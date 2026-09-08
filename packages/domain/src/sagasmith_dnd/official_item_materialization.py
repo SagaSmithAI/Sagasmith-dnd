@@ -37,6 +37,12 @@ def is_bound_official_item_id(pack_id: str, artifact_id: str) -> bool:
     return pack_id == EBERRON_ITEM_PACK_ID and artifact_id in BOUND_OFFICIAL_ITEM_IDS
 
 
+def reviewed_official_item_hash(artifact_id: str) -> str | None:
+    """Return the pinned source-card hash for one executable official item."""
+
+    return _REVIEWED_ITEM_HASHES.get(str(artifact_id))
+
+
 def official_item_profile(
     pack_id: str,
     artifact: Mapping[str, Any],
@@ -55,6 +61,13 @@ def official_item_profile(
         "reviewed_content_hash": _REVIEWED_ITEM_HASHES[artifact_id],
         "selection_fields": ("base_weapon_artifact_id",) if artifact_id == ARMBLADE_ID else (),
         "materializer": "dnd5e.character.inventory_item.v1",
+        "qualification": (
+            "missing_hand_or_arm"
+            if artifact_id == ARCANE_PROPULSION_ARM_ID
+            else "warforged"
+            if artifact_id == ARMBLADE_ID
+            else "any"
+        ),
     }
 
 
@@ -63,6 +76,7 @@ def materialize_official_item_template(
     artifact: Mapping[str, Any],
     *,
     base_weapon_template: Mapping[str, Any] | None = None,
+    pack_version: str | None = None,
 ) -> dict[str, Any] | None:
     """Build one executable template from an exact reviewed source card.
 
@@ -85,11 +99,28 @@ def materialize_official_item_template(
         if base.get("kind") != "weapon":
             return None
         mechanics = copy.deepcopy(dict(base.get("mechanics") or {}))
-        mechanics.update({"magical": True, "magic_bonus": 0})
+        mechanics.update(
+            {
+                "magical": True,
+                "magic_bonus": 0,
+                "official_item": {
+                    "kind": "armblade",
+                    "state": "extended",
+                    "qualification": "warforged",
+                    "toggle_activation": "bonus_action",
+                    "occupies_hand_when_extended": True,
+                    "inseparable_while_attuned": True,
+                },
+            }
+        )
         return {
             **base,
             "name": "Armblade",
-            "source_key": f"{pack_id}:{artifact_id}",
+            "source_key": (
+                f"{pack_id}@{pack_version}:{artifact_id}"
+                if pack_version
+                else f"{pack_id}@unknown:{artifact_id}"
+            ),
             "description": description,
             "kind": "weapon",
             "quantity": 1,
@@ -101,6 +132,11 @@ def materialize_official_item_template(
             "name": "Arcane Propulsion Arm",
             "kind": "weapon",
             "quantity": 1,
+            "source_key": (
+                f"{pack_id}@{pack_version}:{artifact_id}"
+                if pack_version
+                else f"{pack_id}@unknown:{artifact_id}"
+            ),
             "description": description,
             "attunement": "required",
             "mechanics": {
@@ -117,6 +153,13 @@ def materialize_official_item_template(
                 "proficient": True,
                 "magical": True,
                 "magic_bonus": 0,
+                "official_item": {
+                    "kind": "arcane_propulsion_arm",
+                    "state": "attached",
+                    "qualification": "missing_hand_or_arm",
+                    "return_on_throw": True,
+                    "remove_action": True,
+                },
             },
         }
     if artifact_id == DYRRN_TENTACLE_WHIP_ID:
@@ -124,6 +167,11 @@ def materialize_official_item_template(
             "name": "Dyrrn's Tentacle Whip",
             "kind": "weapon",
             "quantity": 1,
+            "source_key": (
+                f"{pack_id}@{pack_version}:{artifact_id}"
+                if pack_version
+                else f"{pack_id}@unknown:{artifact_id}"
+            ),
             "description": description,
             "attunement": "required",
             "mechanics": {
@@ -144,6 +192,16 @@ def materialize_official_item_template(
                 "proficient": False,
                 "magical": True,
                 "magic_bonus": 2,
+                "official_item": {
+                    "kind": "dyrrn_tentacle_whip",
+                    "state": "drawn",
+                    "qualification": "any",
+                    "disadvantage_against_species": ["aberration"],
+                    "natural_20_stun": True,
+                    "stun_duration": "target_end_next_turn",
+                    "sheath_draw_activation": "bonus_action",
+                    "cursed_attunement": True,
+                },
             },
         }
     return None
@@ -158,4 +216,5 @@ __all__ = [
     "is_bound_official_item_id",
     "materialize_official_item_template",
     "official_item_profile",
+    "reviewed_official_item_hash",
 ]

@@ -81,12 +81,18 @@ def test_locked_official_weapons_materialize_and_replay(tmp_path: Path) -> None:
                 assert context["executable_item_profile"]["artifact_id"] == artifact_id
                 assert context["content_hash"] == context["catalog_review_hash"]
 
+            actor_sheet = default_character_sheet()
+            actor_sheet["progression"]["species"] = "Warforged"
+            actor_sheet["traits"]["anatomy"] = {
+                "functional_arms": 1,
+                "functional_hands": 1,
+            }
             actor = await _call(server, "character_create_from", {
                 "mode": "direct",
                 "payload": {
                     "campaign_id": campaign["id"],
                     "name": "Weapon profile tester",
-                    "sheet": default_character_sheet(),
+                    "sheet": actor_sheet,
                 },
                 "idempotency_key": "actor",
             })
@@ -117,6 +123,11 @@ def test_locked_official_weapons_materialize_and_replay(tmp_path: Path) -> None:
                 "damage_formula": "1d8", "damage_type": "force", "properties": ["thrown"],
                 "normal_range_ft": 0, "long_range_ft": 0, "thrown_normal_range_ft": 20,
                 "thrown_long_range_ft": 60, "proficient": True, "magical": True, "magic_bonus": 0,
+                "official_item": {
+                    "kind": "arcane_propulsion_arm", "state": "attached",
+                    "qualification": "missing_hand_or_arm", "return_on_throw": True,
+                    "remove_action": True,
+                },
             }
 
             await apply(DYRRN_TENTACLE_WHIP_ID, None, "dyrrn")
@@ -128,6 +139,7 @@ def test_locked_official_weapons_materialize_and_replay(tmp_path: Path) -> None:
                 {"damage_formula": "1d6", "damage_type": "psychic", "damage_bonus": 0},
             ]
             assert whip["mechanics"]["properties"] == ["finesse", "reach"]
+            assert whip["mechanics"]["official_item"]["natural_20_stun"] is True
             assert "stunned until the end of its next turn" in whip["mechanics"]["on_hit_effect"]
 
             pending_request = {

@@ -468,6 +468,7 @@ def default_character_sheet() -> dict[str, Any]:
             "size": "medium",
             "alignment": "",
             "languages": [],
+            "anatomy": {"functional_arms": 2, "functional_hands": 2},
             "intrinsic_attacks": [],
             "proficiencies": {
                 "armor": [],
@@ -865,6 +866,7 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
                 "always_available",
                 "mastery",
                 "recharge",
+                "official_item",
             },
         )
         category = _text(mechanics.get("category"), f"{field}.category", default="other")
@@ -882,6 +884,9 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
         mastery = _text(mechanics.get("mastery"), f"{field}.mastery").casefold()
         if mastery not in {"", "cleave", "graze", "nick", "push", "sap", "slow", "topple", "vex"}:
             raise ValueError(f"{field}.mastery is invalid")
+        official_item = _normalize_official_item_mechanics(
+            mechanics.get("official_item"), f"{field}.official_item"
+        )
         return {
             "category": category,
             "attack_type": attack_type,
@@ -965,6 +970,7 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
                 mechanics.get("recharge"),
                 f"{field}.recharge",
             ),
+            "official_item": official_item,
         }
     if kind == "container":
         _reject_unknown(
@@ -1255,6 +1261,116 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
             }
         return normalized_ammunition
     return mechanics
+
+
+def _normalize_official_item_mechanics(value: Any, field: str) -> dict[str, Any]:
+    """Normalize the small, source-bound contracts used by official magic weapons.
+
+    This is deliberately not a general effect language.  Every accepted value is
+    tied to one reviewed item identity and is consumed by deterministic engine
+    code; unknown or incomplete contracts fail at sheet validation time.
+    """
+
+    item = _object(value or {}, field)
+    if not item:
+        return {}
+    kind = _text(item.get("kind"), f"{field}.kind")
+    if kind == "arcane_propulsion_arm":
+        _reject_unknown(
+            item,
+            field,
+            {"kind", "state", "qualification", "return_on_throw", "remove_action"},
+        )
+        qualification = _text(item.get("qualification"), f"{field}.qualification")
+        state = _text(item.get("state"), f"{field}.state", default="attached")
+        if qualification != "missing_hand_or_arm":
+            raise ValueError(f"{field}.qualification is invalid")
+        if state not in {"attached", "detached"}:
+            raise ValueError(f"{field}.state is invalid")
+        if item.get("return_on_throw") is not True or item.get("remove_action") is not True:
+            raise ValueError(f"{field} must enable return_on_throw and remove_action")
+        return {
+            "kind": kind,
+            "state": state,
+            "qualification": qualification,
+            "return_on_throw": True,
+            "remove_action": True,
+        }
+    if kind == "armblade":
+        _reject_unknown(
+            item,
+            field,
+            {
+                "kind",
+                "state",
+                "qualification",
+                "toggle_activation",
+                "occupies_hand_when_extended",
+                "inseparable_while_attuned",
+            },
+        )
+        qualification = _text(item.get("qualification"), f"{field}.qualification")
+        state = _text(item.get("state"), f"{field}.state", default="extended")
+        activation = _text(item.get("toggle_activation"), f"{field}.toggle_activation")
+        if qualification != "warforged" or activation != "bonus_action":
+            raise ValueError(f"{field} has an invalid Armblade qualification or activation")
+        if state not in {"extended", "retracted"}:
+            raise ValueError(f"{field}.state is invalid")
+        if item.get("occupies_hand_when_extended") is not True or item.get(
+            "inseparable_while_attuned"
+        ) is not True:
+            raise ValueError(f"{field} must record hand occupation and inseparability")
+        return {
+            "kind": kind,
+            "state": state,
+            "qualification": qualification,
+            "toggle_activation": activation,
+            "occupies_hand_when_extended": True,
+            "inseparable_while_attuned": True,
+        }
+    if kind == "dyrrn_tentacle_whip":
+        _reject_unknown(
+            item,
+            field,
+            {
+                "kind",
+                "state",
+                "qualification",
+                "disadvantage_against_species",
+                "natural_20_stun",
+                "stun_duration",
+                "sheath_draw_activation",
+                "cursed_attunement",
+            },
+        )
+        qualification = _text(item.get("qualification"), f"{field}.qualification")
+        state = _text(item.get("state"), f"{field}.state", default="drawn")
+        activation = _text(item.get("sheath_draw_activation"), f"{field}.sheath_draw_activation")
+        species = _string_list(
+            item.get("disadvantage_against_species"),
+            f"{field}.disadvantage_against_species",
+        )
+        if (
+            qualification != "any"
+            or activation != "bonus_action"
+            or state not in {"drawn", "sheathed"}
+            or species != ["aberration"]
+            or item.get("natural_20_stun") is not True
+            or item.get("stun_duration") != "target_end_next_turn"
+            or item.get("cursed_attunement") is not True
+        ):
+            raise ValueError(f"{field} has an invalid Dyrrn's Tentacle Whip contract")
+        return {
+            "kind": kind,
+            "state": state,
+            "qualification": qualification,
+            "disadvantage_against_species": species,
+            "natural_20_stun": True,
+            "stun_duration": "target_end_next_turn",
+            "sheath_draw_activation": activation,
+            "cursed_attunement": True,
+        }
+    raise ValueError(f"{field}.kind is unsupported")
 
 
 def _validate_item_slot(item: dict[str, Any], slot: str) -> None:
@@ -2854,6 +2970,7 @@ def validate_character_sheet(
             "size",
             "alignment",
             "languages",
+            "anatomy",
             "intrinsic_attacks",
             "proficiencies",
             "resistances",
@@ -2871,6 +2988,24 @@ def validate_character_sheet(
     )
     senses = _object(traits["senses"], "sheet.traits.senses")
     _reject_unknown(senses, "sheet.traits.senses", {*SENSE_NAMES, "passive_perception_bonus"})
+    anatomy = _object(traits.get("anatomy") or {}, "sheet.traits.anatomy")
+    _reject_unknown(anatomy, "sheet.traits.anatomy", {"functional_arms", "functional_hands"})
+    functional_arms = _integer(
+        anatomy.get("functional_arms"),
+        "sheet.traits.anatomy.functional_arms",
+        default=2,
+        minimum=0,
+        maximum=2,
+    )
+    functional_hands = _integer(
+        anatomy.get("functional_hands"),
+        "sheet.traits.anatomy.functional_hands",
+        default=2,
+        minimum=0,
+        maximum=2,
+    )
+    if functional_hands > functional_arms:
+        raise ValueError("sheet.traits.anatomy.functional_hands cannot exceed functional_arms")
     intrinsic_attacks = [
         _normalize_intrinsic_attack(item, f"sheet.traits.intrinsic_attacks[{index}]")
         for index, item in enumerate(
@@ -3577,6 +3712,10 @@ def validate_character_sheet(
             "size": _text(traits["size"], "sheet.traits.size", maximum=100),
             "alignment": _text(traits["alignment"], "sheet.traits.alignment", maximum=100),
             "languages": _string_list(traits["languages"], "sheet.traits.languages"),
+            "anatomy": {
+                "functional_arms": functional_arms,
+                "functional_hands": functional_hands,
+            },
             "intrinsic_attacks": intrinsic_attacks,
             "proficiencies": {
                 key: _string_list(proficiencies[key], f"sheet.traits.proficiencies.{key}")
@@ -4433,6 +4572,19 @@ def _weapon_attacks(
         ):
             continue
         mechanics = item["mechanics"]
+        official_item = dict(mechanics.get("official_item") or {})
+        if item.get("attunement") != "attuned":
+            official_item = {}
+        if official_item.get("kind") == "armblade" and official_item.get("state") == "retracted":
+            continue
+        if official_item.get("kind") == "arcane_propulsion_arm" and official_item.get(
+            "state"
+        ) == "detached":
+            continue
+        if official_item.get("kind") == "dyrrn_tentacle_whip" and official_item.get(
+            "state"
+        ) == "sheathed":
+            continue
         magic_properties_active = item.get("attunement") != "required"
         magic_bonus = mechanics["magic_bonus"] if magic_properties_active else 0
         ability = mechanics["attack_ability"]
@@ -4558,6 +4710,9 @@ def _weapon_attacks(
                 "uses": copy.deepcopy(item.get("uses") or {}),
                 "recharge": copy.deepcopy(mechanics.get("recharge") or {}),
                 "attack_ability_modifier": modifier,
+                "official_item": official_item,
+                "source_key": item.get("source_key", ""),
+                "attunement": item.get("attunement", "none"),
             }
         )
     for attack in intrinsic_attacks:
@@ -5107,6 +5262,57 @@ def update_inventory_item(
     index = value["inventory"]["items"].index(item)
     value["inventory"]["items"][index] = replacement
     return validate_character_sheet(value)
+
+
+def use_official_item_action(
+    sheet: dict[str, Any],
+    item_id: str,
+    operation: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Apply one deterministic action from a reviewed official item contract.
+
+    The encounter layer is responsible for charging the Action/Bonus Action.
+    This function owns only the inventory transition and therefore is also safe
+    to use from replayable non-combat state mutations.
+    """
+
+    value = validate_character_sheet(sheet)
+    item = next((entry for entry in value["inventory"]["items"] if entry["id"] == item_id), None)
+    if item is None or item["kind"] != "weapon":
+        raise LookupError(item_id)
+    contract = dict(item["mechanics"].get("official_item") or {})
+    if not contract:
+        raise ValueError("item has no reviewed official activation contract")
+    normalized = str(operation or "").strip().casefold().replace("-", "_")
+    kind = str(contract.get("kind") or "")
+    if kind == "arcane_propulsion_arm":
+        expected = {"attach": "attached", "remove": "detached"}
+        if normalized not in expected:
+            raise ValueError("Arcane Propulsion Arm operation must be attach or remove")
+        next_state = expected[normalized]
+    elif kind == "armblade":
+        if normalized != "toggle":
+            raise ValueError("Armblade operation must be toggle")
+        next_state = "retracted" if contract.get("state") == "extended" else "extended"
+    elif kind == "dyrrn_tentacle_whip":
+        if normalized != "toggle":
+            raise ValueError("Dyrrn's Tentacle Whip operation must be toggle")
+        next_state = "sheathed" if contract.get("state") == "drawn" else "drawn"
+    else:  # defensive: validation should make this unreachable
+        raise ValueError("unsupported official item activation contract")
+    item["mechanics"]["official_item"] = {**contract, "state": next_state}
+    result = {
+        "item_id": item_id,
+        "official_item_kind": kind,
+        "operation": normalized,
+        "state": next_state,
+        "activation": (
+            "action"
+            if kind == "arcane_propulsion_arm"
+            else "bonus_action"
+        ),
+    }
+    return validate_character_sheet(value), result
 
 
 def attune_inventory_item(sheet: dict[str, Any], item_id: str) -> dict[str, Any]:
