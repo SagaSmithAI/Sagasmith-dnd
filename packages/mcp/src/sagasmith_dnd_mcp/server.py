@@ -151,6 +151,8 @@ from sagasmith_dnd.campaign_state import (
 from sagasmith_dnd.character_import import inspect_character_document
 from sagasmith_dnd.character_schema import (
     CHARACTER_SPELL_CARD_FIELDS,
+    EBERRON_ARTIFICER_BATTLE_READY_FEATURE_ID,
+    EBERRON_ARTIFICER_BATTLE_READY_PACK_ID,
     add_effect,
     add_inventory_item,
     adjust_wallet,
@@ -741,6 +743,35 @@ def _reject_new_intrinsic_attack_provenance(sheet: Mapping[str, Any] | None) -> 
     if projection not in (None, []):
         raise ValueError(
             "intrinsic attack provenance can be created only by character_content_apply"
+        )
+
+
+def _battle_ready_provenance(sheet: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """Return official Battle Ready cards whose creation is server-authorized."""
+
+    content = dict(dict(sheet or {}).get("content") or {})
+    return [
+        deepcopy(item)
+        for item in content.get("features", [])
+        if isinstance(item, Mapping)
+        and item.get("id") == EBERRON_ARTIFICER_BATTLE_READY_FEATURE_ID
+        and item.get("pack_id") == EBERRON_ARTIFICER_BATTLE_READY_PACK_ID
+    ]
+
+
+def _reject_new_battle_ready_provenance(sheet: Mapping[str, Any] | None) -> None:
+    if _battle_ready_provenance(sheet):
+        raise ValueError(
+            "Battle Ready provenance can be created only by source content application"
+        )
+
+
+def _require_preserved_battle_ready_provenance(
+    current: Mapping[str, Any], replacement: Mapping[str, Any]
+) -> None:
+    if _battle_ready_provenance(current) != _battle_ready_provenance(replacement):
+        raise ValueError(
+            "character mutation cannot add, remove, or alter authoritative Battle Ready provenance"
         )
 
 
@@ -14654,6 +14685,11 @@ def _create_server(
 
         if sheet is not None and operation != "character.content.apply":
             _require_preserved_intrinsic_attack_provenance(before.sheet, sheet)
+        if sheet is not None and operation not in {
+            "character.content.apply",
+            "character.rule_artifact.add",
+        }:
+            _require_preserved_battle_ready_provenance(before.sheet, sheet)
         if before.campaign_id is None:
             if sheet is not None:
                 require_engine_owned_character_state(
@@ -30537,6 +30573,7 @@ def _create_server(
         require_engine_owned_character_state(sheet_value)
         _reject_new_intrinsic_attack_provenance(sheet_value)
         _reject_new_tortle_natural_armor_provenance(sheet_value)
+        _reject_new_battle_ready_provenance(sheet_value)
         _require_authoritative_background_state(
             sheet_value,
             character_id=None,
@@ -30647,6 +30684,7 @@ def _create_server(
         require_engine_owned_character_state(sheet)
         _reject_new_intrinsic_attack_provenance(sheet)
         _reject_new_tortle_natural_armor_provenance(sheet)
+        _reject_new_battle_ready_provenance(sheet)
         _require_authoritative_background_state(
             sheet,
             character_id=None,
@@ -30704,6 +30742,7 @@ def _create_server(
         require_engine_owned_character_state(sheet_value)
         _reject_new_intrinsic_attack_provenance(sheet_value)
         _reject_new_tortle_natural_armor_provenance(sheet_value)
+        _reject_new_battle_ready_provenance(sheet_value)
         _require_authoritative_background_state(
             sheet_value,
             character_id=None,
