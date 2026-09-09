@@ -1038,6 +1038,86 @@ def test_draconic_resilience_applies_retroactive_max_hp_and_unarmored_ac(
     asyncio.run(exercise())
 
 
+def test_2014_class_immunity_features_project_into_character_traits(tmp_path: Path) -> None:
+    workspace = Path(__file__).resolve().parents[3]
+    config = McpConfig(
+        home=tmp_path / "home",
+        database_url=None,
+        chroma_url=None,
+        chroma_path_override=None,
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
+        auto_seed_rules=True,
+    )
+
+    async def exercise() -> None:
+        server = create_server(config)
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Class Immunities", "edition": "2014", "idempotency_key": "campaign"},
+        )
+
+        async def apply_feature(
+            name: str,
+            class_name: str,
+            level: int,
+            artifact_id: str,
+        ) -> dict:
+            sheet = default_character_sheet()
+            sheet["progression"].update(
+                {
+                    "level": level,
+                    "classes": [
+                        {"name": class_name, "level": level, "subclass": "", "hit_die": 10}
+                    ],
+                }
+            )
+            actor = await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {"campaign_id": campaign["id"], "name": name, "sheet": sheet},
+                    "idempotency_key": f"{name}-actor",
+                },
+            )
+            return await _call(
+                server,
+                "character_content_apply",
+                {
+                    "character_id": actor["id"],
+                    "artifact_id": artifact_id,
+                    "selection": {},
+                    "expected_revision": actor["revision"],
+                    "idempotency_key": f"{name}-feature",
+                },
+            )
+
+        paladin = await apply_feature(
+            "Divine Health",
+            "Paladin",
+            3,
+            "dnd5e.content.srd2014.feature.paladin-divine-health",
+        )
+        assert paladin["sheet"]["traits"]["condition_immunities"] == ["disease"]
+        assert paladin["sheet"]["traits"]["immunities"] == []
+
+        monk = await apply_feature(
+            "Purity of Body",
+            "Monk",
+            10,
+            "dnd5e.content.srd2014.feature.monk-purity-of-body",
+        )
+        assert monk["sheet"]["traits"]["immunities"] == ["poison"]
+        assert monk["sheet"]["traits"]["condition_immunities"] == [
+            "disease",
+            "poisoned",
+        ]
+
+    asyncio.run(exercise())
+
+
 def test_multiclass_channel_divinity_uses_the_shared_cleric_capacity(
     tmp_path: Path,
 ) -> None:
