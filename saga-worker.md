@@ -53,4 +53,14 @@ Acceptance is implemented and exercised against the indexed SCAG archive version
 - Domain focused regression: `88 passed`.
 - `ruff check`, Python compilation, and `git diff --check` passed.
 - CI run `34349854857` for the pushed acceptance head `b56dbfa63c9a5cc26b25b56804066f49320b2674` passed all four jobs (locked-py311, compatibility-py312, skills, and ui).
-- PR #201 was already merged before this follow-up; this correction opens a separate regular PR and does not close issues, delete branches or forks, or publish source archives.
+- No issue was closed, no pull request was merged, no remote branch or fork was deleted, and no source archive was published by this task.
+
+## 2026-09-10 recovery update
+
+The live state has advanced since this handoff. Content-library PR #20 is merged at `fe7b14643136f42c6a9f61f2618f3c3b2cd9632c`; runtime PR #201 is merged at `95ce0d56a4b715f3a50a9d61d746850cd4b841c5`; runtime PR #202 is merged at `70e1283dab742fbb50d7be479990c5609e0d08c8`. Issues #172, #173, #176, and #182 remain open; #183 is closed.
+
+The current isolated follow-up is `fix/full-official-runtime` at `89890120` (synchronized with merged `main`; the focused runtime change is `e431fdda`, `perf: avoid repeated official archive plan copies`) with PR [#213](https://github.com/SagaSmithAI/Sagasmith-dnd/pull/213). The runtime now walks freshly copied archive values in place while rebuilding resolution-plan fingerprints, retaining the immutable archive boundary and avoiding repeated deep copies during large official archive verification. `skills` and `ui` CI jobs passed; the two Python jobs were pending at the last poll.
+
+With `D:/repo/repostew/worktrees/saga-content-library-runtime-lock` and the current `D:/repo/repostew/Sagasmith-core/src` first on `PYTHONPATH`, the locked Eberron Artificer acceptance test passed end to end, including dependency rebind, source-bound class/subclass materialization, Defender combat/lifecycle, replay, restart, and CAS. The domain archive/package focus passed 19 tests; Ruff, Python compilation, and `git diff --check` passed. The root pytest environment otherwise resolves an older installed core package and can report a false missing dependency; the explicit editable core source path is required for local validation.
+
+The canonical runtime clone and registered worktree resources remain preserved with their pre-existing dirty or untracked state. No issue was closed, no pull request was merged by this recovery, and no branch, fork, or archive was deleted.
