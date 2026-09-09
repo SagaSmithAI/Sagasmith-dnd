@@ -574,12 +574,118 @@ def test_locked_artificer_build_creates_and_commands_defender(tmp_path: Path) ->
             )
             assert weapon_attack["attack_ability"] == "intelligence"
             assert weapon_attack["damage_bonus"] == 4
-            # Starting equipment supplies thieves' tools, not smith's tools;
-            # proficiency alone must not create an item. For this lifecycle
-            # encounter the DM awards one real SRD tool artifact via public
-            # content application. This does not exercise Right Tool for the Job.
-            assert not any(item["name"].casefold() == "smith's tools"
-                           for item in owner["sheet"]["inventory"]["items"])
+            # Starting equipment supplies thieves' tools, not smith's tools.
+            # Exercise the source-bound Right Tool feature after a real hour on
+            # the campaign timeline, then replace it with another artisan tool.
+            right_tool_id = _PREFIX + ".feature.the-right-tool-for-the-job"
+            await _call(server, "campaign_change", {
+                "campaign_id": campaign["id"], "action": "clock_advance",
+                "payload": {"period": "hour", "count": 1, "expected_elapsed_ticks": 600},
+                "expected_revision": (await current())["revision"],
+                "idempotency_key": "right-tool-hour-1",
+            })
+            owner = await _call(server, "character_query", {
+                "view": "get", "payload": {"character_id": owner["id"]},
+            })
+            right_tool_request = {
+                "character_id": owner["id"], "action": "use_activity",
+                "payload": {
+                    "activity_id": right_tool_id,
+                    "declaration": {
+                        "tool_artifact_id": _SRD + "item.smith-s-tools",
+                        "tinkers_tools_in_hand": True,
+                        "unoccupied_space_within_5_ft": True,
+                        "uninterrupted_work_minutes": 60,
+                        "work_started_elapsed_ticks": 0,
+                        "rest_context": "long_rest",
+                    },
+                },
+                "expected_revision": owner["revision"],
+                "idempotency_key": "right-tool-smith",
+            }
+            right_tool = await _call(server, "character_action", right_tool_request)
+            owner = right_tool["character"]
+            generated = next(
+                item for item in owner["sheet"]["inventory"]["items"]
+                if item["id"] == right_tool["result"]["generated_item_id"]
+            )
+            assert generated["name"] == "Smith's tools"
+            assert generated["kind"] == "equipment"
+            assert generated["mechanics"]["right_tool_for_job"]["nonmagical"] is True
+            assert right_tool["result"]["rule_receipts"][0]["mechanic_id"] == (
+                "dnd5e.character.right_tool_for_job.v1"
+            )
+            assert await _call(server, "character_action", right_tool_request) == right_tool
+            await _call(server, "campaign_change", {
+                "campaign_id": campaign["id"], "action": "clock_advance",
+                "payload": {"period": "hour", "count": 1, "expected_elapsed_ticks": 1200},
+                "expected_revision": (await current())["revision"],
+                "idempotency_key": "right-tool-hour-2",
+            })
+            owner = await _call(server, "character_query", {
+                "view": "get", "payload": {"character_id": owner["id"]},
+            })
+            right_tool_replace_request = {
+                **right_tool_request,
+                "payload": {
+                    "activity_id": right_tool_id,
+                    "declaration": {
+                        "tool_artifact_id": _SRD + "item.weaver-s-tools",
+                        "tinkers_tools_in_hand": True,
+                        "unoccupied_space_within_5_ft": True,
+                        "uninterrupted_work_minutes": 60,
+                        "work_started_elapsed_ticks": 600,
+                        "rest_context": "short_rest",
+                    },
+                },
+                "expected_revision": owner["revision"],
+                "idempotency_key": "right-tool-weaver",
+            }
+            right_tool_replacement = await _call(
+                server, "character_action", right_tool_replace_request
+            )
+            owner = right_tool_replacement["character"]
+            assert right_tool_replacement["result"]["replaced_item_ids"] == [
+                right_tool["result"]["generated_item_id"]
+            ]
+            assert not any(
+                item["id"] == right_tool["result"]["generated_item_id"]
+                for item in owner["sheet"]["inventory"]["items"]
+            )
+            assert any(
+                item["name"] == "Weaver's tools"
+                for item in owner["sheet"]["inventory"]["items"]
+            )
+            before_invalid = await _call(server, "character_query", {
+                "view": "get", "payload": {"character_id": owner["id"]},
+            })
+            before_invalid_campaign = await current()
+            with pytest.raises(ToolError, match="unoccupied space"):
+                await _call(server, "character_action", {
+                    **right_tool_replace_request,
+                    "payload": {
+                        "activity_id": right_tool_id,
+                        "declaration": {
+                            "tool_artifact_id": _SRD + "item.cook-s-utensils",
+                            "tinkers_tools_in_hand": True,
+                            "unoccupied_space_within_5_ft": False,
+                            "uninterrupted_work_minutes": 60,
+                            "work_started_elapsed_ticks": 600,
+                        },
+                    },
+                    "expected_revision": owner["revision"],
+                    "idempotency_key": "right-tool-invalid-space",
+                })
+            assert await _call(server, "character_query", {
+                "view": "get", "payload": {"character_id": owner["id"]},
+            }) == before_invalid
+            assert await current() == before_invalid_campaign
+
+            # Proficiency alone still must not create an ordinary inventory item.
+            assert not any(
+                item["source_key"] == _SRD + "item.smith-s-tools"
+                for item in owner["sheet"]["inventory"]["items"]
+            )
             await apply(_SRD + "item.smith-s-tools")
             tools = [item for item in owner["sheet"]["inventory"]["items"]
                      if item["source_key"] == _SRD + "item.smith-s-tools"]
@@ -592,6 +698,10 @@ def test_locked_artificer_build_creates_and_commands_defender(tmp_path: Path) ->
             }
             created = await _call(server, "addon_actor_instantiate", create_request)
             assert await _call(server, "addon_actor_instantiate", create_request) == created
+            assert await _call(server, "character_action", right_tool_request) == right_tool
+            assert await _call(server, "character_action", right_tool_replace_request) == (
+                right_tool_replacement
+            )
             defender = created["character"]
             assert defender["sheet"]["combat"]["hp"]["max"] == 20
             relation = (await current())["state"]["dependent_actor_relations"][0]

@@ -1292,6 +1292,30 @@ SCAG_BLADE_SINGING_FEATURE_IDS = {
     SCAG_RULE_PACK_ID + ".feature.song-of-defense",
     SCAG_RULE_PACK_ID + ".feature.song-of-victory",
 }
+EBERRON_RIGHT_TOOL_FOR_JOB_FEATURE_SUFFIX = ".feature.the-right-tool-for-the-job"
+RIGHT_TOOL_FOR_JOB_MECHANIC_ID = "dnd5e.character.right_tool_for_job.v1"
+RIGHT_TOOL_FOR_JOB_METADATA_KEY = "right_tool_for_job"
+RIGHT_TOOL_FOR_JOB_ARTISAN_TOOL_NAMES = frozenset(
+    {
+        "alchemist's supplies",
+        "brewer's supplies",
+        "calligrapher's supplies",
+        "carpenter's tools",
+        "cartographer's tools",
+        "cobbler's tools",
+        "cook's utensils",
+        "glassblower's tools",
+        "jeweler's tools",
+        "leatherworker's tools",
+        "mason's tools",
+        "painter's supplies",
+        "potter's tools",
+        "smith's tools",
+        "tinker's tools",
+        "weaver's tools",
+        "woodcarver's tools",
+    }
+)
 SCAG_WATCHERS_EYE_BACKGROUND_IDS = frozenset(
     {
         (
@@ -35085,6 +35109,488 @@ def _create_server(
             activity_id,
             character_type=current.character_type,
         )
+        if str(activity_id).endswith(EBERRON_RIGHT_TOOL_FOR_JOB_FEATURE_SUFFIX):
+            if activity_source_card_kind != "feature":
+                raise RulesetUnavailableError(
+                    "The Right Tool for the Job must be recorded as an Artificer feature"
+                )
+            if not is_dm(current.campaign_id, principal_id):
+                raise PermissionError(
+                    "The Right Tool for the Job requires the Agent in the DM role"
+                )
+
+            feature_matches = [
+                item
+                for item in available_content_artifacts(
+                    current.campaign_id,
+                    branch_id=branch_id,
+                )
+                if str(item[2].get("id") or "") == activity_id
+                and item[2].get("kind") == "feature"
+            ]
+            if len(feature_matches) != 1:
+                raise RulesetUnavailableError(
+                    "The Right Tool for the Job source is not uniquely available"
+                )
+            feature_pack_id, feature_pack_version, feature_artifact = feature_matches[0]
+            feature_artifact = reviewed_official_runtime_artifact(
+                feature_pack_id,
+                feature_pack_version,
+                feature_artifact,
+            )
+            feature_source = dict(feature_artifact.get("card") or {})
+            if (
+                str(feature_artifact.get("application_state") or "selection_ready")
+                != "selection_ready"
+                or str(feature_artifact.get("execution_state") or "") != "ruling_ready"
+                or str(feature_source.get("class_name") or "") != "Artificer"
+                or str(feature_source.get("name") or "") != "The Right Tool for the Job"
+                or not str(feature_source.get("description") or "").strip()
+                or feature_source.get("mechanical_grants") != {}
+                or feature_source.get("selection_requirements") != {}
+                or feature_source.get("selection_requirements_by_level") != {}
+            ):
+                raise RulesetUnavailableError(
+                    "The Right Tool for the Job source card is not the reviewed Artificer card"
+                )
+            feature_content_hash = content_fingerprint(feature_artifact)
+            feature_contract = dict(feature_artifact.get("selection_contract") or {})
+            feature_reviewed_hash = str(feature_contract.get("reviewed_content_hash") or "")
+            if feature_reviewed_hash != feature_content_hash:
+                raise RulesetUnavailableError(
+                    "The Right Tool for the Job source review hash is stale"
+                )
+            if (
+                activity_card.get("name") != feature_source.get("name")
+                or activity_card.get("description") != feature_source.get("description")
+                or activity_card.get("ruling_requirements")
+                != feature_source.get("ruling_requirements")
+                or activity_card.get("pack_id") != feature_pack_id
+                or activity_card.get("pack_version") != feature_pack_version
+                or activity_card.get("rule_refs") != list(feature_artifact.get("rule_refs") or [])
+                or activity_card.get("mechanic_refs")
+                != list(feature_artifact.get("mechanic_refs") or [])
+                or activity_card.get("source_key")
+                not in (
+                    None,
+                    "",
+                    f"{feature_pack_id}@{feature_pack_version}:{activity_id}",
+                )
+            ):
+                raise RulesetUnavailableError(
+                    "The Right Tool for the Job character card does not match its source"
+                )
+
+            declared = dict(declaration or {})
+            allowed_declaration_fields = {
+                "tool_artifact_id",
+                "artisan_tools_artifact_id",
+                "tinkers_tools_in_hand",
+                "unoccupied_space_within_5_ft",
+                "uninterrupted_work_minutes",
+                "work_duration_minutes",
+                "work_started_elapsed_ticks",
+                "started_elapsed_ticks",
+                "rest_context",
+            }
+            unexpected = set(declared) - allowed_declaration_fields
+            if unexpected:
+                raise CombatEngineError(
+                    "The Right Tool for the Job declaration has unsupported fields: "
+                    f"{sorted(unexpected)}"
+                )
+
+            def declared_alias(primary: str, alias: str) -> Any:
+                if (
+                    primary in declared
+                    and alias in declared
+                    and declared[primary] != declared[alias]
+                ):
+                    raise CombatEngineError(
+                        f"The Right Tool for the Job declaration conflicts on {primary}"
+                    )
+                if primary in declared:
+                    return declared[primary]
+                return declared.get(alias)
+
+            tool_artifact_id = str(
+                declared_alias("tool_artifact_id", "artisan_tools_artifact_id") or ""
+            ).strip()
+            if not tool_artifact_id:
+                raise CombatEngineError(
+                    "The Right Tool for the Job requires tool_artifact_id"
+                )
+            if declared.get("tinkers_tools_in_hand") is not True:
+                raise CombatEngineError(
+                    "The Right Tool for the Job requires tinker's tools in hand"
+                )
+            if declared.get("unoccupied_space_within_5_ft") is not True:
+                raise CombatEngineError(
+                    "The Right Tool for the Job requires an unoccupied space within 5 feet"
+                )
+            work_minutes = declared_alias(
+                "uninterrupted_work_minutes", "work_duration_minutes"
+            )
+            if isinstance(work_minutes, bool) or not isinstance(work_minutes, int):
+                raise CombatEngineError(
+                    "The Right Tool for the Job requires uninterrupted_work_minutes"
+                )
+            if work_minutes != 60:
+                raise CombatEngineError(
+                    "The Right Tool for the Job requires exactly 60 uninterrupted minutes"
+                )
+            started_elapsed_ticks = declared_alias(
+                "work_started_elapsed_ticks", "started_elapsed_ticks"
+            )
+            if (
+                isinstance(started_elapsed_ticks, bool)
+                or not isinstance(started_elapsed_ticks, int)
+            ):
+                raise CombatEngineError(
+                    "The Right Tool for the Job requires work_started_elapsed_ticks"
+                )
+            current_elapsed_ticks = dict(dict(campaign.state or {}).get("game_time") or {}).get(
+                "elapsed_ticks"
+            )
+            if (
+                isinstance(current_elapsed_ticks, bool)
+                or not isinstance(current_elapsed_ticks, int)
+                or started_elapsed_ticks < 0
+                or started_elapsed_ticks > current_elapsed_ticks
+                or current_elapsed_ticks - started_elapsed_ticks < 60 * TICKS_PER_MINUTE
+            ):
+                raise CombatEngineError(
+                    "The Right Tool for the Job requires one completed uninterrupted hour "
+                    "on the campaign game timeline"
+                )
+            rest_context = declared.get("rest_context", "none")
+            if not isinstance(rest_context, str) or rest_context not in {
+                "none",
+                "short_rest",
+                "long_rest",
+            }:
+                raise CombatEngineError(
+                    "The Right Tool for the Job rest_context must be none, short_rest, or long_rest"
+                )
+
+            def resolve_right_tool_artifact(
+                artifact_id: str,
+            ) -> tuple[str, str, dict[str, Any]]:
+                matches = [
+                    item
+                    for item in available_content_artifacts(
+                        current.campaign_id,
+                        branch_id=branch_id,
+                    )
+                    if str(item[2].get("id") or "") == artifact_id
+                    and item[2].get("kind") == "item"
+                ]
+                if len(matches) != 1:
+                    raise RulesetUnavailableError(
+                        "The Right Tool for the Job requires one exact active tool artifact"
+                    )
+                pack_id, pack_version, artifact = matches[0]
+                artifact = reviewed_official_runtime_artifact(pack_id, pack_version, artifact)
+                if str(artifact.get("application_state") or "selection_ready") != (
+                    "selection_ready"
+                ):
+                    raise RulesetUnavailableError(
+                        "The Right Tool for the Job tool artifact is not selection-ready"
+                    )
+                if artifact.get("selection_contract") is not None and selection_input_errors(
+                    artifact, {}
+                ):
+                    raise RulesetUnavailableError(
+                        "The Right Tool for the Job tool artifact has no executable "
+                        "selection contract"
+                    )
+                card = dict(artifact.get("card") or {})
+                template = card.get("inventory_template")
+                tool_name = str(card.get("name") or "").strip()
+                if (
+                    not tool_name
+                    or tool_name.casefold() not in RIGHT_TOOL_FOR_JOB_ARTISAN_TOOL_NAMES
+                    or not isinstance(template, dict)
+                    or str(template.get("name") or "").strip() != tool_name
+                    or template.get("kind") != "equipment"
+                    or str(template.get("attunement") or "none") != "none"
+                ):
+                    raise ValueError(
+                        "The Right Tool for the Job must select a reviewed artisan's-tools item"
+                    )
+                mechanics = template.get("mechanics") or {}
+                if not isinstance(mechanics, dict):
+                    raise RulesetUnavailableError(
+                        "The Right Tool for the Job tool template mechanics are invalid"
+                    )
+                if (
+                    mechanics.get("magical") is True
+                    or mechanics.get("magic_bonus") not in (None, 0)
+                    or mechanics.get("official_item")
+                    or mechanics.get("grants")
+                ):
+                    raise RulesetUnavailableError(
+                        "The Right Tool for the Job can create only nonmagical artisan's tools"
+                    )
+                return pack_id, pack_version, artifact
+
+            tool_pack_id, tool_pack_version, tool_artifact = resolve_right_tool_artifact(
+                tool_artifact_id
+            )
+            tool_card = dict(tool_artifact.get("card") or {})
+            tool_content_hash = content_fingerprint(tool_artifact)
+            tool_template = deepcopy(dict(tool_card["inventory_template"]))
+            feature_items = [
+                item
+                for item in current.sheet.get("inventory", {}).get("items", [])
+                if isinstance(item, dict)
+            ]
+            generated_items: list[dict[str, Any]] = []
+            metadata_fields = {
+                "schema_version",
+                "feature_id",
+                "feature_content_hash",
+                "tool_artifact_id",
+                "source_pack_id",
+                "source_pack_version",
+                "tool_content_hash",
+                "created_elapsed_ticks",
+                "nonmagical",
+            }
+            for item in feature_items:
+                metadata = dict(
+                    dict(item.get("mechanics") or {}).get(RIGHT_TOOL_FOR_JOB_METADATA_KEY) or {}
+                )
+                if metadata.get("feature_id") != activity_id:
+                    continue
+                if set(metadata) != metadata_fields or metadata.get("schema_version") != 1:
+                    raise RulesetUnavailableError(
+                        "The Right Tool for the Job generated item metadata is invalid"
+                    )
+                if (
+                    item.get("kind") != "equipment"
+                    or metadata.get("feature_content_hash") != feature_content_hash
+                    or metadata.get("nonmagical") is not True
+                    or isinstance(metadata.get("created_elapsed_ticks"), bool)
+                    or not isinstance(metadata.get("created_elapsed_ticks"), int)
+                    or metadata.get("created_elapsed_ticks") < 0
+                    or str(item.get("source_key") or "")
+                    != (
+                        f"{feature_pack_id}@{feature_pack_version}:"
+                        f"{activity_id}:right-tool-for-job"
+                    )
+                ):
+                    raise RulesetUnavailableError(
+                        "The Right Tool for the Job generated item is not source-bound"
+                    )
+                old_pack_id, old_pack_version, old_artifact = resolve_right_tool_artifact(
+                    str(metadata.get("tool_artifact_id") or "")
+                )
+                if (
+                    metadata.get("source_pack_id") != old_pack_id
+                    or metadata.get("source_pack_version") != old_pack_version
+                    or metadata.get("tool_content_hash") != content_fingerprint(old_artifact)
+                    or str(item.get("name") or "")
+                    != str(dict(old_artifact.get("card") or {}).get("name") or "")
+                ):
+                    raise RulesetUnavailableError(
+                        "The Right Tool for the Job generated item source has changed"
+                    )
+                generated_items.append(item)
+            if len(generated_items) > 1:
+                raise RulesetUnavailableError(
+                    "The Right Tool for the Job has multiple generated items"
+                )
+
+            content_section = current.sheet.get("content", {}).get("features", [])
+            recorded_feature = next(
+                (item for item in content_section if str(item.get("id") or "") == activity_id),
+                None,
+            )
+            if not isinstance(recorded_feature, dict):
+                raise RulesetUnavailableError(
+                    "The Right Tool for the Job feature card is missing from the character"
+                )
+            prior_state = dict(
+                dict(recorded_feature.get("choices") or {}).get(
+                    RIGHT_TOOL_FOR_JOB_METADATA_KEY
+                )
+                or {}
+            )
+            if prior_state:
+                expected_state_fields = {
+                    "schema_version",
+                    "feature_id",
+                    "feature_content_hash",
+                    "generated_item_id",
+                    "tool_artifact_id",
+                    "tool_pack_id",
+                    "tool_pack_version",
+                    "tool_content_hash",
+                    "created_elapsed_ticks",
+                    "replaced_item_ids",
+                }
+                if (
+                    set(prior_state) != expected_state_fields
+                    or prior_state.get("schema_version") != 1
+                    or prior_state.get("feature_content_hash") != feature_content_hash
+                    or not isinstance(prior_state.get("replaced_item_ids"), list)
+                ):
+                    raise RulesetUnavailableError(
+                        "The Right Tool for the Job feature choice is not source-bound"
+                    )
+                prior_generated_id = str(prior_state.get("generated_item_id") or "")
+                if prior_state.get("feature_id") != activity_id or (
+                    prior_generated_id
+                    and not any(item.get("id") == prior_generated_id for item in generated_items)
+                ):
+                    raise RulesetUnavailableError(
+                        "The Right Tool for the Job feature choice is not source-bound"
+                    )
+
+            next_sheet = deepcopy(current.sheet)
+            replaced_item_ids: list[str] = []
+            for item in generated_items:
+                next_sheet, _removed = remove_inventory_item(next_sheet, str(item["id"]))
+                replaced_item_ids.append(str(item["id"]))
+            generated_item_id = uuid4().hex
+            generated_source_key = (
+                f"{feature_pack_id}@{feature_pack_version}:{activity_id}:right-tool-for-job"
+            )
+            generated_item = {
+                **tool_template,
+                "id": generated_item_id,
+                "name": str(tool_card.get("name") or tool_template.get("name") or ""),
+                "source_key": generated_source_key,
+                "quantity": 1,
+                "equipped": False,
+                "equipped_slot": None,
+                "attunement": "none",
+                "mechanics": {
+                    **dict(tool_template.get("mechanics") or {}),
+                    RIGHT_TOOL_FOR_JOB_METADATA_KEY: {
+                        "schema_version": 1,
+                        "feature_id": activity_id,
+                        "feature_content_hash": feature_content_hash,
+                        "tool_artifact_id": tool_artifact_id,
+                        "source_pack_id": tool_pack_id,
+                        "source_pack_version": tool_pack_version,
+                        "tool_content_hash": tool_content_hash,
+                        "created_elapsed_ticks": current_elapsed_ticks,
+                        "nonmagical": True,
+                    },
+                },
+            }
+            next_sheet, _ = add_inventory_item(next_sheet, generated_item)
+            next_feature = next(
+                item
+                for item in next_sheet["content"]["features"]
+                if str(item.get("id") or "") == activity_id
+            )
+            right_tool_state = {
+                "schema_version": 1,
+                "feature_id": activity_id,
+                "feature_content_hash": feature_content_hash,
+                "generated_item_id": generated_item_id,
+                "tool_artifact_id": tool_artifact_id,
+                "tool_pack_id": tool_pack_id,
+                "tool_pack_version": tool_pack_version,
+                "tool_content_hash": tool_content_hash,
+                "created_elapsed_ticks": current_elapsed_ticks,
+                "replaced_item_ids": replaced_item_ids,
+            }
+            next_feature["choices"] = {
+                **dict(next_feature.get("choices") or {}),
+                RIGHT_TOOL_FOR_JOB_METADATA_KEY: right_tool_state,
+            }
+            next_sheet = validate_character_sheet(next_sheet)
+            normalized_declaration = {
+                "tool_artifact_id": tool_artifact_id,
+                "tinkers_tools_in_hand": True,
+                "unoccupied_space_within_5_ft": True,
+                "uninterrupted_work_minutes": 60,
+                "work_started_elapsed_ticks": started_elapsed_ticks,
+                "rest_context": rest_context,
+            }
+            rules = effective_rule_context(
+                current.campaign_id,
+                branch_id=branch_id,
+                facts={
+                    "actor_id": character_id,
+                    "activity_id": activity_id,
+                    "tool_artifact_id": tool_artifact_id,
+                },
+            )
+            receipt = {
+                "ruleset_fingerprint": rules.fingerprint,
+                "mechanic_id": RIGHT_TOOL_FOR_JOB_MECHANIC_ID,
+                "event": "character.activity.right_tool_for_job",
+                "character_id": character_id,
+                "activity_id": activity_id,
+                "source_card_kind": activity_source_card_kind,
+                "source_artifact_id": activity_id,
+                "source_pack_id": feature_pack_id,
+                "source_pack_version": feature_pack_version,
+                "source_content_hash": feature_content_hash,
+                "source_card_hash": feature_content_hash,
+                "reviewed_content_hash": feature_reviewed_hash,
+                "tool_artifact_id": tool_artifact_id,
+                "tool_pack_id": tool_pack_id,
+                "tool_pack_version": tool_pack_version,
+                "tool_content_hash": tool_content_hash,
+                "declaration": deepcopy(normalized_declaration),
+                "generated_item_id": generated_item_id,
+                "replaced_item_ids": replaced_item_ids,
+                "rule_refs": list(feature_artifact.get("rule_refs") or []),
+                "tool_rule_refs": list(tool_artifact.get("rule_refs") or []),
+            }
+            updated_character = replace(
+                current,
+                sheet=next_sheet,
+                notes=validate_character_notes(current.notes),
+                revision=current.revision + 1,
+            )
+            return commit_campaign_state(
+                campaign,
+                None,
+                operation="character.activity.right_tool_for_job",
+                principal_id=principal_id,
+                branch_id=branch_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+                payload=payload,
+                response_fields={
+                    "status": "committed",
+                    "result": {
+                        "activity_id": activity_id,
+                        "payment": {"kind": "none"},
+                        "semantic_solution": {
+                            "status": "committed",
+                            "mode": "agent_ruling",
+                            "ruling_kind": "agent_dm_adjudication",
+                            "payment_recorded": False,
+                        },
+                        "requires_ruling": False,
+                        "declaration": normalized_declaration,
+                        "tool": deepcopy(generated_item),
+                        "generated_item_id": generated_item_id,
+                        "replaced_item_ids": replaced_item_ids,
+                        "rule_receipts": [receipt],
+                    },
+                    "character": character_view(updated_character),
+                },
+                character_updates=[
+                    CharacterStateUpdate(
+                        character_id=current.id,
+                        sheet=next_sheet,
+                        notes=validate_character_notes(current.notes),
+                        expected_revision=expected_revision,
+                    )
+                ],
+                rule_receipts=[receipt],
+                include_campaign_revision=False,
+                include_revisions=False,
+            )
         compiled_activity_plan = None
         if isinstance(activity_card.get("resolution_plan"), dict):
             _activity_card, compiled_activity_plan = character_resolution_plan(

@@ -21,12 +21,13 @@ The branch provides source-bound public MCP acceptance paths for the 2014 Artifi
 - Bladesong is a bonus action with proficiency-bonus-scaled uses and long-rest recovery. The acceptance test now verifies DM authorization and forged-override rejection, active effects, short-rest non-recovery, long-rest recovery, voluntary dismissal, and two-handed attack termination with the persisted `two_handed_attack` reason.
 - While active, Bladesong contributes Intelligence to AC, speed, Acrobatics advantage, and concentration-save context. Extra Attack settles two attacks and one eligible cantrip replacement. Song of Defense creates a reaction choice and atomically pays the selected spell slot for five times slot level damage reduction. Song of Victory contributes Intelligence once as a flat eligible melee damage part and is not doubled by a critical hit.
 - Whole-sheet replacement and character ingress preserve source-bound authority. A replacement cannot manufacture, erase, or alter active SCAG Bladesong or authoritative intrinsic species anatomy, and stale-CAS or forged provenance requests leave the prior state unchanged.
+- The Right Tool for the Job uses the reviewed Eberron feature card through a DM-only declaration. It requires tinker's tools in hand, an unoccupied space within 5 feet, and one completed hour on the campaign timeline; it materializes a selected nonmagical artisan's-tools artifact, replaces the prior generated set, records source hashes and rule receipts, and replays across restart.
 
 ## Issue disposition
 
 ### #172 — Artificer character materialization and starting equipment
 
-Acceptance is implemented and exercised through the locked archive setup and play paths. Public MCP evidence covers class and subclass materialization, source-defined equipment alternatives including gold, tools, armor, ammunition and receipts, missing equipment as a blocking choice, replay, restart, and regression-driver rejection of an unsettled Artificer build. The remaining external prerequisite is publication of the immutable package in content-library PR #20.
+Acceptance is implemented and exercised through the locked archive setup and play paths. Public MCP evidence covers class and subclass materialization, source-defined equipment alternatives including gold, tools, armor, ammunition and receipts, the DM-only Right Tool for the Job materialization and replacement path, missing equipment as a blocking choice, replay, restart, and regression-driver rejection of an unsettled Artificer build. The remaining external prerequisite is publication of the immutable package in content-library PR #20.
 
 ### #173 — Battle Smith grants and subclass application order
 
