@@ -19199,6 +19199,7 @@ def _create_server(
             unknown = set(raw) - {
                 "actor_id",
                 "initiative",
+                "initiative_group_id",
                 "tie_breaker",
                 "speed_adjustment_ft",
                 "source_excerpt",
@@ -19779,6 +19780,7 @@ def _create_server(
                 "surprised",
                 "death_saves",
                 "initiative",
+                "initiative_group_id",
                 "tie_breaker",
                 "source_conditions",
             }
@@ -20304,6 +20306,7 @@ def _create_server(
             "surprised",
             "death_saves",
             "initiative",
+            "initiative_group_id",
             "tie_breaker",
             "join_round",
             "source_conditions",

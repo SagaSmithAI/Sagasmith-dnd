@@ -447,6 +447,13 @@ BOUNDARIES = (
         "bundled:srd/initiative",
     ),
     CoreBoundary(
+        "dnd5e.core.initiative.group",
+        ("2014", "2024"),
+        "combat_engine.start_encounter",
+        ("tests/test_combat_engine.py",),
+        "bundled:srd/initiative",
+    ),
+    CoreBoundary(
         "dnd5e.core.action.edition_list",
         ("2014", "2024"),
         "combat_engine.available_actions",

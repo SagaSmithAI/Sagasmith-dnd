@@ -1207,8 +1207,25 @@ def start_encounter(
     validated_participants: list[
         tuple[int, dict[str, Any], str, dict[str, Any], dict[str, Any], set[str], int]
     ] = []
+    initiative_groups: dict[str, list[str]] = {}
     for index, actor in enumerate(participants):
         identifier = actor_id(actor)
+        initiative_group_id = actor.get("initiative_group_id")
+        if initiative_group_id is not None:
+            if not isinstance(initiative_group_id, str) or not initiative_group_id.strip():
+                raise CombatEngineError(
+                    f"actor {identifier} initiative_group_id must be a non-empty string"
+                )
+            initiative_group_id = initiative_group_id.strip()
+            if identifier in dependent_contracts:
+                raise CombatEngineError(
+                    "a dependent Steel Defender cannot be assigned to an initiative group"
+                )
+            if actor.get("initiative") is not None:
+                raise CombatEngineError(
+                    "initiative_group_id requires an engine-owned initiative roll"
+                )
+            initiative_groups.setdefault(initiative_group_id, []).append(identifier)
         derived = actor_derived(actor)
         sheet = actor_sheet(actor)
         conditions = _condition_set(sheet.get("conditions"))
@@ -1248,8 +1265,64 @@ def start_encounter(
                     actor, initiative_roster
                 )
 
+    # Validate complete group compatibility before consuming any random stream
+    # values. A group shares both the d20 result and every roll-affecting
+    # modifier; no grouping is inferred from any actor metadata.
+    preflight_group_signatures: dict[str, tuple[int, bool, bool, bool]] = {}
+    for (
+        _index,
+        actor,
+        identifier,
+        derived,
+        sheet,
+        _conditions,
+        exhaustion,
+    ) in validated_participants:
+        group_id = actor.get("initiative_group_id")
+        if group_id is None:
+            continue
+        group_id = str(group_id).strip()
+        initiative_bonus = int(derived.get("initiative", 0))
+        initiative_bonus += _jack_of_all_trades_bonus(sheet) if normalized_ruleset == "2014" else 0
+        vigilant = normalized_ruleset == "2014" and _steel_defender.has_steel_defender_vigilant(
+            actor
+        )
+        surprised = bool(actor.get("surprised", False)) and not vigilant
+        initiative_disadvantage = bool(actor.get("initiative_disadvantage", False)) or (
+            surprised and normalized_ruleset == "2024"
+        )
+        if identifier in initiative_check_modifiers:
+            effect_bonus, equipment_disadvantage, poisoned = initiative_check_modifiers[identifier]
+            initiative_bonus += effect_bonus
+            initiative_disadvantage |= equipment_disadvantage or poisoned
+        if identifier in frightened_initiative:
+            initiative_disadvantage |= frightened_initiative[identifier]
+        exhaustion_adjustment = d20_exhaustion_adjustment(
+            ruleset=normalized_ruleset,
+            exhaustion=exhaustion,
+            kind="initiative",
+            bonus=initiative_bonus,
+            disadvantage=initiative_disadvantage,
+        )
+        signature = (
+            int(exhaustion_adjustment["bonus"]),
+            bool(actor.get("initiative_advantage", False))
+            or ("invisible" in _conditions and normalized_ruleset == "2024"),
+            bool(exhaustion_adjustment["disadvantage"]),
+            _has_halfling_lucky(sheet),
+        )
+        previous = preflight_group_signatures.get(group_id)
+        if previous is not None and previous != signature:
+            raise CombatEngineError(
+                f"initiative group {group_id!r} has incompatible initiative bonuses "
+                "or roll modifiers"
+            )
+        preflight_group_signatures[group_id] = signature
+
     combatants: list[dict[str, Any]] = []
     rule_boundary_ids: set[str] = set()
+    group_rolls: dict[str, dict[str, Any]] = {}
+    group_signatures: dict[str, tuple[int, bool, bool, bool]] = {}
     for index, actor, identifier, derived, sheet, conditions, exhaustion in validated_participants:
         initiative_bonus = int(derived.get("initiative", 0))
         participant_boundary_ids: list[str] = []
@@ -1290,6 +1363,28 @@ def start_encounter(
         )
         initiative_bonus = int(exhaustion_adjustment["bonus"])
         initiative_disadvantage = bool(exhaustion_adjustment["disadvantage"])
+        initiative_advantage = bool(actor.get("initiative_advantage", False)) or (
+            "invisible" in conditions and normalized_ruleset == "2024"
+        )
+        reroll_ones = _has_halfling_lucky(sheet)
+        initiative_group_id = actor.get("initiative_group_id")
+        if initiative_group_id is not None:
+            initiative_group_id = str(initiative_group_id).strip()
+            signature = (
+                initiative_bonus,
+                initiative_advantage,
+                initiative_disadvantage,
+                reroll_ones,
+            )
+            previous = group_signatures.get(initiative_group_id)
+            if previous is not None and previous != signature:
+                raise CombatEngineError(
+                    f"initiative group {initiative_group_id!r} has incompatible initiative "
+                    "bonuses or roll modifiers"
+                )
+            group_signatures[initiative_group_id] = signature
+            rule_boundary_ids.add("dnd5e.core.initiative.group")
+            participant_boundary_ids.append("dnd5e.core.initiative.group")
         recorded_walk_speed = derived.get("speed", {}).get("walk")
         speed = int(30 if recorded_walk_speed is None else recorded_walk_speed)
         if normalized_ruleset == "2024":
@@ -1306,13 +1401,17 @@ def start_encounter(
             # The source feature assigns its owner's initiative, not another roll.
             initiative = 0
         elif supplied is None:
-            die = roll_d20(
-                advantage=bool(actor.get("initiative_advantage", False))
-                or ("invisible" in conditions and normalized_ruleset == "2024"),
-                disadvantage=initiative_disadvantage,
-                reroll_ones=_has_halfling_lucky(sheet),
-                rng=rng,
-            )
+            if initiative_group_id is not None and initiative_group_id in group_rolls:
+                die = deepcopy(group_rolls[initiative_group_id])
+            else:
+                die = roll_d20(
+                    advantage=initiative_advantage,
+                    disadvantage=initiative_disadvantage,
+                    reroll_ones=reroll_ones,
+                    rng=rng,
+                )
+                if initiative_group_id is not None:
+                    group_rolls[initiative_group_id] = deepcopy(die)
             initiative = die["natural"] + initiative_bonus
         else:
             initiative = int(supplied)
@@ -1325,6 +1424,11 @@ def start_encounter(
                 "initiative": initiative,
                 "initiative_roll": die,
                 "initiative_bonus": initiative_bonus,
+                **(
+                    {"initiative_group_id": initiative_group_id}
+                    if initiative_group_id is not None
+                    else {}
+                ),
                 "_initiative_supplied": supplied is not None,
                 "tie_breaker": int(actor.get("tie_breaker", index)),
                 "_tie_breaker_supplied": "tie_breaker" in actor,
