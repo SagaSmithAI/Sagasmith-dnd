@@ -3,12 +3,17 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
-from sagasmith_dnd.character_schema import default_character_sheet
+from sagasmith_dnd.character_schema import (
+    add_inventory_item,
+    default_character_sheet,
+    equip_inventory_item,
+)
 from sagasmith_dnd.combat_engine import roll_attack_action as engine_roll_attack_action
 from test_official_expansions_mcp import _call, _config, _locked_official_library
 
@@ -46,7 +51,7 @@ async def _campaign_revision(server: object, campaign_id: str) -> int:
     return int(value["revision"])
 
 
-def _wizard_sheet(*, level: int = 14, intelligence: int = 16) -> dict:
+def _wizard_sheet(*, level: int = 14, intelligence: int = 16, hp: int = 30) -> dict:
     sheet = default_character_sheet()
     sheet["edition"] = "2014"
     sheet["abilities"]["intelligence"]["score"] = intelligence
@@ -57,7 +62,7 @@ def _wizard_sheet(*, level: int = 14, intelligence: int = 16) -> dict:
             "classes": [{"name": "Wizard", "level": level, "hit_die": 6}],
         }
     )
-    sheet["combat"]["hp"] = {"value": 30, "max": 30, "temp": 0}
+    sheet["combat"]["hp"] = {"value": hp, "max": hp, "temp": 0}
     sheet["spellcasting"].update(
         {
             "ability": "intelligence",
@@ -434,21 +439,64 @@ def test_locked_scag_bladesinging_materializes_and_settles_full_runtime_contract
                 item for item in reaction["candidates"] if item["id"] == _SONG_DEFENSE_ID
             )
             assert song_defense["cast_levels"] == [1]
-            defended = await _combat_call(
-                server,
-                "combat_choice",
-                {
-                    "campaign_id": campaign["id"],
-                    "actor_id": wizard["id"],
-                    "action": "resolve_defense",
-                    "payload": {
-                        "choice_id": reaction["id"],
-                        "selection": {"id": _SONG_DEFENSE_ID, "cast_level": 1},
-                    },
-                    "expected_revision": await _campaign_revision(server, campaign["id"]),
-                    "idempotency_key": "song-defense",
+            defense_args = {
+                "campaign_id": campaign["id"],
+                "actor_id": wizard["id"],
+                "action": "resolve_defense",
+                "payload": {
+                    "choice_id": reaction["id"],
+                    "selection": {"id": _SONG_DEFENSE_ID, "cast_level": 1},
                 },
+                "expected_revision": await _campaign_revision(server, campaign["id"]),
+                "idempotency_key": "song-defense-cas",
+            }
+            before_defense_campaign = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
             )
+            before_defense_wizard = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": wizard["id"]}},
+            )
+            original_replace = server_module.StateMutationService.replace
+            attempts: list[bool] = []
+
+            def stale_reaction(service: object, campaign_id: str, **kwargs: object) -> object:
+                attempts.append(True)
+                updates = list(kwargs["character_updates"] or [])
+                kwargs["character_updates"] = [
+                    replace(update, expected_revision=update.expected_revision + 1)
+                    for update in updates
+                ]
+                return original_replace(service, campaign_id, **kwargs)
+
+            with monkeypatch.context() as patch:
+                patch.setattr(server_module.StateMutationService, "replace", stale_reaction)
+                with pytest.raises(ToolError, match="revision conflict"):
+                    await _combat_call(server, "combat_choice", defense_args)
+            assert attempts == [True]
+            after_failed_defense_campaign = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            after_failed_defense_wizard = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": wizard["id"]}},
+            )
+            assert after_failed_defense_campaign == before_defense_campaign
+            assert after_failed_defense_wizard == before_defense_wizard
+            assert (await _call(
+                server,
+                "combat_query",
+                {"campaign_id": campaign["id"], "view": "reactions", "actor_id": wizard["id"]},
+            ))[0]["status"] == "pending"
+            defense_args["idempotency_key"] = "song-defense"
+            defense_args["expected_revision"] = await _campaign_revision(server, campaign["id"])
+            defended = await _combat_call(server, "combat_choice", defense_args)
             assert _result_payload(defended)["reaction_defense"]["reduction"] == 5
             defended_damage = _result_payload(defended)["damage"]
             assert defended_damage["reduction"] == 5
@@ -471,18 +519,24 @@ def test_locked_scag_bladesinging_materializes_and_settles_full_runtime_contract
                     "idempotency_key": "end-enemy",
                 },
             )
-            first_attack = await _combat_call(
-                server,
-                "combat_resolve_attack",
-                {
-                    "campaign_id": campaign["id"],
-                    "actor_id": wizard["id"],
-                    "target_id": enemy["id"],
-                    "action": {"weapon_id": "wizard-longsword", "weapon_grip": "one_handed"},
-                    "expected_revision": await _campaign_revision(server, campaign["id"]),
-                    "idempotency_key": "song-victory-attack-1",
-                },
+            duplicate_attack_args = {
+                "campaign_id": campaign["id"],
+                "actor_id": wizard["id"],
+                "target_id": enemy["id"],
+                "action": {"weapon_id": "wizard-longsword", "weapon_grip": "one_handed"},
+                "expected_revision": await _campaign_revision(server, campaign["id"]),
+                "idempotency_key": "song-victory-attack-1",
+            }
+            duplicate_attacks = await asyncio.gather(
+                *[
+                    _combat_call(server, "combat_resolve_attack", duplicate_attack_args)
+                    for _ in range(2)
+                ],
+                return_exceptions=True,
             )
+            assert all(isinstance(item, dict) for item in duplicate_attacks), duplicate_attacks
+            assert duplicate_attacks[0] == duplicate_attacks[1]
+            first_attack = duplicate_attacks[0]
             first_attack_result = _result_payload(first_attack)
             victory_parts = [
                 part
@@ -503,23 +557,20 @@ def test_locked_scag_bladesinging_materializes_and_settles_full_runtime_contract
                     "idempotency_key": "song-victory-attack-2",
                 },
             )
-            assert (
-                len(
-                    [
-                        part
-                        for part in _result_payload(second_attack)["damage"]["roll_parts"]
-                        if part.get("source") == "scag.song_of_victory"
-                    ]
-                )
-                == 1
-            )
+            second_attack_result = _result_payload(second_attack)
+            assert len(
+                [
+                    part
+                    for part in second_attack_result["damage"]["roll_parts"]
+                    if part.get("source") == "scag.song_of_victory"
+                ]
+            ) == 1
             combatant = next(
                 item
                 for item in second_attack["combat"]["combatants"]
                 if item["actor_id"] == wizard["id"]
             )
             assert combatant["turn_budget"]["attack_budget"] == 0
-
             dismissed = await _combat_call(
                 server,
                 "combat_use_activity",
@@ -821,6 +872,324 @@ def test_locked_scag_bladesinging_materializes_and_settles_full_runtime_contract
             assert restored["sheet"]["progression"]["classes"][0]["subclass"] == "Bladesinging"
             assert restored["sheet"]["resources"]["scag_bladesong"]["recovers_on"] == "long_rest"
             assert restored["sheet"]["resources"]["scag_bladesong"]["value"] == 5
+
+            async def termination_start(label: str, expected_revision: int) -> dict:
+                return await _combat_call(
+                    restarted,
+                    "combat_start",
+                    {
+                        "campaign_id": campaign["id"],
+                        "positioning_mode": "grid",
+                        "battle_map": {"width_cells": 12, "height_cells": 12},
+                        "participant_ids": [wizard["id"], enemy["id"]],
+                        "participant_config": [
+                            {
+                                "actor_id": wizard["id"],
+                                "initiative": 20,
+                                "position": {"x": 0, "y": 0},
+                                "disposition": "friendly",
+                            },
+                            {
+                                "actor_id": enemy["id"],
+                                "initiative": 10,
+                                "position": {"x": 1, "y": 0},
+                                "disposition": "hostile",
+                            },
+                        ],
+                        "expected_revision": expected_revision,
+                        "idempotency_key": f"termination-start-{label}",
+                    },
+                )
+
+            boundary_campaign = await _call(
+                restarted,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            boundary_start = await termination_start("armor", boundary_campaign["revision"])
+            activated_for_termination = await _combat_call(
+                restarted,
+                "combat_use_activity",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": wizard["id"],
+                    "activity_id": _BLADESONG_ID,
+                    "expected_revision": boundary_start["campaign_revision"],
+                    "idempotency_key": "termination-armor-activate",
+                },
+            )
+            closed_for_armor = await _combat_call(
+                restarted,
+                "combat_end",
+                {
+                    "campaign_id": campaign["id"],
+                    "expected_revision": activated_for_termination["campaign_revision"],
+                    "idempotency_key": "termination-armor-end",
+                },
+            )
+            termination_wizard = await _call(
+                restarted,
+                "character_query",
+                {"view": "get", "payload": {"character_id": wizard["id"]}},
+            )
+            armored_sheet, armor_id = add_inventory_item(
+                termination_wizard["sheet"],
+                {
+                    "id": "termination-medium-armor",
+                    "name": "Chain Shirt",
+                    "kind": "armor",
+                        "mechanics": {
+                            "category": "medium",
+                            "base_ac": 13,
+                            "dexterity_mode": "max",
+                            "dexterity_max": 2,
+                        },
+                },
+            )
+            armored_sheet = equip_inventory_item(armored_sheet, armor_id, "armor")
+            await _call(
+                restarted,
+                "character_sheet_replace",
+                {
+                    "character_id": wizard["id"],
+                    "sheet": armored_sheet,
+                    "expected_revision": termination_wizard["revision"],
+                    "idempotency_key": "termination-armor",
+                },
+            )
+            await termination_start("armor-sync", closed_for_armor["campaign_revision"])
+            armor_ended = await _call(
+                restarted,
+                "character_query",
+                {"view": "get", "payload": {"character_id": wizard["id"]}},
+            )
+            assert next(
+                item
+                for item in armor_ended["sheet"]["effects"]
+                if item.get("metadata", {}).get("scag_bladesong") is True
+                and item.get("ended_reason") == "armor_or_shield"
+            )["active"] is False
+            closed_for_shield = await _combat_call(
+                restarted,
+                "combat_end",
+                {
+                    "campaign_id": campaign["id"],
+                    "expected_revision": await _campaign_revision(restarted, campaign["id"]),
+                    "idempotency_key": "termination-armor-sync-end",
+                },
+            )
+            armor_ended = await _call(
+                restarted,
+                "character_query",
+                {"view": "get", "payload": {"character_id": wizard["id"]}},
+            )
+            unarmored_sheet = deepcopy(armor_ended["sheet"])
+            unarmored_sheet["inventory"]["items"] = [
+                item for item in unarmored_sheet["inventory"]["items"] if item["id"] != armor_id
+            ]
+            unarmored_sheet["inventory"]["equipment_slots"]["armor"] = None
+            await _call(
+                restarted,
+                "character_sheet_replace",
+                {
+                    "character_id": wizard["id"],
+                    "sheet": unarmored_sheet,
+                    "expected_revision": armor_ended["revision"],
+                    "idempotency_key": "termination-armor-remove",
+                },
+            )
+            shield_start = await termination_start(
+                "shield", closed_for_shield["campaign_revision"]
+            )
+            shield_activation = await _combat_call(
+                restarted,
+                "combat_use_activity",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": wizard["id"],
+                    "activity_id": _BLADESONG_ID,
+                    "expected_revision": shield_start["campaign_revision"],
+                    "idempotency_key": "termination-shield-activate",
+                },
+            )
+            closed_for_shield_update = await _combat_call(
+                restarted,
+                "combat_end",
+                {
+                    "campaign_id": campaign["id"],
+                    "expected_revision": shield_activation["campaign_revision"],
+                    "idempotency_key": "termination-shield-end",
+                },
+            )
+            shield_active = await _call(
+                restarted,
+                "character_query",
+                {"view": "get", "payload": {"character_id": wizard["id"]}},
+            )
+            shield_sheet, shield_id = add_inventory_item(
+                shield_active["sheet"],
+                {
+                    "id": "termination-shield",
+                    "name": "Shield",
+                    "kind": "shield",
+                    "mechanics": {"ac_bonus": 2, "magic_bonus": 0},
+                },
+            )
+            shield_sheet = equip_inventory_item(shield_sheet, shield_id, "shield")
+            await _call(
+                restarted,
+                "character_sheet_replace",
+                {
+                    "character_id": wizard["id"],
+                    "sheet": shield_sheet,
+                    "expected_revision": shield_active["revision"],
+                    "idempotency_key": "termination-shield",
+                },
+            )
+            await termination_start("shield-sync", closed_for_shield_update["campaign_revision"])
+            shield_ended = await _call(
+                restarted,
+                "character_query",
+                {"view": "get", "payload": {"character_id": wizard["id"]}},
+            )
+            assert next(
+                item
+                for item in shield_ended["sheet"]["effects"]
+                if item.get("metadata", {}).get("scag_bladesong") is True
+                and item.get("ended_reason") == "armor_or_shield"
+            )["active"] is False
+            closed_after_shield = await _combat_call(
+                restarted,
+                "combat_end",
+                {
+                    "campaign_id": campaign["id"],
+                    "expected_revision": await _campaign_revision(restarted, campaign["id"]),
+                    "idempotency_key": "termination-shield-sync-end",
+                },
+            )
+            shield_ended = await _call(
+                restarted,
+                "character_query",
+                {"view": "get", "payload": {"character_id": wizard["id"]}},
+            )
+            clear_shield_sheet = deepcopy(shield_ended["sheet"])
+            clear_shield_sheet["inventory"]["items"] = [
+                item
+                for item in clear_shield_sheet["inventory"]["items"]
+                if item["id"] != shield_id
+            ]
+            clear_shield_sheet["inventory"]["equipment_slots"]["shield"] = None
+            await _call(
+                restarted,
+                "character_sheet_replace",
+                {
+                    "character_id": wizard["id"],
+                    "sheet": clear_shield_sheet,
+                    "expected_revision": shield_ended["revision"],
+                    "idempotency_key": "termination-shield-remove",
+                },
+            )
+            incap_start = await termination_start(
+                "incap", closed_after_shield["campaign_revision"]
+            )
+            incap_activation = await _combat_call(
+                restarted,
+                "combat_use_activity",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": wizard["id"],
+                    "activity_id": _BLADESONG_ID,
+                    "expected_revision": incap_start["campaign_revision"],
+                    "idempotency_key": "termination-incap-activate",
+                },
+            )
+            closed_for_incap = await _combat_call(
+                restarted,
+                "combat_end",
+                {
+                    "campaign_id": campaign["id"],
+                    "expected_revision": incap_activation["campaign_revision"],
+                    "idempotency_key": "termination-incap-end-combat",
+                },
+            )
+            active_incap = await _call(
+                restarted,
+                "character_query",
+                {"view": "get", "payload": {"character_id": wizard["id"]}},
+            )
+            hp_one_sheet = deepcopy(active_incap["sheet"])
+            hp_one_sheet["combat"]["hp"] = {"value": 1, "max": 30, "temp": 0}
+            await _call(
+                restarted,
+                "character_sheet_replace",
+                {
+                    "character_id": wizard["id"],
+                    "sheet": hp_one_sheet,
+                    "expected_revision": active_incap["revision"],
+                    "idempotency_key": "termination-incap-hp-one",
+                },
+            )
+            incap_start = await termination_start(
+                "incap-sync", closed_for_incap["campaign_revision"]
+            )
+            await _combat_call(
+                restarted,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": wizard["id"],
+                    "expected_revision": await _campaign_revision(restarted, campaign["id"]),
+                    "idempotency_key": "termination-incap-end-wizard",
+                },
+            )
+            incoming = await _combat_call(
+                restarted,
+                "combat_resolve_attack",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": enemy["id"],
+                    "target_id": wizard["id"],
+                    "action": {"weapon_id": "enemy-club"},
+                    "expected_revision": await _campaign_revision(restarted, campaign["id"]),
+                    "idempotency_key": "termination-incap-hit",
+                },
+            )
+            assert _result_payload(incoming)["pending_reaction"] is True
+            incap_choice = (
+                await _call(
+                    restarted,
+                    "combat_query",
+                    {"campaign_id": campaign["id"], "view": "reactions", "actor_id": wizard["id"]},
+                )
+            )[0]
+            await _combat_call(
+                restarted,
+                "combat_choice",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": wizard["id"],
+                    "action": "resolve_defense",
+                    "payload": {
+                        "choice_id": incap_choice["id"],
+                        "selection": {"id": "decline"},
+                    },
+                    "expected_revision": await _campaign_revision(restarted, campaign["id"]),
+                    "idempotency_key": "termination-incap-decline",
+                },
+            )
+            incapacitated = await _call(
+                restarted,
+                "character_query",
+                {"view": "get", "payload": {"character_id": wizard["id"]}},
+            )
+            assert incapacitated["sheet"]["combat"]["hp"]["value"] == 0
+            assert "unconscious" in incapacitated["sheet"]["conditions"]
+            assert next(
+                item
+                for item in incapacitated["sheet"]["effects"]
+                if item.get("metadata", {}).get("scag_bladesong") is True
+                and item.get("ended_reason") == "incapacitated"
+            )["active"] is False
         finally:
             close_server(restarted)
 

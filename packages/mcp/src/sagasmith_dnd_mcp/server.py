@@ -1162,20 +1162,29 @@ def _require_preserved_tortle_natural_armor_provenance(
         )
 
 
+def _active_scag_bladesong_effects(value: Mapping[str, Any]) -> list[dict[str, Any]]:
+    return [
+        deepcopy(effect)
+        for effect in value.get("effects", [])
+        if isinstance(effect, dict)
+        and effect.get("active")
+        and dict(effect.get("metadata") or {}).get("scag_bladesong") is True
+    ]
+
+
+def _reject_new_scag_bladesong_state(sheet: Mapping[str, Any] | None) -> None:
+    if _active_scag_bladesong_effects(sheet or {}):
+        raise ValueError(
+            "active SCAG Bladesong can be created only by the source-bound combat activity"
+        )
+
+
 def _require_preserved_scag_bladesong_state(
     current: Mapping[str, Any], replacement: Mapping[str, Any]
 ) -> None:
-    """Prevent whole-sheet ingress from manufacturing or erasing Bladesong."""
-    def active(value: Mapping[str, Any]) -> list[dict[str, Any]]:
-        return [
-            deepcopy(effect)
-            for effect in value.get("effects", [])
-            if isinstance(effect, dict)
-            and effect.get("active")
-            and dict(effect.get("metadata") or {}).get("scag_bladesong") is True
-        ]
-    before = active(current)
-    after = active(replacement)
+    """Prevent sheet ingress from manufacturing or erasing Bladesong."""
+    before = _active_scag_bladesong_effects(current)
+    after = _active_scag_bladesong_effects(replacement)
     if bool(before) != bool(after) or (before and before != after):
         raise ValueError(
             "character sheet replacement cannot add, remove, or alter active SCAG Bladesong"
@@ -15463,7 +15472,7 @@ def _create_server(
         if sheet is not None and operation != "character.content.apply":
             _require_preserved_intrinsic_attack_provenance(before.sheet, sheet)
             _require_preserved_official_item_provenance(before.sheet, sheet)
-        if sheet is not None and operation == "character.sheet.replace":
+        if sheet is not None:
             _require_preserved_scag_bladesong_state(before.sheet, sheet)
         if sheet is not None and operation not in {
             "character.content.apply",
@@ -21455,22 +21464,37 @@ def _create_server(
                 response["random_stream_receipt"] = stream.receipt()
             return response
 
-        revisions_result = StateMutationService(storage.database).replace(
-            campaign_id,
-            campaign_state=validate_party_state(next_state),
-            character_updates=updates,
-            expected_campaign_revision=campaign.revision,
-            operation="combat.attack.resolve",
-            actor=principal_id,
-            branch_id=resolved_branch_id,
-            idempotency_key=idempotency_key,
-            idempotency_write=IdempotencyWrite(
-                scope=scope,
-                payload=payload,
-                response=attack_response,
-            ),
-            rule_receipts=list(result.get("rule_receipts") or []),
-        )
+        try:
+            revisions_result = StateMutationService(storage.database).replace(
+                campaign_id,
+                campaign_state=validate_party_state(next_state),
+                character_updates=updates,
+                expected_campaign_revision=campaign.revision,
+                operation="combat.attack.resolve",
+                actor=principal_id,
+                branch_id=resolved_branch_id,
+                idempotency_key=idempotency_key,
+                idempotency_write=IdempotencyWrite(
+                    scope=scope,
+                    payload=payload,
+                    response=attack_response,
+                ),
+                rule_receipts=list(result.get("rule_receipts") or []),
+            )
+        except ValueError as error:
+            # Two identical requests can pass the read-side replay check before
+            # either writer reaches the serialized mutation.  The losing writer
+            # must return the committed response once the winner's receipt is
+            # visible, rather than surfacing the core duplicate-group guard.
+            if not (
+                "already has a committed mutation group" in str(error)
+                or "campaign revision conflict or branch conflict" in str(error)
+            ):
+                raise
+            replay = replay_idempotent(scope, idempotency_key, payload)
+            if replay is None:
+                raise
+            return combat_response(campaign_id, principal_id, replay)
         return combat_response(
             campaign_id,
             principal_id,
@@ -31820,6 +31844,7 @@ def _create_server(
         require_engine_owned_character_state(sheet_value)
         _reject_new_intrinsic_attack_provenance(sheet_value)
         _reject_new_tortle_natural_armor_provenance(sheet_value)
+        _reject_new_scag_bladesong_state(sheet_value)
         _reject_new_battle_ready_provenance(sheet_value)
         _reject_new_official_item_provenance(sheet_value)
         _require_authoritative_background_state(
@@ -31938,6 +31963,7 @@ def _create_server(
         require_engine_owned_character_state(sheet)
         _reject_new_intrinsic_attack_provenance(sheet)
         _reject_new_tortle_natural_armor_provenance(sheet)
+        _reject_new_scag_bladesong_state(sheet)
         _reject_new_battle_ready_provenance(sheet)
         _reject_new_official_item_provenance(sheet)
         _require_authoritative_background_state(
@@ -32002,6 +32028,7 @@ def _create_server(
         require_engine_owned_character_state(sheet_value)
         _reject_new_intrinsic_attack_provenance(sheet_value)
         _reject_new_tortle_natural_armor_provenance(sheet_value)
+        _reject_new_scag_bladesong_state(sheet_value)
         _reject_new_battle_ready_provenance(sheet_value)
         _reject_new_official_item_provenance(sheet_value)
         _require_authoritative_background_state(
@@ -55279,6 +55306,7 @@ boundary.
             if lifecycle_expected_revision is None:
                 lifecycle_expected_revision = relation_campaign.revision
         _reject_new_tortle_natural_armor_provenance(actor_sheet)
+        _reject_new_scag_bladesong_state(actor_sheet)
         created = actor_lifecycle.create(
             campaign_id,
             system_id=DND5E.id,
