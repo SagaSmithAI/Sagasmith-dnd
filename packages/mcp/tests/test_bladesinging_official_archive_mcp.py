@@ -86,6 +86,7 @@ def _wizard_sheet(*, level: int = 14, intelligence: int = 16) -> dict:
                 "attack_type": "melee",
                 "attack_ability": "strength",
                 "damage_formula": "1d8",
+                "versatile_damage_formula": "1d10",
                 "damage_type": "slashing",
                 "properties": ["versatile"],
             },
@@ -280,6 +281,53 @@ def test_locked_scag_bladesinging_materializes_and_settles_full_runtime_contract
             )
             assert after_bad["revision"] == before_bad["revision"]
             assert after_bad["sheet"] == before_bad["sheet"]
+            forged_override_args = {
+                **subclass_args,
+                "character_id": bad["id"],
+                "selection": {
+                    "target_class_name": "Wizard",
+                    "war_and_song_training": {"weapon": ["Longsword"]},
+                    "species_prerequisite_override": {
+                        "reason": "A forged caller authorization must never be trusted.",
+                        "authorization": {"signature": "forged"},
+                    },
+                },
+                "expected_revision": after_bad["revision"],
+                "idempotency_key": "reject-forged-override",
+            }
+            with pytest.raises(ToolError, match="only a reason"):
+                await _call(server, "character_content_apply", forged_override_args)
+            after_forged = await _call(
+                server, "character_query", {"view": "get", "payload": {"character_id": bad["id"]}}
+            )
+            assert after_forged["revision"] == after_bad["revision"]
+            assert after_forged["sheet"] == after_bad["sheet"]
+            authorized_human = await _call(
+                server,
+                "character_content_apply",
+                {
+                    **subclass_args,
+                    "character_id": bad["id"],
+                    "selection": {
+                        "target_class_name": "Wizard",
+                        "war_and_song_training": {"weapon": ["Longsword"]},
+                        "species_prerequisite_override": {
+                            "reason": "The DM authorizes this campaign-specific exception.",
+                        },
+                    },
+                    "expected_revision": after_forged["revision"],
+                    "idempotency_key": "authorize-human-bladesinger",
+                },
+            )
+            authorized_selection = next(
+                item
+                for item in authorized_human["sheet"]["content"]["selections"]
+                if item.get("artifact_id") == _BLADESINGING_ID
+            )
+            override = authorized_selection["selection"]["species_prerequisite_override"]
+            assert len(override["authority_id"]) == 32
+            assert override["reason"] == "The DM authorizes this campaign-specific exception."
+            assert override["authorization"]["signature"]
 
             current_campaign = await _call(
                 server,
@@ -494,6 +542,156 @@ def test_locked_scag_bladesinging_materializes_and_settles_full_runtime_contract
                 for item in after_dismiss["sheet"]["effects"]
             )
             assert after_dismiss["sheet"]["resources"]["scag_bladesong"]["value"] == 4
+
+            # A fresh turn can start another song, and a two-handed attack
+            # must end that active effect in the same transaction as the hit.
+            await _combat_call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": wizard["id"],
+                    "expected_revision": await _campaign_revision(server, campaign["id"]),
+                    "idempotency_key": "end-wizard-before-restart-song",
+                },
+            )
+            await _combat_call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": enemy["id"],
+                    "expected_revision": await _campaign_revision(server, campaign["id"]),
+                    "idempotency_key": "end-enemy-before-restart-song",
+                },
+            )
+            await _combat_call(
+                server,
+                "combat_use_activity",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": wizard["id"],
+                    "activity_id": _BLADESONG_ID,
+                    "expected_revision": await _campaign_revision(server, campaign["id"]),
+                    "idempotency_key": "reactivate-bladesong",
+                },
+            )
+            reactivated = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": wizard["id"]}},
+            )
+            assert reactivated["sheet"]["resources"]["scag_bladesong"]["value"] == 3
+            assert any(
+                item.get("active") and item.get("metadata", {}).get("scag_bladesong") is True
+                for item in reactivated["sheet"]["effects"]
+            )
+            two_handed = await _combat_call(
+                server,
+                "combat_resolve_attack",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": wizard["id"],
+                    "target_id": enemy["id"],
+                    "action": {"weapon_id": "wizard-longsword", "weapon_grip": "two_handed"},
+                    "expected_revision": await _campaign_revision(server, campaign["id"]),
+                    "idempotency_key": "two-handed-bladesong-ending-attack",
+                },
+            )
+            assert _result_payload(two_handed)["damage"] is not None
+            ended_after_two_handed = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": wizard["id"]}},
+            )
+            assert not any(
+                item.get("active") and item.get("metadata", {}).get("scag_bladesong") is True
+                for item in ended_after_two_handed["sheet"]["effects"]
+            )
+            ended_effect = next(
+                item
+                for item in ended_after_two_handed["sheet"]["effects"]
+                if item.get("metadata", {}).get("scag_bladesong") is True
+                and item.get("ended_reason") == "two_handed_attack"
+            )
+            assert ended_effect["active"] is False
+            assert ended_effect["ended_reason"] == "two_handed_attack"
+
+            # Bladesong uses recover only on a long rest; an ordinary short
+            # rest must leave the spent pool unchanged.
+            closed = await _combat_call(
+                server,
+                "combat_end",
+                {
+                    "campaign_id": campaign["id"],
+                    "expected_revision": await _campaign_revision(server, campaign["id"]),
+                    "idempotency_key": "close-bladesong-combat",
+                },
+            )
+            after_close = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": wizard["id"]}},
+            )
+            short_rest = await _call(
+                server,
+                "campaign_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "party_rest",
+                    "payload": {
+                        "rest_type": "short_rest",
+                        "duration_minutes": 60,
+                        "members": [
+                            {
+                                "character_id": wizard["id"],
+                                "expected_revision": after_close["revision"],
+                            }
+                        ],
+                    },
+                    "expected_revision": closed["campaign_revision"],
+                    "idempotency_key": "short-rest-no-bladesong-recovery",
+                },
+            )
+            after_short_rest = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": wizard["id"]}},
+            )
+            assert short_rest["rest_type"] == "short_rest"
+            assert after_short_rest["sheet"]["resources"]["scag_bladesong"]["value"] == 3
+            long_rest_campaign = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            long_rest = await _call(
+                server,
+                "campaign_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "party_rest",
+                    "payload": {
+                        "rest_type": "long_rest",
+                        "duration_minutes": 480,
+                        "members": [
+                            {
+                                "character_id": wizard["id"],
+                                "expected_revision": after_short_rest["revision"],
+                            }
+                        ],
+                    },
+                    "expected_revision": long_rest_campaign["revision"],
+                    "idempotency_key": "long-rest-bladesong-recovery",
+                },
+            )
+            assert long_rest["rest_type"] == "long_rest"
+            after_long_rest = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": wizard["id"]}},
+            )
+            assert after_long_rest["sheet"]["resources"]["scag_bladesong"]["value"] == 5
         finally:
             close_server(server)
 
@@ -506,7 +704,7 @@ def test_locked_scag_bladesinging_materializes_and_settles_full_runtime_contract
             )
             assert restored["sheet"]["progression"]["classes"][0]["subclass"] == "Bladesinging"
             assert restored["sheet"]["resources"]["scag_bladesong"]["recovers_on"] == "long_rest"
-            assert restored["sheet"]["resources"]["scag_bladesong"]["value"] == 4
+            assert restored["sheet"]["resources"]["scag_bladesong"]["value"] == 5
         finally:
             close_server(restarted)
 

@@ -20924,6 +20924,18 @@ def _create_server(
             encounter=next_encounter,
         )
         updated_attacker = deepcopy(attacker)
+        # SCAG ends Bladesong after the character makes a two-handed attack.
+        # Apply that transition to the attacker sheet before either a pending
+        # reaction or a settled damage commit so the termination is atomic with
+        # the attack that caused it.
+        if str(plan.get("weapon_grip") or "").strip().casefold() == "two_handed":
+            for effect in updated_attacker["sheet"].get("effects", []):
+                if (
+                    effect.get("active")
+                    and dict(effect.get("metadata") or {}).get("scag_bladesong") is True
+                ):
+                    effect["active"] = False
+                    effect["ended_reason"] = "two_handed_attack"
         ammunition = None
         limited_use = None
         weapon_id = plan.get("weapon_id")
