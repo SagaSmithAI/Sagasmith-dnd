@@ -27454,7 +27454,10 @@ def _create_server(
                     "kind": "scag_bladesong",
                     "source": activity_id,
                     "active": True,
-                    "duration": {"period": "round", "remaining": 10},
+                    # SCAG/errata: Bladesong lasts one minute.  Keep this on
+                    # the narrative minute clock so a 59-second advance does
+                    # not expire it while the exact 60-second boundary does.
+                    "duration": {"period": "minute", "remaining": 1},
                     "changes": [
                         {
                             "path": "derived.armor_class",

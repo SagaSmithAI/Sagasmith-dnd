@@ -1406,6 +1406,54 @@ def test_2024_cleave_grants_one_restricted_attack_only_after_a_hit() -> None:
         )
 
 
+def test_extra_attack_cantrip_replacement_uses_one_attack_budget_and_cannot_overrun() -> None:
+    attacker = _actor("bladesinger")
+    attacker["sheet"]["combat"]["attacks_per_action"] = 2
+    attacker["derived"] = derive_character_sheet(attacker["sheet"])
+    target = _actor("target")
+    attacker.update(initiative=20, tie_breaker=0)
+    target.update(initiative=10, tie_breaker=1)
+    encounter = start_encounter([attacker, target], ruleset="2014")
+
+    encounter, first = pay_attack_action(
+        encounter,
+        attacker,
+        weapon_id="unarmed-strike",
+        attack_mode="melee",
+    )
+    assert first == {"kind": "attack_action", "payment": "main_action", "attack_count": 2}
+    encounter, replacement = pay_attack_action(
+        encounter,
+        attacker,
+        weapon_id="spell-attack:fire-bolt",
+        attack_mode="cantrip",
+    )
+    assert replacement == {
+        "kind": "cantrip_replacement",
+        "payment": "attack_action",
+    }
+    assert current_combatant(encounter)["turn_budget"]["attack_budget"] == 0
+    with pytest.raises(CombatEngineError, match="only one cantrip replacement"):
+        pay_attack_action(
+            encounter,
+            attacker,
+            weapon_id="spell-attack:fire-bolt",
+            attack_mode="cantrip",
+        )
+
+    ordinary = _actor("ordinary")
+    ordinary_target = _actor("ordinary-target")
+    ordinary.update(initiative=20, tie_breaker=0)
+    ordinary_target.update(initiative=10, tie_breaker=1)
+    with pytest.raises(CombatEngineError, match="requires a source-authorized Extra Attack"):
+        pay_attack_action(
+            start_encounter([ordinary, ordinary_target], ruleset="2014"),
+            ordinary,
+            weapon_id="spell-attack:fire-bolt",
+            attack_mode="cantrip",
+        )
+
+
 def test_2024_nick_moves_the_light_extra_attack_into_the_attack_action() -> None:
     rules = resolution_context({"edition": "2024", "fingerprint": "", "lock": []})
     attacker = _add_light_weapon(_mastery_actor("duelist", "nick"))

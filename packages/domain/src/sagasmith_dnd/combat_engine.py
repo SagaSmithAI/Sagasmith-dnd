@@ -2203,6 +2203,11 @@ def pay_attack_action(
 
     cantrip_replacement = attack_mode == "cantrip" or str(weapon_id).startswith("spell-attack:")
     if cantrip_replacement:
+        attack_count = int(actor_derived(attacker).get("attacks_per_action", 1) or 1)
+        if attack_count < 2:
+            raise CombatEngineError(
+                "cantrip replacement requires a source-authorized Extra Attack"
+            )
         if (
             mastery_followup
             or normalized_light_payment
@@ -2227,14 +2232,13 @@ def pay_attack_action(
             )
             if not payment_key:
                 raise CombatEngineError("actor has no attack payment available")
-            count = int(actor_derived(attacker).get("attacks_per_action", 1) or 1)
-            budget["attack_budget"] = max(0, count - 1)
+            budget["attack_budget"] = attack_count - 1
             budget[payment_key] -= 1
             action_payment_key = payment_key
             payment = {
                 "kind": "cantrip_replacement",
                 "payment": payment_key,
-                "attack_count": count,
+                "attack_count": attack_count,
             }
         flags["cantrip_replacement_used"] = True
     elif mastery_followup:

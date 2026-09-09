@@ -395,6 +395,7 @@ def test_locked_scag_bladesinging_materializes_and_settles_full_runtime_contract
             assert wizard["sheet"]["resources"]["scag_bladesong"]["value"] == 4
             assert wizard["derived"]["armor_class"] == 13
             assert wizard["derived"]["speed"]["walk"] == 40
+            assert active_effect["duration"] == {"period": "minute", "remaining": 1}
             assert (
                 _result_payload(activated)["core_effect"]["bladesong_effect"] == active_effect["id"]
             )
@@ -617,17 +618,132 @@ def test_locked_scag_bladesinging_materializes_and_settles_full_runtime_contract
             assert ended_effect["active"] is False
             assert ended_effect["ended_reason"] == "two_handed_attack"
 
-            # Bladesong uses recover only on a long rest; an ordinary short
-            # rest must leave the spent pool unchanged.
             closed = await _combat_call(
                 server,
                 "combat_end",
                 {
                     "campaign_id": campaign["id"],
                     "expected_revision": await _campaign_revision(server, campaign["id"]),
-                    "idempotency_key": "close-bladesong-combat",
+                    "idempotency_key": "close-before-duration-boundary",
                 },
             )
+
+            # The source duration is one minute on the shared six-second
+            # chronology: nine rounds leave the minute intact, and the tenth
+            # tick reaches the exact expiration boundary.
+            second_start = await _combat_call(
+                server,
+                "combat_start",
+                {
+                    "campaign_id": campaign["id"],
+                    "positioning_mode": "grid",
+                    "battle_map": {"width_cells": 12, "height_cells": 12},
+                    "participant_ids": [wizard["id"], enemy["id"]],
+                    "participant_config": [
+                        {
+                            "actor_id": wizard["id"],
+                            "initiative": 20,
+                            "position": {"x": 0, "y": 0},
+                            "disposition": "friendly",
+                        },
+                        {
+                            "actor_id": enemy["id"],
+                            "initiative": 10,
+                            "position": {"x": 1, "y": 0},
+                            "disposition": "hostile",
+                        },
+                    ],
+                    "expected_revision": closed["campaign_revision"],
+                    "idempotency_key": "duration-boundary-start",
+                },
+            )
+            await _combat_call(
+                server,
+                "combat_use_activity",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": wizard["id"],
+                    "activity_id": _BLADESONG_ID,
+                    "expected_revision": second_start["campaign_revision"],
+                    "idempotency_key": "duration-boundary-activate",
+                },
+            )
+            active_before_clock = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": wizard["id"]}},
+            )
+            boundary_effect = next(
+                item
+                for item in active_before_clock["sheet"]["effects"]
+                if item.get("active")
+                and item.get("metadata", {}).get("scag_bladesong") is True
+            )
+            assert boundary_effect["duration"] == {"period": "minute", "remaining": 1}
+            ended_for_clock = await _combat_call(
+                server,
+                "combat_end",
+                {
+                    "campaign_id": campaign["id"],
+                    "expected_revision": await _campaign_revision(server, campaign["id"]),
+                    "idempotency_key": "duration-boundary-end-combat",
+                },
+            )
+            nine_ticks = await _call(
+                server,
+                "campaign_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "clock_advance",
+                    "payload": {"period": "round", "count": 9},
+                    "expected_revision": ended_for_clock["campaign_revision"],
+                    "idempotency_key": "duration-boundary-nine-ticks",
+                },
+            )
+            after_nine_ticks = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": wizard["id"]}},
+            )
+            nine_tick_effect = next(
+                item
+                for item in after_nine_ticks["sheet"]["effects"]
+                if item.get("active")
+                and item.get("metadata", {}).get("scag_bladesong") is True
+            )
+            assert nine_tick_effect["duration"] == {
+                "period": "minute",
+                "remaining": 1,
+                "elapsed_ticks_remainder": 9,
+            }
+            ten_ticks = await _call(
+                server,
+                "campaign_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "clock_advance",
+                    "payload": {"period": "round", "count": 1},
+                    "expected_revision": nine_ticks["campaign_revision"],
+                    "idempotency_key": "duration-boundary-expire",
+                },
+            )
+            after_minute = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": wizard["id"]}},
+            )
+            expired_at_boundary = next(
+                item
+                for item in after_minute["sheet"]["effects"]
+                if item.get("metadata", {}).get("scag_bladesong") is True
+                and item.get("ended_reason") == "duration_expired"
+            )
+            assert expired_at_boundary["active"] is False
+            assert expired_at_boundary["ended_reason"] == "duration_expired"
+
+            # Bladesong uses recover only on a long rest; an ordinary short
+            # rest must leave the spent pool unchanged.
+            closed = ten_ticks
             after_close = await _call(
                 server,
                 "character_query",
@@ -659,7 +775,7 @@ def test_locked_scag_bladesinging_materializes_and_settles_full_runtime_contract
                 {"view": "get", "payload": {"character_id": wizard["id"]}},
             )
             assert short_rest["rest_type"] == "short_rest"
-            assert after_short_rest["sheet"]["resources"]["scag_bladesong"]["value"] == 3
+            assert after_short_rest["sheet"]["resources"]["scag_bladesong"]["value"] == 2
             long_rest_campaign = await _call(
                 server,
                 "campaign_query",
