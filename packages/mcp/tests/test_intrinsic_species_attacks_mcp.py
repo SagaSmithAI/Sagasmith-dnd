@@ -16,7 +16,7 @@ from sagasmith_dnd.content_validation import build_selection_contract
 
 import sagasmith_dnd_mcp.server as server_module
 from sagasmith_dnd_mcp.config import McpConfig
-from sagasmith_dnd_mcp.server import create_server
+from sagasmith_dnd_mcp.server import close_server, create_server
 from tests.authoring_helpers import import_and_activate_addon_fixture
 
 
@@ -563,5 +563,179 @@ def test_tortle_claws_survive_real_play_and_reject_forged_mutations(
         assert final_target["sheet"]["combat"]["hp"]["value"] == (
             20 - attacked["result"]["damage"]["input_amount"]
         )
+
+    asyncio.run(exercise())
+
+def test_species_replacement_removes_old_intrinsic_projection_atomically(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        config = _config(tmp_path)
+        server = create_server(config)
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "species replacement", "idempotency_key": "campaign"},
+        )
+        profile = await _call(
+            server,
+            "campaign_rules",
+            {
+                "campaign_id": campaign["id"],
+                "action": "set_profile",
+                "payload": {"edition": "2014"},
+                "principal_id": "system:local",
+                "expected_revision": campaign["revision"],
+                "idempotency_key": "profile",
+            },
+        )
+        tortle = _tortle_artifact()
+        human = {
+            "id": "dnd5e.addon.species-replacement.species.human",
+            "kind": "species",
+            "application_state": "selection_ready",
+            "mechanical_scope": "mechanical",
+            "execution_state": "engine_ready",
+            "semantic_resolution": {
+                "status": "resolved",
+                "mode": "static_grant",
+                "first_use_compilation_required": False,
+                "clause_ids": ["species-replacement-human"],
+            },
+            "rule_clauses": [
+                {
+                    "schema_version": 1,
+                    "id": "species-replacement-human",
+                    "title": "Human",
+                    "scope": "mechanical",
+                    "source_citations": [
+                        {
+                            "source": "book:species-replacement",
+                            "source_ref": {"page": 1},
+                            "source_excerpt": "Human is a medium species.",
+                        }
+                    ],
+                    "settlement": {
+                        "mode": "static_grant",
+                        "grant_refs": ["card.grants"],
+                    },
+                }
+            ],
+            "card": {
+                "name": "Human",
+                "grants": {"size": "medium", "walk_speed": 30, "languages": ["Common"]},
+            },
+            "rule_refs": ["species-replacement:p1"],
+        }
+        human["selection_contract"] = build_selection_contract(
+            human, status="ready", references=human["rule_refs"]
+        )
+        await import_and_activate_addon_fixture(
+            _call,
+            server,
+            campaign["id"],
+            config.home,
+            manifest={
+                "id": "dnd5e.addon.tortle-package",
+                "version": "1.0.0",
+                "title": "Tortle Package",
+                "namespace": "dnd5e.addon.tortle-package",
+                "system_id": "dnd5e",
+                "editions": ["2014"],
+                "capabilities": [],
+            },
+            artifacts=[tortle],
+            mechanics=[],
+            expected_revision=profile["campaign_revision"],
+            request_key="species-replacement",
+        )
+        await import_and_activate_addon_fixture(
+            _call,
+            server,
+            campaign["id"],
+            config.home,
+            manifest={
+                "id": "dnd5e.addon.species-replacement",
+                "version": "1.0.0",
+                "title": "Species replacement fixture",
+                "namespace": "dnd5e.addon.species-replacement",
+                "system_id": "dnd5e",
+                "editions": ["2014"],
+                "capabilities": [],
+            },
+            artifacts=[human],
+            mechanics=[],
+            expected_revision=profile["campaign_revision"] + 1,
+            request_key="species-replacement-human",
+        )
+        character = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {"campaign_id": campaign["id"], "name": "species"},
+                "principal_id": "system:local",
+                "idempotency_key": "character",
+            },
+        )
+        applied = await _call(
+            server,
+            "character_content_apply",
+            {
+                "character_id": character["id"],
+                "artifact_id": tortle["id"],
+                "expected_revision": character["revision"],
+                "idempotency_key": "apply-tortle",
+            },
+        )
+        augmented_sheet = deepcopy(applied["sheet"])
+        augmented_sheet["inventory"]["items"].append(
+            {
+                "id": "unrelated-item",
+                "name": "Unrelated Item",
+                "kind": "equipment",
+                "quantity": 1,
+                "equipped": False,
+                "equipped_slot": None,
+            }
+        )
+        augmented = await _call(
+            server,
+            "character_sheet_replace",
+            {
+                "character_id": character["id"],
+                "sheet": augmented_sheet,
+                "expected_revision": applied["revision"],
+                "idempotency_key": "add-unrelated-item",
+            },
+        )
+        replaced = await _call(
+            server,
+            "character_content_apply",
+            {
+                "character_id": character["id"],
+                "artifact_id": human["id"],
+                "expected_revision": augmented["revision"],
+                "idempotency_key": "replace-human",
+            },
+        )
+        assert replaced["sheet"]["progression"]["species"] == "Human"
+        assert replaced["sheet"]["traits"]["intrinsic_attacks"] == []
+        assert [item["id"] for item in replaced["sheet"]["inventory"]["items"]] == [
+            "unrelated-item"
+        ]
+        assert [item["name"] for item in replaced["sheet"]["content"]["selections"]] == ["Human"]
+        replay = await _call(
+            server,
+            "character_content_apply",
+            {
+                "character_id": character["id"],
+                "artifact_id": human["id"],
+                "expected_revision": augmented["revision"],
+                "idempotency_key": "replace-human",
+            },
+        )
+        assert replay == replaced
+        close_server(server)
 
     asyncio.run(exercise())

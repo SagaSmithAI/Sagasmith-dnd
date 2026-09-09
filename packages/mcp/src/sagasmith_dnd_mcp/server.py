@@ -3239,6 +3239,9 @@ PHB2014_TOOL_PROFICIENCIES = (
 )
 BACKGROUND_AUTHORITY_SELECTION_KEY = "_background_authority"
 CLASS_EQUIPMENT_AUTHORITY_KEY = "_class_equipment_authority"
+BACKGROUND_MATERIALIZATION_KEY = "_background_materialization"
+SPECIES_MATERIALIZATION_KEY = "_species_materialization"
+SPECIES_AUTHORITY_SELECTION_KEY = "_species_authority"
 
 
 def _class_equipment_records(sheet: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -3345,6 +3348,331 @@ def _background_selection_records(sheet: Mapping[str, Any]) -> list[dict[str, An
     ]
 
 
+def _content_projection_snapshot(sheet: Mapping[str, Any], kind: str) -> dict[str, Any]:
+    """Capture the actor fields a source selection may project.
+
+    The snapshot is kept in the server-authored selection receipt.  Replacement
+    uses it as a compare-and-swap guard: only values that still have the exact
+    source projection are removed, while unrelated later grants remain intact.
+    """
+
+    progression = dict(sheet.get("progression") or {})
+    traits = dict(sheet.get("traits") or {})
+    proficiencies = dict(traits.get("proficiencies") or {})
+    inventory = dict(sheet.get("inventory") or {})
+    combat = dict(sheet.get("combat") or {})
+    content = dict(sheet.get("content") or {})
+    snapshot: dict[str, Any] = {
+        "kind": kind,
+        "progression": {
+            "background": deepcopy(progression.get("background") or ""),
+            "background_grants": deepcopy(progression.get("background_grants") or {}),
+            "species": deepcopy(progression.get("species") or ""),
+            "species_grants": deepcopy(progression.get("species_grants") or {}),
+        },
+        "abilities": {
+            str(name): int(dict(value).get("score", 0) or 0)
+            for name, value in dict(sheet.get("abilities") or {}).items()
+            if isinstance(value, Mapping)
+        },
+        "skills": {
+            str(name): str(dict(value).get("proficiency") or "none")
+            for name, value in dict(sheet.get("skills") or {}).items()
+            if isinstance(value, Mapping)
+        },
+        "combat": {
+            "hp": deepcopy(combat.get("hp") or {}),
+            "speed": deepcopy(combat.get("speed") or {}),
+        },
+        "traits": {
+            "size": deepcopy(traits.get("size") or ""),
+            "languages": deepcopy(traits.get("languages") or []),
+            "intrinsic_attacks": deepcopy(traits.get("intrinsic_attacks") or []),
+            "resistances": deepcopy(traits.get("resistances") or []),
+            "immunities": deepcopy(traits.get("immunities") or []),
+            "condition_immunities": deepcopy(traits.get("condition_immunities") or []),
+            "senses": deepcopy(traits.get("senses") or {}),
+            "proficiencies": {
+                field: deepcopy(proficiencies.get(field) or [])
+                for field in ("armor", "weapons", "tools", "tool_expertise")
+            },
+        },
+        "inventory": {
+            "items": deepcopy(inventory.get("items") or []),
+            "wallet": deepcopy(inventory.get("wallet") or {}),
+            "equipment_slots": deepcopy(inventory.get("equipment_slots") or {}),
+        },
+        "resources": deepcopy(dict(sheet.get("resources") or {})),
+        "content": {
+            section: deepcopy(content.get(section) or [])
+            for section in ("spells", "features", "feats", "activities")
+        },
+        "effects": deepcopy(sheet.get("effects") or []),
+    }
+    return snapshot
+
+
+def _content_projection_receipt(
+    before: Mapping[str, Any], after: Mapping[str, Any], *, kind: str
+) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "kind": kind,
+        # Keep the signed receipt shallow enough for the public MCP argument
+        # schema when callers later submit the complete character card.
+        "before": json.dumps(
+            _content_projection_snapshot(before, kind),
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        "after": json.dumps(
+            _content_projection_snapshot(after, kind),
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+    }
+
+
+def _projection_list_items(before: list[Any], after: list[Any]) -> list[Any]:
+    """Return one copy of every list member newly projected by a grant."""
+
+    remaining = deepcopy(before)
+    added: list[Any] = []
+    for value in after:
+        try:
+            index = next(index for index, item in enumerate(remaining) if item == value)
+        except StopIteration:
+            added.append(deepcopy(value))
+        else:
+            remaining.pop(index)
+    return added
+
+
+def _projection_remove_exact_list(current: list[Any], *, added: list[Any], label: str) -> None:
+    for value in added:
+        try:
+            index = next(index for index, item in enumerate(current) if item == value)
+        except StopIteration as error:
+            raise ValueError(f"{label} changed or left source custody") from error
+        current.pop(index)
+
+
+def _projection_content_items(
+    before: list[dict[str, Any]],
+    after: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, tuple[dict[str, Any], dict[str, Any]]]]:
+    before_by_id = {
+        str(item.get("id")): item
+        for item in before
+        if isinstance(item, Mapping) and str(item.get("id") or "")
+    }
+    created: list[dict[str, Any]] = []
+    changed: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+    for item in after:
+        if not isinstance(item, Mapping):
+            continue
+        item_id = str(item.get("id") or "")
+        if not item_id or item_id not in before_by_id:
+            created.append(deepcopy(dict(item)))
+        elif dict(before_by_id[item_id]) != dict(item):
+            changed[item_id] = (deepcopy(dict(before_by_id[item_id])), deepcopy(dict(item)))
+    return created, changed
+
+
+def _remove_content_projection(
+    sheet: dict[str, Any], record: Mapping[str, Any], *, kind: str
+) -> None:
+    """Atomically remove one prior background/species projection.
+
+    Every owned value is checked against the server-authored after snapshot
+    before it is removed.  This makes spent, transferred, manually changed, or
+    forged projections fail without changing the candidate sheet.
+    """
+
+    key = BACKGROUND_MATERIALIZATION_KEY if kind == "background" else SPECIES_MATERIALIZATION_KEY
+    raw = dict(record.get("selection") or {}).get(key)
+    if not isinstance(raw, Mapping) or int(raw.get("schema_version", 0) or 0) != 1:
+        raise ValueError(f"{kind} replacement requires a source materialization receipt")
+    try:
+        raw_before = raw.get("before")
+        raw_after = raw.get("after")
+        before = (
+            deepcopy(dict(raw_before))
+            if isinstance(raw_before, Mapping)
+            else json.loads(str(raw_before or "{}"))
+        )
+        after = (
+            deepcopy(dict(raw_after))
+            if isinstance(raw_after, Mapping)
+            else json.loads(str(raw_after or "{}"))
+        )
+    except (TypeError, ValueError, json.JSONDecodeError) as error:
+        raise ValueError(f"{kind} replacement receipt is invalid") from error
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        raise ValueError(f"{kind} replacement receipt is invalid")
+    if before.get("kind") != kind or after.get("kind") != kind:
+        raise ValueError(f"{kind} replacement receipt is invalid")
+
+    current = _content_projection_snapshot(sheet, kind)
+    before_progression = dict(before.get("progression") or {})
+    after_progression = dict(after.get("progression") or {})
+    current_progression = dict(current.get("progression") or {})
+    progression_field = "background" if kind == "background" else "species"
+    grants_field = "background_grants" if kind == "background" else "species_grants"
+    if current_progression.get(grants_field) != after_progression.get(grants_field):
+        raise ValueError(f"{kind} grants changed or left source custody")
+    current_progression[progression_field] = before_progression.get(progression_field, "")
+    current_progression[grants_field] = deepcopy(before_progression.get(grants_field) or {})
+    sheet["progression"][progression_field] = current_progression[progression_field]
+    sheet["progression"][grants_field] = current_progression[grants_field]
+
+    current_abilities = dict(current.get("abilities") or {})
+    before_abilities = dict(before.get("abilities") or {})
+    after_abilities = dict(after.get("abilities") or {})
+    for name, after_score in after_abilities.items():
+        before_score = int(before_abilities.get(name, after_score) or 0)
+        delta = int(after_score or 0) - before_score
+        if not delta:
+            continue
+        value = int(current_abilities.get(name, after_score) or 0)
+        if value < int(after_score or 0):
+            raise ValueError(f"{kind} ability projection changed or left source custody")
+        sheet["abilities"][name]["score"] = value - delta
+
+    current_skills = dict(current.get("skills") or {})
+    before_skills = dict(before.get("skills") or {})
+    after_skills = dict(after.get("skills") or {})
+    for name, after_value in after_skills.items():
+        before_value = str(before_skills.get(name, after_value) or "none")
+        if before_value == after_value:
+            continue
+        if str(current_skills.get(name) or "none") != str(after_value):
+            raise ValueError(f"{kind} skill projection changed or left source custody")
+        sheet["skills"][name]["proficiency"] = before_value
+
+    current_combat = dict(current.get("combat") or {})
+    before_combat = dict(before.get("combat") or {})
+    after_combat = dict(after.get("combat") or {})
+    for field in ("hp", "speed"):
+        if before_combat.get(field) == after_combat.get(field):
+            continue
+        if current_combat.get(field) != after_combat.get(field):
+            raise ValueError(f"{kind} combat projection changed or left source custody")
+        sheet["combat"][field] = deepcopy(before_combat.get(field) or {})
+
+    current_traits = dict(current.get("traits") or {})
+    before_traits = dict(before.get("traits") or {})
+    after_traits = dict(after.get("traits") or {})
+    for field in (
+        "languages",
+        "intrinsic_attacks",
+        "resistances",
+        "immunities",
+        "condition_immunities",
+    ):
+        current_list = list(current_traits.get(field) or [])
+        before_list = list(before_traits.get(field) or [])
+        after_list = list(after_traits.get(field) or [])
+        _projection_remove_exact_list(
+            current_list,
+            added=_projection_list_items(before_list, after_list),
+            label=f"{kind} {field}",
+        )
+        sheet["traits"][field] = current_list
+    if before_traits.get("size") != after_traits.get("size"):
+        if current_traits.get("size") != after_traits.get("size"):
+            raise ValueError(f"{kind} size projection changed or left source custody")
+        sheet["traits"]["size"] = deepcopy(before_traits.get("size") or "")
+    if before_traits.get("senses") != after_traits.get("senses"):
+        if current_traits.get("senses") != after_traits.get("senses"):
+            raise ValueError(f"{kind} senses projection changed or left source custody")
+        sheet["traits"]["senses"] = deepcopy(before_traits.get("senses") or {})
+    before_prof = dict(before_traits.get("proficiencies") or {})
+    after_prof = dict(after_traits.get("proficiencies") or {})
+    for field in ("armor", "weapons", "tools", "tool_expertise"):
+        current_list = list(dict(current_traits.get("proficiencies") or {}).get(field) or [])
+        added = _projection_list_items(
+            list(before_prof.get(field) or []), list(after_prof.get(field) or [])
+        )
+        _projection_remove_exact_list(current_list, added=added, label=f"{kind} {field}")
+        sheet["traits"]["proficiencies"][field] = current_list
+
+    current_inventory = dict(current.get("inventory") or {})
+    before_inventory = dict(before.get("inventory") or {})
+    after_inventory = dict(after.get("inventory") or {})
+    current_items = list(current_inventory.get("items") or [])
+    created_items, changed_items = _projection_content_items(
+        list(before_inventory.get("items") or []), list(after_inventory.get("items") or [])
+    )
+    for item in created_items:
+        _projection_remove_exact_list(current_items, added=[item], label=f"{kind} inventory")
+    current_item_by_id = {
+        str(item.get("id")): item for item in current_items if isinstance(item, Mapping)
+    }
+    for item_id, (old_item, after_item) in changed_items.items():
+        if current_item_by_id.get(item_id) != after_item:
+            raise ValueError(f"{kind} inventory projection changed or left source custody")
+        current_items[current_items.index(after_item)] = old_item
+    sheet["inventory"]["items"] = current_items
+    before_wallet = dict(before_inventory.get("wallet") or {})
+    after_wallet = dict(after_inventory.get("wallet") or {})
+    current_wallet = dict(sheet["inventory"].get("wallet") or {})
+    for denomination, after_amount in after_wallet.items():
+        before_amount = int(before_wallet.get(denomination, after_amount) or 0)
+        delta = int(after_amount or 0) - before_amount
+        if not delta:
+            continue
+        current_amount = int(current_wallet.get(denomination, 0) or 0)
+        if current_amount < int(after_amount or 0):
+            raise ValueError(f"{kind} wallet projection changed or left source custody")
+        current_wallet[denomination] = current_amount - delta
+    sheet["inventory"]["wallet"] = current_wallet
+    if before_inventory.get("equipment_slots") != after_inventory.get("equipment_slots"):
+        if sheet["inventory"].get("equipment_slots") != after_inventory.get("equipment_slots"):
+            raise ValueError(f"{kind} equipment projection changed or left source custody")
+        sheet["inventory"]["equipment_slots"] = deepcopy(
+            before_inventory.get("equipment_slots") or {}
+        )
+
+    before_resources = dict(before.get("resources") or {})
+    after_resources = dict(after.get("resources") or {})
+    current_resources = dict(sheet.get("resources") or {})
+    for key, value in after_resources.items():
+        if key not in before_resources:
+            if current_resources.get(key) != value:
+                raise ValueError(f"{kind} resource projection changed or left source custody")
+            current_resources.pop(key, None)
+        elif before_resources[key] != value:
+            if current_resources.get(key) != value:
+                raise ValueError(f"{kind} resource projection changed or left source custody")
+            current_resources[key] = deepcopy(before_resources[key])
+    sheet["resources"] = current_resources
+
+    for section in ("spells", "features", "feats", "activities"):
+        before_items = list(dict(before.get("content") or {}).get(section) or [])
+        after_items = list(dict(after.get("content") or {}).get(section) or [])
+        created, changed = _projection_content_items(before_items, after_items)
+        current_items = list(sheet["content"].get(section) or [])
+        for item in created:
+            _projection_remove_exact_list(current_items, added=[item], label=f"{kind} {section}")
+        by_id = {str(item.get("id")): item for item in current_items if isinstance(item, Mapping)}
+        for item_id, (old_item, after_item) in changed.items():
+            if by_id.get(item_id) != after_item:
+                raise ValueError(f"{kind} {section} projection changed or left source custody")
+            current_items[current_items.index(after_item)] = old_item
+        sheet["content"][section] = current_items
+
+    before_effects = list(before.get("effects") or [])
+    after_effects = list(after.get("effects") or [])
+    current_effects = list(sheet.get("effects") or [])
+    _projection_remove_exact_list(
+        current_effects,
+        added=_projection_list_items(before_effects, after_effects),
+        label=f"{kind} effects",
+    )
+    sheet["effects"] = current_effects
+
+
 def _has_background_grants(sheet: Mapping[str, Any]) -> bool:
     progression = dict(sheet.get("progression") or {})
     grants = dict(progression.get("background_grants") or {})
@@ -3356,6 +3684,120 @@ def _has_background_grants(sheet: Mapping[str, Any]) -> bool:
         or list(grants.get("tools") or [])
         or dict(grants.get("choices") or {})
     )
+
+
+def _species_selection_records(sheet: Mapping[str, Any]) -> list[dict[str, Any]]:
+    return [
+        dict(item)
+        for item in dict(sheet.get("content") or {}).get("selections", [])
+        if isinstance(item, Mapping) and str(item.get("kind") or "").casefold() == "species"
+    ]
+
+
+def _has_species_grants(sheet: Mapping[str, Any] | None) -> bool:
+    progression = dict((sheet or {}).get("progression") or {})
+    grants = dict(progression.get("species_grants") or {})
+    return any(value not in (None, "", [], {}, False, 0) for value in grants.values())
+
+
+def _species_authority_payload(
+    sheet: Mapping[str, Any],
+    record: Mapping[str, Any],
+    *,
+    character_id: str,
+    authority_id: str,
+) -> dict[str, Any]:
+    selection = deepcopy(dict(record.get("selection") or {}))
+    selection.pop(SPECIES_AUTHORITY_SELECTION_KEY, None)
+    progression = dict(sheet.get("progression") or {})
+    return {
+        "schema_version": 1,
+        "purpose": "species_selection_authority",
+        "authority_id": authority_id,
+        "character_id": character_id,
+        "artifact_id": str(record.get("artifact_id") or ""),
+        "pack_id": str(record.get("pack_id") or ""),
+        "pack_version": str(record.get("pack_version") or ""),
+        "species": str(progression.get("species") or ""),
+        "species_grants_checksum": json_sha256(dict(progression.get("species_grants") or {})),
+        "selection_checksum": json_sha256(selection),
+    }
+
+
+def _require_authoritative_species_state(
+    candidate_sheet: Mapping[str, Any],
+    *,
+    character_id: str | None,
+    secret: bytes,
+    current_sheet: Mapping[str, Any] | None = None,
+) -> None:
+    """Reject forged, removed, or altered official species materialization."""
+
+    records = _species_selection_records(candidate_sheet)
+    traits = dict(candidate_sheet.get("traits") or {})
+    intrinsic_attacks = list(traits.get("intrinsic_attacks") or [])
+    meaningful = bool(_has_species_grants(candidate_sheet) or intrinsic_attacks or records)
+    current_traits = dict((current_sheet or {}).get("traits") or {})
+    current_protected = bool(
+        current_sheet
+        and (
+            _has_species_grants(current_sheet)
+            or list(current_traits.get("intrinsic_attacks") or [])
+            or _species_selection_records(current_sheet)
+        )
+    )
+    if current_protected and not (meaningful or records):
+        raise ValueError("authoritative species state cannot be removed by sheet ingress")
+    if not meaningful and not records:
+        return
+    if not intrinsic_attacks:
+        # Legacy actor archives may carry a source species projection without
+        # the post-#182 authority receipt.  Preserve those ordinary species
+        # grants; intrinsic anatomy must still enter through content apply.
+        return
+    if character_id is None:
+        raise ValueError(
+            "species grants can be created only by character_content_apply after actor creation; "
+            "pre-materialized species state is not accepted"
+        )
+    if len(records) != 1:
+        raise ValueError("authoritative species state requires one species selection receipt")
+    record = records[0]
+    raw_authority = dict(record.get("selection") or {}).get(SPECIES_AUTHORITY_SELECTION_KEY)
+    if not isinstance(raw_authority, Mapping):
+        raise ValueError("species selection authority receipt is missing")
+    authority = dict(raw_authority)
+    authority_id = str(authority.get("authority_id") or "")
+    if not authority_id or not isinstance(authority.get("authorization"), Mapping):
+        raise ValueError("species selection authority receipt is invalid")
+    try:
+        payload = verify_receipt_signature(
+            authority["authorization"],
+            secret,
+            missing_error="species selection authority signature is missing",
+            invalid_error="species selection authority signature is invalid",
+        )
+    except ValueError as error:
+        raise ValueError("species selection authority receipt is invalid") from error
+    expected = _species_authority_payload(
+        candidate_sheet,
+        record,
+        character_id=character_id,
+        authority_id=authority_id,
+    )
+    if payload != expected:
+        raise ValueError("species selection authority receipt does not match the actor state")
+    artifact_id = str(record.get("artifact_id") or "")
+    pack_id = str(record.get("pack_id") or "")
+    pack_version = str(record.get("pack_version") or "")
+    for attack in traits.get("intrinsic_attacks") or []:
+        source = dict(dict(attack).get("source") or {})
+        if (
+            source.get("artifact_id") != artifact_id
+            or source.get("pack_id") != pack_id
+            or source.get("pack_version") != pack_version
+        ):
+            raise ValueError("species intrinsic attack does not match its source selection")
 
 
 def _background_authority_payload(
@@ -14804,6 +15246,12 @@ def _create_server(
                     secret=content_authority_secret,
                     current_sheet=before.sheet,
                 )
+                _require_authoritative_species_state(
+                    sheet,
+                    character_id=before.id,
+                    secret=content_authority_secret,
+                    current_sheet=before.sheet,
+                )
             updated = characters.update(
                 before.id,
                 sheet=sheet,
@@ -14835,6 +15283,12 @@ def _create_server(
                 current_sheet=before.sheet,
             )
             _require_authoritative_background_state(
+                sheet,
+                character_id=before.id,
+                secret=content_authority_secret,
+                current_sheet=before.sheet,
+            )
+            _require_authoritative_species_state(
                 sheet,
                 character_id=before.id,
                 secret=content_authority_secret,
@@ -30686,6 +31140,12 @@ def _create_server(
             secret=content_authority_secret,
         )
         if campaign_id is not None:
+            _require_authoritative_species_state(
+                sheet_value,
+                character_id=None,
+                secret=content_authority_secret,
+            )
+        if campaign_id is not None:
             sheet_value["edition"] = campaign_rules_edition(campaign_id)
         sheet_value = finalize_actor_sheet_rulings(sheet_value, campaign_id)
         normalized_sheet = validate_character_sheet(
@@ -30796,6 +31256,11 @@ def _create_server(
             character_id=None,
             secret=content_authority_secret,
         )
+        _require_authoritative_species_state(
+            sheet,
+            character_id=None,
+            secret=content_authority_secret,
+        )
         sheet["edition"] = campaign_rules_edition(campaign_id)
         sheet = finalize_actor_sheet_rulings(sheet, campaign_id)
         instance_name = name if name is not None else template.name
@@ -30850,6 +31315,11 @@ def _create_server(
         _reject_new_tortle_natural_armor_provenance(sheet_value)
         _reject_new_battle_ready_provenance(sheet_value)
         _require_authoritative_background_state(
+            sheet_value,
+            character_id=None,
+            secret=content_authority_secret,
+        )
+        _require_authoritative_species_state(
             sheet_value,
             character_id=None,
             secret=content_authority_secret,
@@ -44944,6 +45414,22 @@ def _create_server(
                 tortle_natural_armor_authority["authority_id"]
             )
         sheet = deepcopy(current.sheet)
+        replacing_selection: dict[str, Any] | None = None
+        existing_selection: dict[str, Any] | None = None
+        materialization_before: dict[str, Any] | None = None
+        if kind in {"background", "species"}:
+            selection_kind_records = [
+                item
+                for item in sheet["content"]["selections"]
+                if str(item.get("kind") or "").casefold() == kind
+            ]
+            if len(selection_kind_records) > 1:
+                raise ValueError(f"authoritative {kind} state requires one selection receipt")
+            if selection_kind_records:
+                existing_record = selection_kind_records[0]
+                if selection.get("replace_existing") is False:
+                    raise ValueError(f"character already has a different {kind}")
+                existing_selection = existing_record
         phase = authoritative_phase(current.campaign_id)
         spellbook_copy: dict[str, Any] | None = None
         subclass_spell_grants: list[dict[str, Any]] = []
@@ -45020,6 +45506,30 @@ def _create_server(
                 "character revision conflict: "
                 f"expected {expected_revision}, found {current.revision}"
             )
+        if kind in {"background", "species"}:
+            if existing_selection is not None:
+                if str(existing_selection.get("artifact_id") or "") == artifact_id:
+                    raise ValueError(f"content {kind} is already present: {artifact_id}")
+                if kind == "background":
+                    _require_authoritative_background_state(
+                        sheet,
+                        character_id=current.id,
+                        secret=content_authority_secret,
+                    )
+                elif kind == "species":
+                    _require_authoritative_species_state(
+                        sheet,
+                        character_id=current.id,
+                        secret=content_authority_secret,
+                    )
+                _remove_content_projection(sheet, existing_selection, kind=kind)
+                sheet["content"]["selections"] = [
+                    item
+                    for item in sheet["content"]["selections"]
+                    if item is not existing_selection
+                ]
+                replacing_selection = existing_selection
+            materialization_before = deepcopy(sheet)
         provenance = {
             "id": artifact_id,
             "pack_id": pack_id,
@@ -45868,6 +46378,32 @@ def _create_server(
                             ), content_authority_secret,
                         ),
                     }
+                    materialization = dict(background_record.get("selection") or {}).get(
+                        BACKGROUND_MATERIALIZATION_KEY
+                    )
+                    if isinstance(materialization, dict):
+                        materialization = deepcopy(materialization)
+                        materialization["after"] = json.dumps(
+                            _content_projection_snapshot(sheet, "background"),
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        )
+                        background_record["selection"][BACKGROUND_MATERIALIZATION_KEY] = (
+                            materialization
+                        )
+                        authority_id = uuid4().hex
+                        background_record["selection"][BACKGROUND_AUTHORITY_SELECTION_KEY] = {
+                            "authority_id": authority_id,
+                            "authorization": sign_receipt(
+                                _background_authority_payload(
+                                    sheet,
+                                    background_record,
+                                    character_id=current.id,
+                                    authority_id=authority_id,
+                                ),
+                                content_authority_secret,
+                            ),
+                        }
                 equipment_result = apply_starting_equipment(
                     sheet, contract=equipment_contract, selection=equipment_selection,
                     item_templates=templates, source_key=f"{pack_id}@{version}:{artifact_id}",
@@ -46198,7 +46734,11 @@ def _create_server(
                     "declares skill choices"
                 )
             selected_background = custom_name or base_background
-            if existing_background and existing_background != selected_background:
+            if (
+                existing_background
+                and existing_background != selected_background
+                and replacing_selection is None
+            ):
                 raise ValueError("character already has a different background")
             raw_languages = selection.get("languages", [])
             raw_tools = selection.get("tools", [])
@@ -46768,10 +47308,15 @@ def _create_server(
             constitution_score_before = int(sheet["abilities"]["constitution"]["score"])
             base_species = str(card.get("base_species") or selected_species)
             existing_species = str(sheet["progression"].get("species") or "")
-            if existing_species and existing_species.casefold() not in {
-                selected_species.casefold(),
-                base_species.casefold(),
-            }:
+            if (
+                existing_species
+                and existing_species.casefold()
+                not in {
+                    selected_species.casefold(),
+                    base_species.casefold(),
+                }
+                and replacing_selection is None
+            ):
                 raise ValueError("character already has a different species")
             if any(
                 item.get("artifact_id") == artifact_id for item in sheet["content"]["selections"]
@@ -49005,6 +49550,18 @@ def _create_server(
             ):
                 raise ValueError("content selection is already present")
             recorded_selection = deepcopy(selection)
+            if kind in {"background", "species"}:
+                if materialization_before is None:
+                    raise ValueError(f"{kind} materialization receipt has no source snapshot")
+                recorded_selection[
+                    BACKGROUND_MATERIALIZATION_KEY
+                    if kind == "background"
+                    else SPECIES_MATERIALIZATION_KEY
+                ] = _content_projection_receipt(
+                    materialization_before,
+                    sheet,
+                    kind=kind,
+                )
             if tortle_natural_armor_authority is not None:
                 recorded_selection[TORTLE_NATURAL_ARMOR_AUTHORITY_KEY] = deepcopy(
                     tortle_natural_armor_authority
@@ -49033,6 +49590,23 @@ def _create_server(
                     "authority_id": authority_id,
                     "authorization": sign_receipt(
                         authority_payload,
+                        content_authority_secret,
+                    ),
+                }
+                selection = deepcopy(selection_record["selection"])
+            elif kind == "species":
+                if SPECIES_AUTHORITY_SELECTION_KEY in selection_record["selection"]:
+                    raise ValueError("species selection authority is server-managed")
+                authority_id = uuid4().hex
+                selection_record["selection"][SPECIES_AUTHORITY_SELECTION_KEY] = {
+                    "authority_id": authority_id,
+                    "authorization": sign_receipt(
+                        _species_authority_payload(
+                            sheet,
+                            selection_record,
+                            character_id=current.id,
+                            authority_id=authority_id,
+                        ),
                         content_authority_secret,
                     ),
                 }
@@ -52703,6 +53277,11 @@ boundary.
         require_engine_owned_character_state(sheet)
         _reject_new_intrinsic_attack_provenance(sheet)
         _require_authoritative_background_state(
+            sheet,
+            character_id=None,
+            secret=content_authority_secret,
+        )
+        _require_authoritative_species_state(
             sheet,
             character_id=None,
             secret=content_authority_secret,
