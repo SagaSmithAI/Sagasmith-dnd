@@ -5798,6 +5798,35 @@ def apply_weapon_mastery_to_encounter(
                     existing["active"] = False
                     existing["ended_reason"] = "replaced_by_slow_mastery"
         value["ongoing_effects"] = [*list(value.get("ongoing_effects") or []), effect]
+        if mastery_id == "slow":
+            # Slow changes the target's authoritative speed immediately.  Keep
+            # the source base speed separate so the effect is not subtracted a
+            # second time when the target starts a later turn.
+            budget = dict(target.get("turn_budget") or {})
+            base_speed = int(target.get("base_speed", budget.get("speed", 30)) or 0)
+            active_penalty = max(
+                [
+                    int(item.get("penalty_ft", 0) or 0)
+                    for item in value.get("ongoing_effects", [])
+                    if isinstance(item, dict)
+                    and item.get("active", True)
+                    and item.get("mechanic_id") == "dnd5e.core.weapon.mastery"
+                    and item.get("kind") == "speed_penalty"
+                    and str(item.get("target_id") or "") == target_id
+                ]
+                or [0]
+            )
+            budget["speed"] = max(0, base_speed - active_penalty)
+            spent, extra_granted = _movement_accounting(target)
+            speed_multiplier = float(target.get("speed_multiplier", 1.0) or 0.0)
+            budget["movement"] = max(
+                0,
+                int(budget["speed"] * speed_multiplier)
+                + extra_granted
+                - spent,
+            )
+            target["turn_budget"] = budget
+            reconcile_dodge_lifecycle(target)
     elif mastery_id == "cleave":
         if attacker.get("turn_flags", {}).get("weapon_mastery_cleave_used"):
             raise CombatEngineError("Cleave can grant an extra attack only once per turn")
