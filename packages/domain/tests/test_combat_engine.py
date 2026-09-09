@@ -918,6 +918,76 @@ def _grid_encounter(
     )
 
 
+def test_movement_can_switch_travel_speeds_and_carries_distance_spent() -> None:
+    actor = _actor("speedster")
+    actor["position"] = {"x": 10, "y": 10}
+    actor["sheet"]["combat"]["speed"].update({"walk": 30, "fly": 60})
+    actor["derived"] = derive_character_sheet(actor["sheet"])
+    encounter = _grid_encounter([actor])
+
+    walked = spend_movement(
+        encounter, "speedster", 20, destination={"x": 14, "y": 10}
+    )
+    flown = spend_movement(
+        walked,
+        "speedster",
+        40,
+        destination={"x": 14, "y": 18},
+        travel_mode="fly",
+    )
+    current = current_combatant(flown)
+    assert current is not None
+    assert current["turn_budget"]["movement_spent"] == 60
+    assert current["turn_budget"]["travel_mode"] == "fly"
+    assert current["turn_budget"]["movement"] == 0
+
+    fresh = _grid_encounter([actor])
+    flown_first = spend_movement(
+        fresh,
+        "speedster",
+        20,
+        destination={"x": 14, "y": 10},
+        travel_mode="fly",
+    )
+    walked_after_flight = spend_movement(
+        flown_first,
+        "speedster",
+        10,
+        destination={"x": 16, "y": 10},
+    )
+    current = current_combatant(walked_after_flight)
+    assert current is not None
+    assert current["turn_budget"]["movement_spent"] == 30
+    assert current["turn_budget"]["travel_mode"] == "walk"
+
+
+def test_movement_uses_double_cost_without_swim_or_climb_speed() -> None:
+    actor = _actor("climber")
+    actor["position"] = {"x": 10, "y": 10}
+    actor["sheet"]["combat"]["speed"].update({"walk": 30, "swim": 0, "climb": 25})
+    actor["derived"] = derive_character_sheet(actor["sheet"])
+    encounter = _grid_encounter([actor])
+
+    fallback = spend_movement(
+        encounter,
+        "climber",
+        10,
+        destination={"x": 12, "y": 10},
+        travel_mode="swim",
+    )
+    native = spend_movement(
+        fallback,
+        "climber",
+        5,
+        destination={"x": 13, "y": 10},
+        travel_mode="climb",
+    )
+    current = current_combatant(native)
+    assert current is not None
+    assert current["turn_budget"]["movement_spent"] == 25
+    assert current["turn_budget"]["travel_mode"] == "climb"
+
+
 def test_encounter_positioning_modes_are_explicit_engine_state() -> None:
     agent = start_encounter([_actor("agent")], positioning_mode="agent")
     assert agent["positioning_mode"] == "agent"

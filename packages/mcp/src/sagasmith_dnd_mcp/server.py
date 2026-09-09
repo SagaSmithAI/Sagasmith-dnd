@@ -23049,6 +23049,7 @@ def _create_server(
         destination: Any = None,
         path: list[Any] | None = None,
         movement_mode: str = "voluntary",
+        travel_mode: str = "walk",
         crawl: bool = False,
         spatial_facts: dict[str, Any] | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
@@ -23056,7 +23057,7 @@ def _create_server(
         branch_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Apply voluntary, Aggressive, forced, or teleport movement from known positions.
+        """Apply movement with a reason and an independent travel-speed mode.
 
         Only voluntary movement spends the actor's turn budget or opens owned
         opportunity-reaction windows.  Effect-driven forced movement and
@@ -23073,6 +23074,7 @@ def _create_server(
             "destination": destination,
             "path": path,
             "movement_mode": movement_mode,
+            "travel_mode": travel_mode,
             "crawl": crawl,
             "spatial_facts": spatial_facts,
             "branch_id": resolved_branch_id,
@@ -23104,6 +23106,7 @@ def _create_server(
             destination=destination,
             path=path,
             movement_mode=movement_mode,
+            travel_mode=travel_mode,
             crawl=crawl,
             spatial_facts=normalized_spatial_facts,
         )
@@ -58813,6 +58816,7 @@ boundary.
                 data.get("destination"),
                 data.get("path"),
                 data.get("movement_mode", "voluntary"),
+                data.get("travel_mode", "walk"),
                 facade_bool(data, "crawl"),
                 data.get("spatial_facts"),
                 principal_id,
