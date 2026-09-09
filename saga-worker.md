@@ -4,54 +4,51 @@ Date: 2026-09-09 (Asia/Singapore)
 
 ## Scope and state
 
-- Runtime checkout: `D:\repo\repostew\Sagasmith-dnd-fix-173-next`
+- Runtime checkout: `D:/repo/repostew/Sagasmith-dnd-fix-173-next`
 - Branch: `fix/173-artificer-followup-order`
-- Head: `70eba6b3` (`Complete source-bound Bladesinging runtime`), pushed to origin.
+- Head: `b0d505f4` (`Close Bladesong two-handed and rest transitions`), pushed to origin.
 - Runtime PR: [SagaSmithAI/Sagasmith-dnd#201](https://github.com/SagaSmithAI/Sagasmith-dnd/pull/201), open.
-- Official content checkout: `D:\repo\repostew\SagaSmith-dnd-content-library-schema-check`, branch `fix/runtime-locked-archives-v1`, commit `36bd249`.
-- Content dependency: [SagaSmithAI/SagaSmith-dnd-content-library#20](https://github.com/SagaSmithAI/SagaSmith-dnd-content-library/pull/20), open. Runtime tests use the exact locked checkout and indexed package checksums; no unpublished package is assumed.
+- Official content checkout: `D:/repo/repostew/SagaSmith-dnd-content-library-schema-check`, branch `fix/runtime-locked-archives-v1`, commit `36bd249`.
+- Content dependency: [SagaSmithAI/SagaSmith-dnd-content-library#20](https://github.com/SagaSmithAI/SagaSmith-dnd-content-library/pull/20), open. Runtime tests use the verified indexed package checksums from that checkout; the package has not been published or merged by this task.
 
 ## Delivered runtime behavior
 
-The branch now provides source-bound acceptance paths for the 2014 Artificer/Battle Smith, City Watch Watcher's Eye, Tortle Claws, and SCAG Bladesinging content.
+The branch provides source-bound public MCP acceptance paths for the 2014 Artificer/Battle Smith, City Watch Watcher's Eye, Tortle Claws, and SCAG Bladesinging content.
 
-- Artificer/Battle Smith materialization persists reviewed starting equipment, artisan-tool choices, subclass grants, Steel Defender relations, replay, and restart state.
-- Watcher's Eye and Tortle Claws execute through exact locked archive cards with provenance, receipts, replay, restart, and ingress protections.
-- Bladesinging materializes Training in War and Song, Bladesong, Extra Attack, Song of Defense, and Song of Victory from the exact SCAG package. Training grants light armor, Performance, and a selected weapon through the reviewed choice contract.
-- Bladesong is a bonus action with proficiency-bonus-scaled uses and long-rest recovery. Its active effect settles the Intelligence AC bonus, speed increase, Acrobatics advantage, and concentration-save bonus; voluntary dismissal and armor, shield, incapacitation, and two-handed attack termination are persisted.
-- Extra Attack settles two attacks and exactly one source-authorized cantrip replacement. Song of Defense creates a reaction choice and atomically pays the selected spell slot for five times slot level damage reduction. Song of Victory contributes the Intelligence modifier once as a flat eligible melee damage part.
-- Whole-sheet replacement cannot manufacture, erase, or alter an active source-bound Bladesong effect. Failed non-Elf application and stale-CAS paths preserve the prior sheet atomically.
+- Artificer/Battle Smith materializes the reviewed class and subclass grants, initial spells and preparation, source-defined equipment and tool choices, Steel Defender relations, replay, restart, and receipt-backed state.
+- Watcher's Eye and Tortle Claws execute through exact locked archive cards with provenance, receipts, replay, restart, background replacement, and ingress protections. Watcher's Eye remains a narrative/source-fact capability and returns a GM result when campaign facts are absent. Tortle Claws remain intrinsic unarmed strikes and cannot be removed, equipped, transferred, or spent as carried inventory.
+- Bladesinging materializes Training in War and Song, Bladesong, Extra Attack, Song of Defense, and Song of Victory from the indexed SCAG archive. Training grants light armor, Performance, and a selected one-handed melee weapon through the reviewed choice contract.
+- Bladesong is a bonus action with proficiency-bonus-scaled uses and long-rest recovery. The acceptance test now verifies DM authorization and forged-override rejection, active effects, short-rest non-recovery, long-rest recovery, voluntary dismissal, and two-handed attack termination with the persisted `two_handed_attack` reason.
+- While active, Bladesong contributes Intelligence to AC, speed, Acrobatics advantage, and concentration-save context. Extra Attack settles two attacks and one eligible cantrip replacement. Song of Defense creates a reaction choice and atomically pays the selected spell slot for five times slot level damage reduction. Song of Victory contributes Intelligence once as a flat eligible melee damage part and is not doubled by a critical hit.
+- Whole-sheet replacement and character ingress preserve source-bound authority. A replacement cannot manufacture, erase, or alter active SCAG Bladesong or authoritative intrinsic species anatomy, and stale-CAS or forged provenance requests leave the prior state unchanged.
 
 ## Issue disposition
 
 ### #172 — Artificer character materialization and starting equipment
 
-**Bounded acceptance delivered.** Locked setup/play coverage verifies class and subclass materialization, source-defined equipment and tool selection, receipts, replay, restart, and Steel Defender persistence. The issue remains open for broader class-level and invalid-selection matrices outside this bounded path.
+Acceptance is implemented and exercised through the locked archive setup and play paths. Public MCP evidence covers class and subclass materialization, source-defined equipment alternatives including gold, tools, armor, ammunition and receipts, missing equipment as a blocking choice, replay, restart, and regression-driver rejection of an unsettled Artificer build. The remaining external prerequisite is publication of the immutable package in content-library PR #20.
 
 ### #173 — Battle Smith grants and subclass application order
 
-**Bounded acceptance delivered.** Late subclass grant settlement, source-bound spell grants, Defender relation persistence, and replay/order behavior are covered. Broader all-level and tool/component matrices remain outside this change.
+Acceptance is implemented and exercised for source-bound always-prepared subclass spells, exact-level grants, subclass selection after level advancement, Steel Defender binding and lifecycle, replay, restart, CAS, multi-actor settlement, and receipt-backed state. The remaining external prerequisite is publication of the immutable package in content-library PR #20.
 
 ### #176 — City Watch Watcher's Eye
 
-**Bounded acceptance delivered.** The exact SCAG artifact, source facts, pending ruling behavior, receipts, replay, restart, and City Watch versus Investigator distinction are covered. Additional malformed and replacement matrices remain open.
+Acceptance is implemented and exercised for exact City Watch and Investigator identity, source excerpt and rule references, explicit narrative/source-fact capability, present and absent campaign facts, pending GM results, malformed or spoofed source rejection, replay, restart, replacement, and receipt persistence. The remaining external prerequisite is publication of the immutable package in content-library PR #20.
 
 ### #182 — Tortle Claws
 
-**Bounded acceptance delivered.** The exact intrinsic unarmed-strike profile, empty/occupied-hand behavior, transfer/mutation rejection, receipts, replay, and restart are covered. Broader species replacement concurrency remains open.
+Acceptance is implemented and exercised for the finalized intrinsic `Claws` profile, empty-hand and occupied-hand combat, remove/update/equip/transfer/spend rejection, species replacement, replay, restart, CAS, direct/template/content-actor/whole-sheet provenance guards, and unarmed-strike receipts. Module and addon routes use the same character ingress validator. The remaining external prerequisite is publication of the immutable package in content-library PR #20.
 
 ### #183 — SCAG Bladesinging
 
-**Core runtime acceptance delivered against the locked indexed SCAG archive.** The path covers the species prerequisite and DM-only signed override, Training in War and Song, proficiency-bonus resource scaling, long-rest recovery, Bladesong activation/effects/dismissal, source-defined termination, Extra Attack and cantrip substitution, Song of Defense reaction/slot payment, Song of Victory flat damage, CAS/replay/restart, and whole-sheet ingress protection. The archive remains the locally repaired immutable package version `1.0.5-local.subclass-grants.1`; publication and merge of the content-library dependency are separate.
+Acceptance is implemented and exercised against the indexed SCAG archive version `1.0.5-local.subclass-grants.1`. Coverage includes the Elf/Half-Elf prerequisite, signed DM-only override and forged override rejection, level gating, Training in War and Song, proficiency-bonus uses, long-rest-only recovery, active benefits, voluntary dismissal, armor/shield/incapacitation/two-handed termination hooks, Extra Attack and cantrip substitution, Song of Defense reaction and slot payment, Song of Victory flat damage, CAS/replay/restart, and whole-sheet authority protection. The remaining external prerequisite is publication of the immutable SCAG package in content-library PR #20; runtime behavior cannot claim published-archive activation until that dependency lands.
 
 ## Validation evidence
 
-- Domain focused regression after the final test cleanup: `88 passed`.
-- Locked archive groups passed: official expansions (`15 passed`), Artificer equipment/play (`3 passed`), Tortle Claws/breathing (`2 passed`), and Evasion/Bladesinging (`5 passed`) against the verified library.
-- `ruff check` over all changed runtime and test files: passed.
-- Python compilation and `git diff --check`: passed.
-- PR CI run `34308469740`: all four jobs passed. UI `23s`, Skills `7s`, Python 3.11 `38m1s`, and Python 3.12 `41m21s`; both Python jobs passed lint, domain tests, and full MCP test suites.
-
-No issue was closed, no pull request was merged, no remote branch or fork was deleted, and no source archive was published by this task.
-
-
+- Latest locked SCAG archive MCP test: `1 passed` with `SAGASMITH_DND_TEST_OFFICIAL_CONTENT_LIBRARY` set to the verified content-library checkout.
+- Focused locked archive groups previously passed on this branch: official expansions (`15 passed`), Artificer equipment/play (`3 passed`), Tortle Claws/breathing (`2 passed`), and Evasion/Bladesinging (`5 passed`).
+- Domain focused regression: `88 passed`.
+- `ruff check`, Python compilation, and `git diff --check` passed.
+- CI for the new head is run `34316711159`; all four jobs were queued at audit time. The previous full CI run `34311338849` passed all four jobs.
+- No issue was closed, no pull request was merged, no remote branch or fork was deleted, and no source archive was published by this task.
