@@ -4728,6 +4728,7 @@ def class_selection_definition_from_source(description: str) -> dict[str, Any] |
     mechanical contract and must compile to the same selection schema.
     """
 
+    source_description = description
     description = _normalize_class_ocr_text(description.replace("**", ""))
     hit_die_match = re.search(
         r"(?i)\bHit\s+Dice?\s*:\s*1?d\s*(6|8|10|12)(?=\s|per\b)",
@@ -4778,7 +4779,7 @@ def class_selection_definition_from_source(description: str) -> dict[str, Any] |
         ]
         return list(dict.fromkeys(item for item in values if item))
 
-    return {
+    result = {
         "hit_die": int(hit_die_match.group(1)),
         "saving_throw_proficiencies": saving_throws,
         "armor_proficiencies": proficiencies("armor"),
@@ -4787,6 +4788,102 @@ def class_selection_definition_from_source(description: str) -> dict[str, Any] |
         "skill_choice_count": skill_choice_count,
         "skill_options": skill_options,
     }
+    spellcasting = _class_spellcasting_profile_from_source(source_description)
+    if spellcasting is not None:
+        result["spellcasting"] = spellcasting
+    return result
+
+
+def _class_spellcasting_profile_from_source(description: str) -> dict[str, Any] | None:
+    """Compile the level-one 2014 spellcasting contract from a class table."""
+
+    heading = re.search(r"^#\s+(.+?)\s*$", description, re.MULTILINE)
+    class_name = heading.group(1).strip() if heading else ""
+    key = class_name.casefold()
+    config = {
+        "bard": ("charisma", "known", "full", True),
+        "cleric": ("wisdom", "prepared", "full", True),
+        "druid": ("wisdom", "prepared", "full", True),
+        "sorcerer": ("charisma", "known", "full", False),
+        "warlock": ("charisma", "known", "pact", False),
+        "wizard": ("intelligence", "spellbook", "full", True),
+    }.get(key)
+    if config is None:
+        return None
+
+    lines = description.splitlines()
+    table_index = next(
+        (index for index, line in enumerate(lines) if re.match(r"^\|\s*Level\s*\|", line)),
+        None,
+    )
+    if table_index is None or table_index + 2 > len(lines):
+        return None
+    headers = [
+        item.strip().casefold()
+        for item in lines[table_index].strip().strip("|").split("|")
+    ][1:]
+    cantrip_index = next((i for i, item in enumerate(headers) if "cantrips known" in item), None)
+    known_index = next((i for i, item in enumerate(headers) if "spells known" in item), None)
+    slot_start = (
+        known_index + 1
+        if known_index is not None
+        else cantrip_index + 1
+        if cantrip_index is not None
+        else None
+    )
+    if cantrip_index is None or slot_start is None:
+        return None
+    # The header match starts after the first ``Level`` cell, while data rows
+    # retain that cell.
+    cantrip_index += 1
+    if known_index is not None:
+        known_index += 1
+    slot_start += 1
+    slot_progression = config[2]
+    cantrips: list[int] = []
+    known: list[int] = []
+    slots: list[list[int]] = []
+    for line in lines[table_index + 2 :]:
+        if not line.lstrip().startswith("|"):
+            break
+        cells = [item.strip() for item in line.strip().strip("|").split("|")]
+        if not cells or not re.match(r"^\d+(?:st|nd|rd|th)", cells[0], re.IGNORECASE):
+            continue
+        def number(index: int) -> int:
+            value = cells[index] if index < len(cells) else "-"
+            match = re.search(r"\d+", value)
+            return int(match.group()) if match else 0
+        cantrips.append(number(cantrip_index))
+        if known_index is not None:
+            known.append(number(known_index))
+        slots.append([number(index) for index in range(slot_start, len(headers))])
+    if len(cantrips) != 20 or (slot_progression != "pact" and len(slots) != 20):
+        return None
+    profile: dict[str, Any] = {
+        "ability": config[0],
+        "class_list": key,
+        "preparation_mode": config[1],
+        "slot_progression": slot_progression,
+        "ritual_casting": config[3],
+        "spellbook": config[1] == "spellbook",
+        "cantrips_known_by_level": cantrips,
+        "leveled_spells_known_by_level": known,
+        "prepared_limit": {},
+        "spell_list_expansion": [],
+    }
+    if config[1] in {"prepared", "spellbook"}:
+        profile["prepared_limit"] = {
+            "ability": config[0],
+            "class_level_divisor": 1,
+            "rounding": "down",
+            "minimum": 1,
+        }
+    if config[1] == "spellbook":
+        # The 2014 Wizard table omits a Spells Known column, but the source
+        # feature grants six 1st-level spellbook entries and two more each
+        # time the class advances.
+        profile["leveled_spells_known_by_level"] = [6 + 2 * level for level in range(20)]
+    return profile
 
 
 def _normalize_class_ocr_text(description: str) -> str:
