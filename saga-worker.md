@@ -6,7 +6,7 @@ Date: 2026-09-09 (Asia/Singapore)
 
 - Runtime checkout: `D:/repo/repostew/Sagasmith-dnd-fix-173-next`
 - Branch: `fix/173-artificer-followup-order`
-- Runtime implementation commit: `b0d505f4` (`Close Bladesong two-handed and rest transitions`), pushed to origin; this audit is carried by the later documentation commits on the same branch.
+- Runtime implementation commit: `0ff6d6afeed6e0e9b1a2a8933af0d4a22525146e` (`test: complete bladesinging acceptance contract`), pushed to origin; this audit is carried by the later acceptance-test commit on the same branch.
 - Runtime PR: [SagaSmithAI/Sagasmith-dnd#201](https://github.com/SagaSmithAI/Sagasmith-dnd/pull/201), open.
 - Official content checkout: `D:/repo/repostew/SagaSmith-dnd-content-library-schema-check`, branch `fix/runtime-locked-archives-v1`, commit `36bd249`.
 - Content dependency: [SagaSmithAI/SagaSmith-dnd-content-library#20](https://github.com/SagaSmithAI/SagaSmith-dnd-content-library/pull/20), open. Runtime tests use the verified indexed package checksums from that checkout; the package has not been published or merged by this task.
@@ -27,7 +27,7 @@ The branch provides source-bound public MCP acceptance paths for the 2014 Artifi
 
 ### #172 — Artificer character materialization and starting equipment
 
-Acceptance is implemented and exercised through the locked archive setup and play paths. Public MCP evidence covers class and subclass materialization, source-defined equipment alternatives including gold, tools, armor, ammunition and receipts, the DM-only Right Tool for the Job materialization and replacement path, missing equipment as a blocking choice, replay, restart, and regression-driver rejection of an unsettled Artificer build. The remaining external prerequisite is publication of the immutable package in content-library PR #20.
+Acceptance is implemented and exercised through the locked archive setup and play paths. Public MCP evidence covers class and subclass materialization, source-defined equipment alternatives including gold, tools, armor, ammunition and receipts, the DM-only Right Tool for the Job materialization and replacement path, unavailable-package fail-closed behavior, missing and invalid class choices, missing and invalid cantrip and prepared-spell choices, Intelligence and level scaling, follow-up planning, CAS rollback, replay, restart, and regression-driver rejection of an unsettled Artificer build. The remaining external prerequisite is publication of the immutable package in content-library PR #20.
 
 ### #173 — Battle Smith grants and subclass application order
 
@@ -48,7 +48,8 @@ Acceptance is implemented and exercised against the indexed SCAG archive version
 ## Validation evidence
 
 - Latest locked SCAG archive MCP test: `1 passed` with `SAGASMITH_DND_TEST_OFFICIAL_CONTENT_LIBRARY` set to the verified content-library checkout.
-- Focused locked archive groups previously passed on this branch: official expansions (`15 passed`), Artificer equipment/play (`3 passed`), Tortle Claws/breathing (`2 passed`), and Evasion/Bladesinging (`5 passed`).
+- Latest locked Artificer play MCP tests: `3 passed` with `SAGASMITH_DND_TEST_OFFICIAL_CONTENT_LIBRARY` set to the verified content-library checkout; the equipment/play group is `4 passed`.
+- Focused locked archive groups previously passed on this branch: official expansions (`15 passed`), Tortle Claws/breathing (`2 passed`), and Evasion/Bladesinging (`5 passed`).
 - Domain focused regression: `88 passed`.
 - `ruff check`, Python compilation, and `git diff --check` passed.
 - CI for the new head is run `34316711159`; all four jobs were queued at audit time. The previous full CI run `34311338849` passed all four jobs.
