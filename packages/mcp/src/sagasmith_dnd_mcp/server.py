@@ -39,7 +39,7 @@ from mcp.types import (
     TextContent,
     ToolAnnotations,
 )
-from pydantic import Field
+from pydantic import Field, StrictBool
 from sagasmith_core import (
     DOCUMENT_NORMALIZER_VERSION,
     AccessService,
@@ -653,6 +653,14 @@ from sagasmith_dnd_mcp.tool_profiles import (
     tools_for_phase,
     validate_profile_coverage,
 )
+
+
+def _strict_boolean(value: Any, field: str) -> bool:
+    """Reject truthy/falsy stand-ins at every public rules boundary."""
+
+    if not isinstance(value, bool):
+        raise ValueError(f"{field} must be a boolean")
+    return value
 
 
 def _render_combat_png(*args: Any, **kwargs: Any) -> tuple[dict[str, Any], bytes]:
@@ -24385,8 +24393,8 @@ def _create_server(
         actor_id: str,
         spell_id: str,
         cast_level: int | None = None,
-        ritual: bool = False,
-        signature_free_cast: bool = False,
+        ritual: StrictBool = False,
+        signature_free_cast: StrictBool = False,
         feature_cast_source: str | None = None,
         component_ruling: dict[str, Any] | None = None,
         source_item_id: str | None = None,
@@ -24399,6 +24407,8 @@ def _create_server(
         declaration: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Pay a combat action and settle source-bound spell workflows atomically."""
+        ritual = _strict_boolean(ritual, "ritual")
+        signature_free_cast = _strict_boolean(signature_free_cast, "signature_free_cast")
         access.require_actor(campaign_id, actor_id, principal_id, control=True)
         require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = require_current_branch(campaign_id, branch_id)
@@ -29079,10 +29089,10 @@ def _create_server(
         target_id: str | None = None,
         action: str | None = None,
         dc: int = 0,
-        proficient: bool = False,
+        proficient: StrictBool = False,
         bonus: int = 0,
-        advantage: bool = False,
-        disadvantage: bool = False,
+        advantage: StrictBool = False,
+        disadvantage: StrictBool = False,
         rule_facts: dict[str, Any] | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
         expected_revision: int | None = None,
@@ -29090,6 +29100,9 @@ def _create_server(
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Resolve a check/save/death-save or an atomic Medicine stabilization."""
+        proficient = _strict_boolean(proficient, "proficient")
+        advantage = _strict_boolean(advantage, "advantage")
+        disadvantage = _strict_boolean(disadvantage, "disadvantage")
         access.require_actor(campaign_id, actor_id, principal_id, control=True)
         require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = require_current_branch(campaign_id, branch_id)
@@ -37185,11 +37198,11 @@ def _create_server(
         campaign_id: str,
         dc: int,
         ability_score: int,
-        proficient: bool = False,
+        proficient: StrictBool = False,
         level: int = 1,
         bonus: int = 0,
-        advantage: bool = False,
-        disadvantage: bool = False,
+        advantage: StrictBool = False,
+        disadvantage: StrictBool = False,
         kind: str = "ability",
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
         branch_id: str | None = None,
@@ -37197,6 +37210,9 @@ def _create_server(
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Resolve a check and atomically advance the campaign random stream."""
+        proficient = _strict_boolean(proficient, "proficient")
+        advantage = _strict_boolean(advantage, "advantage")
+        disadvantage = _strict_boolean(disadvantage, "disadvantage")
         payload = {
             "dc": dc,
             "ability_score": ability_score,
@@ -51639,9 +51655,7 @@ boundary.
 
     def facade_bool(payload: dict[str, Any], name: str, *, default: bool = False) -> bool:
         value = payload.get(name, default)
-        if not isinstance(value, bool):
-            raise ValueError(f"payload.{name} must be a boolean")
-        return value
+        return _strict_boolean(value, f"payload.{name}")
 
     def required_boolean(payload: dict[str, Any], name: str) -> bool:
         if name not in payload:
@@ -54700,18 +54714,17 @@ boundary.
         casting_slot_level: int | None = None,
         template_variant: str | None = None,
         participant_config: dict[str, Any] | None = None,
-        replace_existing: bool = False,
+        replace_existing: StrictBool = False,
         expected_revision: int | None = None,
         branch_id: str | None = None,
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Instantiate one enabled, reviewed addon actor template without evaluating prose."""
+        replace_existing = _strict_boolean(replace_existing, "replace_existing")
         access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
         if not idempotency_key:
             raise ValueError("idempotency_key is required for addon actor instantiation")
-        if not isinstance(replace_existing, bool):
-            raise ValueError("replace_existing must be a boolean")
         addon_request = {
             "artifact_id": artifact_id,
             "owner_character_id": owner_character_id,
@@ -59198,7 +59211,7 @@ boundary.
                 campaign_id,
                 required(data, "actor_id"),
                 required(data, "choice_id"),
-                required(data, "release"),
+                required_boolean(data, "release"),
                 data.get("declaration"),
                 principal_id,
                 expected_revision,
@@ -59220,7 +59233,7 @@ boundary.
                 campaign_id,
                 required(data, "actor_id"),
                 required(data, "choice_id"),
-                required(data, "release"),
+                required_boolean(data, "release"),
                 data.get("declaration"),
                 principal_id,
                 expected_revision,
