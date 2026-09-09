@@ -559,6 +559,61 @@ def test_steel_defender_shares_owner_initiative_and_immediately_follows_owner() 
     assert defender_state["initiative_roll"] is None
 
 
+@pytest.mark.parametrize("ruleset", ["2014", "2024"])
+def test_declared_initiative_group_rolls_once_and_copies_complete_result(ruleset: str) -> None:
+    first = _actor("goblin-a")
+    second = _actor("goblin-b")
+    first["sheet"]["edition"] = ruleset
+    second["sheet"]["edition"] = ruleset
+    first.update(initiative_group_id="goblins", tie_breaker=2, character_type="monster")
+    second.update(initiative_group_id="goblins", tie_breaker=1, character_type="monster")
+
+    rng = _SequenceRng(14)
+    encounter = start_encounter([first, second], ruleset=ruleset, rng=rng)
+
+    assert len(rng.values) == 0
+    assert [item["initiative"] for item in encounter["combatants"]] == [14, 14]
+    assert encounter["combatants"][0]["initiative_roll"] == encounter["combatants"][1][
+        "initiative_roll"
+    ]
+    assert all(item["initiative_group_id"] == "goblins" for item in encounter["combatants"])
+    assert "dnd5e.core.initiative.group" in encounter["rule_boundary_ids"]
+
+
+def test_grouped_and_ungrouped_monsters_consume_one_roll_per_group() -> None:
+    grouped_a = _actor("grouped-a")
+    grouped_b = _actor("grouped-b")
+    solo = _actor("solo")
+    grouped_a.update(initiative_group_id="same", tie_breaker=2, character_type="monster")
+    grouped_b.update(initiative_group_id="same", tie_breaker=1, character_type="monster")
+    solo.update(tie_breaker=0, character_type="monster")
+
+    rng = _SequenceRng(10, 5)
+    encounter = start_encounter([grouped_a, grouped_b, solo], rng=rng)
+
+    assert len(rng.values) == 0
+    grouped = [item for item in encounter["combatants"] if item.get("initiative_group_id")]
+    assert len(grouped) == 2
+    assert grouped[0]["initiative_roll"] == grouped[1]["initiative_roll"]
+    assert next(item for item in encounter["combatants"] if item["actor_id"] == "solo")[
+        "initiative_roll"
+    ]["natural"] == 5
+
+
+def test_initiative_group_rejects_incompatible_bonuses_before_any_roll() -> None:
+    first = _actor("goblin-a")
+    second = _actor("goblin-b")
+    first["derived"]["initiative"] = 2
+    second["derived"]["initiative"] = 3
+    first.update(initiative_group_id="goblins", tie_breaker=1, character_type="monster")
+    second.update(initiative_group_id="goblins", tie_breaker=2, character_type="monster")
+
+    rng = _SequenceRng(14)
+    with pytest.raises(CombatEngineError, match="incompatible initiative bonuses"):
+        start_encounter([first, second], rng=rng)
+    assert rng.values == [14]
+
+
 def test_steel_defender_defaults_to_dodge_but_keeps_movement_and_reaction() -> None:
     owner = _actor("owner")
     owner["initiative"] = 20
