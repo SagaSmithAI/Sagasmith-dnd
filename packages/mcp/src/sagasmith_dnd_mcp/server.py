@@ -46771,6 +46771,7 @@ def _create_server(
         species_feature_grants: list[dict[str, Any]] = []
         class_materialization: dict[str, Any] | None = None
         replacing_feature_selection = False
+        spell_replacement: dict[str, Any] | None = None
         requested_method = str(selection.get("method") or "").strip().casefold()
         operation = (
             "character.spellbook.copy"
@@ -47806,6 +47807,59 @@ def _create_server(
                 )
             if level == 0 and method != "known":
                 raise ValueError("cantrips must be selected as known spells")
+            replacement_id = selection.get("replace_existing")
+            if replacement_id is not None:
+                if not isinstance(replacement_id, str) or not replacement_id.strip():
+                    raise ValueError("spell replace_existing must be a non-empty spell id")
+                replacement_id = replacement_id.strip()
+                try:
+                    edition = normalize_dnd_edition(sheet.get("edition"))
+                except ValueError as error:
+                    raise ValueError(str(error)) from error
+                if edition != "2014":
+                    raise ValueError("spell replacement is available only for 2014 known casters")
+                if method != "known" or source_class not in {
+                    "bard",
+                    "ranger",
+                    "sorcerer",
+                    "warlock",
+                }:
+                    raise ValueError(
+                        "spell replacement requires a 2014 Bard, Ranger, Sorcerer, "
+                        "or Warlock known spell"
+                    )
+                if level == 0:
+                    raise ValueError("spell replacement cannot replace a cantrip")
+                existing_spell = next(
+                    (
+                        item
+                        for item in sheet["content"]["spells"]
+                        if str(item.get("id") or "") == replacement_id
+                    ),
+                    None,
+                )
+                if existing_spell is None:
+                    raise ValueError("spell replace_existing must reference an existing spell")
+                existing_grant = dict(existing_spell.get("grant") or {})
+                existing_access = dict(existing_spell.get("access") or {})
+                if (
+                    existing_grant.get("source_type") != "class"
+                    or str(existing_grant.get("source_key") or "").casefold() != source_class
+                    or existing_grant.get("method") != "known"
+                    or existing_access.get("known") is not True
+                    or int(existing_spell.get("level", 0) or 0) == 0
+                ):
+                    raise ValueError(
+                        "spell replace_existing must reference an existing known spell "
+                        "from the same class"
+                    )
+                spell_replacement = {
+                    "removed_spell_id": replacement_id,
+                    "removed_spell_name": str(existing_spell.get("name") or replacement_id),
+                    "added_spell_id": artifact_id,
+                    "added_spell_name": str(card.get("name") or artifact_id),
+                    "source_class": source_class,
+                }
             if method in {"spellbook", "spellbook_copy"} and preparation_mode != "spellbook":
                 raise ValueError("only a spellbook caster can select a spellbook grant")
             if method == "class_prepared" and preparation_mode != "prepared":
@@ -47819,7 +47873,10 @@ def _create_server(
                 if spell_status is not None:
                     choice_kind = "cantrips" if level == 0 else "leveled_spells"
                     choice_status = spell_status[choice_kind]
-                    if choice_status["present"] >= choice_status["required"]:
+                    if (
+                        choice_status["present"] >= choice_status["required"]
+                        and replacement_id is None
+                    ):
                         raise ValueError(
                             f"{source_class} {choice_kind} selection exceeds the reviewed "
                             f"class-level limit of {choice_status['required']}"
@@ -47855,6 +47912,23 @@ def _create_server(
             # The actor card stores only the character spell schema, selected
             # grant source, and exact pack provenance.
             spell_card.update(provenance)
+            if spell_replacement is not None:
+                removed_id = spell_replacement["removed_spell_id"]
+                sheet["content"]["spells"] = [
+                    item
+                    for item in sheet["content"]["spells"]
+                    if str(item.get("id") or "") != removed_id
+                ]
+                preparation = sheet.get("spellcasting", {}).get("preparation", {})
+                preparation["selected_spell_ids"] = [
+                    item
+                    for item in preparation.get("selected_spell_ids", [])
+                    if item != removed_id
+                ]
+                spellbook = sheet.get("spellcasting", {}).get("spellbook", {})
+                spellbook["spell_ids"] = [
+                    item for item in spellbook.get("spell_ids", []) if item != removed_id
+                ]
             sheet["content"]["spells"].append(spell_card)
         elif kind == "feat":
             materialize_feat(
@@ -51284,6 +51358,7 @@ def _create_server(
                 if class_materialization is not None
                 else {}
             ),
+            **({"spell_replacement": spell_replacement} if spell_replacement is not None else {}),
             "content_context": runtime_context,
             **({"play_grant": play_grant} if play_grant is not None else {}),
             **(

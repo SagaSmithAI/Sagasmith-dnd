@@ -127,7 +127,10 @@ def test_selection_validation_is_independent_from_runtime_settlement() -> None:
     assert selection_contract_errors(artifact) == []
     assert artifact["selection_contract"]["materializer"] == (DND_SELECTION_MATERIALIZERS["spell"])
     assert artifact["selection_contract"]["schema"] == selection_schema_for_artifact(artifact)
-    assert selection_input_errors(artifact, {"method": "spellbook", "source_class": "wizard"}) == []
+    assert selection_input_errors(
+        artifact,
+        {"method": "spellbook", "source_class": "wizard", "replace_existing": "old-spell"},
+    ) == []
     assert selection_input_errors(artifact, {"raw_payload": {}}) == [
         "dnd5e.example.spell.star-flare.selection has unsupported fields: raw_payload"
     ]

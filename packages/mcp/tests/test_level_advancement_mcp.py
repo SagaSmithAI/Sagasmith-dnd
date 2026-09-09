@@ -189,6 +189,51 @@ def _fighter_sheet() -> dict:
     return sheet
 
 
+def _bard_level_one_sheet() -> dict:
+    sheet = default_character_sheet()
+    sheet["progression"]["level"] = 1
+    sheet["progression"]["classes"] = [
+        {"name": "Bard", "level": 1, "subclass": "", "hit_die": 8}
+    ]
+    sheet["abilities"]["charisma"]["score"] = 16
+    sheet["combat"]["hp"] = {"value": 8, "max": 8, "temp": 0}
+    sheet["combat"]["hit_dice"] = {
+        "d8": {
+            "label": "d8",
+            "value": 1,
+            "max": 1,
+            "recovers_on": "long_rest",
+            "source_key": "Bard",
+        }
+    }
+    sheet["combat"]["hp_progression"] = [
+        {"level": 1, "method": "manual", "value": 8, "source": "Bard level 1"}
+    ]
+    sheet["spellcasting"].update(
+        {
+            "ability": "charisma",
+            "class_lists": ["bard"],
+            "spell_slots": {
+                "1": {
+                    "label": "Level 1 spell slots",
+                    "value": 2,
+                    "max": 2,
+                    "recovers_on": "long_rest",
+                    "source_key": "Bard",
+                    "slot_level": 1,
+                }
+            },
+            "preparation": {
+                "mode": "known",
+                "max_prepared": 0,
+                "changes_on": "long_rest",
+                "selected_spell_ids": [],
+            },
+        }
+    )
+    return sheet
+
+
 def _bard_sheet_with_shadow_resource() -> dict:
     sheet = default_character_sheet()
     sheet["progression"]["level"] = 10
@@ -2632,6 +2677,92 @@ def test_lobby_level_advance_is_source_bound_and_reports_catalog_follow_up(
                     },
                     "expected_revision": unresolvable["revision"],
                     "idempotency_key": "unresolvable-level",
+                },
+            )
+
+    asyncio.run(exercise())
+
+
+def test_2014_known_caster_can_replace_exactly_one_spell_atomically(tmp_path: Path) -> None:
+    workspace = Path(__file__).resolve().parents[3]
+    config = McpConfig(
+        home=tmp_path / "home",
+        database_url=None,
+        chroma_url=None,
+        chroma_path_override=None,
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
+        auto_seed_rules=True,
+    )
+
+    async def exercise() -> None:
+        server = create_server(config)
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Known spell replacement", "edition": "2014", "idempotency_key": "campaign"},
+        )
+        actor = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Bard",
+                    "sheet": _bard_level_one_sheet(),
+                },
+                "idempotency_key": "actor",
+            },
+        )
+        old_spell_id = "dnd5e.content.srd2014.spell.charm-person"
+        new_spell_id = "dnd5e.content.srd2014.spell.comprehend-languages"
+        learned = await _call(
+            server,
+            "character_content_apply",
+            {
+                "character_id": actor["id"],
+                "artifact_id": old_spell_id,
+                "selection": {"source_class": "Bard", "method": "known"},
+                "expected_revision": actor["revision"],
+                "idempotency_key": "old-spell",
+            },
+        )
+        replaced = await _call(
+            server,
+            "character_content_apply",
+            {
+                "character_id": actor["id"],
+                "artifact_id": new_spell_id,
+                "selection": {
+                    "source_class": "Bard",
+                    "method": "known",
+                    "replace_existing": old_spell_id,
+                },
+                "expected_revision": learned["revision"],
+                "idempotency_key": "replace-spell",
+            },
+        )
+        spell_ids = [item["id"] for item in replaced["sheet"]["content"]["spells"]]
+        assert old_spell_id not in spell_ids
+        assert new_spell_id in spell_ids
+        assert replaced["spell_replacement"]["removed_spell_id"] == old_spell_id
+        assert replaced["spell_replacement"]["added_spell_id"] == new_spell_id
+
+        with pytest.raises(Exception, match="existing spell"):
+            await _call(
+                server,
+                "character_content_apply",
+                {
+                    "character_id": actor["id"],
+                    "artifact_id": "dnd5e.content.srd2014.spell.healing-word",
+                    "selection": {
+                        "source_class": "Bard",
+                        "method": "known",
+                        "replace_existing": old_spell_id,
+                    },
+                    "expected_revision": replaced["revision"],
+                    "idempotency_key": "replace-twice",
                 },
             )
 
