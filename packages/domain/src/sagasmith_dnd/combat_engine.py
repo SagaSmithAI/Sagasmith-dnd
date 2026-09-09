@@ -2968,6 +2968,16 @@ def preflight_attack(
     if dueling_bonus and expression:
         expression = f"{expression} + {dueling_bonus}"
     damage_type = str(weapon.get("damage_type") or "")
+    attack_facts = {
+        "magical": bool(weapon.get("magical", False)),
+        "materials": sorted(
+            {
+                str(material).strip().casefold()
+                for material in weapon.get("materials", [])
+                if str(material).strip()
+            }
+        ),
+    }
     on_hit_effect = str(weapon.get("on_hit_effect") or "").strip()
     if ammunition_slaying is not None:
         if on_hit_effect:
@@ -3302,6 +3312,11 @@ def preflight_attack(
             [{"source": "Fighting Style: Dueling", "value": dueling_bonus}] if dueling_bonus else []
         ),
         "damage_type": damage_type,
+        "attack_facts": attack_facts,
+        # Keep these scalar fields for consumers that predate structured
+        # attack facts; settlement uses the structured record above.
+        "magical": attack_facts["magical"],
+        "materials": list(attack_facts["materials"]),
         "weapon_grip": weapon_grip,
         "additional_damage": additional_damage,
         "on_hit_effect": on_hit_effect,
@@ -3857,6 +3872,7 @@ def resolve_attack_damage(
                 source=actor_id(attacker),
                 critical=bool(attack["critical"]),
                 ruleset=str(plan.get("ruleset") or DEFAULT_CHARACTER_EDITION),
+                attack_facts=dict(plan.get("attack_facts") or {}),
                 death_saves=bool(plan.get("target_uses_death_saves", True)),
                 knock_out=bool(plan.get("knock_out", False)),
                 melee=bool(plan.get("melee_attack", False)),
@@ -3878,6 +3894,7 @@ def resolve_attack_damage(
                 source=actor_id(attacker),
                 critical=bool(attack["critical"]),
                 ruleset=str(plan.get("ruleset") or DEFAULT_CHARACTER_EDITION),
+                attack_facts=dict(plan.get("attack_facts") or {}),
                 death_saves=bool(plan.get("target_uses_death_saves", True)),
                 knock_out=bool(plan.get("knock_out", False)),
                 melee=bool(plan.get("melee_attack", False)),
@@ -3946,6 +3963,7 @@ def resolve_attack_damage(
                     source=actor_id(attacker),
                     critical=False,
                     ruleset=str(plan.get("ruleset") or "2024"),
+                    attack_facts=dict(plan.get("attack_facts") or {}),
                     death_saves=bool(plan.get("target_uses_death_saves", True)),
                     weapon_attack=True,
                 )
@@ -4460,6 +4478,7 @@ def apply_damage_to_sheet(
     knock_out: bool = False,
     melee: bool = False,
     weapon_attack: bool = False,
+    attack_facts: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Apply one typed damage part with temp HP and trait ordering."""
     raw, adjusted, normalized, adjustment, defense_sources = _adjust_damage_amount(
@@ -4467,6 +4486,7 @@ def apply_damage_to_sheet(
         amount=amount,
         damage_type=damage_type,
         weapon_attack=weapon_attack,
+        attack_facts=attack_facts,
     )
     result = _apply_adjusted_damage(
         sheet,
@@ -4482,6 +4502,8 @@ def apply_damage_to_sheet(
         melee=melee,
     )
     result["defense_sources"] = defense_sources
+    if attack_facts is not None:
+        result["attack_facts"] = deepcopy(attack_facts)
     return result
 
 
@@ -4693,6 +4715,7 @@ def apply_damage_parts_to_sheet(
     knock_out: bool = False,
     melee: bool = False,
     weapon_attack: bool = False,
+    attack_facts: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Apply one simultaneous multi-type damage instance and preserve each part.
 
@@ -4716,6 +4739,7 @@ def apply_damage_parts_to_sheet(
             amount=grouped_amount,
             damage_type=grouped_type,
             weapon_attack=weapon_attack,
+            attack_facts=attack_facts,
         )
         details.append(
             {
@@ -4760,6 +4784,7 @@ def apply_damage_parts_to_sheet(
         "concentration": applied["concentration"],
         "ended_effect_ids": applied["ended_effect_ids"],
         "massive_damage": applied["massive_damage"],
+        **({"attack_facts": deepcopy(attack_facts)} if attack_facts is not None else {}),
     }
 
 
@@ -4899,6 +4924,7 @@ def _adjust_damage_amount(
     amount: int,
     damage_type: str,
     weapon_attack: bool = False,
+    attack_facts: dict[str, Any] | None = None,
 ) -> tuple[int, int, str, str, list[str]]:
     raw = int(amount)
     if raw < 0:
@@ -4914,6 +4940,55 @@ def _adjust_damage_amount(
         for item_id, values in item_sources[defense].items()
         if normalized in values
     ]
+    conditional: dict[str, set[str]] = {
+        "immunity": set(),
+        "resistance": set(),
+        "vulnerability": set(),
+    }
+    facts = attack_facts if isinstance(attack_facts, dict) else {}
+    materials = facts.get("materials")
+    normalized_materials = (
+        {str(value).strip().casefold() for value in materials if str(value).strip()}
+        if isinstance(materials, list) and all(isinstance(value, str) for value in materials)
+        else None
+    )
+    for defense in list(dict(sheet.get("traits") or {}).get("damage_defenses") or []):
+        if not isinstance(defense, dict) or normalized not in {
+            str(value).strip().casefold() for value in defense.get("damage_types", [])
+        }:
+            continue
+        applies = True
+        for predicate in defense.get("predicates", []):
+            predicate = str(predicate).strip().casefold()
+            if predicate == "unresolved":
+                applies = False
+                break
+            if predicate == "nonmagical_attack":
+                if not isinstance(facts.get("magical"), bool):
+                    applies = False
+                    break
+                applies = not facts["magical"]
+            elif predicate == "not_silvered":
+                if normalized_materials is None:
+                    applies = False
+                    break
+                applies = "silvered" not in normalized_materials
+            elif predicate == "not_adamantine":
+                if normalized_materials is None:
+                    applies = False
+                    break
+                applies = "adamantine" not in normalized_materials
+            else:
+                applies = False
+                break
+            if not applies:
+                break
+        if applies and str(defense.get("kind") or "") in conditional:
+            kind = str(defense["kind"])
+            conditional[kind].add(normalized)
+            source_key = str(defense.get("source_key") or "")
+            if source_key:
+                active_sources.append(f"source:{source_key}")
     blade_ward_sources = [
         str(effect.get("id") or "")
         for effect in sheet.get("effects", [])
@@ -4927,23 +5002,25 @@ def _adjust_damage_amount(
         )
     ]
     active_sources.extend(f"spell:{effect_id}" for effect_id in blade_ward_sources if effect_id)
-    if normalized in immunities:
+    if normalized in immunities or normalized in conditional["immunity"]:
         return raw, 0, normalized, "immune", active_sources
     adjusted = raw
     resistant = (
         normalized in resistances
+        or normalized in conditional["resistance"]
         or "petrified" in _condition_set(sheet.get("conditions"))
         or bool(blade_ward_sources)
     )
     if resistant:
         adjusted //= 2
-    if normalized in vulnerabilities:
+    if normalized in vulnerabilities or normalized in conditional["vulnerability"]:
         adjusted *= 2
-    if resistant and normalized in vulnerabilities:
+    vulnerable = normalized in vulnerabilities or normalized in conditional["vulnerability"]
+    if resistant and vulnerable:
         adjustment = "resistant_and_vulnerable"
     elif resistant:
         adjustment = "resistant"
-    elif normalized in vulnerabilities:
+    elif vulnerable:
         adjustment = "vulnerable"
     else:
         adjustment = "normal"
