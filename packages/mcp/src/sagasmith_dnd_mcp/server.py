@@ -48028,18 +48028,6 @@ def _create_server(
                     ):
                         feature_card.pop(metadata_key, None)
                     if feature_id == SCAG_RULE_PACK_ID + ".feature.bladesong":
-                        feature_card["resource_scaling"] = {
-                            "class_name": target_class,
-                            "target": "scag_bladesong",
-                            "maximum_formula": {
-                                "kind": "proficiency_bonus",
-                                "minimum": 2,
-                                "multiplier": 1,
-                                "offset": 0,
-                            },
-                            "recovers_on": "long_rest",
-                            "label": "Bladesong",
-                        }
                         feature_card["activation"] = {"type": "bonus_action"}
                         feature_card["resource_key"] = "scag_bladesong"
                     if feature_id == SCAG_RULE_PACK_ID + ".feature.extra-attack":
@@ -48148,20 +48136,56 @@ def _create_server(
                             sheet["traits"]["proficiencies"]["armor"].append(armor_name)
                 bladesong_id = SCAG_RULE_PACK_ID + ".feature.bladesong"
                 if bladesong_id in feature_matches:
+                    bladesong_artifact = feature_matches[bladesong_id][2]
+                    source_grants = dict(
+                        dict(bladesong_artifact.get("card") or {}).get("mechanical_grants") or {}
+                    )
+                    source_resources = dict(source_grants.get("resources") or {})
+                    if len(source_resources) != 1:
+                        raise RulesetUnavailableError(
+                            "SCAG Bladesong must declare exactly one reviewed resource grant"
+                        )
+                    source_resource_key, raw_source_resource = next(iter(source_resources.items()))
+                    if not isinstance(raw_source_resource, dict):
+                        raise RulesetUnavailableError(
+                            "SCAG Bladesong resource grant is not a reviewed object"
+                        )
+                    try:
+                        source_maximum = int(raw_source_resource.get("max", 0) or 0)
+                        source_value = int(
+                            raw_source_resource.get("value", source_maximum) or 0
+                        )
+                    except (TypeError, ValueError) as error:
+                        raise RulesetUnavailableError(
+                            "SCAG Bladesong resource grant has invalid capacity"
+                        ) from error
+                    source_recovery = str(raw_source_resource.get("recovers_on") or "").strip()
+                    if (
+                        not str(source_resource_key).strip()
+                        or source_maximum < 1
+                        or source_value < 0
+                        or source_value > source_maximum
+                        or source_recovery not in {"short_rest", "long_rest", "none"}
+                    ):
+                        raise RulesetUnavailableError(
+                            "SCAG Bladesong resource grant is not an executable reviewed profile"
+                        )
                     resource = sheet["resources"].get("scag_bladesong")
                     if resource is None:
                         sheet["resources"]["scag_bladesong"] = {
-                            "label": "Bladesong",
-                            "value": 2,
-                            "max": 2,
-                            "recovers_on": "long_rest",
+                            "label": str(raw_source_resource.get("label") or "Bladesong"),
+                            "value": source_value,
+                            "max": source_maximum,
+                            "recovers_on": source_recovery,
                             "source_key": f"{pack_id}@{version}:{bladesong_id}",
                         }
                     else:
-                        if int(resource.get("max", 0) or 0) != 2:
-                            resource["max"] = 2
-                            resource["value"] = min(int(resource.get("value", 0) or 0), 2)
-                        resource["recovers_on"] = "long_rest"
+                        if int(resource.get("max", 0) or 0) != source_maximum:
+                            resource["max"] = source_maximum
+                            resource["value"] = min(
+                                int(resource.get("value", 0) or 0), source_maximum
+                            )
+                        resource["recovers_on"] = source_recovery
                         resource["source_key"] = f"{pack_id}@{version}:{bladesong_id}"
                 extra_id = SCAG_RULE_PACK_ID + ".feature.extra-attack"
                 if extra_id in feature_matches and target_level >= 6:
