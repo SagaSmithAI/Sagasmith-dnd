@@ -753,6 +753,19 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
                 "maximum_score": 20,
             }
         }
+    if key == ("paladin", "lay on hands"):
+        return {
+            "activation": {"type": "action", "cost": 1},
+            "resource_key": "lay_on_hands",
+            "choices": {
+                "options": ["heal", "cure"],
+                "outcome": (
+                    "spend one point per hit point restored, or five points to cure "
+                    "one disease or neutralize one poison"
+                ),
+            },
+            "mechanic_refs": ["dnd5e.core.activity.lay_on_hands"],
+        }
     if key == ("fighter", "second wind"):
         return {
             "activation": {"type": "bonus_action", "cost": 1},

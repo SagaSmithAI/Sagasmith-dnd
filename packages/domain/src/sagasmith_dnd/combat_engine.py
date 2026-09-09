@@ -7388,6 +7388,116 @@ def resolve_preserve_life_to_sheets(
     }
 
 
+def resolve_lay_on_hands_to_sheets(
+    source_sheet: dict[str, Any],
+    target_sheet: dict[str, Any],
+    *,
+    mode: str,
+    amount: int | None = None,
+    effect_id: str | None = None,
+) -> dict[str, Any]:
+    """Settle the source-bound 2014 Paladin Lay on Hands pool.
+
+    The pool is five points per recorded Paladin level.  Healing spends the
+    player-selected number of points; curing spends exactly five and ends one
+    source-owned poison or disease effect without touching overlapping effects.
+    """
+    source = validate_character_sheet(source_sheet)
+    target = validate_character_sheet(target_sheet)
+    if _normalize_ruleset(source.get("edition")) != "2014":
+        raise CombatEngineError("Lay on Hands is available only under the 2014 rules")
+    feature = next(
+        (
+            item
+            for item in source.get("content", {}).get("features", [])
+            if (
+                str(item.get("id") or "").endswith("paladin-lay-on-hands")
+                or "dnd5e.core.activity.lay_on_hands"
+                in {str(ref) for ref in item.get("mechanic_refs", [])}
+            )
+            and str(item.get("source_key") or "").casefold() in {"", "paladin"}
+        ),
+        None,
+    )
+    if feature is None:
+        raise CombatEngineError("source actor does not have source-bound Lay on Hands")
+    paladin_level = sum(
+        int(item.get("level", 0) or 0)
+        for item in source.get("progression", {}).get("classes", [])
+        if str(item.get("name") or "").strip().casefold() == "paladin"
+    )
+    if paladin_level < 1:
+        raise CombatEngineError("Lay on Hands requires a recorded Paladin class level")
+    maximum = paladin_level * 5
+    resource = dict(source.get("resources", {}).get("lay_on_hands") or {})
+    if not resource or int(resource.get("max", 0) or 0) != maximum:
+        raise CombatEngineError("Lay on Hands resource does not match five times Paladin level")
+    remaining = int(resource.get("value", 0) or 0)
+    normalized_mode = str(mode or "").strip().casefold()
+    if normalized_mode not in {"heal", "cure"}:
+        raise CombatEngineError("Lay on Hands mode must be heal or cure")
+    creature_type = str(
+        target.get("creature_type")
+        or target.get("progression", {}).get("creature_type")
+        or target.get("progression", {}).get("species")
+        or ""
+    ).strip().casefold()
+    if "undead" in creature_type or "construct" in creature_type:
+        raise CombatEngineError("Lay on Hands has no effect on Undead or Constructs")
+    if normalized_mode == "heal":
+        if isinstance(amount, bool) or not isinstance(amount, int) or amount < 1:
+            raise CombatEngineError("Lay on Hands healing amount must be a positive integer")
+        hp = dict(target.get("combat", {}).get("hp") or {})
+        missing = max(0, int(hp.get("max", 0) or 0) - int(hp.get("value", 0) or 0))
+        if amount > missing:
+            raise CombatEngineError("Lay on Hands healing cannot exceed missing hit points")
+        if amount > remaining:
+            raise CombatEngineError("Lay on Hands pool is exhausted")
+        settled = apply_healing_to_sheet(target, amount=amount)
+        source["resources"]["lay_on_hands"]["value"] = remaining - amount
+        return {
+            "source_sheet": validate_character_sheet(source),
+            "target_sheet": validate_character_sheet(settled["sheet"]),
+            "kind": "lay_on_hands",
+            "mode": "heal",
+            "paladin_level": paladin_level,
+            "pool_max": maximum,
+            "pool_spent": amount,
+            "pool_remaining": remaining - amount,
+            "healing": {key: value for key, value in settled.items() if key != "sheet"},
+        }
+    if effect_id is None or not str(effect_id).strip():
+        raise CombatEngineError("Lay on Hands cure requires one poison or disease effect id")
+    if remaining < 5:
+        raise CombatEngineError("Lay on Hands requires five pool points to cure an effect")
+    effects = target.get("effects", [])
+    effect = next((item for item in effects if str(item.get("id") or "") == str(effect_id)), None)
+    if effect is None or not effect.get("active", False):
+        raise CombatEngineError("Lay on Hands cure effect is not active")
+    kind = str(effect.get("kind") or "").strip().casefold()
+    metadata = dict(effect.get("metadata") or {})
+    source_kind = str(metadata.get("source_kind") or effect.get("source_kind") or "").casefold()
+    if kind not in {"poison", "disease"} and source_kind not in {"poison", "disease"}:
+        raise CombatEngineError("Lay on Hands can cure only a poison or disease effect")
+    ended = deepcopy(effect)
+    effect["active"] = False
+    effect["ended_reason"] = "neutralized_by_lay_on_hands"
+    reconcile_ended_effect_conditions(target, ended_effects=[ended])
+    source["resources"]["lay_on_hands"]["value"] = remaining - 5
+    return {
+        "source_sheet": validate_character_sheet(source),
+        "target_sheet": validate_character_sheet(target),
+        "kind": "lay_on_hands",
+        "mode": "cure",
+        "paladin_level": paladin_level,
+        "pool_max": maximum,
+        "pool_spent": 5,
+        "pool_remaining": remaining - 5,
+        "cured_effect_id": str(effect_id),
+        "cured_kind": "disease" if kind == "disease" or source_kind == "disease" else "poison",
+    }
+
+
 def resolve_divine_spark_to_sheet(
     source_actor: dict[str, Any],
     target_actor: dict[str, Any],

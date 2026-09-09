@@ -243,6 +243,7 @@ from sagasmith_dnd.combat_engine import (
     resolve_death_save_to_sheet,
     resolve_divine_spark_to_sheet,
     resolve_hypnotic_pattern_target,
+    resolve_lay_on_hands_to_sheets,
     resolve_preserve_life_to_sheets,
     resolve_readied_action_window,
     resolve_readied_spell_window,
@@ -27270,6 +27271,65 @@ def _create_server(
                 raise CombatEngineError(
                     "Turn Undead has no undead within 30 feet that can see or hear the cleric"
                 )
+        lay_on_hands = str(activity_id).endswith("paladin-lay-on-hands")
+        lay_on_hands_target_record = None
+        lay_on_hands_target_id = ""
+        additional_updates: list[CharacterStateUpdate] = []
+        if lay_on_hands:
+            if activity_source_card_kind != "feature":
+                raise RulesetUnavailableError(
+                    "Lay on Hands must be recorded as a Paladin feature"
+                )
+            if not is_dm(campaign_id, principal_id):
+                raise PermissionError(
+                    "Lay on Hands multi-actor settlement requires the Agent in the DM role"
+                )
+            declared = dict(declaration or {})
+            mode = str(declared.get("mode") or "").strip().casefold()
+            expected = {"target_id", "mode"}
+            expected.add(
+                "amount" if mode == "heal" else "effect_id" if mode == "cure" else "invalid"
+            )
+            if set(declared) != expected or mode not in {"heal", "cure"}:
+                raise CombatEngineError(
+                    "Lay on Hands declaration requires target_id, mode, and amount for "
+                    "healing or effect_id for curing"
+                )
+            lay_on_hands_target_id = str(declared.get("target_id") or "").strip()
+            if not lay_on_hands_target_id:
+                raise CombatEngineError("Lay on Hands requires target_id")
+            combatants_by_id = {
+                str(item.get("actor_id") or ""): item for item in encounter.get("combatants", [])
+            }
+            source_combatant = combatants_by_id.get(actor_id)
+            target_combatant = combatants_by_id.get(lay_on_hands_target_id)
+            if source_combatant is None or target_combatant is None:
+                raise CombatEngineError("Lay on Hands source and target must be current combatants")
+            if lay_on_hands_target_id == actor_id:
+                distance = 0
+            else:
+                source_position = dict(source_combatant.get("position") or {})
+                target_position = dict(target_combatant.get("position") or {})
+                if set(source_position) != {"x", "y"} or set(target_position) != {"x", "y"}:
+                    raise NeedsRulingError(
+                        "Lay on Hands requires source and target battle-map positions",
+                        missing=("lay_on_hands_positions",),
+                    )
+                distance = (
+                    max(
+                        abs(int(source_position["x"]) - int(target_position["x"])),
+                        abs(int(source_position["y"]) - int(target_position["y"])),
+                    )
+                    * 5
+                )
+            if distance > 5:
+                raise CombatEngineError("Lay on Hands target is outside touch range")
+            lay_on_hands_target_record = require_campaign_actor(
+                campaign_id, lay_on_hands_target_id
+            )
+            access.require_actor(
+                campaign_id, lay_on_hands_target_id, principal_id, control=True
+            )
         preserve_life = str(activity_id).endswith(
             "life-domain-channel-divinity-preserve-life"
         ) or str(activity_id).endswith("life-domain-preserve-life")
@@ -27372,6 +27432,20 @@ def _create_server(
                 "sheet": repair_settlement["defender_sheet"],
                 "activation": deepcopy(activity_card.get("activation") or {}),
                 "payment": deepcopy(repair_settlement["payment"]),
+                "rule_receipts": [],
+            }
+        elif lay_on_hands:
+            applied = {
+                "sheet": deepcopy(current.sheet),
+                "activity_id": activity_id,
+                "content_type": "features",
+                "name": str(activity_card.get("name") or activity_id),
+                "activation": deepcopy(activity_card.get("activation") or {}),
+                "payment": None,
+                "choices": {},
+                "requires_ruling": False,
+                "ruling_requirement": None,
+                "status": "committed",
                 "rule_receipts": [],
             }
         elif scag_bladesong_dismiss:
@@ -27491,6 +27565,39 @@ def _create_server(
             declaration=declaration,
             source_card=activity_card,
         )
+        if lay_on_hands:
+            assert lay_on_hands_target_record is not None
+            settled_lay = resolve_lay_on_hands_to_sheets(
+                applied["sheet"],
+                lay_on_hands_target_record.sheet,
+                mode=str(dict(declaration or {}).get("mode") or ""),
+                amount=dict(declaration or {}).get("amount"),
+                effect_id=dict(declaration or {}).get("effect_id"),
+            )
+            if lay_on_hands_target_id == actor_id:
+                self_sheet = deepcopy(settled_lay["target_sheet"])
+                self_sheet["resources"] = deepcopy(settled_lay["source_sheet"]["resources"])
+                applied["sheet"] = validate_character_sheet(self_sheet)
+            else:
+                applied["sheet"] = settled_lay["source_sheet"]
+                target_sheet = validate_character_sheet(settled_lay["target_sheet"])
+                sync_combatant_conditions(next_encounter, lay_on_hands_target_id, target_sheet)
+                additional_updates.append(
+                    CharacterStateUpdate(
+                        character_id=lay_on_hands_target_id,
+                        sheet=target_sheet,
+                        notes=validate_character_notes(lay_on_hands_target_record.notes),
+                        expected_revision=lay_on_hands_target_record.revision,
+                    )
+                )
+            core_effect = {
+                key: value
+                for key, value in settled_lay.items()
+                if key not in {"source_sheet", "target_sheet"}
+            }
+            core_effect["activation_payment"] = activity_activation_payment
+            core_effect["distance_ft"] = 0 if lay_on_hands_target_id == actor_id else distance
+            core_effect["requires_ruling"] = False
         if scag_bladesong_activity and not scag_bladesong_dismiss:
             derived_before_song = derive_character_sheet(
                 applied["sheet"], character_id=actor_id
@@ -27547,7 +27654,6 @@ def _create_server(
                 "activation_payment": activity_activation_payment,
                 "requires_ruling": False,
             }
-        additional_updates: list[CharacterStateUpdate] = []
         if repair_settlement is not None:
             assert repair_target_record is not None
             target_sheet = validate_character_sheet(repair_settlement["target_sheet"])
@@ -27882,14 +27988,17 @@ def _create_server(
                     "legendary_action": ("dnd5e.core.activity.legendary_action"),
                     "second_wind": "dnd5e.core.activity.second_wind",
                     "preserve_life": "dnd5e.core.activity.preserve_life",
+                    "lay_on_hands": "dnd5e.core.activity.lay_on_hands",
                     "turn_undead": "dnd5e.core.activity.turn_undead",
                 }[core_effect_kind]
                 applied["rule_receipts"] = [
                     *list(applied.get("rule_receipts") or []),
-                    *core_receipts(
-                        rule_context,
-                        [mechanic_id],
-                        f"combat.activity.{core_effect_kind}",
+                    *(
+                        core_receipts(
+                            rule_context,
+                            [mechanic_id],
+                            f"combat.activity.{core_effect_kind}",
+                        )
                     ),
                     *(
                         core_receipts(
@@ -35670,6 +35779,126 @@ def _create_server(
                 "character": character_view(current),
                 "campaign_revision": campaign.revision,
             }
+        lay_on_hands = str(activity_id).endswith("paladin-lay-on-hands")
+        if lay_on_hands:
+            if activity_source_card_kind != "feature":
+                raise RulesetUnavailableError(
+                    "Lay on Hands must be recorded as a Paladin feature"
+                )
+            if not is_dm(current.campaign_id, principal_id):
+                raise PermissionError(
+                    "Lay on Hands multi-actor settlement requires the Agent in the DM role"
+                )
+            declared = dict(declaration or {})
+            mode = str(declared.get("mode") or "").strip().casefold()
+            expected = {"target_id", "mode", "expected_revision", "within_touch"}
+            if mode == "heal":
+                expected.add("amount")
+            elif mode == "cure":
+                expected.add("effect_id")
+            if set(declared) != expected or mode not in {"heal", "cure"}:
+                raise CombatEngineError(
+                    "Lay on Hands declaration requires target_id, mode, expected_revision, "
+                    "within_touch, and amount for healing or effect_id for curing"
+                )
+            if declared.get("within_touch") is not True:
+                raise CombatEngineError(
+                    "Lay on Hands requires an authoritative co-location/touch fact"
+                )
+            target_id = str(declared.get("target_id") or "").strip()
+            if not target_id:
+                raise CombatEngineError("Lay on Hands requires target_id")
+            target = require_campaign_actor(current.campaign_id, target_id)
+            access.require_actor(current.campaign_id, target_id, principal_id, control=True)
+            target_revision = declared.get("expected_revision")
+            if isinstance(target_revision, bool) or not isinstance(target_revision, int):
+                raise ValueError("Lay on Hands target expected_revision must be an integer")
+            if target.revision != target_revision:
+                raise ValueError(f"character revision conflict: {target_id}")
+            settled = resolve_lay_on_hands_to_sheets(
+                current.sheet,
+                target.sheet,
+                mode=mode,
+                amount=declared.get("amount"),
+                effect_id=declared.get("effect_id"),
+            )
+            receipts = [
+                *core_receipts(
+                    effective_rule_context(
+                        current.campaign_id,
+                        facts={"actor_id": character_id, "activity_id": activity_id},
+                    ),
+                    ["dnd5e.core.activity.lay_on_hands"],
+                    "activity.lay_on_hands",
+                )
+            ]
+            source_sheet = validate_character_sheet(settled["source_sheet"])
+            target_sheet = validate_character_sheet(settled["target_sheet"])
+            updates = [
+                CharacterStateUpdate(
+                    character_id=character_id,
+                    sheet=source_sheet,
+                    notes=validate_character_notes(current.notes),
+                    expected_revision=expected_revision,
+                )
+            ]
+            if target_id != character_id:
+                updates.append(
+                    CharacterStateUpdate(
+                        character_id=target_id,
+                        sheet=target_sheet,
+                        notes=validate_character_notes(target.notes),
+                        expected_revision=target_revision,
+                    )
+                )
+            else:
+                source_sheet["combat"] = target_sheet["combat"]
+                source_sheet["conditions"] = target_sheet["conditions"]
+                source_sheet["effects"] = target_sheet["effects"]
+                updates[0] = CharacterStateUpdate(
+                    character_id=character_id,
+                    sheet=validate_character_sheet(source_sheet),
+                    notes=validate_character_notes(current.notes),
+                    expected_revision=expected_revision,
+                )
+            projected_source = replace(
+                current, sheet=updates[0].sheet, revision=current.revision + 1
+            )
+            projected_target = (
+                projected_source
+                if target_id == character_id
+                else replace(target, sheet=updates[1].sheet, revision=target.revision + 1)
+            )
+            return commit_campaign_state(
+                campaign,
+                None,
+                operation="character.activity.lay_on_hands",
+                principal_id=principal_id,
+                branch_id=branch_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+                payload=payload,
+                response_fields={
+                    "status": "committed",
+                    "result": {
+                        "activity_id": activity_id,
+                        "target_id": target_id,
+                        "within_touch": True,
+                        "core_effect": {
+                            key: value
+                            for key, value in settled.items()
+                            if key not in {"source_sheet", "target_sheet"}
+                        },
+                        "rule_receipts": receipts,
+                    },
+                    "character": character_view(projected_source),
+                    "target": character_view(projected_target),
+                },
+                character_updates=updates,
+                rule_receipts=receipts,
+                include_campaign_revision=False,
+                include_revisions=False,
+            )
         preserve_life = str(activity_id).endswith(
             "life-domain-channel-divinity-preserve-life"
         ) or str(activity_id).endswith("life-domain-preserve-life")
