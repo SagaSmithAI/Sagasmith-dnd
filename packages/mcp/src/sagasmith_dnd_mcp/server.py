@@ -7326,20 +7326,30 @@ def _create_server(
         return validate_dnd_content_actor(matches[0])
 
     def refresh_portable_resolution_plans(value: Any) -> Any:
-        """Re-fingerprint plans after stable/local source locators are remapped."""
+        """Re-fingerprint plans after stable/local source locators are remapped.
+
+        The values passed here are freshly copied from an immutable archive.  Walk
+        them in place so official archive verification does not repeatedly clone
+        every source citation and card while applying several artifacts from the
+        same pack.  Callers that need a reusable value already own the archive
+        copy, and the function still rebuilds every plan reference before return.
+        """
 
         fingerprints: dict[str, str] = {}
 
         def refresh(item: Any) -> Any:
             if isinstance(item, list):
-                return [refresh(child) for child in item]
+                for index, child in enumerate(item):
+                    item[index] = refresh(child)
+                return item
             if not isinstance(item, dict):
-                return deepcopy(item)
+                return item
             if "resolution_solution" in item:
                 raise ValueError(
                     "rule packs cannot carry campaign-compiled resolution_solution state"
                 )
-            result = {key: refresh(child) for key, child in item.items()}
+            for key, child in list(item.items()):
+                item[key] = refresh(child)
             required_plan_fields = {
                 "schema_version",
                 "id",
@@ -7349,17 +7359,19 @@ def _create_server(
                 "steps",
                 "citations",
             }
-            if required_plan_fields.issubset(result):
-                candidate = dict(result)
+            if required_plan_fields.issubset(item):
+                candidate = dict(item)
                 candidate.pop("fingerprint", None)
                 compiled = compile_resolution_plan(candidate)
                 fingerprints[compiled.id] = compiled.fingerprint
                 return resolution_plan_template(compiled)
-            return result
+            return item
 
         def refresh_references(item: Any, *, parent: str = "") -> Any:
             if isinstance(item, list):
-                return [refresh_references(child, parent=parent) for child in item]
+                for index, child in enumerate(item):
+                    item[index] = refresh_references(child, parent=parent)
+                return item
             if not isinstance(item, dict):
                 return item
             if (
@@ -7369,7 +7381,9 @@ def _create_server(
             ):
                 plan_id = str(item["id"])
                 return {"id": plan_id, "fingerprint": fingerprints[plan_id]}
-            return {key: refresh_references(child, parent=key) for key, child in item.items()}
+            for key, child in list(item.items()):
+                item[key] = refresh_references(child, parent=key)
+            return item
 
         return refresh_references(refresh(value))
 
