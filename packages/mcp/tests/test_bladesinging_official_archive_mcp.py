@@ -22,6 +22,7 @@ from sagasmith_dnd_mcp.server import close_server, create_server
 
 _SCAG_RULE_ID = "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a"
 _SCAG_ADDON_ID = f"{_SCAG_RULE_ID}.addon"
+_BOOMING_BLADE_ID = f"{_SCAG_RULE_ID}.spell.booming-blade"
 _BLADESINGING_ID = f"{_SCAG_RULE_ID}.subclass.bladesinging"
 _BLADESONG_ID = f"{_SCAG_RULE_ID}.feature.bladesong"
 _EXTRA_ATTACK_ID = f"{_SCAG_RULE_ID}.feature.extra-attack"
@@ -221,13 +222,32 @@ def test_locked_scag_bladesinging_materializes_and_settles_full_runtime_contract
                 _SONG_VICTORY_ID,
                 _TRAINING_ID,
             } <= set(features)
-            assert wizard["sheet"]["resources"]["scag_bladesong"]["max"] == 5
-            assert wizard["sheet"]["resources"]["scag_bladesong"]["recovers_on"] == "long_rest"
+            assert wizard["sheet"]["resources"]["scag_bladesong"]["max"] == 2
+            assert wizard["sheet"]["resources"]["scag_bladesong"]["recovers_on"] == "short_rest"
+            assert dict(features[_BLADESONG_ID].get("resource_scaling") or {}).get(
+                "maximum_formula", {}
+            ).get("kind") != "proficiency_bonus"
             assert wizard["sheet"]["combat"]["attacks_per_action"] == 2
             assert "light armor" in wizard["sheet"]["traits"]["proficiencies"]["armor"]
             assert "performance" in wizard["sheet"]["skills"]
             assert wizard["sheet"]["skills"]["performance"]["proficiency"] == "proficient"
             assert "Longsword" in wizard["sheet"]["traits"]["proficiencies"]["weapons"]
+
+            wizard = await _call(
+                server,
+                "character_content_apply",
+                {
+                    "character_id": wizard["id"],
+                    "artifact_id": _BOOMING_BLADE_ID,
+                    "selection": {"source_class": "Wizard", "method": "known"},
+                    "expected_revision": wizard["revision"],
+                    "idempotency_key": "apply-booming-blade",
+                },
+            )
+            assert any(
+                item.get("id") == _BOOMING_BLADE_ID
+                for item in wizard["sheet"]["content"]["spells"]
+            )
 
             replay = await _call(server, "character_content_apply", subclass_args)
             assert replay == applied
@@ -397,13 +417,27 @@ def test_locked_scag_bladesinging_materializes_and_settles_full_runtime_contract
                 for item in wizard["sheet"]["effects"]
                 if item.get("metadata", {}).get("scag_bladesong") is True and item["active"]
             )
-            assert wizard["sheet"]["resources"]["scag_bladesong"]["value"] == 4
+            assert wizard["sheet"]["resources"]["scag_bladesong"]["value"] == 1
             assert wizard["derived"]["armor_class"] == 13
             assert wizard["derived"]["speed"]["walk"] == 40
             assert active_effect["duration"] == {"period": "minute", "remaining": 1}
             assert (
                 _result_payload(activated)["core_effect"]["bladesong_effect"] == active_effect["id"]
             )
+
+            with pytest.raises(ToolError, match="does not authorize cantrip substitution"):
+                await _combat_call(
+                    server,
+                    "combat_resolve_attack",
+                    {
+                        "campaign_id": campaign["id"],
+                        "actor_id": wizard["id"],
+                        "target_id": enemy["id"],
+                        "action": {"cantrip_spell_id": _BOOMING_BLADE_ID},
+                        "expected_revision": await _campaign_revision(server, campaign["id"]),
+                        "idempotency_key": "reject-scag-cantrip-replacement",
+                    },
+                )
 
             await _combat_call(
                 server,
@@ -593,7 +627,7 @@ def test_locked_scag_bladesinging_materializes_and_settles_full_runtime_contract
                 item.get("active") and item.get("metadata", {}).get("scag_bladesong") is True
                 for item in after_dismiss["sheet"]["effects"]
             )
-            assert after_dismiss["sheet"]["resources"]["scag_bladesong"]["value"] == 4
+            assert after_dismiss["sheet"]["resources"]["scag_bladesong"]["value"] == 1
 
             # A fresh turn can start another song, and a two-handed attack
             # must end that active effect in the same transaction as the hit.
@@ -633,7 +667,7 @@ def test_locked_scag_bladesinging_materializes_and_settles_full_runtime_contract
                 "character_query",
                 {"view": "get", "payload": {"character_id": wizard["id"]}},
             )
-            assert reactivated["sheet"]["resources"]["scag_bladesong"]["value"] == 3
+            assert reactivated["sheet"]["resources"]["scag_bladesong"]["value"] == 0
             assert any(
                 item.get("active") and item.get("metadata", {}).get("scag_bladesong") is True
                 for item in reactivated["sheet"]["effects"]
@@ -679,6 +713,41 @@ def test_locked_scag_bladesinging_materializes_and_settles_full_runtime_contract
                 },
             )
 
+            between_combat_wizard = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": wizard["id"]}},
+            )
+            between_combat_rest = await _call(
+                server,
+                "campaign_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "party_rest",
+                    "payload": {
+                        "rest_type": "short_rest",
+                        "duration_minutes": 60,
+                        "members": [
+                            {
+                                "character_id": wizard["id"],
+                                "expected_revision": between_combat_wizard["revision"],
+                            }
+                        ],
+                    },
+                    "expected_revision": closed["campaign_revision"],
+                    "idempotency_key": "short-rest-before-duration-test",
+                },
+            )
+            after_between_combat_rest = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": wizard["id"]}},
+            )
+            assert (
+                after_between_combat_rest["sheet"]["resources"]["scag_bladesong"]["value"]
+                == 2
+            )
+
             # The source duration is one minute on the shared six-second
             # chronology: nine rounds leave the minute intact, and the tenth
             # tick reaches the exact expiration boundary.
@@ -704,7 +773,7 @@ def test_locked_scag_bladesinging_materializes_and_settles_full_runtime_contract
                             "disposition": "hostile",
                         },
                     ],
-                    "expected_revision": closed["campaign_revision"],
+                    "expected_revision": between_combat_rest["campaign_revision"],
                     "idempotency_key": "duration-boundary-start",
                 },
             )
@@ -792,14 +861,15 @@ def test_locked_scag_bladesinging_materializes_and_settles_full_runtime_contract
             assert expired_at_boundary["active"] is False
             assert expired_at_boundary["ended_reason"] == "duration_expired"
 
-            # Bladesong uses recover only on a long rest; an ordinary short
-            # rest must leave the spent pool unchanged.
+            # Bladesong recovers on a short or long rest; the spent pool must
+            # refill after the exact source-defined rest boundary.
             closed = ten_ticks
             after_close = await _call(
                 server,
                 "character_query",
                 {"view": "get", "payload": {"character_id": wizard["id"]}},
             )
+            assert after_close["sheet"]["resources"]["scag_bladesong"]["value"] == 1
             short_rest = await _call(
                 server,
                 "campaign_change",
@@ -858,7 +928,7 @@ def test_locked_scag_bladesinging_materializes_and_settles_full_runtime_contract
                 "character_query",
                 {"view": "get", "payload": {"character_id": wizard["id"]}},
             )
-            assert after_long_rest["sheet"]["resources"]["scag_bladesong"]["value"] == 5
+            assert after_long_rest["sheet"]["resources"]["scag_bladesong"]["value"] == 2
         finally:
             close_server(server)
 
@@ -870,8 +940,8 @@ def test_locked_scag_bladesinging_materializes_and_settles_full_runtime_contract
                 {"view": "get", "payload": {"character_id": wizard["id"]}},
             )
             assert restored["sheet"]["progression"]["classes"][0]["subclass"] == "Bladesinging"
-            assert restored["sheet"]["resources"]["scag_bladesong"]["recovers_on"] == "long_rest"
-            assert restored["sheet"]["resources"]["scag_bladesong"]["value"] == 5
+            assert restored["sheet"]["resources"]["scag_bladesong"]["recovers_on"] == "short_rest"
+            assert restored["sheet"]["resources"]["scag_bladesong"]["value"] == 2
 
             async def termination_start(label: str, expected_revision: int) -> dict:
                 return await _combat_call(
@@ -1058,7 +1128,7 @@ def test_locked_scag_bladesinging_materializes_and_settles_full_runtime_contract
                 if item.get("metadata", {}).get("scag_bladesong") is True
                 and item.get("ended_reason") == "armor_or_shield"
             )["active"] is False
-            closed_after_shield = await _combat_call(
+            await _combat_call(
                 restarted,
                 "combat_end",
                 {
@@ -1072,7 +1142,39 @@ def test_locked_scag_bladesinging_materializes_and_settles_full_runtime_contract
                 "character_query",
                 {"view": "get", "payload": {"character_id": wizard["id"]}},
             )
-            clear_shield_sheet = deepcopy(shield_ended["sheet"])
+            recovery_campaign = await _call(
+                restarted,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            recovery_rest = await _call(
+                restarted,
+                "campaign_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "party_rest",
+                    "payload": {
+                        "rest_type": "short_rest",
+                        "duration_minutes": 60,
+                        "members": [
+                            {
+                                "character_id": wizard["id"],
+                                "expected_revision": shield_ended["revision"],
+                            }
+                        ],
+                    },
+                    "expected_revision": recovery_campaign["revision"],
+                    "idempotency_key": "termination-short-rest-before-incap",
+                },
+            )
+            after_recovery = await _call(
+                restarted,
+                "character_query",
+                {"view": "get", "payload": {"character_id": wizard["id"]}},
+            )
+            assert recovery_rest["rest_type"] == "short_rest"
+            assert after_recovery["sheet"]["resources"]["scag_bladesong"]["value"] == 2
+            clear_shield_sheet = deepcopy(after_recovery["sheet"])
             clear_shield_sheet["inventory"]["items"] = [
                 item
                 for item in clear_shield_sheet["inventory"]["items"]
@@ -1085,12 +1187,12 @@ def test_locked_scag_bladesinging_materializes_and_settles_full_runtime_contract
                 {
                     "character_id": wizard["id"],
                     "sheet": clear_shield_sheet,
-                    "expected_revision": shield_ended["revision"],
+                    "expected_revision": after_recovery["revision"],
                     "idempotency_key": "termination-shield-remove",
                 },
             )
             incap_start = await termination_start(
-                "incap", closed_after_shield["campaign_revision"]
+                "incap", recovery_rest["campaign_revision"]
             )
             incap_activation = await _combat_call(
                 restarted,
