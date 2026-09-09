@@ -16,6 +16,7 @@ from .ground_transfer import (
     _update_external_locations,
     _upsert_external_ref,
 )
+from .held_items import is_attuned_custody_locked_item
 
 
 def _bounded_id(seed: str, used: set[str]) -> str:
@@ -57,6 +58,8 @@ def transfer_actor_inventory_item(
     root = next((item for item in source_items if item["id"] == item_id), None)
     if root is None:
         raise LookupError(item_id)
+    if is_attuned_custody_locked_item(root):
+        raise ValueError("an attuned custody-locked official item cannot leave its owner's custody")
     count = root["quantity"] if quantity is None else quantity
     if type(count) is not int or count < 1 or count > root["quantity"]:
         raise ValueError("quantity must be a positive integer within the item stack")
@@ -64,6 +67,8 @@ def transfer_actor_inventory_item(
     if not full and root["attunement"] != "none":
         raise ValueError("cannot split an attunable item stack")
     moved = _item_closure(source_items, item_id) if full else [deepcopy(root)]
+    if any(is_attuned_custody_locked_item(item) for item in moved):
+        raise ValueError("an attuned custody-locked official item cannot leave its owner's custody")
     originals = {item["id"]: deepcopy(item) for item in moved}
     moved_ids = set(originals)
     if full:

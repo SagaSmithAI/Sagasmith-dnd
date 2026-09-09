@@ -113,6 +113,31 @@ def test_held_roots_keeps_attuned_weapon_as_a_held_root() -> None:
     assert held_item_roots(sheet) == [item_id]
 
 
+def test_held_roots_excludes_an_attuned_inseparable_armblade() -> None:
+    sheet = validate_character_sheet({})
+    sheet, item_id = add_inventory_item(
+        sheet,
+        {
+            **_weapon("armblade"),
+            "attunement": "attuned",
+            "mechanics": {
+                **_weapon("armblade")["mechanics"],
+                "official_item": {
+                    "kind": "armblade",
+                    "state": "extended",
+                    "qualification": "warforged",
+                    "toggle_activation": "bonus_action",
+                    "occupies_hand_when_extended": True,
+                    "inseparable_while_attuned": True,
+                },
+            },
+        },
+    )
+    sheet = equip_inventory_item(sheet, item_id, "main_hand")
+
+    assert held_item_roots(sheet) == []
+
+
 def test_held_roots_rejects_stale_hand_slot_reference() -> None:
     sheet = validate_character_sheet({})
     sheet["inventory"]["equipment_slots"]["main_hand"] = "missing-item"

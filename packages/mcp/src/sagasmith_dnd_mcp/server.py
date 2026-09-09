@@ -169,6 +169,7 @@ from sagasmith_dnd.character_schema import (
     set_resource_value,
     set_spell_prepared,
     update_inventory_item,
+    use_official_item_action,
     validate_character_notes,
     validate_character_sheet,
     validate_party_state,
@@ -199,6 +200,7 @@ from sagasmith_dnd.combat_engine import (
     apply_damage_parts_to_sheet,
     apply_damage_to_sheet,
     apply_healing_to_sheet,
+    apply_official_item_effect_to_encounter,
     apply_weapon_mastery_to_encounter,
     arm_readied_spell,
     available_actions,
@@ -219,6 +221,7 @@ from sagasmith_dnd.combat_engine import (
     pay_activity_activation,
     pay_attack_action,
     pay_legendary_action,
+    pay_official_item_activation,
     pay_witch_bolt_sustain_action,
     preflight_attack,
     preflight_spell_attack,
@@ -381,6 +384,17 @@ from sagasmith_dnd.official_expansions import (
     official_expansion_support_catalog,
     resolve_official_expansion_archives,
     resolve_official_expansion_support_archives,
+)
+from sagasmith_dnd.official_item_materialization import (
+    ARCANE_PROPULSION_ARM_ID,
+    ARMBLADE_ID,
+    DYRRN_TENTACLE_WHIP_ID,
+    EBERRON_ITEM_PACK_ID,
+    is_bound_official_item_id,
+    materialize_official_item_template,
+    materialized_item_binding_hash,
+    official_item_profile,
+    reviewed_official_item_hash,
 )
 from sagasmith_dnd.playthrough import (
     playthrough_source_bindings,
@@ -579,6 +593,7 @@ from sagasmith_dnd.vocabulary import (
     INVENTORY_OWNER_SCOPES,
     PLAYER_GAMEPLAY_VISIBILITY_SCOPES,
     REST_TYPES,
+    WEAPON_HAND_SLOTS,
 )
 from sqlalchemy.exc import NoResultFound
 
@@ -772,6 +787,85 @@ def _require_preserved_battle_ready_provenance(
     if _battle_ready_provenance(current) != _battle_ready_provenance(replacement):
         raise ValueError(
             "character mutation cannot add, remove, or alter authoritative Battle Ready provenance"
+        )
+
+
+def _official_item_provenance(sheet: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    """Return bound official item selections with their immutable item binding."""
+
+    value = dict(sheet or {})
+    content = dict(value.get("content") or {})
+    items = {
+        str(item.get("id") or ""): item
+        for item in dict(value.get("inventory") or {}).get("items", [])
+        if isinstance(item, Mapping)
+    }
+    result: list[dict[str, Any]] = []
+    for selection in content.get("selections", []):
+        if not isinstance(selection, Mapping):
+            continue
+        artifact_id = str(selection.get("artifact_id") or "")
+        if (
+            selection.get("kind") != "item"
+            or not is_bound_official_item_id(str(selection.get("pack_id") or ""), artifact_id)
+        ):
+            continue
+        recorded = dict(selection.get("selection") or {})
+        item_id = str(recorded.get("inventory_item_id") or "")
+        item = items.get(item_id)
+        contract = (
+            dict(dict(item.get("mechanics") or {}).get("official_item") or {})
+            if item
+            else {}
+        )
+        qualification: dict[str, Any] = {}
+        if contract.get("kind") == "armblade":
+            qualification["species"] = str(
+                dict(value.get("progression") or {}).get("species") or ""
+            )
+        elif contract.get("kind") == "arcane_propulsion_arm":
+            anatomy = dict(dict(value.get("traits") or {}).get("anatomy") or {})
+            qualification = {
+                "functional_arms": int(anatomy.get("functional_arms", 2) or 0),
+                "functional_hands": int(anatomy.get("functional_hands", 2) or 0),
+            }
+        result.append(
+            {
+                "selection": deepcopy(dict(selection)),
+                "item_id": item_id,
+                "official_item_state": str(
+                    dict(dict(item.get("mechanics") or {}).get("official_item") or {}).get(
+                        "state"
+                    )
+                    or ""
+                )
+                if item is not None
+                else "",
+                "attunement": str(item.get("attunement") or "") if item is not None else "",
+                "qualification": qualification,
+                "materialized_item_hash": (
+                    materialized_item_binding_hash(item) if item is not None else ""
+                ),
+            }
+        )
+    return result
+
+
+def _reject_new_official_item_provenance(sheet: Mapping[str, Any] | None) -> None:
+    if _official_item_provenance(sheet):
+        raise ValueError(
+            "official item provenance can be created only by character_content_apply"
+        )
+
+
+def _require_preserved_official_item_provenance(
+    current: Mapping[str, Any], replacement: Mapping[str, Any]
+) -> None:
+    before = _official_item_provenance(current)
+    after = _official_item_provenance(replacement)
+    if before != after:
+        raise ValueError(
+            "character mutation cannot add, remove, or alter authoritative official item provenance"
         )
 
 
@@ -7566,6 +7660,7 @@ def _create_server(
             _reject_new_intrinsic_attack_provenance(actor["sheet"])
             _reject_new_tortle_natural_armor_provenance(actor.get("sheet"))
             _reject_new_battle_ready_provenance(actor["sheet"])
+            _reject_new_official_item_provenance(actor["sheet"])
         mismatched = [
             actor["id"]
             for actor in validated_actors
@@ -15229,6 +15324,7 @@ def _create_server(
 
         if sheet is not None and operation != "character.content.apply":
             _require_preserved_intrinsic_attack_provenance(before.sheet, sheet)
+            _require_preserved_official_item_provenance(before.sheet, sheet)
         if sheet is not None and operation not in {
             "character.content.apply",
             "character.rule_artifact.add",
@@ -20945,6 +21041,17 @@ def _create_server(
                 helper["turn_flags"] = helper_flags
         sync_combatant_conditions(next_encounter, actor_id, updated_attacker["sheet"])
         sync_combatant_conditions(next_encounter, target_id, updated_target["sheet"])
+        official_item_commit = apply_official_item_effect_to_encounter(
+            next_encounter,
+            result,
+            attacker_id=actor_id,
+            target_id=target_id,
+        )
+        next_encounter = official_item_commit["encounter"]
+        if official_item_commit["effect"] is not None:
+            result["official_item_effect"]["committed"] = deepcopy(
+                official_item_commit["effect"]
+            )
         reconcile_readied_spells(next_encounter, target_id, updated_target["sheet"])
         damage_result = result.get("damage")
         if isinstance(damage_result, dict):
@@ -26083,6 +26190,199 @@ def _create_server(
 
     @public_tool()
     @_agent_ruling_boundary
+    def combat_use_official_item(
+        campaign_id: str,
+        actor_id: str,
+        item_id: str,
+        operation: str,
+        principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None,
+        branch_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Resolve one attuned Eberron weapon transition through the turn economy."""
+
+        require_combat_actor_or_steel_defender_owner_control(
+            campaign_id, actor_id, principal_id, branch_id=branch_id
+        )
+        require_write_contract(expected_revision, idempotency_key)
+        resolved_branch_id = require_current_branch(campaign_id, branch_id)
+        payload = {
+            "actor_id": actor_id,
+            "item_id": item_id,
+            "operation": operation,
+            "branch_id": resolved_branch_id,
+        }
+        scope = f"combat-official-item:{campaign_id}:{resolved_branch_id}:{principal_id}"
+        replay = replay_idempotent(scope, idempotency_key, payload)
+        if replay is not None:
+            return combat_response(campaign_id, principal_id, replay)
+        campaign, encounter = active_encounter(campaign_id)
+        if expected_revision is not None and campaign.revision != expected_revision:
+            raise ValueError(
+                "campaign revision conflict: "
+                f"expected {expected_revision}, found {campaign.revision}"
+            )
+        require_no_blocking_pending(encounter)
+        record = require_campaign_actor(campaign_id, actor_id)
+        item = next(
+            (
+                value
+                for value in record.sheet.get("inventory", {}).get("items", [])
+                if str(value.get("id") or "") == str(item_id)
+            ),
+            None,
+        )
+        if not isinstance(item, dict):
+            raise CombatEngineError("official item is not present in the actor inventory")
+        if item.get("condition") == "destroyed":
+            raise CombatEngineError("a destroyed official item cannot be activated")
+        contract = dict(dict(item.get("mechanics") or {}).get("official_item") or {})
+        kind = str(contract.get("kind") or "")
+        source_key = str(item.get("source_key") or "")
+        expected_suffix = {
+            "arcane_propulsion_arm": ARCANE_PROPULSION_ARM_ID,
+            "armblade": ARMBLADE_ID,
+            "dyrrn_tentacle_whip": DYRRN_TENTACLE_WHIP_ID,
+        }.get(kind)
+        if not expected_suffix or not source_key.endswith(f":{expected_suffix}"):
+            raise CombatEngineError(
+                "official item activation requires an exact reviewed source key"
+            )
+        selection_receipt = next(
+            (
+                selection
+                for selection in record.sheet.get("content", {}).get("selections", [])
+                if isinstance(selection, dict)
+                and str(selection.get("artifact_id") or "") == expected_suffix
+            ),
+            None,
+        )
+        if not isinstance(selection_receipt, dict) or str(
+            selection_receipt.get("pack_id") or ""
+        ) != EBERRON_ITEM_PACK_ID:
+            raise CombatEngineError(
+                "official item activation requires the matching content selection receipt"
+            )
+        if str(selection_receipt.get("kind") or "") != "item":
+            raise CombatEngineError("official item activation requires an item selection receipt")
+        recorded_selection = dict(selection_receipt.get("selection") or {})
+        reviewed_hash = reviewed_official_item_hash(expected_suffix)
+        if (
+            str(recorded_selection.get("inventory_item_id") or "") != str(item_id)
+            or not reviewed_hash
+            or str(recorded_selection.get("artifact_content_hash") or "") != reviewed_hash
+            or str(recorded_selection.get("reviewed_content_hash") or "") != reviewed_hash
+        ):
+            raise CombatEngineError(
+                "official item activation receipt does not bind this inventory item"
+            )
+        selected_version = str(selection_receipt.get("pack_version") or "")
+        if not selected_version or not source_key.startswith(
+            f"{EBERRON_ITEM_PACK_ID}@{selected_version}:"
+        ):
+            raise CombatEngineError("official item activation provenance does not match selection")
+        applied_receipt_fields = {
+            "event": "character.content.apply",
+            "artifact_id": expected_suffix,
+            "character_id": actor_id,
+            "pack_id": EBERRON_ITEM_PACK_ID,
+            "pack_version": selected_version,
+            "artifact_content_hash": reviewed_hash,
+            "reviewed_content_hash": reviewed_hash,
+        }
+        if not rule_receipts.has_applied_receipt(
+            campaign_id,
+            event="character.content.apply",
+            receipt_fields=applied_receipt_fields,
+            branch_id=resolved_branch_id,
+        ):
+            raise CombatEngineError("official item activation requires the applied content receipt")
+        if item.get("attunement") != "attuned":
+            raise CombatEngineError("official item activation requires completed attunement")
+        state = str(contract.get("state") or "")
+        normalized_operation = str(operation or "").strip().casefold().replace("-", "_")
+        if kind == "arcane_propulsion_arm" and normalized_operation == (
+            "attach" if state == "attached" else "remove" if state == "detached" else ""
+        ):
+            raise CombatEngineError("Arcane Propulsion Arm is already in that state")
+        if (
+            kind in {"armblade", "dyrrn_tentacle_whip"}
+            and item.get("equipped_slot") not in WEAPON_HAND_SLOTS
+        ):
+            raise CombatEngineError("this official weapon must be equipped in a weapon hand")
+        activation = "action" if kind == "arcane_propulsion_arm" else "bonus_action"
+        next_encounter, payment = pay_official_item_activation(
+            encounter,
+            actor_id_value=actor_id,
+            item_id=item_id,
+            activation=activation,
+        )
+        next_sheet, transition = use_official_item_action(record.sheet, item_id, operation)
+        result = {
+            "item_id": item_id,
+            "official_item": transition,
+            "payment": payment,
+            "status": "committed",
+        }
+        rules = effective_rule_context(
+            campaign_id,
+            branch_id=resolved_branch_id,
+            facts={"actor_id": actor_id, "item_id": item_id, "operation": operation},
+        )
+        result["rule_receipts"] = [
+            {
+                "ruleset_fingerprint": rules.fingerprint,
+                "mechanic_id": f"dnd5e.expansion.eberron.{kind}",
+                "event": "combat.official_item.activation",
+                "source_key": source_key,
+                "operation": transition["operation"],
+            }
+        ]
+        next_state = {**dict(campaign.state or {}), "combat": next_encounter}
+        next_state["resolution_log"] = [
+            *list(next_state.get("resolution_log") or []),
+            {
+                "id": f"resolution-{uuid4().hex}",
+                "type": "combat_official_item",
+                "operation": "combat.official_item.activation",
+                "actor_id": actor_id,
+                "item_id": item_id,
+                "result": deepcopy(result),
+                "branch_id": resolved_branch_id,
+                "campaign_revision": campaign.revision + 1,
+            },
+        ][-200:]
+        response_fields = {
+            "status": "committed",
+            "result": result,
+            "combat": next_encounter,
+            "campaign_revision": campaign.revision + 1,
+        }
+        response = commit_campaign_state(
+            campaign,
+            next_state,
+            operation="combat.official_item.activation",
+            principal_id=principal_id,
+            branch_id=resolved_branch_id,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=payload,
+            response_fields=response_fields,
+            character_updates=[
+                CharacterStateUpdate(
+                    character_id=actor_id,
+                    sheet=validate_character_sheet(next_sheet),
+                    notes=validate_character_notes(record.notes),
+                    expected_revision=record.revision,
+                )
+            ],
+            rule_receipts=list(result["rule_receipts"]),
+        )
+        return combat_response(campaign_id, principal_id, response)
+
+    @public_tool()
+    @_agent_ruling_boundary
     def combat_use_activity(
         campaign_id: str,
         actor_id: str,
@@ -31134,6 +31434,7 @@ def _create_server(
         _reject_new_intrinsic_attack_provenance(sheet_value)
         _reject_new_tortle_natural_armor_provenance(sheet_value)
         _reject_new_battle_ready_provenance(sheet_value)
+        _reject_new_official_item_provenance(sheet_value)
         _require_authoritative_background_state(
             sheet_value,
             character_id=None,
@@ -31251,6 +31552,7 @@ def _create_server(
         _reject_new_intrinsic_attack_provenance(sheet)
         _reject_new_tortle_natural_armor_provenance(sheet)
         _reject_new_battle_ready_provenance(sheet)
+        _reject_new_official_item_provenance(sheet)
         _require_authoritative_background_state(
             sheet,
             character_id=None,
@@ -31314,6 +31616,7 @@ def _create_server(
         _reject_new_intrinsic_attack_provenance(sheet_value)
         _reject_new_tortle_natural_armor_provenance(sheet_value)
         _reject_new_battle_ready_provenance(sheet_value)
+        _reject_new_official_item_provenance(sheet_value)
         _require_authoritative_background_state(
             sheet_value,
             character_id=None,
@@ -43475,7 +43778,7 @@ def _create_server(
         """Return bounded source and settlement context for an external Agent."""
 
         catalog_review = dict(artifact.get("catalog_review") or {})
-        return {
+        context = {
             "artifact_id": str(artifact.get("id") or ""),
             "kind": str(artifact.get("kind") or ""),
             "pack_id": pack_id,
@@ -43493,6 +43796,10 @@ def _create_server(
             "rule_refs": list(artifact.get("rule_refs") or []),
             "source_citations": deepcopy(list(artifact.get("source_citations") or [])),
         }
+        item_profile = official_item_profile(pack_id, artifact)
+        if item_profile is not None:
+            context["executable_item_profile"] = deepcopy(item_profile)
+        return context
 
     def trusted_watchers_eye_binding(
         campaign_id: str,
@@ -45342,8 +45649,118 @@ def _create_server(
             raise ValueError("background selection authority is server-managed")
         if CLASS_EQUIPMENT_AUTHORITY_KEY in selection:
             raise ValueError("class starting-equipment authority is server-managed")
+        item_profile = official_item_profile(pack_id, artifact)
+        if is_bound_official_item_id(pack_id, artifact_id) and item_profile is None:
+            return {
+                **_ruling_status(
+                    "pending_ruling",
+                    "missing_or_conflicting_source_review",
+                ),
+                "reason": (
+                    "official item identity is reserved for a reviewed executable profile, "
+                    "but its current content fingerprint is not approved"
+                ),
+            }
+        if item_profile is not None:
+            qualification = str(item_profile.get("qualification") or "")
+            progression = dict(current.sheet.get("progression") or {})
+            species_tokens = {
+                token
+                for token in re.findall(
+                    r"[a-z0-9_]+",
+                    str(progression.get("species") or "").casefold(),
+                )
+            }
+            anatomy = dict(dict(current.sheet.get("traits") or {}).get("anatomy") or {})
+            if qualification == "warforged" and "warforged" not in species_tokens:
+                raise ValueError("Armblade requires a Warforged character")
+            if qualification == "missing_hand_or_arm" and not (
+                int(anatomy.get("functional_arms", 2) or 0) < 2
+                or int(anatomy.get("functional_hands", 2) or 0) < 2
+            ):
+                raise ValueError(
+                    "Arcane Propulsion Arm requires a character missing a hand or arm"
+                )
+        armblade_base_template: dict[str, Any] | None = None
+        armblade_base_source: dict[str, Any] | None = None
+        special_item_selection = item_profile is not None and artifact_id == ARMBLADE_ID
+        if special_item_selection:
+            if set(selection) != {"base_weapon_artifact_id"}:
+                return {
+                    "status": "pending_choice",
+                    "reason": (
+                        "Armblade requires one reviewed one-handed melee weapon "
+                        "to define its source-bound base profile"
+                    ),
+                    "selection_requirements": {
+                        "base_weapon_artifact_id": {
+                            "kind": "item",
+                            "pack_id": CORE_CONTENT_PACK_ID,
+                            "artifact_kind": "weapon",
+                            "attack_type": "melee",
+                            "two_handed": False,
+                        }
+                    },
+                }
+            base_weapon_artifact_id = str(selection.get("base_weapon_artifact_id") or "")
+            base_matches = [
+                item
+                for item in candidates
+                if item[2].get("id") == base_weapon_artifact_id and item[2].get("kind") == "item"
+            ]
+            if len(base_matches) != 1:
+                raise ValueError("Armblade base weapon must name one active weapon artifact")
+            base_pack_id, base_version, base_artifact = base_matches[0]
+            base_artifact = reviewed_official_runtime_artifact(
+                base_pack_id, base_version, base_artifact
+            )
+            if base_pack_id != CORE_CONTENT_PACK_ID:
+                raise ValueError(
+                    "Armblade base weapon must be an active SRD 2014 core weapon artifact"
+                )
+            if str(base_artifact.get("application_state") or "selection_ready") != (
+                "selection_ready"
+            ):
+                raise RulesetUnavailableError(
+                    "Armblade base weapon must be a selection-ready reviewed artifact"
+                )
+            if base_artifact.get("selection_contract") is not None:
+                base_contract_errors = selection_input_errors(base_artifact, {})
+                if base_contract_errors:
+                    raise RulesetUnavailableError(
+                        "Armblade base weapon has no reviewed executable selection contract"
+                    )
+            base_card = dict(base_artifact.get("card") or {})
+            base_template = base_card.get("inventory_template")
+            base_mechanics = dict(dict(base_template or {}).get("mechanics") or {})
+            base_properties = {
+                str(value).strip().casefold() for value in base_mechanics.get("properties", [])
+            }
+            if (
+                not isinstance(base_template, dict)
+                or base_template.get("kind") != "weapon"
+                or base_mechanics.get("attack_type") != "melee"
+                or "two-handed" in base_properties
+                or "two_handed" in base_properties
+            ):
+                raise ValueError(
+                    "Armblade base weapon must be an executable one-handed melee weapon"
+                )
+            armblade_base_template = deepcopy(base_template)
+            armblade_base_source = {
+                "artifact_id": base_weapon_artifact_id,
+                "pack_id": base_pack_id,
+                "pack_version": base_version,
+                "content_hash": content_fingerprint(base_artifact),
+                "catalog_review_hash": str(
+                    dict(base_artifact.get("catalog_review") or {}).get(
+                        "reviewed_content_hash"
+                    )
+                    or ""
+                ),
+            }
         contract_required = artifact.get("selection_contract") is not None
-        if contract_required:
+        if contract_required and not special_item_selection:
             contract_errors = selection_input_errors(artifact, selection)
             if contract_errors:
                 return {
@@ -45358,6 +45775,10 @@ def _create_server(
                     "errors": contract_errors,
                 }
         runtime_context = content_runtime_context(pack_id, version, artifact)
+        if armblade_base_source is not None:
+            executable_item_profile = dict(runtime_context.get("executable_item_profile") or {})
+            executable_item_profile["base_weapon_source"] = deepcopy(armblade_base_source)
+            runtime_context["executable_item_profile"] = executable_item_profile
         tortle_archive_verification = (
             verified_reserved_official_rule_definition(pack_id, version)
             if artifact_id == TORTLE_NATURAL_ARMOR_ARTIFACT_ID
@@ -45401,6 +45822,12 @@ def _create_server(
             "selection": deepcopy(selection),
             "rule_refs": list(artifact.get("rule_refs") or []),
         }
+        if armblade_base_source is not None:
+            content_receipt["base_weapon_source"] = deepcopy(armblade_base_source)
+        if item_profile is not None:
+            content_receipt["reviewed_content_hash"] = str(
+                item_profile["reviewed_content_hash"]
+            )
         raw_selection_contract = artifact.get("selection_contract")
         if isinstance(raw_selection_contract, dict) and not selection_contract_errors(artifact):
             selection_contract = dict(raw_selection_contract)
@@ -47883,14 +48310,14 @@ def _create_server(
                     source=f"{selected_species} species",
                 )
         elif kind == "item":
-            if selection:
+            if selection and not special_item_selection:
                 raise ValueError("item content selection does not accept input fields")
             if any(
                 item.get("artifact_id") == artifact_id for item in sheet["content"]["selections"]
             ):
                 raise ValueError("content item is already present")
             inventory_template = card.get("inventory_template")
-            if not isinstance(inventory_template, dict):
+            if item_profile is None and not isinstance(inventory_template, dict):
                 return {
                     **_ruling_status(
                         "pending_ruling",
@@ -47898,11 +48325,45 @@ def _create_server(
                     ),
                     "reason": "item has no reviewed inventory_template",
                 }
-            item_template = deepcopy(inventory_template)
+            item_template = (
+                materialize_official_item_template(
+                    pack_id,
+                    artifact,
+                    base_weapon_template=armblade_base_template,
+                    pack_version=version,
+                )
+                if item_profile is not None
+                else deepcopy(inventory_template)
+            )
+            if item_profile is not None and item_template is None:
+                return {
+                    **_ruling_status(
+                        "pending_ruling",
+                        "missing_or_conflicting_source_review",
+                    ),
+                    "reason": "official item has no complete reviewed weapon materialization",
+                }
             item_template["source_key"] = str(
                 item_template.get("source_key") or f"{pack_id}@{version}:{artifact_id}"
             )
             sheet, inventory_item_id = add_inventory_item(sheet, item_template)
+            recorded_selection = {
+                "inventory_item_id": inventory_item_id,
+                "artifact_content_hash": content_fingerprint(artifact),
+            }
+            if item_profile is not None:
+                recorded_selection["reviewed_content_hash"] = str(
+                    item_profile["reviewed_content_hash"]
+                )
+                recorded_selection["materialized_item_hash"] = materialized_item_binding_hash(
+                    next(
+                        item
+                        for item in sheet["inventory"]["items"]
+                        if item["id"] == inventory_item_id
+                    )
+                )
+            if armblade_base_source is not None:
+                recorded_selection["base_weapon_source"] = deepcopy(armblade_base_source)
             sheet["content"]["selections"].append(
                 {
                     "artifact_id": artifact_id,
@@ -47912,7 +48373,7 @@ def _create_server(
                     "pack_version": version,
                     "rule_refs": list(artifact.get("rule_refs") or []),
                     "mechanic_refs": list(artifact.get("mechanic_refs") or []),
-                    "selection": {"inventory_item_id": inventory_item_id},
+                    "selection": recorded_selection,
                 }
             )
         elif kind in {"feature", "activity"}:

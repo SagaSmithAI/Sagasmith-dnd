@@ -2893,9 +2893,9 @@ def test_reviewed_addon_item_uses_bound_inventory_materializer(tmp_path: Path) -
         assert item["source_key"] == (
             "dnd5e.addon.reviewed-item@1.0.0:dnd5e.addon.reviewed-item.item.moon-blade"
         )
-        assert applied["sheet"]["content"]["selections"][0]["selection"] == {
-            "inventory_item_id": item["id"]
-        }
+        selection = applied["sheet"]["content"]["selections"][0]["selection"]
+        assert selection["inventory_item_id"] == item["id"]
+        assert selection["artifact_content_hash"] == applied["content_context"]["content_hash"]
         assert applied["content_context"]["artifact_id"] == artifact["id"]
         assert applied["content_context"]["card"]["inventory_template"]["name"] == ("Moon Blade")
         queried = await _call(

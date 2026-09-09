@@ -52,6 +52,13 @@ from sagasmith_dnd.engine import (
     roll_d20,
 )
 from sagasmith_dnd.hit_points import apply_basic_healing_to_sheet
+from sagasmith_dnd.official_item_materialization import (
+    ARCANE_PROPULSION_ARM_ID,
+    ARMBLADE_ID,
+    DYRRN_TENTACLE_WHIP_ID,
+    EBERRON_ITEM_PACK_ID,
+    reviewed_official_item_hash,
+)
 from sagasmith_dnd.resolution_plan import (
     ResolutionPlanCompilationError,
     compile_resolution_plan,
@@ -1579,6 +1586,69 @@ def _combat_turn_token(encounter: dict[str, Any]) -> str:
     )
 
 
+_OFFICIAL_ITEM_ARTIFACT_IDS = {
+    "arcane_propulsion_arm": ARCANE_PROPULSION_ARM_ID,
+    "armblade": ARMBLADE_ID,
+    "dyrrn_tentacle_whip": DYRRN_TENTACLE_WHIP_ID,
+}
+
+
+def _verified_official_item_for_attack(
+    attacker: dict[str, Any], weapon: dict[str, Any]
+) -> dict[str, Any]:
+    """Return an official contract only after the applied-item provenance gate."""
+
+    contract = deepcopy(dict(weapon.get("official_item") or {}))
+    kind = str(contract.get("kind") or "")
+    artifact_id = _OFFICIAL_ITEM_ARTIFACT_IDS.get(kind)
+    if artifact_id is None:
+        return {}
+    if str(weapon.get("attunement") or "") != "attuned":
+        return {}
+    source_key = str(weapon.get("source_key") or "")
+    prefix = f"{EBERRON_ITEM_PACK_ID}@"
+    if not source_key.startswith(prefix):
+        return {}
+    provenance = source_key[len(prefix) :].split(":", 1)
+    if (
+        len(provenance) != 2
+        or provenance[1] != artifact_id
+        or not provenance[0]
+        or provenance[0].casefold() == "unknown"
+    ):
+        return {}
+    selection = next(
+        (
+            item
+            for item in dict(actor_sheet(attacker).get("content") or {}).get("selections", [])
+            if isinstance(item, dict) and str(item.get("artifact_id") or "") == artifact_id
+        ),
+        None,
+    )
+    if not isinstance(selection, dict) or str(selection.get("kind") or "") != "item":
+        return {}
+    recorded = dict(selection.get("selection") or {})
+    expected_hash = reviewed_official_item_hash(artifact_id)
+    if (
+        str(selection.get("pack_id") or "") != EBERRON_ITEM_PACK_ID
+        or str(selection.get("pack_version") or "") != provenance[0]
+        or str(recorded.get("inventory_item_id") or "") != str(weapon.get("item_id") or "")
+        or not expected_hash
+        or str(recorded.get("artifact_content_hash") or "") != expected_hash
+        or str(recorded.get("reviewed_content_hash") or "") != expected_hash
+    ):
+        return {}
+    recorded_binding_hash = str(
+        dict(selection.get("selection") or {}).get("materialized_item_hash") or ""
+    )
+    if (
+        not recorded_binding_hash
+        or recorded_binding_hash != str(weapon.get("materialized_item_hash") or "")
+    ):
+        return {}
+    return contract
+
+
 def _record_action_payment(
     encounter: dict[str, Any],
     combatant: dict[str, Any],
@@ -2307,6 +2377,36 @@ def pay_attack_action(
     return value, payment
 
 
+def pay_official_item_activation(
+    encounter: dict[str, Any],
+    *,
+    actor_id_value: str,
+    item_id: str,
+    activation: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Pay the action economy for one reviewed official-item transition."""
+
+    value = deepcopy(encounter)
+    current = current_combatant(value)
+    if current is None or str(current.get("actor_id") or "") != actor_id_value:
+        raise CombatEngineError("it is not this actor's turn")
+    _require_tortle_shell_emergence_only(current)
+    normalized = str(activation or "").strip().casefold().replace("-", "_")
+    if normalized not in {"action", "bonus_action"}:
+        raise CombatEngineError("official item activation must be an action or bonus_action")
+    budget = dict(current.get("turn_budget") or {})
+    if int(budget.get(normalized, 0) or 0) < 1:
+        raise CombatEngineError(f"actor has no {normalized.replace('_', ' ').title()} available")
+    budget[normalized] = int(budget[normalized]) - 1
+    current["turn_budget"] = budget
+    _record_action_payment(value, current, action="official_item", payment=normalized)
+    return value, {
+        "kind": "official_item_activation",
+        "item_id": item_id,
+        "activation": normalized,
+    }
+
+
 def pay_multiattack_activity(
     encounter: dict[str, Any],
     actor_id_value: str,
@@ -2555,6 +2655,22 @@ def preflight_attack(
     effect_roll_bonus = active_effect_roll_bonus(actor_sheet(attacker), "attack")
     attack_bonus = int(weapon.get("attack_bonus", 0)) + effect_roll_bonus
     context = dict(action.get("context") or {})
+    official_item = _verified_official_item_for_attack(attacker, weapon)
+    if official_item.get("kind") == "dyrrn_tentacle_whip":
+        target_species = str(
+            dict(actor_sheet(target).get("progression") or {}).get("species") or ""
+        ).casefold()
+        species_tokens = set(re.findall(r"[a-z0-9_]+", target_species))
+        protected_species = {
+            str(value).strip().casefold()
+            for value in official_item.get("disadvantage_against_species", [])
+        }
+        matched_species = sorted(species_tokens & protected_species)
+        if matched_species:
+            context["disadvantage"] = True
+            context.setdefault("disadvantage_sources", []).append(
+                "official_item:dyrrn_tentacle_whip:aberration"
+            )
     attack_ability = str(weapon.get("attack_ability") or "strength").casefold()
     equipment_attack_disadvantage = attack_ability in set(
         actor_derived(attacker)
@@ -3147,6 +3263,7 @@ def preflight_attack(
         "additional_damage": additional_damage,
         "on_hit_effect": on_hit_effect,
         "standard_on_hit_mechanics": list(weapon.get("standard_on_hit_mechanics") or []),
+        "official_item": official_item,
         "advantage": bool(context.get("advantage", False)),
         "disadvantage": bool(context.get("disadvantage", False)),
         "advantage_sources": list(context.get("advantage_sources") or []),
@@ -3547,6 +3664,24 @@ def resolve_attack_damage(
         damage=None,
     )
     expression = str(plan.get("damage_expression") or "")
+    official_item = dict(plan.get("official_item") or {})
+    official_kind = str(official_item.get("kind") or "")
+    if official_kind == "dyrrn_tentacle_whip" and attack.get("hit"):
+        if official_item.get("natural_20_stun") and int(attack.get("natural", 0) or 0) == 20:
+            result["official_item_effect"] = {
+                "kind": "dyrrn_natural_20_stun",
+                "source_actor_id": actor_id(attacker),
+                "target_id": actor_id(target),
+                "condition": "stunned",
+                "duration": "target_end_next_turn",
+            }
+    if official_kind == "arcane_propulsion_arm" and plan.get("attack_mode") == "ranged":
+        result["official_item_effect"] = {
+            "kind": "arcane_propulsion_arm_return",
+            "source_actor_id": actor_id(attacker),
+            "target_id": actor_id(target),
+            "item_id": str(plan.get("weapon_id") or ""),
+        }
     if attack["hit"] and expression:
         damage_expression = _critical_expression(expression) if attack["critical"] else expression
         damage_roll = roll(damage_expression, rng=rng)
@@ -3633,14 +3768,20 @@ def resolve_attack_damage(
                 "detail": sneak_roll.detail,
             }
             result["damage"]["sneak_attack"] = deepcopy(result["sneak_attack"])
-        if plan.get("on_hit_effect"):
+        if plan.get("on_hit_effect") and official_kind not in {
+            "dyrrn_tentacle_whip",
+            "arcane_propulsion_arm",
+        }:
             result["on_hit_ruling"] = {
                 "required": True,
                 "effect": str(plan["on_hit_effect"]),
                 "default_resolver": "agent",
                 "ruling_kind": "source_or_scene_fact",
             }
-    elif attack["hit"] and plan.get("on_hit_effect"):
+    elif attack["hit"] and plan.get("on_hit_effect") and official_kind not in {
+        "dyrrn_tentacle_whip",
+        "arcane_propulsion_arm",
+    }:
         result["on_hit_ruling"] = {
             "required": True,
             "effect": str(plan["on_hit_effect"]),
@@ -5570,6 +5711,85 @@ def apply_weapon_mastery_to_encounter(
         },
     ][-100:]
     return {"encounter": value, "effect": deepcopy(effect)}
+
+
+def apply_official_item_effect_to_encounter(
+    encounter: dict[str, Any],
+    result: dict[str, Any],
+    *,
+    attacker_id: str,
+    target_id: str,
+) -> dict[str, Any]:
+    """Commit deterministic encounter effects emitted by official weapons."""
+
+    value = deepcopy(encounter)
+    effect = dict(result.get("official_item_effect") or {})
+    if not effect:
+        return {"encounter": value, "effect": None}
+    kind = str(effect.get("kind") or "")
+    if kind == "dyrrn_natural_20_stun":
+        if str(effect.get("target_id") or "") != target_id or str(
+            effect.get("source_actor_id") or ""
+        ) != attacker_id:
+            raise CombatEngineError("Dyrrn stun effect actor binding is invalid")
+        combatant = next(
+            (
+                item
+                for item in value.get("combatants", [])
+                if str(item.get("actor_id") or "") == target_id
+            ),
+            None,
+        )
+        if combatant is None:
+            raise CombatEngineError("Dyrrn stun target is not a combatant")
+        current = current_combatant(value)
+        target_turns_completed = int(combatant.get("turns_completed", 0) or 0)
+        target_is_current_turn = bool(
+            current is not None and str(current.get("actor_id") or "") == target_id
+        )
+        conditions = _condition_set(combatant.get("conditions"))
+        conditions.add("stunned")
+        combatant["conditions"] = sorted(conditions)
+        committed = {
+            "id": f"official-item-stun-{uuid4().hex}",
+            "kind": "official_item_stun",
+            "mechanic_id": "dnd5e.expansion.eberron.dyrrn_tentacle_whip",
+            "source_actor_id": attacker_id,
+            "target_actor_id": target_id,
+            "condition": "stunned",
+            "expires_on": "target_turn_end",
+            "expires_after_target_turns_completed": target_turns_completed
+            + (2 if target_is_current_turn else 1),
+            "active": True,
+        }
+        value.setdefault("ongoing_effects", []).append(committed)
+        value["log"] = [
+            *list(value.get("log") or []),
+            {
+                "type": "official_item_effect",
+                "effect": deepcopy(committed),
+            },
+        ][-100:]
+        return {"encounter": value, "effect": committed}
+    if kind == "arcane_propulsion_arm_return":
+        if str(effect.get("source_actor_id") or "") != attacker_id or str(
+            effect.get("target_id") or ""
+        ) != target_id:
+            raise CombatEngineError("Arcane Propulsion Arm return effect actor binding is invalid")
+        committed = {
+            "kind": kind,
+            "mechanic_id": "dnd5e.expansion.eberron.arcane_propulsion_arm",
+            "source_actor_id": attacker_id,
+            "target_id": target_id,
+            "item_id": str(effect.get("item_id") or ""),
+            "state": "attached",
+        }
+        value["log"] = [
+            *list(value.get("log") or []),
+            {"type": "official_item_effect", "effect": deepcopy(committed)},
+        ][-100:]
+        return {"encounter": value, "effect": committed}
+    raise CombatEngineError(f"unsupported official item encounter effect: {kind}")
 
 
 def consume_weapon_mastery_attack_effects(
@@ -7966,6 +8186,23 @@ def end_turn(
         ):
             effect["active"] = False
             effect["ended_reason"] = "source_turn_end"
+        if (
+            isinstance(effect, dict)
+            and effect.get("active", True)
+            and effect.get("mechanic_id") == "dnd5e.expansion.eberron.dyrrn_tentacle_whip"
+            and effect.get("expires_on") == "target_turn_end"
+            and str(effect.get("target_actor_id") or "") == str(current.get("actor_id") or "")
+            and (
+                effect.get("expires_after_target_turns_completed") is None
+                or int(current.get("turns_completed", 0) or 0)
+                >= int(effect.get("expires_after_target_turns_completed", 0) or 0)
+            )
+        ):
+            current_conditions = _condition_set(current.get("conditions"))
+            current_conditions.discard(str(effect.get("condition") or "stunned"))
+            current["conditions"] = sorted(current_conditions)
+            effect["active"] = False
+            effect["ended_reason"] = "target_turn_end"
     retained_flags = {
         key: deepcopy(item)
         for key, item in current_flags.items()
