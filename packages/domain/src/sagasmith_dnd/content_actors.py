@@ -92,14 +92,22 @@ def validate_dnd_content_actor(actor: Mapping[str, Any]) -> dict[str, Any]:
     if "intrinsic_attacks" not in value["sheet"].get("traits", {}):
         if normalized["sheet"]["traits"].get("intrinsic_attacks") == []:
             normalized["sheet"]["traits"].pop("intrinsic_attacks")
+    # Older immutable archives also predate the empty anatomy descriptor.
+    # Accept only the exact default omission and retain the signed payload.
+    if "anatomy" not in value["sheet"].get("traits", {}):
+        if normalized["sheet"]["traits"].get("anatomy") == {
+            "functional_arms": 2,
+            "functional_hands": 2,
+        }:
+            normalized["sheet"]["traits"].pop("anatomy")
     # Older immutable archives also predate external item custody references.
     # Accept only an absent empty default, without changing the signed payload
     # or relaxing validation of explicit references and other canonical fields.
     if "external_items" not in value["sheet"].get("inventory", {}):
         if normalized["sheet"]["inventory"].get("external_items") == []:
             normalized["sheet"]["inventory"].pop("external_items")
-    # Older immutable archives also predate three empty item-mechanics
-    # defaults. Accept only those exact omissions and retain the signed
+    # Older immutable archives also predate empty item-mechanics defaults.
+    # Accept only those exact omissions and retain the signed
     # payload; explicit values still have to pass the current schema.
     _strip_legacy_item_mechanics_defaults(value["sheet"], normalized["sheet"])
     if normalized["sheet"] != value["sheet"] or normalized["notes"] != value["notes"]:
@@ -135,6 +143,7 @@ def _strip_legacy_item_mechanics_defaults(
             ("category", ""),
             ("strength_requirement", 0),
             ("magical", False),
+            ("official_item", {}),
         ):
             if key not in original_mechanics and normalized_mechanics.get(key) == default:
                 normalized_mechanics.pop(key, None)

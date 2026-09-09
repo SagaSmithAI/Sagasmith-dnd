@@ -23,7 +23,9 @@ from sagasmith_dnd.content_packages import (
 )
 
 
-def _legacy_actor(*, missing_intrinsic_attacks: bool = False) -> dict:
+def _legacy_actor(
+    *, missing_intrinsic_attacks: bool = False, missing_anatomy: bool = False
+) -> dict:
     notes = default_character_notes()
     notes["profile"]["summary"] = "Legacy inventory fixture."
     actor = build_dnd_content_actor(
@@ -37,12 +39,22 @@ def _legacy_actor(*, missing_intrinsic_attacks: bool = False) -> dict:
     actor["sheet"]["inventory"].pop("external_items")
     if missing_intrinsic_attacks:
         actor["sheet"]["traits"].pop("intrinsic_attacks")
+    if missing_anatomy:
+        actor["sheet"]["traits"].pop("anatomy")
     return actor
 
 
-@pytest.mark.parametrize("missing_intrinsic_attacks", [False, True])
-def test_absent_empty_external_items_preserves_actor_and_archive(missing_intrinsic_attacks):
-    actor = _legacy_actor(missing_intrinsic_attacks=missing_intrinsic_attacks)
+@pytest.mark.parametrize(
+    ("missing_intrinsic_attacks", "missing_anatomy"),
+    [(False, False), (True, False), (False, True), (True, True)],
+)
+def test_absent_empty_legacy_defaults_preserve_actor_and_archive(
+    missing_intrinsic_attacks, missing_anatomy
+):
+    actor = _legacy_actor(
+        missing_intrinsic_attacks=missing_intrinsic_attacks,
+        missing_anatomy=missing_anatomy,
+    )
     original = deepcopy(actor)
     assert validate_dnd_content_actor(actor) == original
     assert actor == original

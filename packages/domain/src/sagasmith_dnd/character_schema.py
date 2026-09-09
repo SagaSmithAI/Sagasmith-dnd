@@ -142,8 +142,17 @@ ENGINE_SETTLED_NON_AC_EFFECT_PATHS = {
     "combat.hp.excess_on_end",
     "combat.melee_reach.bonus_ft",
     "combat.speed.multiplier",
+    "combat.speed.walk",
+    "combat.speed.fly",
+    "combat.speed.swim",
+    "combat.speed.climb",
+    "combat.speed.burrow",
     "rolls.attack.advantage",
     "rolls.attack.disadvantage",
+    "rolls.ability_check.advantage",
+    "rolls.ability_check.disadvantage",
+    "rolls.saving_throw.advantage",
+    "rolls.saving_throw.disadvantage",
     "rolls.weapon_damage.dice_multiplier",
     "traits.size",
 }
@@ -738,7 +747,7 @@ def _normalize_resource_scaling(value: Any, field: str) -> dict[str, Any]:
             {"kind", "ability", "minimum", "multiplier", "offset"},
         )
         kind = _text(formula.get("kind"), f"{field}.maximum_formula.kind")
-        if kind not in {"class_level", "ability_modifier"}:
+        if kind not in {"class_level", "ability_modifier", "proficiency_bonus"}:
             raise ValueError(f"{field}.maximum_formula.kind is invalid")
         ability = _text(
             formula.get("ability"),
@@ -747,7 +756,7 @@ def _normalize_resource_scaling(value: Any, field: str) -> dict[str, Any]:
         )
         if kind == "ability_modifier" and ability not in ABILITY_NAMES:
             raise ValueError(f"{field}.maximum_formula.ability is invalid")
-        if kind == "class_level" and ability:
+        if kind in {"class_level", "proficiency_bonus"} and ability:
             raise ValueError(f"{field}.maximum_formula.ability is not allowed")
         normalized_formula = {
             "kind": kind,
@@ -2397,6 +2406,20 @@ def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
             mode != "set" or not isinstance(change_value, bool)
         ):
             raise ValueError(f"{field} {path} requires a boolean set value")
+        if path in {
+            "rolls.ability_check.advantage",
+            "rolls.ability_check.disadvantage",
+            "rolls.saving_throw.advantage",
+            "rolls.saving_throw.disadvantage",
+        } and (mode != "set" or not isinstance(change_value, bool)):
+            raise ValueError(f"{field} {path} requires a boolean set value")
+        if re.fullmatch(r"combat\.speed\.(walk|fly|swim|climb|burrow)", path) and (
+            mode not in {"add", "override"}
+            or isinstance(change_value, bool)
+            or not isinstance(change_value, int)
+            or change_value < 0
+        ):
+            raise ValueError(f"{field} {path} requires a non-negative speed value")
         if path == "traits.size" and (
             mode != "override"
             or not isinstance(change_value, str)
@@ -4493,7 +4516,7 @@ def _derive_armor_class(
             )
             if speed_match is not None:
                 if (
-                    change["mode"] != "override"
+                    change["mode"] not in {"add", "override"}
                     or isinstance(change["value"], bool)
                     or not isinstance(change["value"], int)
                     or change["value"] < 0
@@ -4908,6 +4931,60 @@ def active_effect_roll_bonus(sheet: dict[str, Any], kind: str) -> int:
     return bonus
 
 
+def active_effect_roll_advantage(
+    sheet: dict[str, Any], kind: str, *, key: str | None = None
+) -> tuple[bool, bool]:
+    """Return source-bound advantage/disadvantage flags for checks and saves."""
+    normalized = str(kind).strip().casefold().replace("-", "_").replace(" ", "_")
+    if normalized in {"skill", "ability", "check"}:
+        prefix = "rolls.ability_check"
+    elif normalized in {"save", "saving_throw"}:
+        prefix = "rolls.saving_throw"
+    elif normalized == "attack":
+        prefix = "rolls.attack"
+    else:
+        raise ValueError(f"unsupported effect roll kind: {kind}")
+    advantage = disadvantage = False
+    normalized_key = str(key or "").casefold().replace("-", "_").replace(" ", "_")
+    for effect in validate_character_sheet(sheet)["effects"]:
+        if not effect["active"]:
+            continue
+        restricted = str(dict(effect.get("metadata") or {}).get("skill") or "")
+        if restricted and (
+            restricted.casefold().replace("-", "_").replace(" ", "_") != normalized_key
+        ):
+            continue
+        for change in effect["changes"]:
+            if change["path"] not in {f"{prefix}.advantage", f"{prefix}.disadvantage"}:
+                continue
+            if change["mode"] != "set" or not isinstance(change["value"], bool):
+                raise ValueError(f"active {change['path']} effect modifier is malformed")
+            if change["path"].endswith("advantage"):
+                advantage = advantage or change["value"]
+            else:
+                disadvantage = disadvantage or change["value"]
+    return advantage, disadvantage
+
+
+def active_concentration_save_bonus(sheet: dict[str, Any]) -> int:
+    """Return bonuses explicitly scoped to concentration saves."""
+    bonus = 0
+    for effect in validate_character_sheet(sheet)["effects"]:
+        if (
+            not effect["active"]
+            or dict(effect.get("metadata") or {}).get("scag_bladesong") is not True
+            or dict(effect.get("metadata") or {}).get("save_purpose") != "concentration"
+        ):
+            continue
+        for change in effect["changes"]:
+            if change["path"] != "rolls.saving_throw.bonus" or change["mode"] != "add":
+                continue
+            if isinstance(change["value"], bool) or not isinstance(change["value"], int):
+                raise ValueError("active concentration save effect modifier is malformed")
+            bonus += change["value"]
+    return bonus
+
+
 def _has_2014_dwarf_heavy_armor_speed_exception(sheet: dict[str, Any]) -> bool:
     """Recognize the exact source-bound 2014 dwarf exception, never prose alone."""
 
@@ -5109,14 +5186,17 @@ def derive_character_sheet(
                 continue
             speed = change["value"]
             if (
-                change["mode"] != "override"
+                change["mode"] not in {"add", "override"}
                 or isinstance(speed, bool)
                 or not isinstance(speed, int)
                 or speed < 0
             ):
                 raise ValueError("active speed override effect is malformed")
             mode = match.group(1)
-            effective_speed[mode] = max(int(effective_speed.get(mode, 0) or 0), speed)
+            if change["mode"] == "add":
+                effective_speed[mode] = int(effective_speed.get(mode, 0) or 0) + speed
+            else:
+                effective_speed[mode] = max(int(effective_speed.get(mode, 0) or 0), speed)
     if encumbrance_summary["state"] == "over_capacity":
         effective_speed = {mode: 0 for mode in effective_speed}
     else:

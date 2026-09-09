@@ -654,6 +654,44 @@ def test_feature_resource_formula_reacts_to_ability_changes_and_unlimited_levels
     }
 
 
+def test_feature_resource_proficiency_bonus_formula_tracks_character_level() -> None:
+    sheet = _single_class_sheet("Wizard", hit_die=6, constitution=12, hp=(6, 6))
+    sheet["progression"]["level"] = 14
+    sheet["progression"]["classes"][0]["level"] = 14
+    sheet["content"]["features"] = [
+        {
+            "id": "bladesong",
+            "name": "Bladesong",
+            "resource_scaling": {
+                "target": "bladesong_uses",
+                "label": "Bladesong",
+                "class_name": "Wizard",
+                "maximum_by_level": {},
+                "maximum_formula": {
+                    "kind": "proficiency_bonus",
+                    "minimum": 2,
+                    "multiplier": 1,
+                    "offset": 0,
+                },
+                "recovers_on": "long_rest",
+                "recovery_by_level": {},
+            },
+        }
+    ]
+
+    synchronized = synchronize_class_feature_resources(sheet)
+
+    resource = synchronized["sheet"]["resources"]["bladesong_uses"]
+    assert resource["max"] == 5
+    assert resource["value"] == 5
+    assert resource["recovers_on"] == "long_rest"
+
+    synchronized["sheet"]["progression"]["level"] = 17
+    synchronized["sheet"]["progression"]["classes"][0]["level"] = 17
+    higher = synchronize_class_feature_resources(synchronized["sheet"])
+    assert higher["sheet"]["resources"]["bladesong_uses"]["max"] == 6
+
+
 def test_feature_resource_sync_does_not_guess_that_top_level_resources_are_shadows() -> None:
     sheet = _single_class_sheet("Bard", hit_die=8, constitution=12, hp=(8, 8))
     sheet["abilities"]["charisma"]["score"] = 20

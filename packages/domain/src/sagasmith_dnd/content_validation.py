@@ -105,6 +105,12 @@ _ENGINE_SELECTION_FIELDS = {
         }
     ),
     "class": frozenset({"skill_replacements", "tool_replacements"}),
+    # The subclass contract carries the class target in its published schema.
+    # These two fields are engine-owned inputs for the SCAG Bladesinging
+    # prerequisite and its reviewed Training in War and Song choice.  Keeping
+    # them here avoids changing the immutable archive contract while still
+    # exposing the complete source-bound materializer surface.
+    "subclass": frozenset({"species_prerequisite_override", "war_and_song_training"}),
 }
 
 _CARD_BINDINGS = {

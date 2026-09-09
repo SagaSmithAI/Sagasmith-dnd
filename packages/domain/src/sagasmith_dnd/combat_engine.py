@@ -19,8 +19,11 @@ from sagasmith_dnd.activity_identity import is_multiattack_activity
 from sagasmith_dnd.breathing import breathing_blocks_recovery
 from sagasmith_dnd.character_schema import (
     SKILL_ABILITIES,
+    active_concentration_save_bonus,
+    active_effect_roll_advantage,
     active_effect_roll_bonus,
     add_effect,
+    derive_character_sheet,
     effective_ability_scores,
     effective_hit_point_maximum,
     effective_size,
@@ -2198,7 +2201,43 @@ def pay_attack_action(
         str(item).strip().casefold() for item in dict(selected_weapon or {}).get("properties", [])
     }
 
-    if mastery_followup:
+    cantrip_replacement = attack_mode == "cantrip" or str(weapon_id).startswith("spell-attack:")
+    if cantrip_replacement:
+        if (
+            mastery_followup
+            or normalized_light_payment
+            or active_multiattack
+            or multiattack_option_id
+        ):
+            raise CombatEngineError(
+                "a cantrip replacement cannot combine with another attack option"
+            )
+        if flags.get("cantrip_replacement_used"):
+            raise CombatEngineError("Extra Attack allows only one cantrip replacement per turn")
+        if int(budget.get("attack_budget", 0) or 0) > 0:
+            budget["attack_budget"] -= 1
+            payment = {"kind": "cantrip_replacement", "payment": "attack_action"}
+        else:
+            payment_key = (
+                "main_action"
+                if int(budget.get("main_action", 0) or 0) > 0
+                else "extra_action"
+                if int(budget.get("extra_action", 0) or 0) > 0
+                else ""
+            )
+            if not payment_key:
+                raise CombatEngineError("actor has no attack payment available")
+            count = int(actor_derived(attacker).get("attacks_per_action", 1) or 1)
+            budget["attack_budget"] = max(0, count - 1)
+            budget[payment_key] -= 1
+            action_payment_key = payment_key
+            payment = {
+                "kind": "cantrip_replacement",
+                "payment": payment_key,
+                "attack_count": count,
+            }
+        flags["cantrip_replacement_used"] = True
+    elif mastery_followup:
         if active_multiattack or multiattack_option_id:
             raise CombatEngineError("Cleave cannot be folded into Multiattack")
         if int(budget.get("attack_budget", 0) or 0) < 1:
@@ -3545,11 +3584,18 @@ def available_attack_defenses(
     known_ids = {str(item.get("id") or "") for item in options}
     for candidate in extra_defenses or []:
         candidate_id = str(candidate.get("id") or "")
+        candidate_kind = str(candidate.get("kind") or "").casefold()
         bonus = int(candidate.get("bonus", 0) or 0)
+        if candidate_kind == "scag_song_defense":
+            if not candidate_id or candidate_id in known_ids:
+                continue
+            options.append({**deepcopy(candidate), "id": candidate_id})
+            known_ids.add(candidate_id)
+            continue
         if (
             not candidate_id
             or candidate_id in known_ids
-            or str(candidate.get("kind") or "").casefold()
+            or candidate_kind
             not in {"armor_class_bonus", "spell_armor_class_bonus"}
             or bonus <= 0
         ):
@@ -3645,11 +3691,33 @@ def resolve_attack_damage(
     plan: dict[str, Any],
     attack: dict[str, Any],
     rules: ResolutionContext | None = None,
+    damage_reduction: int = 0,
     rng: Any = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Resolve damage and after-effects from one already rolled attack."""
     updated_attacker = deepcopy(attacker)
     updated_target = deepcopy(target)
+    weapon_for_song = next(
+        (item for item in actor_sheet(updated_attacker).get("inventory", {}).get("items", [])
+         if str(item.get("id") or "") == str(plan.get("weapon_id") or "")),
+        None,
+    )
+    weapon_properties = {
+        str(item).casefold().replace("-", "_")
+        for item in dict(weapon_for_song or {}).get("mechanics", {}).get("properties", [])
+    }
+    if (
+        plan.get("weapon_grip") == "two_handed"
+        or "two_handed" in weapon_properties
+        or "two handed" in weapon_properties
+    ):
+        for effect in actor_sheet(updated_attacker).get("effects", []):
+            if (
+                effect.get("active")
+                and dict(effect.get("metadata") or {}).get("scag_bladesong") is True
+            ):
+                effect["active"] = False
+                effect["ended_reason"] = "two_handed_attack"
     result: dict[str, Any] = deepcopy(attack)
     result.update(
         attacker_id=actor_id(attacker),
@@ -3724,7 +3792,60 @@ def resolve_attack_damage(
                     "source": str(extra.get("source") or ""),
                 }
             )
+        # SCAG 2014 Song of Victory is a flat modifier: it applies once to a
+        # qualifying one-handed melee weapon hit and therefore is never part
+        # of the critical expression.
+        attacker_sheet = actor_sheet(updated_attacker)
+        song_victory_active = any(
+            effect.get("active")
+            and dict(effect.get("metadata") or {}).get("scag_bladesong") is True
+            for effect in attacker_sheet.get("effects", [])
+        )
+        song_victory_feature = any(
+            str(item.get("id") or "").endswith(".feature.song-of-victory")
+            and str(item.get("pack_id") or "") == (
+                "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a"
+            )
+            for item in attacker_sheet.get("content", {}).get("features", [])
+        )
+        if song_victory_active and song_victory_feature and plan.get("melee_attack"):
+            weapon = next(
+                (item for item in attacker_sheet.get("inventory", {}).get("items", [])
+                 if str(item.get("id") or "") == str(plan.get("weapon_id") or "")),
+                None,
+            )
+            properties = {
+                str(item).casefold().replace("-", "_")
+                for item in dict(weapon or {}).get("mechanics", {}).get("properties", [])
+            }
+            if (
+                weapon is not None
+                and plan.get("weapon_grip") != "two_handed"
+                and "two_handed" not in properties
+                and "two handed" not in properties
+            ):
+                int_mod = int(
+                    dict(derive_character_sheet(attacker_sheet).get("ability_modifiers") or {})
+                    .get("intelligence", 0)
+                    or 0
+                )
+                int_mod = max(1, int_mod)
+                rolled_parts.append({
+                    "expression": str(int_mod),
+                    "rolled_expression": str(int_mod),
+                    "rolls": [],
+                    "detail": f"Song of Victory +{int_mod}",
+                    "amount": int_mod,
+                    "damage_type": str(plan.get("damage_type") or ""),
+                    "source": "scag.song_of_victory",
+                    "flat": True,
+                })
         if len(rolled_parts) == 1:
+            if damage_reduction:
+                rolled_parts[0]["amount_before_reduction"] = rolled_parts[0]["amount"]
+                rolled_parts[0]["amount"] = max(
+                    0, rolled_parts[0]["amount"] - int(damage_reduction)
+                )
             damage = apply_damage_to_sheet(
                 target_sheet,
                 amount=rolled_parts[0]["amount"],
@@ -3738,6 +3859,15 @@ def resolve_attack_damage(
                 weapon_attack=str(plan.get("kind") or "") == "attack",
             )
         else:
+            if damage_reduction:
+                remaining_reduction = int(damage_reduction)
+                for part in rolled_parts:
+                    part["amount_before_reduction"] = part["amount"]
+                    reduced = min(remaining_reduction, int(part["amount"]))
+                    part["amount"] = int(part["amount"]) - reduced
+                    remaining_reduction -= reduced
+                    if remaining_reduction <= 0:
+                        break
             damage = apply_damage_parts_to_sheet(
                 target_sheet,
                 rolled_parts,
@@ -3758,6 +3888,8 @@ def resolve_attack_damage(
             "detail": damage_roll.detail,
             "roll_parts": rolled_parts,
         }
+        if damage_reduction:
+            result["damage"]["reduction"] = int(damage_reduction)
         if sneak_roll is not None:
             result["sneak_attack"] = {
                 **sneak_plan,
@@ -7324,7 +7456,8 @@ def _frightened_ability_check_disadvantage(
 
 
 def _sheet_check_modifiers(
-    sheet: dict[str, Any], derived: dict[str, Any], *, kind: str, ability: str
+    sheet: dict[str, Any], derived: dict[str, Any], *, kind: str, ability: str,
+    save_purpose: str | None = None,
 ) -> tuple[int, bool, bool]:
     """Nonrolling modifiers shared by ordinary checks and 2014 initiative.
 
@@ -7332,6 +7465,12 @@ def _sheet_check_modifiers(
     choices at their respective callers; these are not interchangeable rolls.
     """
     effect_bonus = active_effect_roll_bonus(sheet, kind)
+    if kind == "save":
+        concentration_bonus = active_concentration_save_bonus(sheet)
+        # A Bladesong concentration clause must not improve unrelated saves.
+        effect_bonus -= concentration_bonus
+        if save_purpose == "concentration":
+            effect_bonus += concentration_bonus
     normalized_ability = str(ability).strip().casefold().replace(" ", "_")
     check_ability = SKILL_ABILITIES.get(normalized_ability, _long_ability_name(ability))
     equipment_penalties = dict(derived.get("equipment_penalties") or {})
@@ -7340,7 +7479,10 @@ def _sheet_check_modifiers(
     )
     equipment_disadvantage = check_ability in set(equipment_penalties.get(penalty_field) or [])
     poisoned = kind in ABILITY_CHECK_KINDS and "poisoned" in _condition_set(sheet.get("conditions"))
-    return effect_bonus, equipment_disadvantage, poisoned
+    effect_advantage, effect_disadvantage = active_effect_roll_advantage(
+        sheet, kind, key=normalized_ability
+    )
+    return effect_bonus, equipment_disadvantage or effect_disadvantage, poisoned
 
 
 def resolve_actor_check(
@@ -7368,9 +7510,17 @@ def resolve_actor_check(
     normalized_ruleset = _normalize_ruleset(ruleset or sheet.get("edition"))
     conditions = _condition_set(sheet.get("conditions"))
     exhaustion = int(sheet.get("combat", {}).get("exhaustion", 0) or 0)
+    modifier_save_purpose = save_purpose
+    if modifier_save_purpose is None and rules is not None:
+        modifier_save_purpose = str(dict(rules.facts).get("save_purpose") or "") or None
     effect_roll_bonus, equipment_disadvantage, poisoned = _sheet_check_modifiers(
-        sheet, derived, kind=kind, ability=ability
+        sheet, derived, kind=kind, ability=ability, save_purpose=modifier_save_purpose
     )
+    effect_advantage, _effect_disadvantage = active_effect_roll_advantage(
+        sheet, kind, key=str(ability).strip().casefold().replace(" ", "_")
+    )
+    if effect_advantage:
+        advantage = True
     roll_bonus = int(bonus) + effect_roll_bonus
     extension = apply_rule_event(sheet, "check.before", rules)
     if extension.status != "committed":

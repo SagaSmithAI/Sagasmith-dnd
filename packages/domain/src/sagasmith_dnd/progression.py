@@ -9,7 +9,7 @@ from typing import Any
 from sagasmith_dnd.character_schema import normalize_class_spellcasting_profile
 from sagasmith_dnd.combat_engine import CombatEngineError
 from sagasmith_dnd.editions import normalize_dnd_edition
-from sagasmith_dnd.engine import ability_modifier, roll
+from sagasmith_dnd.engine import ability_modifier, proficiency_bonus, roll
 from sagasmith_dnd.resources import resize_bounded_resource
 from sagasmith_dnd.spells import (
     PREPARED_SPELL_LIMITS_2024,
@@ -1087,6 +1087,11 @@ def _scaled_resource_capacity(
         elif kind == "ability_modifier":
             ability = str(formula.get("ability") or "")
             base = _ability_modifier(sheet, ability)
+        elif kind == "proficiency_bonus":
+            character_level = int(
+                sheet.get("progression", {}).get("level", class_level) or class_level
+            )
+            base = proficiency_bonus(character_level)
         else:
             raise CombatEngineError("feature resource scaling formula is invalid")
         return (
