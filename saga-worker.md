@@ -52,5 +52,5 @@ Acceptance is implemented and exercised against the indexed SCAG archive version
 - Focused locked archive groups previously passed on this branch: official expansions (`15 passed`), Tortle Claws/breathing (`2 passed`), and Evasion/Bladesinging (`5 passed`).
 - Domain focused regression: `88 passed`.
 - `ruff check`, Python compilation, and `git diff --check` passed.
-- CI for the new head is run `34316711159`; all four jobs were queued at audit time. The previous full CI run `34311338849` passed all four jobs.
+- CI run `34349854857` for the pushed acceptance head `b56dbfa63c9a5cc26b25b56804066f49320b2674` passed all four jobs (locked-py311, compatibility-py312, skills, and ui).
 - No issue was closed, no pull request was merged, no remote branch or fork was deleted, and no source archive was published by this task.
