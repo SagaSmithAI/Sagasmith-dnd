@@ -6,7 +6,7 @@ Date: 2026-09-09 (Asia/Singapore)
 
 - Runtime checkout: `D:/repo/repostew/Sagasmith-dnd-fix-173-next`
 - Branch: `fix/173-artificer-followup-order`
-- Head: `46d5e249` (`Refresh SagaSmith acceptance audit evidence`), pushed to origin.
+- Head: `ea1cbc50` (`Correct acceptance audit head`), pushed to origin.
 - Runtime PR: [SagaSmithAI/Sagasmith-dnd#201](https://github.com/SagaSmithAI/Sagasmith-dnd/pull/201), open.
 - Official content checkout: `D:/repo/repostew/SagaSmith-dnd-content-library-schema-check`, branch `fix/runtime-locked-archives-v1`, commit `36bd249`.
 - Content dependency: [SagaSmithAI/SagaSmith-dnd-content-library#20](https://github.com/SagaSmithAI/SagaSmith-dnd-content-library/pull/20), open. Runtime tests use the verified indexed package checksums from that checkout; the package has not been published or merged by this task.
