@@ -1162,6 +1162,35 @@ def _require_preserved_tortle_natural_armor_provenance(
         )
 
 
+def _active_scag_bladesong_effects(value: Mapping[str, Any]) -> list[dict[str, Any]]:
+    return [
+        deepcopy(effect)
+        for effect in value.get("effects", [])
+        if isinstance(effect, dict)
+        and effect.get("active")
+        and dict(effect.get("metadata") or {}).get("scag_bladesong") is True
+    ]
+
+
+def _reject_new_scag_bladesong_state(sheet: Mapping[str, Any] | None) -> None:
+    if _active_scag_bladesong_effects(sheet or {}):
+        raise ValueError(
+            "active SCAG Bladesong can be created only by the source-bound combat activity"
+        )
+
+
+def _require_preserved_scag_bladesong_state(
+    current: Mapping[str, Any], replacement: Mapping[str, Any]
+) -> None:
+    """Prevent sheet ingress from manufacturing or erasing Bladesong."""
+    before = _active_scag_bladesong_effects(current)
+    after = _active_scag_bladesong_effects(replacement)
+    if bool(before) != bool(after) or (before and before != after):
+        raise ValueError(
+            "character sheet replacement cannot add, remove, or alter active SCAG Bladesong"
+        )
+
+
 def _character_spell_card(catalog_card: dict[str, Any]) -> dict[str, Any]:
     """Project a rule-catalog spell into the persistable character-card schema."""
     return {
@@ -1189,6 +1218,7 @@ ENGINE_OWNED_STANDARD_ACTIVITY_IDS = frozenset(
         "dnd5e.content.srd2024.feature.fighter-second-wind",
         "dnd5e.content.srd2024.feature.life-domain-preserve-life",
         "dnd5e.content.srd2024.feature.rogue-cunning-action",
+        "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a.feature.bladesong",
     }
 )
 
@@ -1253,8 +1283,144 @@ ENGINE_SETTLED_CARD_MECHANIC_IDS = frozenset(
         CORE_SLEEP_MECHANIC_ID,
         CORE_MENDING_MECHANIC_ID,
         CORE_WITCH_BOLT_MECHANIC_ID,
+        "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a.feature.bladesong",
+        "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a.feature.song-of-defense",
+        "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a.feature.song-of-victory",
     }
 )
+
+SCAG_OFFICIAL_ADDON_ID = (
+    "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a.addon"
+)
+SCAG_RULE_PACK_ID = "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a"
+SCAG_BLADE_SINGING_SUBCLASS_ID = SCAG_RULE_PACK_ID + ".subclass.bladesinging"
+SCAG_BLADE_SINGING_FEATURE_IDS = {
+    SCAG_RULE_PACK_ID + ".feature.training-in-war-and-song",
+    SCAG_RULE_PACK_ID + ".feature.bladesong",
+    SCAG_RULE_PACK_ID + ".feature.extra-attack",
+    SCAG_RULE_PACK_ID + ".feature.song-of-defense",
+    SCAG_RULE_PACK_ID + ".feature.song-of-victory",
+}
+EBERRON_RIGHT_TOOL_FOR_JOB_FEATURE_SUFFIX = ".feature.the-right-tool-for-the-job"
+RIGHT_TOOL_FOR_JOB_MECHANIC_ID = "dnd5e.character.right_tool_for_job.v1"
+RIGHT_TOOL_FOR_JOB_METADATA_KEY = "right_tool_for_job"
+RIGHT_TOOL_FOR_JOB_ARTISAN_TOOL_NAMES = frozenset(
+    {
+        "alchemist's supplies",
+        "brewer's supplies",
+        "calligrapher's supplies",
+        "carpenter's tools",
+        "cartographer's tools",
+        "cobbler's tools",
+        "cook's utensils",
+        "glassblower's tools",
+        "jeweler's tools",
+        "leatherworker's tools",
+        "mason's tools",
+        "painter's supplies",
+        "potter's tools",
+        "smith's tools",
+        "tinker's tools",
+        "weaver's tools",
+        "woodcarver's tools",
+    }
+)
+SCAG_WATCHERS_EYE_BACKGROUND_IDS = frozenset(
+    {
+        (
+            "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide."
+            "16e6a243ef0a.background.city-watch"
+        ),
+        (
+            "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide."
+            "16e6a243ef0a.background.investigator"
+        ),
+    }
+)
+WATCHERS_EYE_CAPABILITIES = frozenset(
+    {
+        "local_law",
+        "local_criminal_activity",
+        "watch_outpost",
+        "law_enforcement_contact",
+        "watch_information",
+        "recognition",
+    }
+)
+WATCHERS_EYE_FACT_METADATA_KEY = "dnd5e_watchers_eye"
+WATCHERS_EYE_FACT_SCHEMA_VERSION = 1
+WATCHERS_EYE_FEATURE_NAME = "Watcher's Eye"
+WATCHERS_EYE_NARRATIVE_SCHEMA = "sagasmith.dnd.narrative-capability.v1"
+
+
+def _watchers_eye_source_binding(artifact: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Return exact source-review binding for the two SCAG background cards."""
+
+    artifact_id = str(artifact.get("id") or "")
+    if artifact_id not in SCAG_WATCHERS_EYE_BACKGROUND_IDS:
+        return None
+    if str(artifact.get("kind") or "") != "background":
+        return None
+    if str(artifact.get("application_state") or "") != "selection_ready":
+        return None
+    if str(artifact.get("execution_state") or "") != "ruling_ready":
+        return None
+    raw_selection_contract = artifact.get("selection_contract")
+    raw_catalog_review = artifact.get("catalog_review")
+    if raw_selection_contract is not None or raw_catalog_review is not None:
+        if selection_contract_errors(artifact):
+            return None
+        selection_contract = dict(raw_selection_contract or {})
+        catalog_review = dict(raw_catalog_review or {})
+        reviewed_content_hash = str(selection_contract.get("reviewed_content_hash") or "")
+        if (
+            selection_contract.get("status") != "ready"
+            or selection_contract.get("materializer") != "dnd5e.character.background.v1"
+            or catalog_review.get("status") != "approved"
+            or reviewed_content_hash != str(catalog_review.get("reviewed_content_hash") or "")
+            or len(reviewed_content_hash) != 64
+        ):
+            return None
+    else:
+        # The import boundary intentionally strips authoring attestations after
+        # binding them into the immutable addon checksum and definition provenance.
+        reviewed_content_hash = content_fingerprint(artifact)
+    card = dict(artifact.get("card") or {})
+    grants = dict(card.get("background_grants") or {})
+    if str(grants.get("feature") or "") != WATCHERS_EYE_FEATURE_NAME:
+        return None
+    source_refs = [
+        dict(item) for item in artifact.get("source_refs") or [] if isinstance(item, dict)
+    ]
+    feature_sources = [
+        item
+        for item in source_refs
+        if "watcher's eye" in str(item.get("note") or "").casefold()
+        and str(item.get("chunk_id") or item.get("chunk_key") or "")
+    ]
+    if len(feature_sources) != 1:
+        return None
+    chunk_key = str(feature_sources[0].get("chunk_id") or feature_sources[0].get("chunk_key"))
+    rule_refs = [str(item) for item in artifact.get("rule_refs") or []]
+    feature_rule_refs = [item for item in rule_refs if item.endswith(f"#chunk:{chunk_key}")]
+    if len(feature_rule_refs) != 1:
+        return None
+    ruling_requirements = [
+        dict(item) for item in card.get("ruling_requirements") or [] if isinstance(item, dict)
+    ]
+    if not any(
+        str(item.get("ruling_kind") or "") == "agent_dm_adjudication"
+        and len(str(item.get("source_excerpt") or "")) >= 100
+        for item in ruling_requirements
+    ):
+        return None
+    return {
+        "artifact_id": artifact_id,
+        "background_name": str(card.get("name") or artifact_id),
+        "reviewed_content_hash": reviewed_content_hash,
+        "rule_refs": rule_refs,
+        "feature_rule_ref": feature_rule_refs[0],
+    }
 
 
 def _semantic_plan_save_facts(
@@ -3232,6 +3398,9 @@ PHB2014_TOOL_PROFICIENCIES = (
 )
 BACKGROUND_AUTHORITY_SELECTION_KEY = "_background_authority"
 CLASS_EQUIPMENT_AUTHORITY_KEY = "_class_equipment_authority"
+BACKGROUND_MATERIALIZATION_KEY = "_background_materialization"
+SPECIES_MATERIALIZATION_KEY = "_species_materialization"
+SPECIES_AUTHORITY_SELECTION_KEY = "_species_authority"
 
 
 def _class_equipment_records(sheet: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -3338,6 +3507,331 @@ def _background_selection_records(sheet: Mapping[str, Any]) -> list[dict[str, An
     ]
 
 
+def _content_projection_snapshot(sheet: Mapping[str, Any], kind: str) -> dict[str, Any]:
+    """Capture the actor fields a source selection may project.
+
+    The snapshot is kept in the server-authored selection receipt.  Replacement
+    uses it as a compare-and-swap guard: only values that still have the exact
+    source projection are removed, while unrelated later grants remain intact.
+    """
+
+    progression = dict(sheet.get("progression") or {})
+    traits = dict(sheet.get("traits") or {})
+    proficiencies = dict(traits.get("proficiencies") or {})
+    inventory = dict(sheet.get("inventory") or {})
+    combat = dict(sheet.get("combat") or {})
+    content = dict(sheet.get("content") or {})
+    snapshot: dict[str, Any] = {
+        "kind": kind,
+        "progression": {
+            "background": deepcopy(progression.get("background") or ""),
+            "background_grants": deepcopy(progression.get("background_grants") or {}),
+            "species": deepcopy(progression.get("species") or ""),
+            "species_grants": deepcopy(progression.get("species_grants") or {}),
+        },
+        "abilities": {
+            str(name): int(dict(value).get("score", 0) or 0)
+            for name, value in dict(sheet.get("abilities") or {}).items()
+            if isinstance(value, Mapping)
+        },
+        "skills": {
+            str(name): str(dict(value).get("proficiency") or "none")
+            for name, value in dict(sheet.get("skills") or {}).items()
+            if isinstance(value, Mapping)
+        },
+        "combat": {
+            "hp": deepcopy(combat.get("hp") or {}),
+            "speed": deepcopy(combat.get("speed") or {}),
+        },
+        "traits": {
+            "size": deepcopy(traits.get("size") or ""),
+            "languages": deepcopy(traits.get("languages") or []),
+            "intrinsic_attacks": deepcopy(traits.get("intrinsic_attacks") or []),
+            "resistances": deepcopy(traits.get("resistances") or []),
+            "immunities": deepcopy(traits.get("immunities") or []),
+            "condition_immunities": deepcopy(traits.get("condition_immunities") or []),
+            "senses": deepcopy(traits.get("senses") or {}),
+            "proficiencies": {
+                field: deepcopy(proficiencies.get(field) or [])
+                for field in ("armor", "weapons", "tools", "tool_expertise")
+            },
+        },
+        "inventory": {
+            "items": deepcopy(inventory.get("items") or []),
+            "wallet": deepcopy(inventory.get("wallet") or {}),
+            "equipment_slots": deepcopy(inventory.get("equipment_slots") or {}),
+        },
+        "resources": deepcopy(dict(sheet.get("resources") or {})),
+        "content": {
+            section: deepcopy(content.get(section) or [])
+            for section in ("spells", "features", "feats", "activities")
+        },
+        "effects": deepcopy(sheet.get("effects") or []),
+    }
+    return snapshot
+
+
+def _content_projection_receipt(
+    before: Mapping[str, Any], after: Mapping[str, Any], *, kind: str
+) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "kind": kind,
+        # Keep the signed receipt shallow enough for the public MCP argument
+        # schema when callers later submit the complete character card.
+        "before": json.dumps(
+            _content_projection_snapshot(before, kind),
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        "after": json.dumps(
+            _content_projection_snapshot(after, kind),
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+    }
+
+
+def _projection_list_items(before: list[Any], after: list[Any]) -> list[Any]:
+    """Return one copy of every list member newly projected by a grant."""
+
+    remaining = deepcopy(before)
+    added: list[Any] = []
+    for value in after:
+        try:
+            index = next(index for index, item in enumerate(remaining) if item == value)
+        except StopIteration:
+            added.append(deepcopy(value))
+        else:
+            remaining.pop(index)
+    return added
+
+
+def _projection_remove_exact_list(current: list[Any], *, added: list[Any], label: str) -> None:
+    for value in added:
+        try:
+            index = next(index for index, item in enumerate(current) if item == value)
+        except StopIteration as error:
+            raise ValueError(f"{label} changed or left source custody") from error
+        current.pop(index)
+
+
+def _projection_content_items(
+    before: list[dict[str, Any]],
+    after: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, tuple[dict[str, Any], dict[str, Any]]]]:
+    before_by_id = {
+        str(item.get("id")): item
+        for item in before
+        if isinstance(item, Mapping) and str(item.get("id") or "")
+    }
+    created: list[dict[str, Any]] = []
+    changed: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+    for item in after:
+        if not isinstance(item, Mapping):
+            continue
+        item_id = str(item.get("id") or "")
+        if not item_id or item_id not in before_by_id:
+            created.append(deepcopy(dict(item)))
+        elif dict(before_by_id[item_id]) != dict(item):
+            changed[item_id] = (deepcopy(dict(before_by_id[item_id])), deepcopy(dict(item)))
+    return created, changed
+
+
+def _remove_content_projection(
+    sheet: dict[str, Any], record: Mapping[str, Any], *, kind: str
+) -> None:
+    """Atomically remove one prior background/species projection.
+
+    Every owned value is checked against the server-authored after snapshot
+    before it is removed.  This makes spent, transferred, manually changed, or
+    forged projections fail without changing the candidate sheet.
+    """
+
+    key = BACKGROUND_MATERIALIZATION_KEY if kind == "background" else SPECIES_MATERIALIZATION_KEY
+    raw = dict(record.get("selection") or {}).get(key)
+    if not isinstance(raw, Mapping) or int(raw.get("schema_version", 0) or 0) != 1:
+        raise ValueError(f"{kind} replacement requires a source materialization receipt")
+    try:
+        raw_before = raw.get("before")
+        raw_after = raw.get("after")
+        before = (
+            deepcopy(dict(raw_before))
+            if isinstance(raw_before, Mapping)
+            else json.loads(str(raw_before or "{}"))
+        )
+        after = (
+            deepcopy(dict(raw_after))
+            if isinstance(raw_after, Mapping)
+            else json.loads(str(raw_after or "{}"))
+        )
+    except (TypeError, ValueError, json.JSONDecodeError) as error:
+        raise ValueError(f"{kind} replacement receipt is invalid") from error
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        raise ValueError(f"{kind} replacement receipt is invalid")
+    if before.get("kind") != kind or after.get("kind") != kind:
+        raise ValueError(f"{kind} replacement receipt is invalid")
+
+    current = _content_projection_snapshot(sheet, kind)
+    before_progression = dict(before.get("progression") or {})
+    after_progression = dict(after.get("progression") or {})
+    current_progression = dict(current.get("progression") or {})
+    progression_field = "background" if kind == "background" else "species"
+    grants_field = "background_grants" if kind == "background" else "species_grants"
+    if current_progression.get(grants_field) != after_progression.get(grants_field):
+        raise ValueError(f"{kind} grants changed or left source custody")
+    current_progression[progression_field] = before_progression.get(progression_field, "")
+    current_progression[grants_field] = deepcopy(before_progression.get(grants_field) or {})
+    sheet["progression"][progression_field] = current_progression[progression_field]
+    sheet["progression"][grants_field] = current_progression[grants_field]
+
+    current_abilities = dict(current.get("abilities") or {})
+    before_abilities = dict(before.get("abilities") or {})
+    after_abilities = dict(after.get("abilities") or {})
+    for name, after_score in after_abilities.items():
+        before_score = int(before_abilities.get(name, after_score) or 0)
+        delta = int(after_score or 0) - before_score
+        if not delta:
+            continue
+        value = int(current_abilities.get(name, after_score) or 0)
+        if value < int(after_score or 0):
+            raise ValueError(f"{kind} ability projection changed or left source custody")
+        sheet["abilities"][name]["score"] = value - delta
+
+    current_skills = dict(current.get("skills") or {})
+    before_skills = dict(before.get("skills") or {})
+    after_skills = dict(after.get("skills") or {})
+    for name, after_value in after_skills.items():
+        before_value = str(before_skills.get(name, after_value) or "none")
+        if before_value == after_value:
+            continue
+        if str(current_skills.get(name) or "none") != str(after_value):
+            raise ValueError(f"{kind} skill projection changed or left source custody")
+        sheet["skills"][name]["proficiency"] = before_value
+
+    current_combat = dict(current.get("combat") or {})
+    before_combat = dict(before.get("combat") or {})
+    after_combat = dict(after.get("combat") or {})
+    for field in ("hp", "speed"):
+        if before_combat.get(field) == after_combat.get(field):
+            continue
+        if current_combat.get(field) != after_combat.get(field):
+            raise ValueError(f"{kind} combat projection changed or left source custody")
+        sheet["combat"][field] = deepcopy(before_combat.get(field) or {})
+
+    current_traits = dict(current.get("traits") or {})
+    before_traits = dict(before.get("traits") or {})
+    after_traits = dict(after.get("traits") or {})
+    for field in (
+        "languages",
+        "intrinsic_attacks",
+        "resistances",
+        "immunities",
+        "condition_immunities",
+    ):
+        current_list = list(current_traits.get(field) or [])
+        before_list = list(before_traits.get(field) or [])
+        after_list = list(after_traits.get(field) or [])
+        _projection_remove_exact_list(
+            current_list,
+            added=_projection_list_items(before_list, after_list),
+            label=f"{kind} {field}",
+        )
+        sheet["traits"][field] = current_list
+    if before_traits.get("size") != after_traits.get("size"):
+        if current_traits.get("size") != after_traits.get("size"):
+            raise ValueError(f"{kind} size projection changed or left source custody")
+        sheet["traits"]["size"] = deepcopy(before_traits.get("size") or "")
+    if before_traits.get("senses") != after_traits.get("senses"):
+        if current_traits.get("senses") != after_traits.get("senses"):
+            raise ValueError(f"{kind} senses projection changed or left source custody")
+        sheet["traits"]["senses"] = deepcopy(before_traits.get("senses") or {})
+    before_prof = dict(before_traits.get("proficiencies") or {})
+    after_prof = dict(after_traits.get("proficiencies") or {})
+    for field in ("armor", "weapons", "tools", "tool_expertise"):
+        current_list = list(dict(current_traits.get("proficiencies") or {}).get(field) or [])
+        added = _projection_list_items(
+            list(before_prof.get(field) or []), list(after_prof.get(field) or [])
+        )
+        _projection_remove_exact_list(current_list, added=added, label=f"{kind} {field}")
+        sheet["traits"]["proficiencies"][field] = current_list
+
+    current_inventory = dict(current.get("inventory") or {})
+    before_inventory = dict(before.get("inventory") or {})
+    after_inventory = dict(after.get("inventory") or {})
+    current_items = list(current_inventory.get("items") or [])
+    created_items, changed_items = _projection_content_items(
+        list(before_inventory.get("items") or []), list(after_inventory.get("items") or [])
+    )
+    for item in created_items:
+        _projection_remove_exact_list(current_items, added=[item], label=f"{kind} inventory")
+    current_item_by_id = {
+        str(item.get("id")): item for item in current_items if isinstance(item, Mapping)
+    }
+    for item_id, (old_item, after_item) in changed_items.items():
+        if current_item_by_id.get(item_id) != after_item:
+            raise ValueError(f"{kind} inventory projection changed or left source custody")
+        current_items[current_items.index(after_item)] = old_item
+    sheet["inventory"]["items"] = current_items
+    before_wallet = dict(before_inventory.get("wallet") or {})
+    after_wallet = dict(after_inventory.get("wallet") or {})
+    current_wallet = dict(sheet["inventory"].get("wallet") or {})
+    for denomination, after_amount in after_wallet.items():
+        before_amount = int(before_wallet.get(denomination, after_amount) or 0)
+        delta = int(after_amount or 0) - before_amount
+        if not delta:
+            continue
+        current_amount = int(current_wallet.get(denomination, 0) or 0)
+        if current_amount < int(after_amount or 0):
+            raise ValueError(f"{kind} wallet projection changed or left source custody")
+        current_wallet[denomination] = current_amount - delta
+    sheet["inventory"]["wallet"] = current_wallet
+    if before_inventory.get("equipment_slots") != after_inventory.get("equipment_slots"):
+        if sheet["inventory"].get("equipment_slots") != after_inventory.get("equipment_slots"):
+            raise ValueError(f"{kind} equipment projection changed or left source custody")
+        sheet["inventory"]["equipment_slots"] = deepcopy(
+            before_inventory.get("equipment_slots") or {}
+        )
+
+    before_resources = dict(before.get("resources") or {})
+    after_resources = dict(after.get("resources") or {})
+    current_resources = dict(sheet.get("resources") or {})
+    for key, value in after_resources.items():
+        if key not in before_resources:
+            if current_resources.get(key) != value:
+                raise ValueError(f"{kind} resource projection changed or left source custody")
+            current_resources.pop(key, None)
+        elif before_resources[key] != value:
+            if current_resources.get(key) != value:
+                raise ValueError(f"{kind} resource projection changed or left source custody")
+            current_resources[key] = deepcopy(before_resources[key])
+    sheet["resources"] = current_resources
+
+    for section in ("spells", "features", "feats", "activities"):
+        before_items = list(dict(before.get("content") or {}).get(section) or [])
+        after_items = list(dict(after.get("content") or {}).get(section) or [])
+        created, changed = _projection_content_items(before_items, after_items)
+        current_items = list(sheet["content"].get(section) or [])
+        for item in created:
+            _projection_remove_exact_list(current_items, added=[item], label=f"{kind} {section}")
+        by_id = {str(item.get("id")): item for item in current_items if isinstance(item, Mapping)}
+        for item_id, (old_item, after_item) in changed.items():
+            if by_id.get(item_id) != after_item:
+                raise ValueError(f"{kind} {section} projection changed or left source custody")
+            current_items[current_items.index(after_item)] = old_item
+        sheet["content"][section] = current_items
+
+    before_effects = list(before.get("effects") or [])
+    after_effects = list(after.get("effects") or [])
+    current_effects = list(sheet.get("effects") or [])
+    _projection_remove_exact_list(
+        current_effects,
+        added=_projection_list_items(before_effects, after_effects),
+        label=f"{kind} effects",
+    )
+    sheet["effects"] = current_effects
+
+
 def _has_background_grants(sheet: Mapping[str, Any]) -> bool:
     progression = dict(sheet.get("progression") or {})
     grants = dict(progression.get("background_grants") or {})
@@ -3349,6 +3843,120 @@ def _has_background_grants(sheet: Mapping[str, Any]) -> bool:
         or list(grants.get("tools") or [])
         or dict(grants.get("choices") or {})
     )
+
+
+def _species_selection_records(sheet: Mapping[str, Any]) -> list[dict[str, Any]]:
+    return [
+        dict(item)
+        for item in dict(sheet.get("content") or {}).get("selections", [])
+        if isinstance(item, Mapping) and str(item.get("kind") or "").casefold() == "species"
+    ]
+
+
+def _has_species_grants(sheet: Mapping[str, Any] | None) -> bool:
+    progression = dict((sheet or {}).get("progression") or {})
+    grants = dict(progression.get("species_grants") or {})
+    return any(value not in (None, "", [], {}, False, 0) for value in grants.values())
+
+
+def _species_authority_payload(
+    sheet: Mapping[str, Any],
+    record: Mapping[str, Any],
+    *,
+    character_id: str,
+    authority_id: str,
+) -> dict[str, Any]:
+    selection = deepcopy(dict(record.get("selection") or {}))
+    selection.pop(SPECIES_AUTHORITY_SELECTION_KEY, None)
+    progression = dict(sheet.get("progression") or {})
+    return {
+        "schema_version": 1,
+        "purpose": "species_selection_authority",
+        "authority_id": authority_id,
+        "character_id": character_id,
+        "artifact_id": str(record.get("artifact_id") or ""),
+        "pack_id": str(record.get("pack_id") or ""),
+        "pack_version": str(record.get("pack_version") or ""),
+        "species": str(progression.get("species") or ""),
+        "species_grants_checksum": json_sha256(dict(progression.get("species_grants") or {})),
+        "selection_checksum": json_sha256(selection),
+    }
+
+
+def _require_authoritative_species_state(
+    candidate_sheet: Mapping[str, Any],
+    *,
+    character_id: str | None,
+    secret: bytes,
+    current_sheet: Mapping[str, Any] | None = None,
+) -> None:
+    """Reject forged, removed, or altered official species materialization."""
+
+    records = _species_selection_records(candidate_sheet)
+    traits = dict(candidate_sheet.get("traits") or {})
+    intrinsic_attacks = list(traits.get("intrinsic_attacks") or [])
+    meaningful = bool(_has_species_grants(candidate_sheet) or intrinsic_attacks or records)
+    current_traits = dict((current_sheet or {}).get("traits") or {})
+    current_protected = bool(
+        current_sheet
+        and (
+            _has_species_grants(current_sheet)
+            or list(current_traits.get("intrinsic_attacks") or [])
+            or _species_selection_records(current_sheet)
+        )
+    )
+    if current_protected and not (meaningful or records):
+        raise ValueError("authoritative species state cannot be removed by sheet ingress")
+    if not meaningful and not records:
+        return
+    if not intrinsic_attacks:
+        # Legacy actor archives may carry a source species projection without
+        # the post-#182 authority receipt.  Preserve those ordinary species
+        # grants; intrinsic anatomy must still enter through content apply.
+        return
+    if character_id is None:
+        raise ValueError(
+            "species grants can be created only by character_content_apply after actor creation; "
+            "pre-materialized species state is not accepted"
+        )
+    if len(records) != 1:
+        raise ValueError("authoritative species state requires one species selection receipt")
+    record = records[0]
+    raw_authority = dict(record.get("selection") or {}).get(SPECIES_AUTHORITY_SELECTION_KEY)
+    if not isinstance(raw_authority, Mapping):
+        raise ValueError("species selection authority receipt is missing")
+    authority = dict(raw_authority)
+    authority_id = str(authority.get("authority_id") or "")
+    if not authority_id or not isinstance(authority.get("authorization"), Mapping):
+        raise ValueError("species selection authority receipt is invalid")
+    try:
+        payload = verify_receipt_signature(
+            authority["authorization"],
+            secret,
+            missing_error="species selection authority signature is missing",
+            invalid_error="species selection authority signature is invalid",
+        )
+    except ValueError as error:
+        raise ValueError("species selection authority receipt is invalid") from error
+    expected = _species_authority_payload(
+        candidate_sheet,
+        record,
+        character_id=character_id,
+        authority_id=authority_id,
+    )
+    if payload != expected:
+        raise ValueError("species selection authority receipt does not match the actor state")
+    artifact_id = str(record.get("artifact_id") or "")
+    pack_id = str(record.get("pack_id") or "")
+    pack_version = str(record.get("pack_version") or "")
+    for attack in traits.get("intrinsic_attacks") or []:
+        source = dict(dict(attack).get("source") or {})
+        if (
+            source.get("artifact_id") != artifact_id
+            or source.get("pack_id") != pack_id
+            or source.get("pack_version") != pack_version
+        ):
+            raise ValueError("species intrinsic attack does not match its source selection")
 
 
 def _background_authority_payload(
@@ -12615,6 +13223,34 @@ def _create_server(
     def sync_combatant_conditions(
         encounter: dict[str, Any], actor_id: str, sheet: dict[str, Any]
     ) -> None:
+        # SCAG Bladesong ends immediately when its source-defined equipment or
+        # incapacitation condition becomes true.  Keep this projection in the
+        # same transaction as the character update so it cannot be forged by a
+        # stale encounter snapshot.
+        conditions = {str(item).casefold() for item in sheet.get("conditions", [])}
+        slots = dict(sheet.get("inventory", {}).get("equipment_slots") or {})
+        items = {
+            str(item.get("id") or ""): item
+            for item in sheet.get("inventory", {}).get("items", [])
+        }
+        worn_armor = items.get(str(slots.get("armor") or ""))
+        worn_shield = items.get(str(slots.get("shield") or ""))
+        worn_armor_category = str(
+            dict(dict(worn_armor or {}).get("mechanics") or {}).get("category") or ""
+        ).casefold()
+        bladesong_end_reason = None
+        if conditions.intersection(INCAPACITATING_STATE_IDS):
+            bladesong_end_reason = "incapacitated"
+        elif worn_armor_category in {"medium", "heavy"} or worn_shield is not None:
+            bladesong_end_reason = "armor_or_shield"
+        if bladesong_end_reason:
+            for effect in sheet.get("effects", []):
+                if (
+                    effect.get("active")
+                    and dict(effect.get("metadata") or {}).get("scag_bladesong") is True
+                ):
+                    effect["active"] = False
+                    effect["ended_reason"] = bladesong_end_reason
         for combatant in [
             *encounter.get("combatants", []),
             *encounter.get("reinforcements", []),
@@ -13250,6 +13886,60 @@ def _create_server(
                         "cast_options": legal_casts,
                     }
                 )
+        song_defense_id = SCAG_RULE_PACK_ID + ".feature.song-of-defense"
+        song_feature = next(
+            (
+                item for item in target["sheet"].get("content", {}).get("features", [])
+                if str(item.get("id") or "") == song_defense_id
+                and str(item.get("pack_id") or "") == SCAG_RULE_PACK_ID
+            ),
+            None,
+        )
+        active_bladesong = any(
+            effect.get("active")
+            and dict(effect.get("metadata") or {}).get("scag_bladesong") is True
+            for effect in target["sheet"].get("effects", [])
+        )
+        target_combatant = next(
+            (
+                item
+                for item in encounter.get("combatants", [])
+                if str(item.get("actor_id") or "") == str(plan["target_id"])
+            ),
+            None,
+        )
+        reaction_available = target_combatant is not None and int(
+            dict(target_combatant.get("turn_budget") or {}).get("reaction", 0) or 0
+        ) > 0
+        if (
+            song_feature is not None
+            and active_bladesong
+            and reaction_available
+            and str(plan.get("damage_expression") or "").strip()
+        ):
+            cast_options = []
+            for raw_level, slot in dict(
+                target["sheet"].get("spellcasting", {}).get("spell_slots") or {}
+            ).items():
+                if not str(raw_level).isdigit() or int(raw_level) < 1 or int(raw_level) > 9:
+                    continue
+                slot_data = dict(slot or {})
+                if int(slot_data.get("value", 0) or 0) > 0:
+                    level = int(raw_level)
+                    cast_options.append({
+                        "cast_level": level,
+                        "reduction": 5 * level,
+                        "payment": {"economy": "spell_slot", "slot_level": level},
+                    })
+            if cast_options:
+                spell_options.append({
+                    "id": song_defense_id,
+                    "name": "Song of Defense",
+                    "kind": "scag_song_defense",
+                    "cast_levels": [item["cast_level"] for item in cast_options],
+                    "cast_options": cast_options,
+                    "source_type": "scag_feature",
+                })
         return available_attack_defenses(
             target,
             plan=plan,
@@ -14782,6 +15472,8 @@ def _create_server(
         if sheet is not None and operation != "character.content.apply":
             _require_preserved_intrinsic_attack_provenance(before.sheet, sheet)
             _require_preserved_official_item_provenance(before.sheet, sheet)
+        if sheet is not None:
+            _require_preserved_scag_bladesong_state(before.sheet, sheet)
         if sheet is not None and operation not in {
             "character.content.apply",
             "character.rule_artifact.add",
@@ -14794,6 +15486,12 @@ def _create_server(
                     current_sheet=before.sheet,
                 )
                 _require_authoritative_background_state(
+                    sheet,
+                    character_id=before.id,
+                    secret=content_authority_secret,
+                    current_sheet=before.sheet,
+                )
+                _require_authoritative_species_state(
                     sheet,
                     character_id=before.id,
                     secret=content_authority_secret,
@@ -14830,6 +15528,12 @@ def _create_server(
                 current_sheet=before.sheet,
             )
             _require_authoritative_background_state(
+                sheet,
+                character_id=before.id,
+                secret=content_authority_secret,
+                current_sheet=before.sheet,
+            )
+            _require_authoritative_species_state(
                 sheet,
                 character_id=before.id,
                 secret=content_authority_secret,
@@ -19939,6 +20643,9 @@ def _create_server(
         campaign = campaigns.get(campaign_id)
         action_payload = sanitize_attack_action(campaign_id, principal_id, deepcopy(action or {}))
         spell_resolution_id = str(action_payload.pop("spell_resolution_id", "") or "")
+        cantrip_spell_id = str(action_payload.get("cantrip_spell_id") or "").strip()
+        if cantrip_spell_id:
+            action_payload.pop("cantrip_spell_id", None)
         deflect_declaration = action_payload.pop("deflect_attack", None)
         payload = {
             "actor_id": actor_id,
@@ -19947,6 +20654,7 @@ def _create_server(
             # defaults.  Keep the idempotency request bound to the caller's
             # normalized input instead of mutating it after the hash is bound.
             "action": deepcopy(action_payload),
+            "cantrip_spell_id": cantrip_spell_id,
             "spell_resolution_id": spell_resolution_id,
             "deflect_attack": deepcopy(deflect_declaration),
             "branch_id": resolved_branch_id,
@@ -20051,6 +20759,61 @@ def _create_server(
                     context=dict(action_payload.get("context") or {}),
                     rules=rule_context,
                 )
+            elif cantrip_spell_id:
+                extra_attack_feature_id = SCAG_RULE_PACK_ID + ".feature.extra-attack"
+                extra_attack_feature = next(
+                    (
+                        item
+                        for item in attacker_record.sheet.get("content", {}).get("features", [])
+                        if str(item.get("id") or "") == extra_attack_feature_id
+                        and str(item.get("pack_id") or "") == SCAG_RULE_PACK_ID
+                    ),
+                    None,
+                )
+                if extra_attack_feature is None:
+                    raise CombatEngineError(
+                        "cantrip substitution requires source-bound SCAG Extra Attack"
+                    )
+                # The 2014 SCAG wording grants two weapon attacks only.  The
+                # cantrip replacement is a later Bladesinging revision and is
+                # legal here only when the recorded source card explicitly
+                # authorizes it.  Never infer that revision from the feature id.
+                extra_attack_text = " ".join(
+                    str(extra_attack_feature.get(key) or "")
+                    for key in ("description", "effect", "source_excerpt")
+                ).casefold()
+                if not any(
+                    phrase in extra_attack_text
+                    for phrase in (
+                        "replace one of the attacks",
+                        "replace one attack",
+                        "one of those attacks with a cantrip",
+                        "one of the attacks with a cantrip",
+                    )
+                ):
+                    raise CombatEngineError(
+                        "the recorded Extra Attack source does not authorize cantrip substitution"
+                    )
+                cantrip = next(
+                    (
+                        item for item in attacker_record.sheet.get("content", {}).get("spells", [])
+                        if str(item.get("id") or "") == cantrip_spell_id
+                    ),
+                    None,
+                )
+                if cantrip is None or int(cantrip.get("level", 0) or 0) != 0:
+                    raise CombatEngineError("Extra Attack substitution requires a recorded cantrip")
+                plan = preflight_spell_attack(
+                    attacker,
+                    target,
+                    spell_id=cantrip_spell_id,
+                    cast_level=0,
+                    encounter=encounter,
+                    context=dict(action_payload.get("context") or {}),
+                    rules=rule_context,
+                )
+                plan["attack_mode"] = "cantrip"
+                plan["cantrip_replacement"] = True
             else:
                 plan = preflight_attack(
                     attacker,
@@ -20194,6 +20957,18 @@ def _create_server(
             encounter=next_encounter,
         )
         updated_attacker = deepcopy(attacker)
+        # SCAG ends Bladesong after the character makes a two-handed attack.
+        # Apply that transition to the attacker sheet before either a pending
+        # reaction or a settled damage commit so the termination is atomic with
+        # the attack that caused it.
+        if str(plan.get("weapon_grip") or "").strip().casefold() == "two_handed":
+            for effect in updated_attacker["sheet"].get("effects", []):
+                if (
+                    effect.get("active")
+                    and dict(effect.get("metadata") or {}).get("scag_bladesong") is True
+                ):
+                    effect["active"] = False
+                    effect["ended_reason"] = "two_handed_attack"
         ammunition = None
         limited_use = None
         weapon_id = plan.get("weapon_id")
@@ -20689,22 +21464,37 @@ def _create_server(
                 response["random_stream_receipt"] = stream.receipt()
             return response
 
-        revisions_result = StateMutationService(storage.database).replace(
-            campaign_id,
-            campaign_state=validate_party_state(next_state),
-            character_updates=updates,
-            expected_campaign_revision=campaign.revision,
-            operation="combat.attack.resolve",
-            actor=principal_id,
-            branch_id=resolved_branch_id,
-            idempotency_key=idempotency_key,
-            idempotency_write=IdempotencyWrite(
-                scope=scope,
-                payload=payload,
-                response=attack_response,
-            ),
-            rule_receipts=list(result.get("rule_receipts") or []),
-        )
+        try:
+            revisions_result = StateMutationService(storage.database).replace(
+                campaign_id,
+                campaign_state=validate_party_state(next_state),
+                character_updates=updates,
+                expected_campaign_revision=campaign.revision,
+                operation="combat.attack.resolve",
+                actor=principal_id,
+                branch_id=resolved_branch_id,
+                idempotency_key=idempotency_key,
+                idempotency_write=IdempotencyWrite(
+                    scope=scope,
+                    payload=payload,
+                    response=attack_response,
+                ),
+                rule_receipts=list(result.get("rule_receipts") or []),
+            )
+        except ValueError as error:
+            # Two identical requests can pass the read-side replay check before
+            # either writer reaches the serialized mutation.  The losing writer
+            # must return the committed response once the winner's receipt is
+            # visible, rather than surfacing the core duplicate-group guard.
+            if not (
+                "already has a committed mutation group" in str(error)
+                or "campaign revision conflict or branch conflict" in str(error)
+            ):
+                raise
+            replay = replay_idempotent(scope, idempotency_key, payload)
+            if replay is None:
+                raise
+            return combat_response(campaign_id, principal_id, replay)
         return combat_response(
             campaign_id,
             principal_id,
@@ -21906,6 +22696,8 @@ def _create_server(
         defense_kind = str(candidate.get("kind") or "")
         spell_result: dict[str, Any] | None = None
         activity_result: dict[str, Any] | None = None
+        song_defense_payment: dict[str, Any] | None = None
+        song_defense_reduction = 0
         if used:
             next_encounter = pay_activity_activation(
                 next_encounter,
@@ -21978,13 +22770,46 @@ def _create_server(
                     raise CombatEngineError("reviewed defensive activity could not be consumed")
                 target["sheet"] = activity_result["sheet"]
                 target["derived"] = derive_character_sheet(target["sheet"], character_id=actor_id)
+            elif defense_kind == "scag_song_defense":
+                cast_level = selection.get("cast_level")
+                if isinstance(cast_level, bool) or not isinstance(cast_level, int):
+                    raise CombatEngineError(
+                        "Song of Defense requires an integer spell slot level"
+                    )
+                cast_option = next(
+                    (
+                        item
+                        for item in candidate.get("cast_options", [])
+                        if int(item.get("cast_level", 0) or 0) == cast_level
+                    ),
+                    None,
+                )
+                if cast_option is None or cast_level < 1 or cast_level > 9:
+                    raise CombatEngineError(
+                        "Song of Defense slot level is not one of the offered choices"
+                    )
+                slots = target["sheet"].setdefault("spellcasting", {}).setdefault("spell_slots", {})
+                slot = dict(slots.get(str(cast_level)) or slots.get(cast_level) or {})
+                try:
+                    mutate_bounded_resource(slot, amount=1, direction="spend")
+                except ValueError as error:
+                    raise CombatEngineError("Song of Defense spell slot is exhausted") from error
+                slots[str(cast_level)] = slot
+                song_defense_reduction = 5 * cast_level
+                song_defense_payment = {
+                    "kind": "spell_slot",
+                    "slot_level": cast_level,
+                    "amount": 1,
+                    "reaction": True,
+                }
             else:
                 raise CombatEngineError("defensive reaction kind is not executable")
-            attack = apply_attack_ac_bonus(
-                attack,
-                bonus=int(candidate.get("bonus", 0) or 0),
-                source_id=selection_id,
-            )
+            if defense_kind != "scag_song_defense":
+                attack = apply_attack_ac_bonus(
+                    attack,
+                    bonus=int(candidate.get("bonus", 0) or 0),
+                    source_id=selection_id,
+                )
         next_encounter = resolve_choice_window(
             next_encounter,
             choice_id=choice_id,
@@ -22001,6 +22826,7 @@ def _create_server(
             plan=plan,
             attack=attack,
             rules=rule_context,
+            damage_reduction=song_defense_reduction,
         )
         mastery_commit = apply_weapon_mastery_to_encounter(
             next_encounter,
@@ -22017,26 +22843,44 @@ def _create_server(
         result["reaction_defense"] = {
             "used": used,
             "source_type": (
-                "spell" if used and defense_kind == "spell_armor_class_bonus" else "activity"
-            )
-            if used
-            else None,
-            "activity_id": (selection_id if used and defense_kind == "armor_class_bonus" else None),
+                "spell"
+                if used and defense_kind == "spell_armor_class_bonus"
+                else "scag_feature"
+                if used and defense_kind == "scag_song_defense"
+                else "activity"
+            ) if used else None,
+            "activity_id": (
+                selection_id
+                if used and defense_kind in {"armor_class_bonus", "scag_song_defense"}
+                else None
+            ),
             "spell_id": (
                 str(candidate.get("spell_id") or selection_id)
                 if used and defense_kind == "spell_armor_class_bonus"
                 else None
             ),
-            "cast_level": spell_result.get("cast_level") if spell_result else None,
+            "cast_level": (
+                spell_result.get("cast_level")
+                if spell_result
+                else cast_level
+                if used and defense_kind == "scag_song_defense"
+                else None
+            ),
             "payment": (
                 deepcopy(spell_result.get("payment") or {})
                 if spell_result
                 else deepcopy(activity_result.get("payment"))
                 if activity_result
+                else deepcopy(song_defense_payment)
+                if used and defense_kind == "scag_song_defense"
                 else None
             ),
             "effect_id": spell_result.get("effect_id") if spell_result else None,
             "bonus": int(candidate.get("bonus", 0) or 0) if used else 0,
+            "reduction": (
+                song_defense_reduction if used and defense_kind == "scag_song_defense" else 0
+            ),
+            "payment_override": deepcopy(song_defense_payment),
             "semantic_solution": (
                 {
                     "plan_id": candidate.get("plan_id"),
@@ -25868,6 +26712,39 @@ def _create_server(
             activity_id,
             character_type=current.character_type,
         )
+        scag_bladesong_activity = (
+            activity_id == SCAG_RULE_PACK_ID + ".feature.bladesong"
+            and activity_source_card_kind in {"activity", "feature"}
+            and str(activity_card.get("pack_id") or "") == SCAG_RULE_PACK_ID
+            and any(
+                str(item.get("id") or "") == activity_id
+                and str(item.get("pack_id") or "") == SCAG_RULE_PACK_ID
+                for item in current.sheet.get("content", {}).get("features", [])
+            )
+        )
+        scag_bladesong_dismiss = False
+        if scag_bladesong_activity:
+            declared_bladesong = dict(declaration or {})
+            scag_bladesong_dismiss = bool(
+                declared_bladesong.get("dismiss") is True
+                or str(declared_bladesong.get("action") or "").casefold() == "dismiss"
+            )
+            if scag_bladesong_dismiss and set(declared_bladesong) - {"dismiss", "action"}:
+                raise CombatEngineError("Bladesong dismissal accepts only dismiss/action")
+            if not scag_bladesong_dismiss:
+                slots = dict(current.sheet.get("inventory", {}).get("equipment_slots") or {})
+                items = {
+                    str(item.get("id") or ""): item
+                    for item in current.sheet.get("inventory", {}).get("items", [])
+                }
+                worn_armor = items.get(str(slots.get("armor") or ""))
+                armor_category = str(
+                    dict(dict(worn_armor or {}).get("mechanics") or {}).get("category") or ""
+                ).casefold()
+                if armor_category in {"medium", "heavy"} or slots.get("shield"):
+                    raise CombatEngineError(
+                        "Bladesong requires no medium or heavy armor and no shield"
+                    )
         steel_defender_contract = _steel_defender_turn_contracts(
             campaign_id,
             resolved_branch_id,
@@ -26479,6 +27356,20 @@ def _create_server(
                 "payment": deepcopy(repair_settlement["payment"]),
                 "rule_receipts": [],
             }
+        elif scag_bladesong_dismiss:
+            applied = {
+                "sheet": deepcopy(current.sheet),
+                "activity_id": activity_id,
+                "content_type": "features",
+                "name": str(activity_card.get("name") or activity_id),
+                "activation": {"type": "passive"},
+                "payment": {"kind": "dismissal"},
+                "choices": {},
+                "requires_ruling": False,
+                "ruling_requirement": None,
+                "status": "committed",
+                "rule_receipts": [],
+            }
         else:
             try:
                 applied = consume_activity(
@@ -26521,6 +27412,18 @@ def _create_server(
                 raise CombatEngineError("resolve the earlier pending save or choice first")
         else:
             require_no_blocking_pending(encounter)
+        if scag_bladesong_dismiss:
+            ended = []
+            for effect in applied["sheet"].get("effects", []):
+                if (
+                    effect.get("active")
+                    and dict(effect.get("metadata") or {}).get("scag_bladesong") is True
+                ):
+                    effect["active"] = False
+                    effect["ended_reason"] = "voluntary_dismissal"
+                    ended.append(str(effect.get("id") or ""))
+            if not ended:
+                raise CombatEngineError("Bladesong is not active")
         engine_owned_special = activity_id in {
             "dnd5e.content.srd2014.feature.fighter-action-surge",
             "dnd5e.content.srd2024.feature.fighter-action-surge",
@@ -26538,6 +27441,9 @@ def _create_server(
                 activity_id=activity_id,
                 spec=legendary_spec,
             )
+        elif scag_bladesong_dismiss:
+            next_encounter = deepcopy(encounter)
+            activity_activation_payment = {"kind": "dismissal"}
         else:
             next_encounter = pay_activity_activation(
                 encounter,
@@ -26567,6 +27473,62 @@ def _create_server(
             declaration=declaration,
             source_card=activity_card,
         )
+        if scag_bladesong_activity and not scag_bladesong_dismiss:
+            derived_before_song = derive_character_sheet(
+                applied["sheet"], character_id=actor_id
+            )
+            intelligence = int(
+                dict(derived_before_song.get("ability_modifiers") or {}).get("intelligence", 0)
+                or 0
+            )
+            intelligence = max(1, intelligence)
+            if any(
+                effect.get("active")
+                and dict(effect.get("metadata") or {}).get("scag_bladesong") is True
+                for effect in applied["sheet"].get("effects", [])
+            ):
+                raise CombatEngineError("Bladesong is already active")
+            bladesong_effect_id = "scag-bladesong-active"
+            if any(
+                str(effect.get("id") or "") == bladesong_effect_id
+                for effect in applied["sheet"].get("effects", [])
+            ):
+                bladesong_effect_id = f"{bladesong_effect_id}-{uuid4().hex}"
+            applied["sheet"], effect = add_effect(
+                applied["sheet"],
+                {
+                    "id": bladesong_effect_id,
+                    "name": "Bladesong",
+                    "kind": "scag_bladesong",
+                    "source": activity_id,
+                    "active": True,
+                    # SCAG/errata: Bladesong lasts one minute.  Keep this on
+                    # the narrative minute clock so a 59-second advance does
+                    # not expire it while the exact 60-second boundary does.
+                    "duration": {"period": "minute", "remaining": 1},
+                    "changes": [
+                        {
+                            "path": "derived.armor_class",
+                            "mode": "add",
+                            "value": intelligence,
+                        },
+                        {"path": "combat.speed.walk", "mode": "add", "value": 10},
+                        {"path": "rolls.ability_check.advantage", "mode": "set", "value": True},
+                        {"path": "rolls.saving_throw.bonus", "mode": "add", "value": intelligence},
+                    ],
+                    "metadata": {
+                        "scag_bladesong": True,
+                        "skill": "acrobatics",
+                        "save_purpose": "concentration",
+                    },
+                },
+            )
+            core_effect = {
+                "kind": "scag_bladesong",
+                "bladesong_effect": deepcopy(effect),
+                "activation_payment": activity_activation_payment,
+                "requires_ruling": False,
+            }
         additional_updates: list[CharacterStateUpdate] = []
         if repair_settlement is not None:
             assert repair_target_record is not None
@@ -26863,7 +27825,11 @@ def _create_server(
             applied["requires_ruling"] = bool(core_effect.get("requires_ruling", False))
             applied["core_effect"] = core_effect
             core_effect_kind = str(core_effect["kind"])
-            if core_effect_kind == "steel_defender_repair":
+            if core_effect_kind == "scag_bladesong":
+                # The executable effect is defined by the exact locked SCAG
+                # feature card already attached to this character.
+                applied["rule_receipts"] = list(applied.get("rule_receipts") or [])
+            elif core_effect_kind == "steel_defender_repair":
                 assert steel_defender_contract is not None
                 applied["rule_receipts"] = [
                     *list(applied.get("rule_receipts") or []),
@@ -30878,6 +31844,7 @@ def _create_server(
         require_engine_owned_character_state(sheet_value)
         _reject_new_intrinsic_attack_provenance(sheet_value)
         _reject_new_tortle_natural_armor_provenance(sheet_value)
+        _reject_new_scag_bladesong_state(sheet_value)
         _reject_new_battle_ready_provenance(sheet_value)
         _reject_new_official_item_provenance(sheet_value)
         _require_authoritative_background_state(
@@ -30885,6 +31852,12 @@ def _create_server(
             character_id=None,
             secret=content_authority_secret,
         )
+        if campaign_id is not None:
+            _require_authoritative_species_state(
+                sheet_value,
+                character_id=None,
+                secret=content_authority_secret,
+            )
         if campaign_id is not None:
             sheet_value["edition"] = campaign_rules_edition(campaign_id)
         sheet_value = finalize_actor_sheet_rulings(sheet_value, campaign_id)
@@ -30990,9 +31963,15 @@ def _create_server(
         require_engine_owned_character_state(sheet)
         _reject_new_intrinsic_attack_provenance(sheet)
         _reject_new_tortle_natural_armor_provenance(sheet)
+        _reject_new_scag_bladesong_state(sheet)
         _reject_new_battle_ready_provenance(sheet)
         _reject_new_official_item_provenance(sheet)
         _require_authoritative_background_state(
+            sheet,
+            character_id=None,
+            secret=content_authority_secret,
+        )
+        _require_authoritative_species_state(
             sheet,
             character_id=None,
             secret=content_authority_secret,
@@ -31049,9 +32028,15 @@ def _create_server(
         require_engine_owned_character_state(sheet_value)
         _reject_new_intrinsic_attack_provenance(sheet_value)
         _reject_new_tortle_natural_armor_provenance(sheet_value)
+        _reject_new_scag_bladesong_state(sheet_value)
         _reject_new_battle_ready_provenance(sheet_value)
         _reject_new_official_item_provenance(sheet_value)
         _require_authoritative_background_state(
+            sheet_value,
+            character_id=None,
+            secret=content_authority_secret,
+        )
+        _require_authoritative_species_state(
             sheet_value,
             character_id=None,
             secret=content_authority_secret,
@@ -34151,6 +35136,488 @@ def _create_server(
             activity_id,
             character_type=current.character_type,
         )
+        if str(activity_id).endswith(EBERRON_RIGHT_TOOL_FOR_JOB_FEATURE_SUFFIX):
+            if activity_source_card_kind != "feature":
+                raise RulesetUnavailableError(
+                    "The Right Tool for the Job must be recorded as an Artificer feature"
+                )
+            if not is_dm(current.campaign_id, principal_id):
+                raise PermissionError(
+                    "The Right Tool for the Job requires the Agent in the DM role"
+                )
+
+            feature_matches = [
+                item
+                for item in available_content_artifacts(
+                    current.campaign_id,
+                    branch_id=branch_id,
+                )
+                if str(item[2].get("id") or "") == activity_id
+                and item[2].get("kind") == "feature"
+            ]
+            if len(feature_matches) != 1:
+                raise RulesetUnavailableError(
+                    "The Right Tool for the Job source is not uniquely available"
+                )
+            feature_pack_id, feature_pack_version, feature_artifact = feature_matches[0]
+            feature_artifact = reviewed_official_runtime_artifact(
+                feature_pack_id,
+                feature_pack_version,
+                feature_artifact,
+            )
+            feature_source = dict(feature_artifact.get("card") or {})
+            if (
+                str(feature_artifact.get("application_state") or "selection_ready")
+                != "selection_ready"
+                or str(feature_artifact.get("execution_state") or "") != "ruling_ready"
+                or str(feature_source.get("class_name") or "") != "Artificer"
+                or str(feature_source.get("name") or "") != "The Right Tool for the Job"
+                or not str(feature_source.get("description") or "").strip()
+                or feature_source.get("mechanical_grants") != {}
+                or feature_source.get("selection_requirements") != {}
+                or feature_source.get("selection_requirements_by_level") != {}
+            ):
+                raise RulesetUnavailableError(
+                    "The Right Tool for the Job source card is not the reviewed Artificer card"
+                )
+            feature_content_hash = content_fingerprint(feature_artifact)
+            feature_contract = dict(feature_artifact.get("selection_contract") or {})
+            feature_reviewed_hash = str(feature_contract.get("reviewed_content_hash") or "")
+            if feature_reviewed_hash != feature_content_hash:
+                raise RulesetUnavailableError(
+                    "The Right Tool for the Job source review hash is stale"
+                )
+            if (
+                activity_card.get("name") != feature_source.get("name")
+                or activity_card.get("description") != feature_source.get("description")
+                or activity_card.get("ruling_requirements")
+                != feature_source.get("ruling_requirements")
+                or activity_card.get("pack_id") != feature_pack_id
+                or activity_card.get("pack_version") != feature_pack_version
+                or activity_card.get("rule_refs") != list(feature_artifact.get("rule_refs") or [])
+                or activity_card.get("mechanic_refs")
+                != list(feature_artifact.get("mechanic_refs") or [])
+                or activity_card.get("source_key")
+                not in (
+                    None,
+                    "",
+                    f"{feature_pack_id}@{feature_pack_version}:{activity_id}",
+                )
+            ):
+                raise RulesetUnavailableError(
+                    "The Right Tool for the Job character card does not match its source"
+                )
+
+            declared = dict(declaration or {})
+            allowed_declaration_fields = {
+                "tool_artifact_id",
+                "artisan_tools_artifact_id",
+                "tinkers_tools_in_hand",
+                "unoccupied_space_within_5_ft",
+                "uninterrupted_work_minutes",
+                "work_duration_minutes",
+                "work_started_elapsed_ticks",
+                "started_elapsed_ticks",
+                "rest_context",
+            }
+            unexpected = set(declared) - allowed_declaration_fields
+            if unexpected:
+                raise CombatEngineError(
+                    "The Right Tool for the Job declaration has unsupported fields: "
+                    f"{sorted(unexpected)}"
+                )
+
+            def declared_alias(primary: str, alias: str) -> Any:
+                if (
+                    primary in declared
+                    and alias in declared
+                    and declared[primary] != declared[alias]
+                ):
+                    raise CombatEngineError(
+                        f"The Right Tool for the Job declaration conflicts on {primary}"
+                    )
+                if primary in declared:
+                    return declared[primary]
+                return declared.get(alias)
+
+            tool_artifact_id = str(
+                declared_alias("tool_artifact_id", "artisan_tools_artifact_id") or ""
+            ).strip()
+            if not tool_artifact_id:
+                raise CombatEngineError(
+                    "The Right Tool for the Job requires tool_artifact_id"
+                )
+            if declared.get("tinkers_tools_in_hand") is not True:
+                raise CombatEngineError(
+                    "The Right Tool for the Job requires tinker's tools in hand"
+                )
+            if declared.get("unoccupied_space_within_5_ft") is not True:
+                raise CombatEngineError(
+                    "The Right Tool for the Job requires an unoccupied space within 5 feet"
+                )
+            work_minutes = declared_alias(
+                "uninterrupted_work_minutes", "work_duration_minutes"
+            )
+            if isinstance(work_minutes, bool) or not isinstance(work_minutes, int):
+                raise CombatEngineError(
+                    "The Right Tool for the Job requires uninterrupted_work_minutes"
+                )
+            if work_minutes != 60:
+                raise CombatEngineError(
+                    "The Right Tool for the Job requires exactly 60 uninterrupted minutes"
+                )
+            started_elapsed_ticks = declared_alias(
+                "work_started_elapsed_ticks", "started_elapsed_ticks"
+            )
+            if (
+                isinstance(started_elapsed_ticks, bool)
+                or not isinstance(started_elapsed_ticks, int)
+            ):
+                raise CombatEngineError(
+                    "The Right Tool for the Job requires work_started_elapsed_ticks"
+                )
+            current_elapsed_ticks = dict(dict(campaign.state or {}).get("game_time") or {}).get(
+                "elapsed_ticks"
+            )
+            if (
+                isinstance(current_elapsed_ticks, bool)
+                or not isinstance(current_elapsed_ticks, int)
+                or started_elapsed_ticks < 0
+                or started_elapsed_ticks > current_elapsed_ticks
+                or current_elapsed_ticks - started_elapsed_ticks < 60 * TICKS_PER_MINUTE
+            ):
+                raise CombatEngineError(
+                    "The Right Tool for the Job requires one completed uninterrupted hour "
+                    "on the campaign game timeline"
+                )
+            rest_context = declared.get("rest_context", "none")
+            if not isinstance(rest_context, str) or rest_context not in {
+                "none",
+                "short_rest",
+                "long_rest",
+            }:
+                raise CombatEngineError(
+                    "The Right Tool for the Job rest_context must be none, short_rest, or long_rest"
+                )
+
+            def resolve_right_tool_artifact(
+                artifact_id: str,
+            ) -> tuple[str, str, dict[str, Any]]:
+                matches = [
+                    item
+                    for item in available_content_artifacts(
+                        current.campaign_id,
+                        branch_id=branch_id,
+                    )
+                    if str(item[2].get("id") or "") == artifact_id
+                    and item[2].get("kind") == "item"
+                ]
+                if len(matches) != 1:
+                    raise RulesetUnavailableError(
+                        "The Right Tool for the Job requires one exact active tool artifact"
+                    )
+                pack_id, pack_version, artifact = matches[0]
+                artifact = reviewed_official_runtime_artifact(pack_id, pack_version, artifact)
+                if str(artifact.get("application_state") or "selection_ready") != (
+                    "selection_ready"
+                ):
+                    raise RulesetUnavailableError(
+                        "The Right Tool for the Job tool artifact is not selection-ready"
+                    )
+                if artifact.get("selection_contract") is not None and selection_input_errors(
+                    artifact, {}
+                ):
+                    raise RulesetUnavailableError(
+                        "The Right Tool for the Job tool artifact has no executable "
+                        "selection contract"
+                    )
+                card = dict(artifact.get("card") or {})
+                template = card.get("inventory_template")
+                tool_name = str(card.get("name") or "").strip()
+                if (
+                    not tool_name
+                    or tool_name.casefold() not in RIGHT_TOOL_FOR_JOB_ARTISAN_TOOL_NAMES
+                    or not isinstance(template, dict)
+                    or str(template.get("name") or "").strip() != tool_name
+                    or template.get("kind") != "equipment"
+                    or str(template.get("attunement") or "none") != "none"
+                ):
+                    raise ValueError(
+                        "The Right Tool for the Job must select a reviewed artisan's-tools item"
+                    )
+                mechanics = template.get("mechanics") or {}
+                if not isinstance(mechanics, dict):
+                    raise RulesetUnavailableError(
+                        "The Right Tool for the Job tool template mechanics are invalid"
+                    )
+                if (
+                    mechanics.get("magical") is True
+                    or mechanics.get("magic_bonus") not in (None, 0)
+                    or mechanics.get("official_item")
+                    or mechanics.get("grants")
+                ):
+                    raise RulesetUnavailableError(
+                        "The Right Tool for the Job can create only nonmagical artisan's tools"
+                    )
+                return pack_id, pack_version, artifact
+
+            tool_pack_id, tool_pack_version, tool_artifact = resolve_right_tool_artifact(
+                tool_artifact_id
+            )
+            tool_card = dict(tool_artifact.get("card") or {})
+            tool_content_hash = content_fingerprint(tool_artifact)
+            tool_template = deepcopy(dict(tool_card["inventory_template"]))
+            feature_items = [
+                item
+                for item in current.sheet.get("inventory", {}).get("items", [])
+                if isinstance(item, dict)
+            ]
+            generated_items: list[dict[str, Any]] = []
+            metadata_fields = {
+                "schema_version",
+                "feature_id",
+                "feature_content_hash",
+                "tool_artifact_id",
+                "source_pack_id",
+                "source_pack_version",
+                "tool_content_hash",
+                "created_elapsed_ticks",
+                "nonmagical",
+            }
+            for item in feature_items:
+                metadata = dict(
+                    dict(item.get("mechanics") or {}).get(RIGHT_TOOL_FOR_JOB_METADATA_KEY) or {}
+                )
+                if metadata.get("feature_id") != activity_id:
+                    continue
+                if set(metadata) != metadata_fields or metadata.get("schema_version") != 1:
+                    raise RulesetUnavailableError(
+                        "The Right Tool for the Job generated item metadata is invalid"
+                    )
+                if (
+                    item.get("kind") != "equipment"
+                    or metadata.get("feature_content_hash") != feature_content_hash
+                    or metadata.get("nonmagical") is not True
+                    or isinstance(metadata.get("created_elapsed_ticks"), bool)
+                    or not isinstance(metadata.get("created_elapsed_ticks"), int)
+                    or metadata.get("created_elapsed_ticks") < 0
+                    or str(item.get("source_key") or "")
+                    != (
+                        f"{feature_pack_id}@{feature_pack_version}:"
+                        f"{activity_id}:right-tool-for-job"
+                    )
+                ):
+                    raise RulesetUnavailableError(
+                        "The Right Tool for the Job generated item is not source-bound"
+                    )
+                old_pack_id, old_pack_version, old_artifact = resolve_right_tool_artifact(
+                    str(metadata.get("tool_artifact_id") or "")
+                )
+                if (
+                    metadata.get("source_pack_id") != old_pack_id
+                    or metadata.get("source_pack_version") != old_pack_version
+                    or metadata.get("tool_content_hash") != content_fingerprint(old_artifact)
+                    or str(item.get("name") or "")
+                    != str(dict(old_artifact.get("card") or {}).get("name") or "")
+                ):
+                    raise RulesetUnavailableError(
+                        "The Right Tool for the Job generated item source has changed"
+                    )
+                generated_items.append(item)
+            if len(generated_items) > 1:
+                raise RulesetUnavailableError(
+                    "The Right Tool for the Job has multiple generated items"
+                )
+
+            content_section = current.sheet.get("content", {}).get("features", [])
+            recorded_feature = next(
+                (item for item in content_section if str(item.get("id") or "") == activity_id),
+                None,
+            )
+            if not isinstance(recorded_feature, dict):
+                raise RulesetUnavailableError(
+                    "The Right Tool for the Job feature card is missing from the character"
+                )
+            prior_state = dict(
+                dict(recorded_feature.get("choices") or {}).get(
+                    RIGHT_TOOL_FOR_JOB_METADATA_KEY
+                )
+                or {}
+            )
+            if prior_state:
+                expected_state_fields = {
+                    "schema_version",
+                    "feature_id",
+                    "feature_content_hash",
+                    "generated_item_id",
+                    "tool_artifact_id",
+                    "tool_pack_id",
+                    "tool_pack_version",
+                    "tool_content_hash",
+                    "created_elapsed_ticks",
+                    "replaced_item_ids",
+                }
+                if (
+                    set(prior_state) != expected_state_fields
+                    or prior_state.get("schema_version") != 1
+                    or prior_state.get("feature_content_hash") != feature_content_hash
+                    or not isinstance(prior_state.get("replaced_item_ids"), list)
+                ):
+                    raise RulesetUnavailableError(
+                        "The Right Tool for the Job feature choice is not source-bound"
+                    )
+                prior_generated_id = str(prior_state.get("generated_item_id") or "")
+                if prior_state.get("feature_id") != activity_id or (
+                    prior_generated_id
+                    and not any(item.get("id") == prior_generated_id for item in generated_items)
+                ):
+                    raise RulesetUnavailableError(
+                        "The Right Tool for the Job feature choice is not source-bound"
+                    )
+
+            next_sheet = deepcopy(current.sheet)
+            replaced_item_ids: list[str] = []
+            for item in generated_items:
+                next_sheet, _removed = remove_inventory_item(next_sheet, str(item["id"]))
+                replaced_item_ids.append(str(item["id"]))
+            generated_item_id = uuid4().hex
+            generated_source_key = (
+                f"{feature_pack_id}@{feature_pack_version}:{activity_id}:right-tool-for-job"
+            )
+            generated_item = {
+                **tool_template,
+                "id": generated_item_id,
+                "name": str(tool_card.get("name") or tool_template.get("name") or ""),
+                "source_key": generated_source_key,
+                "quantity": 1,
+                "equipped": False,
+                "equipped_slot": None,
+                "attunement": "none",
+                "mechanics": {
+                    **dict(tool_template.get("mechanics") or {}),
+                    RIGHT_TOOL_FOR_JOB_METADATA_KEY: {
+                        "schema_version": 1,
+                        "feature_id": activity_id,
+                        "feature_content_hash": feature_content_hash,
+                        "tool_artifact_id": tool_artifact_id,
+                        "source_pack_id": tool_pack_id,
+                        "source_pack_version": tool_pack_version,
+                        "tool_content_hash": tool_content_hash,
+                        "created_elapsed_ticks": current_elapsed_ticks,
+                        "nonmagical": True,
+                    },
+                },
+            }
+            next_sheet, _ = add_inventory_item(next_sheet, generated_item)
+            next_feature = next(
+                item
+                for item in next_sheet["content"]["features"]
+                if str(item.get("id") or "") == activity_id
+            )
+            right_tool_state = {
+                "schema_version": 1,
+                "feature_id": activity_id,
+                "feature_content_hash": feature_content_hash,
+                "generated_item_id": generated_item_id,
+                "tool_artifact_id": tool_artifact_id,
+                "tool_pack_id": tool_pack_id,
+                "tool_pack_version": tool_pack_version,
+                "tool_content_hash": tool_content_hash,
+                "created_elapsed_ticks": current_elapsed_ticks,
+                "replaced_item_ids": replaced_item_ids,
+            }
+            next_feature["choices"] = {
+                **dict(next_feature.get("choices") or {}),
+                RIGHT_TOOL_FOR_JOB_METADATA_KEY: right_tool_state,
+            }
+            next_sheet = validate_character_sheet(next_sheet)
+            normalized_declaration = {
+                "tool_artifact_id": tool_artifact_id,
+                "tinkers_tools_in_hand": True,
+                "unoccupied_space_within_5_ft": True,
+                "uninterrupted_work_minutes": 60,
+                "work_started_elapsed_ticks": started_elapsed_ticks,
+                "rest_context": rest_context,
+            }
+            rules = effective_rule_context(
+                current.campaign_id,
+                branch_id=branch_id,
+                facts={
+                    "actor_id": character_id,
+                    "activity_id": activity_id,
+                    "tool_artifact_id": tool_artifact_id,
+                },
+            )
+            receipt = {
+                "ruleset_fingerprint": rules.fingerprint,
+                "mechanic_id": RIGHT_TOOL_FOR_JOB_MECHANIC_ID,
+                "event": "character.activity.right_tool_for_job",
+                "character_id": character_id,
+                "activity_id": activity_id,
+                "source_card_kind": activity_source_card_kind,
+                "source_artifact_id": activity_id,
+                "source_pack_id": feature_pack_id,
+                "source_pack_version": feature_pack_version,
+                "source_content_hash": feature_content_hash,
+                "source_card_hash": feature_content_hash,
+                "reviewed_content_hash": feature_reviewed_hash,
+                "tool_artifact_id": tool_artifact_id,
+                "tool_pack_id": tool_pack_id,
+                "tool_pack_version": tool_pack_version,
+                "tool_content_hash": tool_content_hash,
+                "declaration": deepcopy(normalized_declaration),
+                "generated_item_id": generated_item_id,
+                "replaced_item_ids": replaced_item_ids,
+                "rule_refs": list(feature_artifact.get("rule_refs") or []),
+                "tool_rule_refs": list(tool_artifact.get("rule_refs") or []),
+            }
+            updated_character = replace(
+                current,
+                sheet=next_sheet,
+                notes=validate_character_notes(current.notes),
+                revision=current.revision + 1,
+            )
+            return commit_campaign_state(
+                campaign,
+                None,
+                operation="character.activity.right_tool_for_job",
+                principal_id=principal_id,
+                branch_id=branch_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+                payload=payload,
+                response_fields={
+                    "status": "committed",
+                    "result": {
+                        "activity_id": activity_id,
+                        "payment": {"kind": "none"},
+                        "semantic_solution": {
+                            "status": "committed",
+                            "mode": "agent_ruling",
+                            "ruling_kind": "agent_dm_adjudication",
+                            "payment_recorded": False,
+                        },
+                        "requires_ruling": False,
+                        "declaration": normalized_declaration,
+                        "tool": deepcopy(generated_item),
+                        "generated_item_id": generated_item_id,
+                        "replaced_item_ids": replaced_item_ids,
+                        "rule_receipts": [receipt],
+                    },
+                    "character": character_view(updated_character),
+                },
+                character_updates=[
+                    CharacterStateUpdate(
+                        character_id=current.id,
+                        sheet=next_sheet,
+                        notes=validate_character_notes(current.notes),
+                        expected_revision=expected_revision,
+                    )
+                ],
+                rule_receipts=[receipt],
+                include_campaign_revision=False,
+                include_revisions=False,
+            )
         compiled_activity_plan = None
         if isinstance(activity_card.get("resolution_plan"), dict):
             _activity_card, compiled_activity_plan = character_resolution_plan(
@@ -44475,10 +45942,21 @@ def _create_server(
                     ),
                 }
             elif artifact_kind == "subclass":
+                subclass_card_requirements = dict(card.get("selection_requirements") or {})
+                subclass_fields = ["target_class_name"]
+                if subclass_card_requirements.get("field"):
+                    subclass_fields.append(str(subclass_card_requirements["field"]))
+                if str(artifact.get("id") or "") == SCAG_BLADE_SINGING_SUBCLASS_ID:
+                    subclass_fields.append("species_prerequisite_override")
                 selection_requirements = {
-                    "fields": ["target_class_name"],
+                    "fields": list(dict.fromkeys(subclass_fields)),
                     "class_name": str(card.get("class_name") or ""),
                     "minimum_level": int(card.get("minimum_level", 1) or 1),
+                    **(
+                        {"selection_contract": subclass_card_requirements}
+                        if subclass_card_requirements
+                        else {}
+                    ),
                 }
             elif artifact_kind == "background":
                 grants = dict(card.get("background_grants") or {})
@@ -45270,6 +46748,22 @@ def _create_server(
                 tortle_natural_armor_authority["authority_id"]
             )
         sheet = deepcopy(current.sheet)
+        replacing_selection: dict[str, Any] | None = None
+        existing_selection: dict[str, Any] | None = None
+        materialization_before: dict[str, Any] | None = None
+        if kind in {"background", "species"}:
+            selection_kind_records = [
+                item
+                for item in sheet["content"]["selections"]
+                if str(item.get("kind") or "").casefold() == kind
+            ]
+            if len(selection_kind_records) > 1:
+                raise ValueError(f"authoritative {kind} state requires one selection receipt")
+            if selection_kind_records:
+                existing_record = selection_kind_records[0]
+                if selection.get("replace_existing") is False:
+                    raise ValueError(f"character already has a different {kind}")
+                existing_selection = existing_record
         phase = authoritative_phase(current.campaign_id)
         spellbook_copy: dict[str, Any] | None = None
         subclass_spell_grants: list[dict[str, Any]] = []
@@ -45346,6 +46840,30 @@ def _create_server(
                 "character revision conflict: "
                 f"expected {expected_revision}, found {current.revision}"
             )
+        if kind in {"background", "species"}:
+            if existing_selection is not None:
+                if str(existing_selection.get("artifact_id") or "") == artifact_id:
+                    raise ValueError(f"content {kind} is already present: {artifact_id}")
+                if kind == "background":
+                    _require_authoritative_background_state(
+                        sheet,
+                        character_id=current.id,
+                        secret=content_authority_secret,
+                    )
+                elif kind == "species":
+                    _require_authoritative_species_state(
+                        sheet,
+                        character_id=current.id,
+                        secret=content_authority_secret,
+                    )
+                _remove_content_projection(sheet, existing_selection, kind=kind)
+                sheet["content"]["selections"] = [
+                    item
+                    for item in sheet["content"]["selections"]
+                    if item is not existing_selection
+                ]
+                replacing_selection = existing_selection
+            materialization_before = deepcopy(sheet)
         provenance = {
             "id": artifact_id,
             "pack_id": pack_id,
@@ -46194,6 +47712,32 @@ def _create_server(
                             ), content_authority_secret,
                         ),
                     }
+                    materialization = dict(background_record.get("selection") or {}).get(
+                        BACKGROUND_MATERIALIZATION_KEY
+                    )
+                    if isinstance(materialization, dict):
+                        materialization = deepcopy(materialization)
+                        materialization["after"] = json.dumps(
+                            _content_projection_snapshot(sheet, "background"),
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        )
+                        background_record["selection"][BACKGROUND_MATERIALIZATION_KEY] = (
+                            materialization
+                        )
+                        authority_id = uuid4().hex
+                        background_record["selection"][BACKGROUND_AUTHORITY_SELECTION_KEY] = {
+                            "authority_id": authority_id,
+                            "authorization": sign_receipt(
+                                _background_authority_payload(
+                                    sheet,
+                                    background_record,
+                                    character_id=current.id,
+                                    authority_id=authority_id,
+                                ),
+                                content_authority_secret,
+                            ),
+                        }
                 equipment_result = apply_starting_equipment(
                     sheet, contract=equipment_contract, selection=equipment_selection,
                     item_templates=templates, source_key=f"{pack_id}@{version}:{artifact_id}",
@@ -46349,6 +47893,267 @@ def _create_server(
                 raise ValueError(
                     f"{target_class} must reach level {minimum_level} for this subclass"
                 )
+            bladesinging = artifact_id == SCAG_BLADE_SINGING_SUBCLASS_ID
+            if bladesinging:
+                # SCAG 594 is a real prerequisite.  A non-elf selection is
+                # legal only through a fresh DM decision recorded in the
+                # source selection receipt; caller supplied signatures are
+                # intentionally ignored.
+                species_text = str(sheet["progression"].get("species") or "").casefold()
+                species_tokens = set(re.findall(r"[a-z0-9]+", species_text))
+                elf_species = "elf" in species_tokens or (
+                    "half" in species_tokens and "elf" in species_tokens
+                )
+                prior_selection = next(
+                    (
+                        dict(item.get("selection") or {})
+                        for item in sheet["content"].get("selections", [])
+                        if item.get("kind") == "subclass"
+                        and str(item.get("artifact_id") or "") == artifact_id
+                        and str(item.get("pack_id") or "") == pack_id
+                        and str(item.get("pack_version") or "") == version
+                    ),
+                    {},
+                )
+                override = selection.get("species_prerequisite_override")
+                override_supplied = override is not None
+                if override is None and isinstance(
+                    prior_selection.get("species_prerequisite_override"), dict
+                ):
+                    # Reapplying a subclass during a later level-up must carry
+                    # forward the already settled DM exception rather than
+                    # demanding a second ruling from the player.
+                    override = deepcopy(prior_selection["species_prerequisite_override"])
+                    selection["species_prerequisite_override"] = deepcopy(override)
+                if override is not None:
+                    if override_supplied and not is_dm(current.campaign_id, principal_id):
+                        raise PermissionError("SCAG species overrides require the campaign DM")
+                    if not isinstance(override, dict):
+                        raise ValueError("SCAG species override requires only a reason")
+                    if override_supplied and set(override) != {"reason"}:
+                        raise ValueError("SCAG species override requires only a reason")
+                    reason = " ".join(str(override.get("reason") or "").split())
+                    if not 10 <= len(reason) <= 500:
+                        raise ValueError(
+                            "SCAG species override reason must be 10 to 500 characters"
+                        )
+                    if override_supplied:
+                        authority_id = uuid4().hex
+                        selection["species_prerequisite_override"] = {
+                            "authority_id": authority_id,
+                            "reason": reason,
+                            "authorization": sign_receipt(
+                                {
+                                    "schema_version": 1,
+                                    "purpose": "scag_bladesinging_species_override",
+                                    "character_id": current.id,
+                                    "artifact_id": artifact_id,
+                                    "pack_id": pack_id,
+                                    "pack_version": version,
+                                    "authority_id": authority_id,
+                                    "reason": reason,
+                                },
+                                content_authority_secret,
+                            ),
+                        }
+                elif not elf_species:
+                    raise ValueError(
+                        "SCAG Bladesinging requires Elf or Half-Elf, or a specific DM override"
+                    )
+                all_feature_matches: dict[str, tuple[str, str, dict[str, Any]]] = {}
+                for feature_id in sorted(SCAG_BLADE_SINGING_FEATURE_IDS):
+                    options = [
+                        item for item in candidates
+                        if item[2].get("kind") == "feature"
+                        and str(item[2].get("id") or "") == feature_id
+                        and item[0] == pack_id and item[1] == version
+                    ]
+                    if len(options) == 1:
+                        all_feature_matches[feature_id] = options[0]
+                if set(all_feature_matches) != SCAG_BLADE_SINGING_FEATURE_IDS:
+                    missing = sorted(SCAG_BLADE_SINGING_FEATURE_IDS - set(all_feature_matches))
+                    raise RulesetUnavailableError(
+                        "SCAG Bladesinging is missing reviewed feature cards: "
+                        + ", ".join(missing)
+                    )
+                target_level = int(target.get("level", 0) or 0)
+                feature_matches = {
+                    feature_id: feature_match
+                    for feature_id, feature_match in all_feature_matches.items()
+                    if int(
+                        dict(feature_match[2].get("card") or {}).get("minimum_level", 1)
+                        or 1
+                    )
+                    <= target_level
+                }
+                # Materialize the reviewed feature cards as executable
+                # character content.  The runtime adds the errata clauses
+                # below, while retaining the archive provenance on every card.
+                for feature_id, feature_match in feature_matches.items():
+                    feature_card = deepcopy(dict(feature_match[2].get("card") or {}))
+                    feature_card.update(
+                        id=feature_id,
+                        pack_id=feature_match[0],
+                        pack_version=feature_match[1],
+                        rule_refs=list(feature_match[2].get("rule_refs") or []),
+                        mechanic_refs=list(feature_match[2].get("mechanic_refs") or []),
+                        source_key=f"{pack_id}@{version}:{feature_id}",
+                    )
+                    for metadata_key in (
+                        "class_name",
+                        "subclass_name",
+                        "feature_subtype",
+                        "minimum_level",
+                        "unlock_levels",
+                        "repeatable_selection_levels",
+                        "selection_requirements",
+                        "selection_requirements_by_level",
+                        "mechanical_grants",
+                        "choice_metadata",
+                        "resource_scaling",
+                    ):
+                        feature_card.pop(metadata_key, None)
+                    if feature_id == SCAG_RULE_PACK_ID + ".feature.bladesong":
+                        feature_card["resource_scaling"] = {
+                            "class_name": target_class,
+                            "target": "scag_bladesong",
+                            "maximum_formula": {
+                                "kind": "proficiency_bonus",
+                                "minimum": 2,
+                                "multiplier": 1,
+                                "offset": 0,
+                            },
+                            "recovers_on": "long_rest",
+                            "label": "Bladesong",
+                        }
+                        feature_card["activation"] = {"type": "bonus_action"}
+                        feature_card["resource_key"] = "scag_bladesong"
+                    if feature_id == SCAG_RULE_PACK_ID + ".feature.extra-attack":
+                        feature_card["attack_scaling"] = {
+                            "class_name": target_class,
+                            "attacks_per_action_by_level": {"6": 2},
+                        }
+                    existing_feature = next(
+                        (
+                            item
+                            for item in sheet["content"]["features"]
+                            if item.get("id") == feature_id
+                        ),
+                        None,
+                    )
+                    if existing_feature is None:
+                        sheet["content"]["features"].append(feature_card)
+                    elif existing_feature.get("pack_version") != version:
+                        raise ValueError(
+                            "SCAG feature is already materialized from another version"
+                        )
+                training_id = SCAG_RULE_PACK_ID + ".feature.training-in-war-and-song"
+                if training_id in feature_matches:
+                    training_card = dict(
+                        feature_matches[training_id][2].get("card") or {}
+                    )
+                    training_requirements = dict(
+                        training_card.get("selection_requirements") or {}
+                    )
+                    if str(training_requirements.get("kind") or "") != "proficiency_grants":
+                        raise RulesetUnavailableError(
+                            "SCAG Training in War and Song has no executable choice contract"
+                        )
+                    training_value = selection.get("war_and_song_training")
+                    existing_training = next(
+                        (
+                            item
+                            for item in sheet["content"]["features"]
+                            if item.get("id") == training_id
+                        ),
+                        None,
+                    )
+                    reuse_training = training_value is None and existing_training is not None
+                    if training_value is None:
+                        training_value = dict(
+                            dict(existing_training or {}).get("choices") or {}
+                        ).get("war_and_song_training")
+                    if training_value is None:
+                        raise ValueError(
+                            "Bladesinging requires one reviewed one-handed melee weapon choice"
+                        )
+                    if reuse_training:
+                        # Reapplying a subclass during level-up must validate and
+                        # preserve the prior choice without granting the same
+                        # proficiency a second time.
+                        validation_sheet = deepcopy(sheet)
+                        if isinstance(training_value, dict):
+                            for raw_group in training_requirements.get("groups") or []:
+                                if not isinstance(raw_group, dict):
+                                    continue
+                                group_id = str(raw_group.get("id") or "")
+                                selected = training_value.get(group_id)
+                                kind = str(raw_group.get("kind") or "").casefold()
+                                if not isinstance(selected, list):
+                                    continue
+                                if kind == "weapon":
+                                    target_proficiencies = validation_sheet["traits"][
+                                        "proficiencies"
+                                    ]["weapons"]
+                                elif kind == "tool":
+                                    target_proficiencies = validation_sheet["traits"][
+                                        "proficiencies"
+                                    ]["tools"]
+                                elif kind == "language":
+                                    target_proficiencies = validation_sheet["traits"]["languages"]
+                                else:
+                                    continue
+                                selected_keys = {str(item).casefold() for item in selected}
+                                target_proficiencies[:] = [
+                                    item
+                                    for item in target_proficiencies
+                                    if str(item).casefold() not in selected_keys
+                                ]
+                        normalized_training = _materialize_feature_proficiency_groups(
+                            validation_sheet,
+                            value=training_value,
+                            groups=training_requirements.get("groups"),
+                        )
+                    else:
+                        normalized_training = _materialize_feature_proficiency_groups(
+                            sheet,
+                            value=training_value,
+                            groups=training_requirements.get("groups"),
+                        )
+
+                    for feature in sheet["content"]["features"]:
+                        if feature.get("id") == training_id:
+                            feature["choices"] = {
+                                "war_and_song_training": normalized_training,
+                            }
+                            break
+                    if sheet["skills"]["performance"]["proficiency"] == "none":
+                        sheet["skills"]["performance"]["proficiency"] = "proficient"
+                    for armor_name in ("light armor",):
+                        if armor_name not in sheet["traits"]["proficiencies"]["armor"]:
+                            sheet["traits"]["proficiencies"]["armor"].append(armor_name)
+                bladesong_id = SCAG_RULE_PACK_ID + ".feature.bladesong"
+                if bladesong_id in feature_matches:
+                    resource = sheet["resources"].get("scag_bladesong")
+                    if resource is None:
+                        sheet["resources"]["scag_bladesong"] = {
+                            "label": "Bladesong",
+                            "value": 2,
+                            "max": 2,
+                            "recovers_on": "long_rest",
+                            "source_key": f"{pack_id}@{version}:{bladesong_id}",
+                        }
+                    else:
+                        if int(resource.get("max", 0) or 0) != 2:
+                            resource["max"] = 2
+                            resource["value"] = min(int(resource.get("value", 0) or 0), 2)
+                        resource["recovers_on"] = "long_rest"
+                        resource["source_key"] = f"{pack_id}@{version}:{bladesong_id}"
+                extra_id = SCAG_RULE_PACK_ID + ".feature.extra-attack"
+                if extra_id in feature_matches and target_level >= 6:
+                    sheet["combat"]["attacks_per_action"] = max(
+                        2, int(sheet["combat"].get("attacks_per_action", 1))
+                    )
             existing_subclass = str(target.get("subclass") or "")
             if existing_subclass and existing_subclass != str(card.get("name") or artifact_id):
                 raise ValueError("target class already has a different subclass")
@@ -46524,7 +48329,11 @@ def _create_server(
                     "declares skill choices"
                 )
             selected_background = custom_name or base_background
-            if existing_background and existing_background != selected_background:
+            if (
+                existing_background
+                and existing_background != selected_background
+                and replacing_selection is None
+            ):
                 raise ValueError("character already has a different background")
             raw_languages = selection.get("languages", [])
             raw_tools = selection.get("tools", [])
@@ -47094,10 +48903,15 @@ def _create_server(
             constitution_score_before = int(sheet["abilities"]["constitution"]["score"])
             base_species = str(card.get("base_species") or selected_species)
             existing_species = str(sheet["progression"].get("species") or "")
-            if existing_species and existing_species.casefold() not in {
-                selected_species.casefold(),
-                base_species.casefold(),
-            }:
+            if (
+                existing_species
+                and existing_species.casefold()
+                not in {
+                    selected_species.casefold(),
+                    base_species.casefold(),
+                }
+                and replacing_selection is None
+            ):
                 raise ValueError("character already has a different species")
             if any(
                 item.get("artifact_id") == artifact_id for item in sheet["content"]["selections"]
@@ -49365,6 +51179,18 @@ def _create_server(
             ):
                 raise ValueError("content selection is already present")
             recorded_selection = deepcopy(selection)
+            if kind in {"background", "species"}:
+                if materialization_before is None:
+                    raise ValueError(f"{kind} materialization receipt has no source snapshot")
+                recorded_selection[
+                    BACKGROUND_MATERIALIZATION_KEY
+                    if kind == "background"
+                    else SPECIES_MATERIALIZATION_KEY
+                ] = _content_projection_receipt(
+                    materialization_before,
+                    sheet,
+                    kind=kind,
+                )
             if tortle_natural_armor_authority is not None:
                 recorded_selection[TORTLE_NATURAL_ARMOR_AUTHORITY_KEY] = deepcopy(
                     tortle_natural_armor_authority
@@ -49393,6 +51219,23 @@ def _create_server(
                     "authority_id": authority_id,
                     "authorization": sign_receipt(
                         authority_payload,
+                        content_authority_secret,
+                    ),
+                }
+                selection = deepcopy(selection_record["selection"])
+            elif kind == "species":
+                if SPECIES_AUTHORITY_SELECTION_KEY in selection_record["selection"]:
+                    raise ValueError("species selection authority is server-managed")
+                authority_id = uuid4().hex
+                selection_record["selection"][SPECIES_AUTHORITY_SELECTION_KEY] = {
+                    "authority_id": authority_id,
+                    "authorization": sign_receipt(
+                        _species_authority_payload(
+                            sheet,
+                            selection_record,
+                            character_id=current.id,
+                            authority_id=authority_id,
+                        ),
                         content_authority_secret,
                     ),
                 }
@@ -49538,6 +51381,11 @@ def _create_server(
         # This path predates character_content_apply and must not become a
         # provenance bypass for privileged Battle Ready mechanics.
         artifact = reviewed_official_runtime_artifact(pack_id, version, artifact)
+        if artifact_id in SCAG_BLADE_SINGING_FEATURE_IDS:
+            raise ValueError(
+                "SCAG Bladesinging features require character_content_apply for "
+                "level and source prerequisite validation"
+            )
         section = {
             "feature": "features",
             "activity": "activities",
@@ -53067,6 +54915,11 @@ boundary.
             character_id=None,
             secret=content_authority_secret,
         )
+        _require_authoritative_species_state(
+            sheet,
+            character_id=None,
+            secret=content_authority_secret,
+        )
         if character_type not in NON_PLAYER_CHARACTER_TYPES:
             raise ValueError("addon actor templates create only npc or monster actors")
         actor_id = str(
@@ -53453,6 +55306,7 @@ boundary.
             if lifecycle_expected_revision is None:
                 lifecycle_expected_revision = relation_campaign.revision
         _reject_new_tortle_natural_armor_provenance(actor_sheet)
+        _reject_new_scag_bladesong_state(actor_sheet)
         created = actor_lifecycle.create(
             campaign_id,
             system_id=DND5E.id,

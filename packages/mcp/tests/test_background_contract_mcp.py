@@ -931,3 +931,103 @@ def test_background_grants_are_rejected_at_whole_sheet_build_and_content_actor_i
         close_server(server)
 
     asyncio.run(exercise())
+
+
+@pytest.mark.fresh_database
+def test_background_replacement_is_atomic_and_replayable(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+
+    async def exercise() -> None:
+        server = create_server(config)
+        campaign, artifacts = await _setup(server, config)
+        city_watch = next(item for item in artifacts if item["id"].endswith("city-watch"))
+        hermit = next(item for item in artifacts if item["id"].endswith("hermit"))
+        character = await _create(server, campaign["id"], "replace-background")
+        city = await _call(
+            server,
+            "character_content_apply",
+            {
+                "character_id": character["id"],
+                "artifact_id": city_watch["id"],
+                "selection": {"languages": ["Elvish", "Goblin"]},
+                "expected_revision": character["revision"],
+                "idempotency_key": "replace-background-city",
+            },
+        )
+        replaced = await _call(
+            server,
+            "character_content_apply",
+            {
+                "character_id": character["id"],
+                "artifact_id": hermit["id"],
+                "selection": {"languages": ["Dwarvish"]},
+                "expected_revision": city["revision"],
+                "idempotency_key": "replace-background-hermit",
+            },
+        )
+        assert replaced["sheet"]["progression"]["background"] == "Hermit"
+        assert replaced["sheet"]["skills"]["athletics"]["proficiency"] == "none"
+        assert replaced["sheet"]["skills"]["medicine"]["proficiency"] == "proficient"
+        assert replaced["sheet"]["traits"]["languages"] == ["Dwarvish"]
+        assert [item["name"] for item in replaced["sheet"]["inventory"]["items"]] == [
+            "Watch Uniform"
+        ]
+        assert len(replaced["sheet"]["content"]["selections"]) == 1
+        assert replaced["sheet"]["content"]["selections"][0]["artifact_id"] == hermit["id"]
+        replay = await _call(
+            server,
+            "character_content_apply",
+            {
+                "character_id": character["id"],
+                "artifact_id": hermit["id"],
+                "selection": {"languages": ["Dwarvish"]},
+                "expected_revision": city["revision"],
+                "idempotency_key": "replace-background-hermit",
+            },
+        )
+        assert replay == replaced
+        dirty_character = await _create(server, campaign["id"], "dirty-background")
+        dirty_city = await _call(
+            server,
+            "character_content_apply",
+            {
+                "character_id": dirty_character["id"],
+                "artifact_id": city_watch["id"],
+                "selection": {"languages": ["Elvish", "Goblin"]},
+                "expected_revision": dirty_character["revision"],
+                "idempotency_key": "dirty-background-city",
+            },
+        )
+        dirty_sheet = deepcopy(dirty_city["sheet"])
+        dirty_sheet["inventory"]["items"][0]["quantity"] = 2
+        dirty = await _call(
+            server,
+            "character_sheet_replace",
+            {
+                "character_id": dirty_character["id"],
+                "sheet": dirty_sheet,
+                "expected_revision": dirty_city["revision"],
+                "idempotency_key": "dirty-background-item",
+            },
+        )
+        with pytest.raises(Exception, match="changed or left source custody"):
+            await _call(
+                server,
+                "character_content_apply",
+                {
+                    "character_id": dirty_character["id"],
+                    "artifact_id": hermit["id"],
+                    "selection": {"languages": ["Dwarvish"]},
+                    "expected_revision": dirty["revision"],
+                    "idempotency_key": "dirty-background-replace",
+                },
+            )
+        unchanged = await _call(
+            server,
+            "character_query",
+            {"view": "get", "payload": {"character_id": dirty_character["id"]}},
+        )
+        assert unchanged["revision"] == dirty["revision"]
+        close_server(server)
+
+    asyncio.run(exercise())

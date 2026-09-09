@@ -1,4 +1,4 @@
-"""Real locked Eberron build-to-Defender play; not full class/errata acceptance."""
+"""Real locked Eberron build-to-Defender and Artificer acceptance play."""
 
 from __future__ import annotations
 
@@ -498,6 +498,25 @@ def test_locked_artificer_build_creates_and_commands_defender(tmp_path: Path) ->
                 })
                 owner = advanced["character"]
             await apply(_PREFIX + ".subclass.battle-smith", {"target_class_name": "Artificer"})
+            # The subclass is selected after the class has already reached its
+            # level-3 feature threshold.  Its source-bound spell grants must be
+            # settled immediately and must remain outside the prepared-spell
+            # limit, regardless of selection order.
+            spells = {
+                spell["name"]: spell for spell in owner["sheet"]["content"]["spells"]
+            }
+            for name in ("Heroism", "Shield"):
+                assert spells[name]["access"]["always_prepared"] is True
+                assert spells[name]["access"]["prepared"] is True
+                assert spells[name]["grant"] == {
+                    "source_type": "subclass",
+                    "source_key": "Battle Smith",
+                    "method": "class_prepared",
+                }
+            selected_spells = owner["sheet"]["spellcasting"]["preparation"][
+                "selected_spell_ids"
+            ]
+            assert all(spells[name]["id"] not in selected_spells for name in ("Heroism", "Shield"))
             for feature in _FEATURES[:-1]:
                 await apply(_PREFIX + ".feature." + feature, {
                     "infusions": ["Enhanced Arcane Focus", "Enhanced Defense",
@@ -548,19 +567,125 @@ def test_locked_artificer_build_creates_and_commands_defender(tmp_path: Path) ->
                 "expected_revision": owner["revision"],
                 "idempotency_key": "battle-ready-weapon-equip",
             })
-            owner = equipped_weapon["character"]
+            owner = equipped_weapon
             weapon_attack = next(
                 attack for attack in owner["derived"]["inventory"]["weapon_attacks"]
                 if attack["item_id"] == "battle-ready-fixture-weapon"
             )
             assert weapon_attack["attack_ability"] == "intelligence"
             assert weapon_attack["damage_bonus"] == 4
-            # Starting equipment supplies thieves' tools, not smith's tools;
-            # proficiency alone must not create an item. For this lifecycle
-            # encounter the DM awards one real SRD tool artifact via public
-            # content application. This does not exercise Right Tool for the Job.
-            assert not any(item["name"].casefold() == "smith's tools"
-                           for item in owner["sheet"]["inventory"]["items"])
+            # Starting equipment supplies thieves' tools, not smith's tools.
+            # Exercise the source-bound Right Tool feature after a real hour on
+            # the campaign timeline, then replace it with another artisan tool.
+            right_tool_id = _PREFIX + ".feature.the-right-tool-for-the-job"
+            await _call(server, "campaign_change", {
+                "campaign_id": campaign["id"], "action": "clock_advance",
+                "payload": {"period": "hour", "count": 1, "expected_elapsed_ticks": 600},
+                "expected_revision": (await current())["revision"],
+                "idempotency_key": "right-tool-hour-1",
+            })
+            owner = await _call(server, "character_query", {
+                "view": "get", "payload": {"character_id": owner["id"]},
+            })
+            right_tool_request = {
+                "character_id": owner["id"], "action": "use_activity",
+                "payload": {
+                    "activity_id": right_tool_id,
+                    "declaration": {
+                        "tool_artifact_id": _SRD + "item.smith-s-tools",
+                        "tinkers_tools_in_hand": True,
+                        "unoccupied_space_within_5_ft": True,
+                        "uninterrupted_work_minutes": 60,
+                        "work_started_elapsed_ticks": 0,
+                        "rest_context": "long_rest",
+                    },
+                },
+                "expected_revision": owner["revision"],
+                "idempotency_key": "right-tool-smith",
+            }
+            right_tool = await _call(server, "character_action", right_tool_request)
+            owner = right_tool["character"]
+            generated = next(
+                item for item in owner["sheet"]["inventory"]["items"]
+                if item["id"] == right_tool["result"]["generated_item_id"]
+            )
+            assert generated["name"] == "Smith's tools"
+            assert generated["kind"] == "equipment"
+            assert generated["mechanics"]["right_tool_for_job"]["nonmagical"] is True
+            assert right_tool["result"]["rule_receipts"][0]["mechanic_id"] == (
+                "dnd5e.character.right_tool_for_job.v1"
+            )
+            assert await _call(server, "character_action", right_tool_request) == right_tool
+            await _call(server, "campaign_change", {
+                "campaign_id": campaign["id"], "action": "clock_advance",
+                "payload": {"period": "hour", "count": 1, "expected_elapsed_ticks": 1200},
+                "expected_revision": (await current())["revision"],
+                "idempotency_key": "right-tool-hour-2",
+            })
+            owner = await _call(server, "character_query", {
+                "view": "get", "payload": {"character_id": owner["id"]},
+            })
+            right_tool_replace_request = {
+                **right_tool_request,
+                "payload": {
+                    "activity_id": right_tool_id,
+                    "declaration": {
+                        "tool_artifact_id": _SRD + "item.weaver-s-tools",
+                        "tinkers_tools_in_hand": True,
+                        "unoccupied_space_within_5_ft": True,
+                        "uninterrupted_work_minutes": 60,
+                        "work_started_elapsed_ticks": 600,
+                        "rest_context": "short_rest",
+                    },
+                },
+                "expected_revision": owner["revision"],
+                "idempotency_key": "right-tool-weaver",
+            }
+            right_tool_replacement = await _call(
+                server, "character_action", right_tool_replace_request
+            )
+            owner = right_tool_replacement["character"]
+            assert right_tool_replacement["result"]["replaced_item_ids"] == [
+                right_tool["result"]["generated_item_id"]
+            ]
+            assert not any(
+                item["id"] == right_tool["result"]["generated_item_id"]
+                for item in owner["sheet"]["inventory"]["items"]
+            )
+            assert any(
+                item["name"] == "Weaver's tools"
+                for item in owner["sheet"]["inventory"]["items"]
+            )
+            before_invalid = await _call(server, "character_query", {
+                "view": "get", "payload": {"character_id": owner["id"]},
+            })
+            before_invalid_campaign = await current()
+            with pytest.raises(ToolError, match="unoccupied space"):
+                await _call(server, "character_action", {
+                    **right_tool_replace_request,
+                    "payload": {
+                        "activity_id": right_tool_id,
+                        "declaration": {
+                            "tool_artifact_id": _SRD + "item.cook-s-utensils",
+                            "tinkers_tools_in_hand": True,
+                            "unoccupied_space_within_5_ft": False,
+                            "uninterrupted_work_minutes": 60,
+                            "work_started_elapsed_ticks": 600,
+                        },
+                    },
+                    "expected_revision": owner["revision"],
+                    "idempotency_key": "right-tool-invalid-space",
+                })
+            assert await _call(server, "character_query", {
+                "view": "get", "payload": {"character_id": owner["id"]},
+            }) == before_invalid
+            assert await current() == before_invalid_campaign
+
+            # Proficiency alone still must not create an ordinary inventory item.
+            assert not any(
+                item["source_key"] == _SRD + "item.smith-s-tools"
+                for item in owner["sheet"]["inventory"]["items"]
+            )
             await apply(_SRD + "item.smith-s-tools")
             tools = [item for item in owner["sheet"]["inventory"]["items"]
                      if item["source_key"] == _SRD + "item.smith-s-tools"]
@@ -573,6 +698,10 @@ def test_locked_artificer_build_creates_and_commands_defender(tmp_path: Path) ->
             }
             created = await _call(server, "addon_actor_instantiate", create_request)
             assert await _call(server, "addon_actor_instantiate", create_request) == created
+            assert await _call(server, "character_action", right_tool_request) == right_tool
+            assert await _call(server, "character_action", right_tool_replace_request) == (
+                right_tool_replacement
+            )
             defender = created["character"]
             assert defender["sheet"]["combat"]["hp"]["max"] == 20
             relation = (await current())["state"]["dependent_actor_relations"][0]
@@ -626,6 +755,250 @@ def test_locked_artificer_build_creates_and_commands_defender(tmp_path: Path) ->
                 "view": "get", "payload": {"character_id": owner["id"]},
             }) == lifecycle_final[1]
             assert await current() == final_campaign
+        finally:
+            await sessions.aclose()
+            close_server(runtime)
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.fresh_database
+def test_locked_artificer_spell_choices_scaling_and_transactional_guards(tmp_path: Path) -> None:
+    """Exercise the public class, spell-selection, scaling, CAS, and replay contract."""
+    library = _locked_official_library()
+    workspace = Path(__file__).resolve().parents[3]
+    config = McpConfig(
+        home=tmp_path / "home", database_url=None, chroma_url=None, chroma_path_override=None,
+        dnd_skills_dir=workspace / "skills", modulegen_skills_dir=tmp_path / "modulegen",
+        auto_seed_rules=True, official_content_library=library,
+    )
+
+    async def exercise() -> None:
+        runtime = create_server(config)
+        # _ProtocolTools is normally constructed from an entered Client. Keep
+        # the explicit client context here so restart closes the same session.
+        sessions = AsyncExitStack()
+        client = await sessions.enter_async_context(Client(runtime, mode="2026-07-28"))
+        server = _ProtocolTools(client)
+        try:
+            campaign = await _call(server, "campaign_create", {
+                "name": "Artificer spell contract", "edition": "2014",
+                "random_seed": "official-artificer-spell-v1", "idempotency_key": "campaign",
+            })
+            base_sheet = default_character_sheet()
+            base_sheet["abilities"]["intelligence"]["score"] = 10
+            owner = await _call(server, "character_create_from", {
+                "mode": "direct", "payload": {
+                    "campaign_id": campaign["id"], "name": "Choice-bound Artificer",
+                    "sheet": base_sheet,
+                }, "idempotency_key": "owner",
+            })
+            class_id = _CLASS
+            starting = {
+                "mode": "equipment", "choices": {
+                    "simple_weapons": [_SRD + "item.dagger", _SRD + "item.club"],
+                    "armor": [_SRD + "item.scale-mail"],
+                },
+            }
+            unavailable_before = await _call(server, "character_query", {
+                "view": "get", "payload": {"character_id": owner["id"]},
+            })
+            with pytest.raises(ToolError, match="not available"):
+                await _call(server, "character_content_apply", {
+                    "character_id": owner["id"], "artifact_id": class_id,
+                    "selection": {"starting_equipment": starting},
+                    "expected_revision": owner["revision"],
+                    "idempotency_key": "unavailable-class",
+                })
+            assert await _call(server, "character_query", {
+                "view": "get", "payload": {"character_id": owner["id"]},
+            }) == unavailable_before
+
+            profile = await _call(server, "campaign_rules", {
+                "campaign_id": campaign["id"], "action": "get_profile",
+            })
+            await _call(server, "content_pack", {
+                "action": "activate", "payload": {
+                    "campaign_id": campaign["id"], "kind": "addon",
+                    "addon_id": _PREFIX + ".addon", "version": _VERSION,
+                }, "expected_revision": profile["campaign_revision"],
+                "idempotency_key": "activate",
+            })
+            catalog = await _call(server, "character_query", {
+                "view": "catalog", "payload": {"campaign_id": campaign["id"], "query": class_id},
+            })
+            class_entry = next(item for item in catalog if item["id"] == class_id)
+            requirements = class_entry["selection_requirements"]
+            assert requirements["starting_equipment"]["gold_alternative"]["dice"] == "5d4"
+            base_selection = await _selection_for(server, campaign["id"], class_id)
+            pending = await _call(server, "character_content_apply", {
+                "character_id": owner["id"], "artifact_id": class_id,
+                "selection": base_selection, "expected_revision": owner["revision"],
+                "idempotency_key": "missing-starting-equipment",
+            })
+            assert pending["status"] == "pending_choice"
+            assert "starting-equipment" in pending["reason"]
+            with pytest.raises(ToolError, match="starting equipment"):
+                await _call(server, "character_content_apply", {
+                    "character_id": owner["id"], "artifact_id": class_id,
+                    "selection": {**base_selection, "starting_equipment": {
+                        "mode": "equipment", "choices": {
+                            "simple_weapons": [_SRD + "item.longsword", _SRD + "item.club"],
+                            "armor": [_SRD + "item.scale-mail"],
+                        },
+                    }}, "expected_revision": owner["revision"],
+                    "idempotency_key": "invalid-starting-equipment",
+                })
+            applied = await _call(server, "character_content_apply", {
+                "character_id": owner["id"], "artifact_id": class_id,
+                "selection": {**base_selection, "starting_equipment": starting},
+                "expected_revision": owner["revision"], "idempotency_key": "apply-class",
+            })
+            owner = applied
+            class_response = applied
+            assert owner["sheet"]["spellcasting"]["ability"] == "intelligence"
+            assert owner["sheet"]["spellcasting"]["class_lists"] == ["artificer"]
+            assert owner["sheet"]["spellcasting"]["spell_slots"]["1"]["max"] == 2
+            assert owner["sheet"]["spellcasting"]["preparation"]["max_prepared"] == 1
+            assert owner["spell_selection"]["cantrips"]["required"] == 2
+            assert owner["spell_selection"]["cantrips"]["missing"] == 2
+            assert owner["spell_selection"]["preparation"]["missing_for_setup"] == 1
+            assert owner["follow_up"]["complete"] is False
+
+            async def apply_spell(spell: str, method: str = "known") -> dict:
+                nonlocal owner
+                request = {
+                    "character_id": owner["id"],
+                    "artifact_id": _SRD + "spell." + spell,
+                    "selection": {"source_class": "Artificer", "method": method},
+                    "expected_revision": owner["revision"],
+                    "idempotency_key": "spell-" + spell + "-" + method,
+                }
+                owner = await _call(server, "character_content_apply", request)
+                assert await _call(server, "character_content_apply", request) == owner
+                return owner
+
+            with pytest.raises(ToolError, match="not a artificer spell"):
+                await apply_spell("magic-missile")
+            await apply_spell("mending")
+            await apply_spell("light")
+            with pytest.raises(ToolError, match="class-level limit of 2"):
+                await apply_spell("guidance")
+            with pytest.raises(ToolError, match="cantrips"):
+                await _call(server, "character_spell_prepare", {
+                    "character_id": owner["id"], "mode": "set",
+                    "payload": {"spell_id": _SRD + "spell.mending", "prepared": True},
+                    "expected_revision": owner["revision"],
+                    "idempotency_key": "prepare-cantrip-rejected",
+                })
+            await apply_spell("cure-wounds", "class_prepared")
+            await apply_spell("faerie-fire", "class_prepared")
+            before_overflow = await _call(server, "character_query", {
+                "view": "get", "payload": {"character_id": owner["id"]},
+            })
+            with pytest.raises(ToolError, match="exceeds 1"):
+                await _call(server, "character_spell_prepare", {
+                    "character_id": owner["id"], "mode": "replace_all",
+                    "payload": {"spell_ids": [
+                        _SRD + "spell.cure-wounds", _SRD + "spell.faerie-fire",
+                    ], "event": "setup"}, "expected_revision": owner["revision"],
+                    "idempotency_key": "prepare-over-limit",
+                })
+            assert await _call(server, "character_query", {
+                "view": "get", "payload": {"character_id": owner["id"]},
+            }) == before_overflow
+            prepared = await _call(server, "character_spell_prepare", {
+                "character_id": owner["id"], "mode": "replace_all",
+                "payload": {"spell_ids": [_SRD + "spell.cure-wounds"], "event": "setup"},
+                "expected_revision": owner["revision"], "idempotency_key": "prepare-one",
+            })
+            owner = prepared["character"]
+            prepare_response = prepared
+            assert prepared["preparation"]["selected_spell_ids"] == [_SRD + "spell.cure-wounds"]
+            spell_status = await _call(server, "character_query", {
+                "view": "advancement", "payload": {
+                    "character_id": owner["id"], "class_name": "Artificer",
+                    "scope": "current_level",
+                },
+            })
+            assert spell_status["spell_selection"]["preparation"]["selected"] == 1
+            assert spell_status["spell_selection"]["preparation"]["missing_for_setup"] == 0
+
+            levels = {}
+            for level in (2, 3):
+                request = {
+                    "character_id": owner["id"], "action": "level_advance",
+                    "payload": {
+                        "class_name": "Artificer", "hp_method": "fixed",
+                        "reason": f"Acceptance level {level}",
+                        "source_ref": "bundled:srd2014/03_Characterization/Beyond_1st_Level.md",
+                    }, "expected_revision": owner["revision"],
+                    "idempotency_key": f"level-{level}",
+                }
+                advanced = await _call(server, "character_state_change", request)
+                owner = advanced["character"]
+                levels[level] = advanced
+                assert advanced["advancement"]["follow_up"]["complete"] is False
+                assert advanced["advancement"]["follow_up"]["spell_choices"]
+            assert owner["sheet"]["progression"]["level"] == 3
+            assert owner["sheet"]["spellcasting"]["spell_slots"]["1"]["max"] == 3
+            assert owner["sheet"]["spellcasting"]["preparation"]["max_prepared"] == 1
+            plan = await _call(server, "character_query", {
+                "view": "advancement", "payload": {
+                    "character_id": owner["id"], "class_name": "Artificer",
+                    "scope": "current_level",
+                },
+            })
+            assert plan["spell_selection"]["class_level"] == 3
+            assert plan["spell_selection"]["preparation"]["limit"] == 1
+            assert plan["spell_selection"]["preparation"]["selected"] == 1
+
+            before_cas = await _call(server, "character_query", {
+                "view": "get", "payload": {"character_id": owner["id"]},
+            })
+            with pytest.raises(ToolError, match="revision conflict"):
+                await _call(server, "character_spell_prepare", {
+                    "character_id": owner["id"], "mode": "set",
+                    "payload": {"spell_id": _SRD + "spell.cure-wounds", "prepared": False},
+                    "expected_revision": owner["revision"] - 1,
+                    "idempotency_key": "stale-prepare",
+                })
+            assert await _call(server, "character_query", {
+                "view": "get", "payload": {"character_id": owner["id"]},
+            }) == before_cas
+            final_owner = before_cas
+            replay_requests = [
+                ("character_content_apply", class_response, {
+                    "character_id": final_owner["id"], "artifact_id": class_id,
+                    "selection": {**base_selection, "starting_equipment": starting},
+                    "expected_revision": 0, "idempotency_key": "apply-class",
+                }),
+                ("character_spell_prepare", prepare_response, {
+                    "character_id": final_owner["id"], "mode": "replace_all",
+                    "payload": {"spell_ids": [_SRD + "spell.cure-wounds"], "event": "setup"},
+                    "expected_revision": 0, "idempotency_key": "prepare-one",
+                }),
+                ("character_state_change", levels[2], {
+                    "character_id": final_owner["id"], "action": "level_advance",
+                    "payload": {
+                        "class_name": "Artificer", "hp_method": "fixed",
+                        "reason": "Acceptance level 2",
+                        "source_ref": "bundled:srd2014/03_Characterization/Beyond_1st_Level.md",
+                    }, "expected_revision": 0, "idempotency_key": "level-2",
+                }),
+            ]
+            await sessions.aclose()
+            close_server(runtime)
+            runtime = create_server(config)
+            sessions = AsyncExitStack()
+            client = await sessions.enter_async_context(Client(runtime, mode="2026-07-28"))
+            server = _ProtocolTools(client)
+            assert await _call(server, "character_query", {
+                "view": "get", "payload": {"character_id": final_owner["id"]},
+            }) == final_owner
+            for tool, expected, request in replay_requests:
+                response = await _call(server, tool, request)
+                assert response == expected
         finally:
             await sessions.aclose()
             close_server(runtime)

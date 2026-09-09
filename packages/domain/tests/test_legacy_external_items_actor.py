@@ -7,7 +7,11 @@ from sagasmith_core.content_pack import (
     loads_content_archive,
 )
 
-from sagasmith_dnd.character_schema import default_character_notes, default_character_sheet
+from sagasmith_dnd.character_schema import (
+    add_inventory_item,
+    default_character_notes,
+    default_character_sheet,
+)
 from sagasmith_dnd.content_actors import (
     build_dnd_content_actor,
     canonicalize_dnd_content_actor,
@@ -19,7 +23,9 @@ from sagasmith_dnd.content_packages import (
 )
 
 
-def _legacy_actor(*, missing_intrinsic_attacks: bool = False) -> dict:
+def _legacy_actor(
+    *, missing_intrinsic_attacks: bool = False, missing_anatomy: bool = False
+) -> dict:
     notes = default_character_notes()
     notes["profile"]["summary"] = "Legacy inventory fixture."
     actor = build_dnd_content_actor(
@@ -33,12 +39,22 @@ def _legacy_actor(*, missing_intrinsic_attacks: bool = False) -> dict:
     actor["sheet"]["inventory"].pop("external_items")
     if missing_intrinsic_attacks:
         actor["sheet"]["traits"].pop("intrinsic_attacks")
+    if missing_anatomy:
+        actor["sheet"]["traits"].pop("anatomy")
     return actor
 
 
-@pytest.mark.parametrize("missing_intrinsic_attacks", [False, True])
-def test_absent_empty_external_items_preserves_actor_and_archive(missing_intrinsic_attacks):
-    actor = _legacy_actor(missing_intrinsic_attacks=missing_intrinsic_attacks)
+@pytest.mark.parametrize(
+    ("missing_intrinsic_attacks", "missing_anatomy"),
+    [(False, False), (True, False), (False, True), (True, True)],
+)
+def test_absent_empty_legacy_defaults_preserve_actor_and_archive(
+    missing_intrinsic_attacks, missing_anatomy
+):
+    actor = _legacy_actor(
+        missing_intrinsic_attacks=missing_intrinsic_attacks,
+        missing_anatomy=missing_anatomy,
+    )
     original = deepcopy(actor)
     assert validate_dnd_content_actor(actor) == original
     assert actor == original
@@ -82,6 +98,76 @@ def test_missing_external_items_does_not_relax_other_canonical_fields():
     actor["notes"]["profile"].pop("portrait_ref")
     with pytest.raises(ValueError, match="canonical sheet and notes"):
         validate_dnd_content_actor(actor)
+
+
+def test_legacy_empty_item_mechanics_defaults_preserve_actor_and_archive():
+    actor = _legacy_actor()
+    actor["sheet"], _item_id = add_inventory_item(
+        actor["sheet"],
+        {
+            "id": "legacy-armor",
+            "name": "Legacy armor",
+            "kind": "armor",
+            "mechanics": {
+                "base_ac": 12,
+                "dexterity_mode": "max",
+                "dexterity_max": 2,
+                "magic_bonus": 0,
+                "stealth_disadvantage": False,
+            },
+        },
+    )
+    mechanics = actor["sheet"]["inventory"]["items"][0]["mechanics"]
+    mechanics.pop("category")
+    mechanics.pop("strength_requirement")
+    actor["sheet"], _item_id = add_inventory_item(
+        actor["sheet"],
+        {
+            "id": "legacy-weapon",
+            "name": "Legacy weapon",
+            "kind": "weapon",
+            "mechanics": {
+                "attack_type": "melee",
+                "attack_ability": "strength",
+                "damage_formula": "1d4",
+                "damage_type": "bludgeoning",
+            },
+        },
+    )
+    actor["sheet"]["inventory"]["items"][1]["mechanics"].pop("magical")
+    original = deepcopy(actor)
+
+    assert validate_dnd_content_actor(actor) == original
+    canonical = canonicalize_dnd_content_actor(actor)
+    assert canonical["sheet"]["inventory"]["items"][0]["mechanics"]["category"] == ""
+    assert canonical["sheet"]["inventory"]["items"][0]["mechanics"]["strength_requirement"] == 0
+    assert canonical["sheet"]["inventory"]["items"][1]["mechanics"]["magical"] is False
+
+    package, blobs = build_preset_content_package(
+        package_id="dnd5e.example.legacy-item-mechanics",
+        version="1.0.0",
+        system_id="dnd5e",
+        title="Legacy item mechanics actors",
+        cards=[actor],
+    )
+    package = build_content_package(
+        kind=package["kind"],
+        package_id=package["id"],
+        version=package["version"],
+        system_id=package["system_id"],
+        manifest=package["manifest"],
+        dependencies=package["dependencies"],
+        sources=package["sources"],
+        assets=package["assets"],
+        content_reviews=package["content_reviews"],
+        actors=[original],
+        content=package["content"],
+        metadata=package["metadata"],
+    )
+    archive = dumps_content_archive(package, blobs=blobs)
+    restored, restored_blobs = loads_content_archive(archive)
+    assert validate_dnd_content_package(restored) == package
+    assert restored_blobs == blobs
 
 
 @pytest.mark.parametrize("external_items", [None, ["forged"], [{"id": "forged"}]])

@@ -17,11 +17,14 @@ def test_locked_scag_archive_activates_and_applies_watchers_eye(tmp_path: Path) 
     async def exercise() -> None:
         workspace = Path(__file__).resolve().parents[3]
         archive_root = _locked_official_library()
-        archives = list(
-            archive_root.glob("packages/*sword-coast-adventurer-s-guide*.sagasmith-pack")
+        index = json.loads((archive_root / "index.json").read_text(encoding="utf-8"))
+        package_entry = next(
+            item
+            for item in index["packages"]
+            if item["id"]
+            == "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a.addon"
         )
-        assert len(archives) == 1
-        with zipfile.ZipFile(archives[0]) as archive:
+        with zipfile.ZipFile(archive_root / package_entry["path"]) as archive:
             package = json.loads(archive.read("package.sagasmith.json"))
         definition_id = package["content"]["rule_definitions"][0]["id"]
         for slug in ("city-watch", "investigator"):
