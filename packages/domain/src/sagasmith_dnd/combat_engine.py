@@ -1336,6 +1336,11 @@ def start_encounter(
                     "speed": speed,
                     "movement_spent": 0,
                     "extra_movement_granted": 0,
+                    "travel_mode": "walk",
+                    "speed_modes": {
+                        mode: max(0, int(derived.get("speed", {}).get(mode, 0) or 0))
+                        for mode in _TRAVEL_SPEED_MODES
+                    },
                     "object_interaction": 1,
                     "attack_budget": 0,
                 },
@@ -1344,6 +1349,10 @@ def start_encounter(
                 "condition_sources": timed_condition_sources(sheet),
                 "speed_multiplier": speed_multiplier,
                 "base_speed": speed,
+                "speed_modes": {
+                    mode: max(0, int(derived.get("speed", {}).get(mode, 0) or 0))
+                    for mode in _TRAVEL_SPEED_MODES
+                },
                 "position": (
                     deepcopy(actor.get("position"))
                     if normalized_positioning_mode == "grid"
@@ -1894,15 +1903,43 @@ def pay_witch_bolt_sustain_action(
     }
 
 
-def _effective_speed_ft(combatant: dict[str, Any]) -> int:
+_TRAVEL_SPEED_MODES = {"walk", "fly", "swim", "climb", "burrow"}
+
+
+def _travel_speed_modes(combatant: dict[str, Any]) -> dict[str, int]:
+    """Return the encounter snapshot's recorded speeds, with legacy fallback."""
+
+    budget = dict(combatant.get("turn_budget") or {})
+    recorded = combatant.get("speed_modes", budget.get("speed_modes"))
+    if isinstance(recorded, dict):
+        return {
+            mode: max(0, int(recorded.get(mode, 0) or 0))
+            for mode in _TRAVEL_SPEED_MODES
+        }
+    return {"walk": max(0, int(budget.get("speed", 0) or 0)), **{
+        mode: 0 for mode in _TRAVEL_SPEED_MODES - {"walk"}
+    }}
+
+
+def _effective_speed_ft(
+    combatant: dict[str, Any], travel_mode: str | None = None
+) -> int:
     if _condition_set(combatant.get("conditions")) & {"grappled", "restrained"}:
         return 0
     budget = dict(combatant.get("turn_budget") or {})
+    mode = str(travel_mode or budget.get("travel_mode") or "walk").strip().lower()
+    if mode not in _TRAVEL_SPEED_MODES:
+        return 0
+    base_speed = _travel_speed_modes(combatant).get(mode, 0)
+    # A missing swim/climb speed still permits that movement at double cost;
+    # flight and burrowing require an actual corresponding speed.
+    if mode in {"swim", "climb"} and base_speed <= 0:
+        base_speed = _travel_speed_modes(combatant).get("walk", 0)
     recorded_speed_multiplier = combatant.get("speed_multiplier")
     speed_multiplier = float(
         1.0 if recorded_speed_multiplier is None else recorded_speed_multiplier
     )
-    return max(0, int(int(budget.get("speed", 0) or 0) * speed_multiplier))
+    return max(0, int(base_speed * speed_multiplier))
 
 
 def dodge_benefit_active(combatant: dict[str, Any]) -> bool:
@@ -1981,9 +2018,11 @@ def _movement_accounting(combatant: dict[str, Any]) -> tuple[int, int]:
     return max(0, spent), 0
 
 
-def _remaining_movement_ft(combatant: dict[str, Any]) -> int:
+def _remaining_movement_ft(
+    combatant: dict[str, Any], travel_mode: str | None = None
+) -> int:
     spent, extra_granted = _movement_accounting(combatant)
-    return max(0, _effective_speed_ft(combatant) + extra_granted - spent)
+    return max(0, _effective_speed_ft(combatant, travel_mode) + extra_granted - spent)
 
 
 def _tortle_shell_defense_combatant_active(combatant: dict[str, Any]) -> bool:
@@ -5074,13 +5113,16 @@ def spend_movement(
     destination: Any = None,
     path: list[Any] | None = None,
     movement_mode: str = "voluntary",
+    travel_mode: str = "walk",
     crawl: bool = False,
     spatial_facts: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Apply voluntary, Aggressive, forced, or teleport movement from known geometry.
+    """Apply movement with a separate reason and travel-speed mode.
 
     Explicit token positions, reach values, map bounds/blocked cells, and
     difficult cells crossed by a voluntary cell-by-cell path are automated.
+    ``movement_mode`` describes why the movement occurs; ``travel_mode`` selects
+    walk, fly, swim, climb, or burrow speed and defaults to walk for legacy callers.
     Forced movement and teleportation never spend the target's turn movement or
     trigger opportunity attacks; their source-specific target and line-of-effect
     legality must be settled before this generic position mutation.
@@ -5090,8 +5132,13 @@ def spend_movement(
     if distance < 0:
         raise CombatEngineError("movement distance cannot be negative")
     movement_mode = str(movement_mode).strip().lower().replace("-", "_")
+    travel_mode = str(travel_mode).strip().lower().replace("-", "_")
     if movement_mode not in {"voluntary", "aggressive", "forced", "teleport"}:
         raise CombatEngineError("movement_mode must be voluntary, aggressive, forced, or teleport")
+    if travel_mode not in _TRAVEL_SPEED_MODES:
+        raise CombatEngineError(
+            "travel_mode must be walk, fly, swim, climb, or burrow"
+        )
     uses_aggressive_grant = movement_mode == "aggressive"
     willing_movement = movement_mode in {"voluntary", "aggressive"}
     if not willing_movement and crawl:
@@ -5177,12 +5224,16 @@ def spend_movement(
             missing=("grapple_source",),
             ruling_kind="missing_or_conflicting_source_review",
         )
-    if willing_movement and _effective_speed_ft(combatant) <= 0:
+    selected_speed = _effective_speed_ft(combatant, travel_mode)
+    native_travel_speed = _travel_speed_modes(combatant).get(travel_mode, 0)
+    if willing_movement and selected_speed <= 0:
         raise CombatEngineError("actor cannot move while its effective speed is zero")
+    if willing_movement and travel_mode in {"fly", "burrow"} and native_travel_speed <= 0:
+        raise CombatEngineError(f"actor has no {travel_mode} speed")
     if (
         willing_movement
         and not uses_aggressive_grant
-        and _remaining_movement_ft(combatant) <= 0
+        and _remaining_movement_ft(combatant, travel_mode) <= 0
     ):
         raise CombatEngineError(
             "actor has no movement remaining at its current speed"
@@ -5197,9 +5248,9 @@ def spend_movement(
         raise CombatEngineError("surprised actor cannot move on its first turn")
     budget = dict(combatant.get("turn_budget") or {})
     available = int(
-        (aggressive_grant or {}).get("remaining", 0)
-        if uses_aggressive_grant
-        else _remaining_movement_ft(combatant)
+            (aggressive_grant or {}).get("remaining", 0)
+            if uses_aggressive_grant
+            else _remaining_movement_ft(combatant, travel_mode)
     )
     origin = _position(combatant.get("position"))
     waypoints: list[tuple[float, float]] = []
@@ -5283,7 +5334,19 @@ def spend_movement(
             for point in route
             if point is not None and f"{int(point[0])},{int(point[1])}" in difficult_cells
         )
-    movement_cost = distance + (distance if crawl else 0) + terrain_cost if willing_movement else 0
+    missing_aquatic_or_climb_speed = (
+        willing_movement
+        and travel_mode in {"swim", "climb"}
+        and native_travel_speed <= 0
+    )
+    movement_cost = (
+        distance
+        + (distance if crawl else 0)
+        + (distance if missing_aquatic_or_climb_speed else 0)
+        + terrain_cost
+        if willing_movement
+        else 0
+    )
     if willing_movement and movement_cost > available:
         raise CombatEngineError(
             "movement exceeds the remaining Aggressive grant"
@@ -5409,6 +5472,7 @@ def spend_movement(
         flags["aggressive_movement"] = aggressive_grant
         combatant["turn_flags"] = flags
     elif willing_movement:
+        budget["travel_mode"] = travel_mode
         _update_movement_accounting(combatant, budget, spent_delta=movement_cost)
     if destination is not None:
         from sagasmith_dnd.spatial import validate_position
