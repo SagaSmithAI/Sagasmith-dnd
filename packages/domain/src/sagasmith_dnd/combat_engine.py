@@ -2614,6 +2614,9 @@ def preflight_attack(
             "name": "Unarmed Strike",
             "attack_type": "melee",
             "reach_ft": 5,
+            "attack_ability": "strength",
+            "attack_ability_options": ["strength"],
+            "attack_ability_modifier": modifier,
             "properties": [],
             "attack_bonus": modifier + int(actor_derived(attacker).get("proficiency_bonus", 2)),
             "damage_expression": f"1 {'+' if modifier >= 0 else '-'} {abs(modifier)}",
@@ -2631,12 +2634,78 @@ def preflight_attack(
             modifier = ability_modifier(strength)
             weapon = {
                 "item_id": "unarmed-strike",
+                "attack_ability": "strength",
+                "attack_ability_options": ["strength"],
+                "attack_ability_modifier": modifier,
                 "attack_bonus": modifier + int(actor_derived(attacker).get("proficiency_bonus", 2)),
                 "damage_expression": f"1 {'+' if modifier >= 0 else '-'} {abs(modifier)}",
                 "damage_type": "bludgeoning",
             }
         else:
             raise CombatEngineError("weapon_id is required when actor has multiple attacks")
+    default_attack_ability = str(weapon.get("attack_ability") or "strength").strip().casefold()
+    raw_attack_ability_options = weapon.get("attack_ability_options")
+    if raw_attack_ability_options is not None and (
+        not isinstance(raw_attack_ability_options, list)
+        or not raw_attack_ability_options
+        or any(
+            not isinstance(value, str) or not value.strip()
+            for value in raw_attack_ability_options
+        )
+    ):
+        raise CombatEngineError("attack_ability_options must be a non-empty string list")
+    if isinstance(raw_attack_ability_options, list):
+        attack_ability_options = [
+            str(value).strip().casefold()
+            for value in raw_attack_ability_options
+        ]
+    else:
+        attack_ability_options = [default_attack_ability]
+        properties = {str(item).strip().casefold() for item in weapon.get("properties", [])}
+        if "finesse" in properties and default_attack_ability in {"strength", "dexterity"}:
+            attack_ability_options = ["strength", "dexterity"]
+    if len(attack_ability_options) != len(set(attack_ability_options)):
+        raise CombatEngineError("attack_ability_options must not contain duplicates")
+    if default_attack_ability not in attack_ability_options:
+        raise CombatEngineError("weapon attack ability is not present in its ability options")
+    requested_attack_ability = action.get("attack_ability")
+    attack_ability = default_attack_ability
+    explicit_attack_ability = requested_attack_ability is not None
+    if explicit_attack_ability:
+        if not isinstance(requested_attack_ability, str) or not requested_attack_ability.strip():
+            raise CombatEngineError("attack_ability must be a non-empty ability name")
+        attack_ability = requested_attack_ability.strip().casefold()
+        if attack_ability not in attack_ability_options:
+            raise CombatEngineError(
+                "attack_ability must be one of: " + ", ".join(attack_ability_options)
+            )
+    ability_modifiers = dict(actor_derived(attacker).get("ability_modifiers") or {})
+    default_modifier = int(weapon.get("attack_ability_modifier", 0) or 0)
+    modifier = (
+        int(
+            ability_modifiers.get(
+                attack_ability,
+                default_modifier if attack_ability == default_attack_ability else 0,
+            )
+        )
+        if explicit_attack_ability
+        else default_modifier
+    )
+    ability_modifier_delta = modifier - default_modifier
+    attack_bonus_override = weapon.get("attack_bonus_override")
+    damage_bonus_override = weapon.get("damage_bonus_override")
+    damage_bonus = int(weapon.get("damage_bonus", 0) or 0)
+    if explicit_attack_ability:
+        if attack_bonus_override is None:
+            attack_bonus = int(weapon.get("attack_bonus", 0) or 0) + ability_modifier_delta
+        else:
+            attack_bonus = int(attack_bonus_override)
+        if damage_bonus_override is None:
+            damage_bonus += ability_modifier_delta
+        else:
+            damage_bonus = int(damage_bonus_override)
+    else:
+        attack_bonus = int(weapon.get("attack_bonus", 0) or 0)
     if dict(weapon.get("recharge") or {}):
         uses = dict(weapon.get("uses") or {})
         if int(uses.get("value", 0) or 0) < 1:
@@ -2696,7 +2765,7 @@ def preflight_attack(
                 "ammunition_item_id": str(ammunition_item_id),
             }
     effect_roll_bonus = active_effect_roll_bonus(actor_sheet(attacker), "attack")
-    attack_bonus = int(weapon.get("attack_bonus", 0)) + effect_roll_bonus
+    attack_bonus += effect_roll_bonus
     context = dict(action.get("context") or {})
     official_item = _verified_official_item_for_attack(attacker, weapon)
     if official_item.get("kind") == "dyrrn_tentacle_whip":
@@ -2714,7 +2783,6 @@ def preflight_attack(
             context.setdefault("disadvantage_sources", []).append(
                 "official_item:dyrrn_tentacle_whip:aberration"
             )
-    attack_ability = str(weapon.get("attack_ability") or "strength").casefold()
     equipment_attack_disadvantage = attack_ability in set(
         actor_derived(attacker)
         .get("equipment_penalties", {})
@@ -2762,6 +2830,13 @@ def preflight_attack(
     cover_bonus = {"half": 2, "three_quarters": 5}.get(cover_degree, 0)
     target_ac += cover_bonus
     expression = weapon.get("damage_expression") or weapon.get("damage") or ""
+    if explicit_attack_ability and weapon.get("damage_formula"):
+        formula = str(weapon.get("damage_formula") or "")
+        expression = (
+            f"{formula} {'+' if damage_bonus > 0 else '-'} {abs(damage_bonus)}"
+            if damage_bonus
+            else formula
+        )
     attack_mode = str(action.get("attack_mode") or weapon.get("attack_type") or "melee").lower()
     if attack_mode not in {"melee", "ranged"}:
         raise CombatEngineError("attack_mode must be melee or ranged")
@@ -2856,7 +2931,6 @@ def preflight_attack(
         versatile_formula = str(weapon.get("versatile_damage_formula") or "")
         if not versatile_formula:
             raise CombatEngineError("versatile weapon is missing its two-handed damage formula")
-        damage_bonus = int(weapon.get("damage_bonus", 0) or 0)
         expression = (
             f"{versatile_formula} {'+' if damage_bonus >= 0 else '-'} {abs(damage_bonus)}"
             if damage_bonus
@@ -2894,7 +2968,7 @@ def preflight_attack(
             raise CombatEngineError(
                 "Nick mastery is declared through the Light extra-attack entitlement"
             )
-        attacker_modifier = int(weapon.get("attack_ability_modifier", 0) or 0)
+        attacker_modifier = modifier
         weapon_mastery = {
             "id": mastery,
             "weapon_id": str(weapon.get("item_id") or ""),
@@ -2950,7 +3024,7 @@ def preflight_attack(
             weapon_mastery["weapon_reach_ft"] = reach
     if mastery_followup:
         damage_bonus = int(weapon.get("damage_bonus", 0) or 0)
-        ability_bonus = int(weapon.get("attack_ability_modifier", 0) or 0)
+        ability_bonus = modifier
         if not bool(mastery_followup.get("include_attack_ability_modifier", False)):
             adjusted_bonus = damage_bonus - max(0, ability_bonus)
             damage_formula = str(weapon.get("damage_formula") or "")
@@ -3279,6 +3353,8 @@ def preflight_attack(
         core_boundary_ids.append("dnd5e.core.attack.sneak_attack")
     if properties & {"two_handed", "versatile"}:
         core_boundary_ids.append("dnd5e.core.attack.weapon_grip")
+    if len(attack_ability_options) > 1:
+        core_boundary_ids.append("dnd5e.core.weapon.proficiency_and_finesse")
     if weapon_mastery is not None:
         core_boundary_ids.append("dnd5e.core.weapon.mastery")
     if mastery_followup:
@@ -3288,6 +3364,9 @@ def preflight_attack(
         "kind": "attack",
         "attacker_id": actor_id(attacker),
         "target_id": actor_id(target),
+        "attack_ability": attack_ability,
+        "attack_ability_modifier": modifier,
+        "attack_ability_options": list(attack_ability_options),
         "attack_bonus": attack_bonus,
         "effect_roll_bonus": effect_roll_bonus,
         "target_ac": target_ac,
@@ -3410,6 +3489,9 @@ def preflight_spell_attack(
         "item_id": synthetic_id,
         "name": str(spell.get("name") or spell_id),
         "attack_type": attack_mode,
+        "attack_ability": "spell",
+        "attack_ability_options": ["spell"],
+        "attack_ability_modifier": 0,
         "attack_bonus": int(attack_bonus),
         "damage_expression": scaled_roll_expression(
             damage,
@@ -3477,6 +3559,9 @@ def roll_attack_action(
         **attack,
         "attacker_id": str(plan["attacker_id"]),
         "target_id": str(plan["target_id"]),
+        "attack_ability": plan.get("attack_ability"),
+        "attack_ability_modifier": plan.get("attack_ability_modifier"),
+        "attack_ability_options": list(plan.get("attack_ability_options") or []),
         "damage": None,
     }
 
@@ -3727,6 +3812,9 @@ def resolve_attack_damage(
         attacker_id=actor_id(attacker),
         target_id=actor_id(target),
         weapon_id=str(plan.get("weapon_id") or ""),
+        attack_ability=plan.get("attack_ability"),
+        attack_ability_modifier=plan.get("attack_ability_modifier"),
+        attack_ability_options=list(plan.get("attack_ability_options") or []),
         attack_mode=str(plan.get("attack_mode") or ""),
         unarmed_strike=bool(plan.get("unarmed_strike", False)),
         natural_weapon=bool(plan.get("natural_weapon", False)),

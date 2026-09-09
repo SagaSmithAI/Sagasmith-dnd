@@ -12062,6 +12062,11 @@ def _create_server(
         value = dict(action)
         if "use_weapon_mastery" in value and not isinstance(value["use_weapon_mastery"], bool):
             raise CombatEngineError("use_weapon_mastery must be boolean")
+        if "attack_ability" in value:
+            attack_ability = value["attack_ability"]
+            if not isinstance(attack_ability, str) or not attack_ability.strip():
+                raise CombatEngineError("attack_ability must be a non-empty ability name")
+            value["attack_ability"] = attack_ability.strip().casefold()
         for field, allowed in (
             ("light_extra_attack", {"bonus_action", "nick"}),
             ("weapon_mastery_followup", {"cleave"}),
