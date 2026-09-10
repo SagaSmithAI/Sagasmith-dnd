@@ -59,6 +59,7 @@ from sagasmith_dnd.combat_engine import (
     resolve_death_save_to_sheet,
     resolve_divine_spark_to_sheet,
     resolve_hypnotic_pattern_target,
+    resolve_lay_on_hands_to_sheets,
     resolve_preserve_life_to_sheets,
     resolve_readied_spell_window,
     resolve_save_damage_to_sheet,
@@ -3130,6 +3131,65 @@ def test_preserve_life_enforces_pool_half_hp_and_creature_type() -> None:
             {"undead": undead},
             allocations=[{"target_id": "undead", "amount": 1}],
         )
+
+
+def test_2014_lay_on_hands_scales_pool_and_cures_one_owned_effect() -> None:
+    paladin = _actor("paladin", hp=30)["sheet"]
+    paladin["progression"] = {
+        "level": 5,
+        "classes": [{"name": "Paladin", "level": 5, "hit_die": 10}],
+    }
+    paladin["content"]["features"] = [
+        {
+            "id": "dnd5e.content.srd2014.feature.paladin-lay-on-hands",
+            "name": "Lay on Hands",
+            "source_key": "Paladin",
+            "mechanic_refs": ["dnd5e.core.activity.lay_on_hands"],
+        }
+    ]
+    paladin["resources"]["lay_on_hands"] = {
+        "label": "Lay on Hands",
+        "value": 25,
+        "max": 25,
+        "recovers_on": "long_rest",
+        "source_key": "Paladin",
+    }
+    target = _actor("target", hp=20)["sheet"]
+    target["combat"]["hp"]["value"] = 5
+    target, _ = add_effect(
+        target,
+        {
+            "id": "poison-a",
+            "name": "Poison",
+            "kind": "poison",
+            "active": True,
+            "changes": [{"path": "conditions", "mode": "add", "value": "poisoned"}],
+        },
+    )
+    target, _ = add_effect(
+        target,
+        {
+            "id": "poison-b",
+            "name": "Other Poison",
+            "kind": "poison",
+            "active": True,
+            "changes": [{"path": "conditions", "mode": "add", "value": "poisoned"}],
+        },
+    )
+    healed = resolve_lay_on_hands_to_sheets(paladin, target, mode="heal", amount=10)
+    assert healed["target_sheet"]["combat"]["hp"]["value"] == 15
+    assert healed["source_sheet"]["resources"]["lay_on_hands"]["value"] == 15
+    cured = resolve_lay_on_hands_to_sheets(
+        healed["source_sheet"], healed["target_sheet"], mode="cure", effect_id="poison-a"
+    )
+    assert cured["source_sheet"]["resources"]["lay_on_hands"]["value"] == 10
+    by_id = {item["id"]: item for item in cured["target_sheet"]["effects"]}
+    assert by_id["poison-a"]["active"] is False
+    assert by_id["poison-b"]["active"] is True
+    with pytest.raises(CombatEngineError, match="Undead or Constructs"):
+        undead = _actor("undead")["sheet"]
+        undead["progression"]["species"] = "undead"
+        resolve_lay_on_hands_to_sheets(paladin, undead, mode="heal", amount=1)
 
 
 def test_2024_preserve_life_starts_at_level_three_and_can_target_undead() -> None:
