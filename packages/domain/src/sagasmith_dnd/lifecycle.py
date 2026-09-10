@@ -23,6 +23,7 @@ from sagasmith_dnd.combat_engine import CombatEngineError
 from sagasmith_dnd.conditions import (
     apply_condition_change,
     condition_ids,
+    effect_is_suspended_by_petrification,
     reconcile_condition_projection,
     reconcile_ended_effect_conditions,
 )
@@ -588,6 +589,7 @@ def advance_effect_durations(
     value = deepcopy(sheet)
     advanced: list[str] = []
     expired: list[str] = []
+    suspended: list[str] = []
     breathing_result: dict[str, Any] | None = None
     if advance_breathing and (
         normalized == "round"
@@ -627,6 +629,9 @@ def advance_effect_durations(
             continue
         if duration.get("period") != normalized:
             continue
+        if effect_is_suspended_by_petrification(value, effect):
+            suspended.append(str(effect.get("id")))
+            continue
         remaining = int(duration.get("remaining", 0) or 0)
         if remaining <= amount:
             effect["active"] = False
@@ -643,6 +648,7 @@ def advance_effect_durations(
         "amount": amount,
         "advanced": advanced,
         "expired": expired,
+        "suspended": suspended,
     }
 
 
@@ -656,6 +662,7 @@ def advance_source_turn_effect_durations(
     value = deepcopy(sheet)
     advanced: list[str] = []
     expired: list[str] = []
+    suspended: list[str] = []
     for effect in value.get("effects", []):
         if not effect.get("active"):
             continue
@@ -664,6 +671,9 @@ def advance_source_turn_effect_durations(
             duration.get("period") != "source_turn_start"
             or str(effect.get("source") or "") != source_id
         ):
+            continue
+        if effect_is_suspended_by_petrification(value, effect):
+            suspended.append(str(effect.get("id")))
             continue
         remaining = int(duration.get("remaining", 0) or 0)
         if remaining <= 1:
@@ -682,6 +692,7 @@ def advance_source_turn_effect_durations(
         "amount": 1,
         "advanced": advanced,
         "expired": expired,
+        "suspended": suspended,
     }
 
 
@@ -694,6 +705,8 @@ def expire_combat_bound_effects(sheet: dict[str, Any]) -> dict[str, Any]:
             continue
         duration = dict(effect.get("duration") or {})
         if duration.get("period") not in COMBAT_BOUND_EFFECT_PERIODS:
+            continue
+        if effect_is_suspended_by_petrification(value, effect):
             continue
         effect["active"] = False
         effect["ended_reason"] = "combat_ended"
@@ -736,6 +749,8 @@ def _advance_elapsed_effect_collection(
     }
     for effect in result.get(collection_key, []):
         if not effect.get("active"):
+            continue
+        if effect_is_suspended_by_petrification(result, effect):
             continue
         duration = dict(effect.get("duration") or {})
         period = str(duration.get("period") or "")

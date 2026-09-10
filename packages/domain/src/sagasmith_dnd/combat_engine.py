@@ -37,8 +37,10 @@ from sagasmith_dnd.conditions import (
     apply_effect_conditions,
     condition_ids,
     effect_condition_additions,
+    effect_is_suspended_by_petrification,
     reconcile_condition_projection,
     reconcile_ended_effect_conditions,
+    sheet_is_petrified,
 )
 from sagasmith_dnd.content_solution import (
     ContentSolutionError,
@@ -457,6 +459,8 @@ def active_condition_source_effects(sheet: dict[str, Any], condition: str) -> li
     for effect in sheet.get("effects", []):
         if not effect.get("active"):
             continue
+        if effect_is_suspended_by_petrification(sheet, effect):
+            continue
         if normalized in effect_condition_additions(effect):
             matches.append(deepcopy(effect))
     return matches
@@ -484,6 +488,8 @@ def source_speed_multiplier(sheet: dict[str, Any]) -> float:
     multiplier = 1.0
     for effect in sheet.get("effects", []):
         if not effect.get("active"):
+            continue
+        if effect_is_suspended_by_petrification(sheet, effect):
             continue
         if _is_hypnotic_pattern_target_effect(effect):
             multiplier = 0.0
@@ -742,6 +748,8 @@ def _active_attack_roll_effect_flags(sheet: dict[str, Any]) -> tuple[bool, bool,
     sources: list[str] = []
     for effect in sheet.get("effects", []):
         if not isinstance(effect, dict) or not effect.get("active"):
+            continue
+        if effect_is_suspended_by_petrification(sheet, effect):
             continue
         effect_applied = False
         for change in effect.get("changes", []):
@@ -3144,10 +3152,13 @@ def preflight_attack(
         if close_combat_threat_ids:
             context["disadvantage"] = True
             context.setdefault("disadvantage_sources", []).append("hostile_creature_within_5_ft")
-    attacker_conditions = _condition_set(
-        attacker.get("conditions") or actor_sheet(attacker).get("conditions")
+    attacker_sheet = actor_sheet(attacker)
+    attacker_conditions = condition_ids(
+        attacker.get("conditions") or attacker_sheet.get("conditions")
     )
-    attacker_exhaustion = int(actor_sheet(attacker).get("combat", {}).get("exhaustion", 0) or 0)
+    if sheet_is_petrified(attacker_sheet):
+        attacker_conditions.discard("poisoned")
+    attacker_exhaustion = int(attacker_sheet.get("combat", {}).get("exhaustion", 0) or 0)
     ruleset = (
         _normalize_ruleset(encounter.get("ruleset"))
         if encounter is not None
@@ -5073,6 +5084,9 @@ def _adjust_damage_amount(
         for item_id, values in item_sources[defense].items()
         if normalized in values
     ]
+    if normalized == "poison" and sheet_is_petrified(sheet):
+        active_sources.append("condition:petrified")
+        return raw, 0, normalized, "immune", active_sources
     conditional: dict[str, set[str]] = {
         "immunity": set(),
         "resistance": set(),
@@ -7746,7 +7760,11 @@ def _sheet_check_modifiers(
         "save_disadvantage_abilities" if kind == "save" else "check_disadvantage_abilities"
     )
     equipment_disadvantage = check_ability in set(equipment_penalties.get(penalty_field) or [])
-    poisoned = kind in ABILITY_CHECK_KINDS and "poisoned" in _condition_set(sheet.get("conditions"))
+    poisoned = (
+        kind in ABILITY_CHECK_KINDS
+        and "poisoned" in condition_ids(sheet.get("conditions"))
+        and not sheet_is_petrified(sheet)
+    )
     effect_advantage, effect_disadvantage = active_effect_roll_advantage(
         sheet, kind, key=normalized_ability
     )

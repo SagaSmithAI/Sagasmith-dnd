@@ -5160,6 +5160,19 @@ def test_petrified_condition_grants_resistance_to_every_damage_type_once() -> No
     assert result["adjustment"] == "resistant"
 
 
+def test_petrified_condition_grants_poison_immunity_without_changing_other_resistance() -> None:
+    actor = _actor("target", hp=20)
+    actor["sheet"]["conditions"] = ["petrified"]
+    poison = apply_damage_to_sheet(actor["sheet"], amount=9, damage_type="poison")
+    force = apply_damage_to_sheet(actor["sheet"], amount=9, damage_type="force")
+
+    assert poison["applied_amount"] == 0
+    assert poison["adjustment"] == "immune"
+    assert "condition:petrified" in poison["defense_sources"]
+    assert force["applied_amount"] == 4
+    assert force["adjustment"] == "resistant"
+
+
 def test_negative_damage_is_rejected_instead_of_silently_healing_or_nooping() -> None:
     with pytest.raises(ValueError, match="cannot be negative"):
         apply_damage_to_sheet(_actor("target")["sheet"], amount=-1)

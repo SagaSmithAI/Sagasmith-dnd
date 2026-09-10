@@ -32,6 +32,14 @@ INCAPACITATING_STATE_IDS = frozenset(
 LIVING_INCAPACITATING_STATE_IDS = INCAPACITATING_STATE_IDS - {"dead"}
 DEATH_SAVE_SETTLED_CONDITIONS = frozenset({"dead", "stable"})
 
+# 2014 Petrified grants immunity to poison and disease while preserving any
+# pre-existing effect in the actor ledger. Keep these identifiers centralized so
+# effect application, condition projection, and duration advancement agree.
+POISON_EFFECT_KINDS = frozenset({"poison", "poisoned"})
+DISEASE_EFFECT_KINDS = frozenset({"disease", "nonmagical_disease"})
+POISON_DISEASE_EFFECT_KINDS = POISON_EFFECT_KINDS | DISEASE_EFFECT_KINDS
+POISON_DISEASE_CONDITION_IDS = frozenset({"poison", "poisoned", "disease", "diseased"})
+
 
 def condition_ids(value: Any) -> set[str]:
     """Return canonical condition identifiers from a card or combat projection."""
@@ -42,6 +50,48 @@ def condition_ids(value: Any) -> set[str]:
         for item in values
         if str(item).strip()
     }
+
+
+def normalized_effect_kind(effect: dict[str, Any]) -> str:
+    """Return one effect kind in the same form used by lifecycle clocks."""
+
+    return str(effect.get("kind") or "").strip().casefold().replace("-", "_")
+
+
+def effect_is_poison_or_disease(effect: dict[str, Any]) -> bool:
+    """Return whether an effect carries poison/disease state.
+
+    Timed condition effects that explicitly add ``poisoned`` or ``disease``
+    are classified as well, so legacy caller-constructed cards share the same
+    petrified boundary as named poison/disease kinds.
+    """
+
+    kind = normalized_effect_kind(effect)
+    if kind in POISON_DISEASE_EFFECT_KINDS:
+        return True
+    if kind != "timed_conditions":
+        return False
+    return bool(effect_condition_additions(effect) & POISON_DISEASE_CONDITION_IDS)
+
+
+def sheet_is_petrified(sheet: dict[str, Any]) -> bool:
+    """Return whether 2014 Petrified immunity is currently active."""
+
+    return str(sheet.get("edition") or "2014").strip() == "2014" and (
+        "petrified" in condition_ids(sheet.get("conditions"))
+    )
+
+
+def effect_is_suspended_by_petrification(
+    sheet: dict[str, Any], effect: dict[str, Any]
+) -> bool:
+    """Return whether one active poison/disease effect is mechanically paused."""
+
+    return (
+        bool(effect.get("active", False))
+        and sheet_is_petrified(sheet)
+        and effect_is_poison_or_disease(effect)
+    )
 
 
 def active_effect_condition_additions(sheet: dict[str, Any]) -> set[str]:
@@ -58,7 +108,11 @@ def active_effect_condition_additions(sheet: dict[str, Any]) -> set[str]:
 def effect_condition_additions(effect: dict[str, Any]) -> set[str]:
     """Return canonical conditions explicitly granted by one timed effect."""
 
-    if effect.get("kind") not in {"timed_conditions", "turn_undead"}:
+    if normalized_effect_kind(effect) not in {
+        "timed_conditions",
+        "turn_undead",
+        *POISON_DISEASE_EFFECT_KINDS,
+    }:
         return set()
     result: set[str] = set()
     for change in effect.get("changes", []):
@@ -78,6 +132,8 @@ def apply_effect_conditions(sheet: dict[str, Any], effect: dict[str, Any]) -> No
 
     if not effect.get("active", True):
         return
+    if effect_is_suspended_by_petrification(sheet, effect):
+        raise ValueError("poison and disease effects are blocked while the creature is petrified")
     hp = dict(sheet.setdefault("combat", {}).setdefault("hp", {}))
     for change in effect.get("changes", []):
         if (
@@ -155,6 +211,7 @@ def reconcile_ended_effect_conditions(
 
     if removable:
         sheet["conditions"] = sorted(condition_ids(sheet.get("conditions")) - removable)
+    _restore_petrified_suspended_conditions(sheet)
 
 
 def _effect_converts_excess_hit_points(effect: dict[str, Any]) -> bool:
@@ -172,6 +229,8 @@ def _active_effect_hit_point_maximum(sheet: dict[str, Any]) -> int:
     maximum = max(0, int(hp.get("max", 0) or 0))
     for effect in sheet.get("effects", []):
         if not isinstance(effect, dict) or not effect.get("active", False):
+            continue
+        if effect_is_suspended_by_petrification(sheet, effect):
             continue
         for change in effect.get("changes", []):
             if not isinstance(change, dict) or change.get("path") != "combat.hp.maximum_multiplier":
@@ -203,10 +262,41 @@ def apply_condition_change(
     conditions = condition_ids(sheet.get("conditions"))
     if add:
         immunities = condition_ids(dict(sheet.get("traits") or {}).get("condition_immunities"))
-        if normalized not in immunities:
+        if (
+            normalized not in immunities
+            and not (sheet_is_petrified(sheet) and normalized in POISON_DISEASE_CONDITION_IDS)
+        ):
             conditions.add(normalized)
     elif normalized not in active_effect_condition_additions(sheet):
         conditions.discard(normalized)
+    if normalized == "petrified" and add:
+        conditions.difference_update(_petrified_suspended_condition_ids(sheet))
+    sheet["conditions"] = sorted(conditions)
+    if normalized == "petrified" and not add:
+        _restore_petrified_suspended_conditions(sheet)
+
+
+def _petrified_suspended_condition_ids(sheet: dict[str, Any]) -> set[str]:
+    """Return poison/disease conditions owned by effects that remain active."""
+
+    result: set[str] = set()
+    for effect in sheet.get("effects", []):
+        if not isinstance(effect, dict) or not effect.get("active", False):
+            continue
+        if not effect_is_poison_or_disease(effect):
+            continue
+        result.update(effect_condition_additions(effect) & POISON_DISEASE_CONDITION_IDS)
+    return result
+
+
+def _restore_petrified_suspended_conditions(sheet: dict[str, Any]) -> None:
+    """Re-project surviving poison/disease conditions after Petrified ends."""
+
+    if sheet_is_petrified(sheet):
+        return
+    immunities = condition_ids(dict(sheet.get("traits") or {}).get("condition_immunities"))
+    conditions = condition_ids(sheet.get("conditions"))
+    conditions.update(_petrified_suspended_condition_ids(sheet) - immunities)
     sheet["conditions"] = sorted(conditions)
 
 

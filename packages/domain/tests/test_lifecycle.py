@@ -301,6 +301,37 @@ def test_effect_duration_and_long_rest_recovery_are_card_local() -> None:
     assert result["recovered"]["feature"] == 2
 
 
+def test_petrified_suspends_periodic_and_elapsed_poison_disease_clocks() -> None:
+    sheet = default_character_sheet()
+    sheet["conditions"] = ["petrified", "poisoned"]
+    sheet["effects"] = [
+        {
+            "id": "poison",
+            "name": "Poison",
+            "kind": "poison",
+            "active": True,
+            "duration": {"period": "hour", "remaining": 3},
+            "changes": [{"path": "conditions", "mode": "add", "value": "poisoned"}],
+        },
+        {
+            "id": "disease",
+            "name": "Disease",
+            "kind": "nonmagical_disease",
+            "active": True,
+            "duration": {"period": "minute", "remaining": 5},
+            "changes": [],
+        },
+    ]
+
+    periodic = advance_effect_durations(sheet, period="hour")
+    elapsed = advance_elapsed_effect_durations(periodic["sheet"], elapsed_ticks=60)
+
+    assert periodic["suspended"] == ["poison"]
+    assert periodic["sheet"]["effects"][0]["duration"]["remaining"] == 3
+    assert elapsed["sheet"]["effects"][1]["duration"]["remaining"] == 5
+    assert elapsed["advanced"] == []
+
+
 def test_expiring_timed_conditions_removes_only_conditions_owned_by_the_effect() -> None:
     sheet = default_character_sheet()
     sheet["conditions"] = ["poisoned", "paralyzed", "prone"]
