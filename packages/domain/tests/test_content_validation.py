@@ -136,6 +136,33 @@ def test_selection_validation_is_independent_from_runtime_settlement() -> None:
     ]
 
 
+def test_engine_owned_spell_replacement_does_not_invalidate_locked_contracts() -> None:
+    """An edition-wide rule must extend a locked contract without republishing it.
+
+    `replace_existing` implements the 2014 known-caster replacement rule and is
+    validated against character state rather than the spell card.  Publishing it
+    in the card-bound surface would invalidate every immutable archive locked
+    before the rule existed, so it has to stay engine-owned.
+    """
+
+    artifact = _artifact()
+    artifact["semantic_resolution"] = {
+        "status": "resolved",
+        "mode": "agent_ruling",
+        "first_use_compilation_required": False,
+    }
+    artifact["selection_contract"] = build_selection_contract(artifact, status="ready")
+
+    schema = selection_schema_for_artifact(artifact)
+    assert schema["selection_fields"] == ["method", "source_class"]
+    assert "replace_existing" not in schema["card_binding"]
+    assert selection_contract_errors(artifact) == []
+    assert selection_input_errors(
+        artifact,
+        {"method": "spellbook", "source_class": "wizard", "replace_existing": "old-spell"},
+    ) == []
+
+
 def test_selection_contract_fails_closed_for_missing_or_stale_materialization() -> None:
     artifact = _artifact()
     assert selection_contract_errors(artifact) == [
