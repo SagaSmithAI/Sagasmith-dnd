@@ -42,6 +42,27 @@ from sagasmith_dnd.vocabulary import REST_TYPES
 SHORT_REST_MINIMUM_MINUTES = 60
 LONG_REST_MINIMUM_MINUTES = 480
 TRANCE_LONG_REST_MINUTES = 240
+REST_STRENUOUS_ACTIVITIES = frozenset(
+    {
+        "walking",
+        "walk",
+        "fighting",
+        "fight",
+        "combat",
+        "spellcasting",
+        "spell_casting",
+        "spell casting",
+        "casting",
+        "strenuous",
+        "strenuous_activity",
+        "strenuous activity",
+        "running",
+        "run",
+        "swimming",
+        "climbing",
+        "marching",
+    }
+)
 REST_MINIMUM_MINUTES = {
     "short_rest": SHORT_REST_MINIMUM_MINUTES,
     "long_rest": LONG_REST_MINIMUM_MINUTES,
@@ -259,6 +280,7 @@ def validate_rest_schedule(
     rest_type: str,
     duration_minutes: int,
     allows_trance: bool = False,
+    rest_activity_minutes: dict[str, int] | None = None,
 ) -> dict[str, int]:
     """Derive the mechanical rest allocation from duration and actor features."""
     normalized_type = str(rest_type).strip().lower().replace("-", "_")
@@ -272,6 +294,8 @@ def validate_rest_schedule(
         or duration_minutes < minimum_minutes
     ):
         raise CombatEngineError(f"{normalized_type} requires at least {minimum_minutes} minutes")
+    activities = validate_rest_activity_minutes(rest_activity_minutes)
+    strenuous = _validate_rest_activity_contract(normalized_type, activities)
     if normalized_type == "short_rest":
         return {
             "sleep_minutes": 0,
@@ -279,17 +303,34 @@ def validate_rest_schedule(
             "strenuous_activity_minutes": 0,
             "trance_minutes": 0,
         }
+    activity_total = sum(activities.values())
+    trance_minutes = TRANCE_LONG_REST_MINUTES if allows_trance else 0
+    restable_minutes = duration_minutes - trance_minutes
+    if activity_total > restable_minutes:
+        raise CombatEngineError(
+            "declared rest activity exceeds the available non-sleep rest time"
+        )
+    sleep_minutes = restable_minutes - activity_total
+    light_activity_minutes = activity_total - strenuous
+    if not allows_trance and sleep_minutes < 360:
+        raise CombatEngineError(
+            "a 2014 long rest requires at least 6 hours of sleep"
+        )
+    if light_activity_minutes > 120:
+        raise CombatEngineError(
+            "a 2014 long rest permits at most 2 hours of light activity"
+        )
     if allows_trance:
         return {
-            "sleep_minutes": max(0, duration_minutes - TRANCE_LONG_REST_MINUTES),
-            "light_activity_minutes": 0,
-            "strenuous_activity_minutes": 0,
-            "trance_minutes": TRANCE_LONG_REST_MINUTES,
+            "sleep_minutes": sleep_minutes,
+            "light_activity_minutes": light_activity_minutes,
+            "strenuous_activity_minutes": strenuous,
+            "trance_minutes": trance_minutes,
         }
     return {
-        "sleep_minutes": duration_minutes,
-        "light_activity_minutes": 0,
-        "strenuous_activity_minutes": 0,
+        "sleep_minutes": sleep_minutes,
+        "light_activity_minutes": light_activity_minutes,
+        "strenuous_activity_minutes": strenuous,
         "trance_minutes": 0,
     }
 
@@ -304,6 +345,7 @@ def record_rest_completion(
     expected_character_revision: int = 0,
     song_of_rest_die_sides: int | None = None,
     song_of_rest_used: bool = False,
+    rest_activity_minutes: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Validate game-time rest timing and preserve canonical tick positions."""
     normalized = str(rest_type).strip().lower().replace("-", "_")
@@ -350,6 +392,7 @@ def record_rest_completion(
         rest_type=normalized,
         duration_minutes=duration_ticks // TICKS_PER_MINUTE,
         allows_trance=allows_trance,
+        rest_activity_minutes=rest_activity_minutes,
     )
     validate_rest_eligibility(sheet, rest_type=normalized)
     history = dict(dict(sheet.get("combat") or {}).get("rest_history") or {})
@@ -987,6 +1030,28 @@ def validate_rest_activity_minutes(
     return normalized
 
 
+def _validate_rest_activity_contract(
+    rest_type: str,
+    activities: dict[str, int],
+) -> int:
+    """Apply the 2014 interruption contract to already-normalized activities."""
+    strenuous = sum(
+        minutes
+        for activity, minutes in activities.items()
+        if activity in REST_STRENUOUS_ACTIVITIES
+    )
+    if rest_type == "short_rest" and strenuous:
+        raise CombatEngineError(
+            "a short rest cannot include strenuous activity "
+            f"({strenuous} minutes declared)"
+        )
+    if rest_type == "long_rest" and strenuous >= 60:
+        raise CombatEngineError(
+            "long rest interrupted by at least 1 hour of strenuous activity"
+        )
+    return strenuous
+
+
 def recover_chase_exhaustion(sheet: dict[str, Any]) -> dict[str, Any]:
     """Remove every exhaustion level explicitly recorded as chase fatigue."""
     value = deepcopy(sheet)
@@ -1056,6 +1121,7 @@ def apply_rest(
     if rest_type != "short_rest" and song_of_rest_source_sheet is not None:
         raise CombatEngineError("Song of Rest applies only when finishing a short rest")
     normalized_rest_activities = validate_rest_activity_minutes(rest_activity_minutes)
+    _validate_rest_activity_contract(rest_type, normalized_rest_activities)
     song_of_rest_die_sides = (
         validate_song_of_rest_source(song_of_rest_source_sheet)
         if song_of_rest_source_sheet is not None

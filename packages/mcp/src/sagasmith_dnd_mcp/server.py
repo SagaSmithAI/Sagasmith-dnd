@@ -34586,6 +34586,7 @@ def _create_server(
             derived_rest_timing = validate_rest_schedule(
                 rest_type=normalized_rest_type,
                 duration_minutes=duration_minutes,
+                rest_activity_minutes=rest_activities,
                 allows_trance=(
                     allows_trance_rest(current_member.sheet)
                     if normalized_rest_type == "long_rest"
@@ -34681,6 +34682,7 @@ def _create_server(
                 rest_type=normalized_rest_type,
                 started_elapsed_ticks=started_elapsed_ticks,
                 completed_elapsed_ticks=completed_elapsed_ticks,
+                rest_activity_minutes=member["rest_activity_minutes"],
             )
             if normalized_rest_type == "long_rest" and member["prepared_spell_ids"] is not None:
                 preparation_hydration = hydrate_class_prepared_spell_cards(
@@ -34832,6 +34834,7 @@ def _create_server(
                     rest_type=normalized_rest_type,
                     started_elapsed_ticks=started_elapsed_ticks,
                     completed_elapsed_ticks=completed_elapsed_ticks,
+                    rest_activity_minutes=member["rest_activity_minutes"],
                     hit_dice_spent_count=len(applied.get("hit_dice_rolls") or []),
                     expected_character_revision=current.revision + 1,
                     song_of_rest_die_sides=(

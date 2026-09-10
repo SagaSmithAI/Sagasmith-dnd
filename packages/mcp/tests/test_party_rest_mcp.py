@@ -237,6 +237,65 @@ def test_party_long_rest_advances_once_and_settles_members_atomically(tmp_path: 
     asyncio.run(exercise())
 
 
+def test_party_long_rest_interruption_writes_no_campaign_or_character_state(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Interrupted rest", "edition": "2014", "idempotency_key": "campaign"},
+        )
+        character = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Resting",
+                    "sheet": default_character_sheet(),
+                },
+                "idempotency_key": "character",
+            },
+        )
+        before = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        with pytest.raises(Exception, match="interrupted"):
+            await _call(
+                server,
+                "campaign_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "party_rest",
+                    "payload": {
+                        "members": [
+                            {
+                                "character_id": character["id"],
+                                "expected_revision": character["revision"],
+                                "rest_activity_minutes": {"fighting": 60},
+                            }
+                        ]
+                    },
+                    "expected_revision": before["revision"],
+                    "idempotency_key": "interrupted-rest",
+                },
+            )
+        after = await _call(
+            server,
+            "campaign_query",
+            {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+        )
+        assert after["revision"] == before["revision"]
+        assert after["state"] == before["state"]
+
+    asyncio.run(exercise())
+
+
 def test_party_short_rest_advances_and_settles_every_member_atomically(
     tmp_path: Path,
 ) -> None:
