@@ -207,6 +207,7 @@ from sagasmith_dnd.combat_engine import (
     available_attack_defenses,
     available_reactions,
     can_see,
+    consume_task_help,
     consume_weapon_mastery_attack_effects,
     current_combatant,
     damage_amount_after_reduction,
@@ -13284,6 +13285,13 @@ def _create_server(
                         flags["death_save_due"] = False
                 combatant["condition_sources"] = timed_condition_sources(sheet)
                 combatant["speed_multiplier"] = source_speed_multiplier(sheet)
+                if conditions.intersection(INCAPACITATING_STATE_IDS):
+                    flags = dict(combatant.get("turn_flags") or {})
+                    flags.pop("helping", None)
+                    if flags:
+                        combatant["turn_flags"] = flags
+                    else:
+                        combatant.pop("turn_flags", None)
                 reconcile_tortle_shell_defense_projection(combatant, sheet)
                 current_dodge_transition = reconcile_dodge_lifecycle(combatant)
                 dodge_transition = (
@@ -29442,6 +29450,7 @@ def _create_server(
                 actor,
                 kind=kind,
                 ability=normalized_ability,
+                action=normalized_check_action,
                 dc=dc,
                 encounter=encounter,
                 proficient=proficient,
@@ -29456,6 +29465,7 @@ def _create_server(
                         "actor_id": actor_id,
                         "kind": kind,
                         "ability": ability,
+                        "action": normalized_check_action,
                         "dc": dc,
                     },
                     branch_id=resolved_branch_id,
@@ -29484,6 +29494,12 @@ def _create_server(
                         },
                     )
                 result = {**result, "action": normalized_check_action}
+        if encounter is not None and result.get("helped_by"):
+            encounter = consume_task_help(
+                encounter,
+                actor_id_value=actor_id,
+                helper_id=str(result["helped_by"]),
+            )
         if encounter:
             for update in updates:
                 sync_combatant_conditions(encounter, update.character_id, update.sheet)

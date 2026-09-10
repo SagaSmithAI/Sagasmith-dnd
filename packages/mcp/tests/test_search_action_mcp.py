@@ -159,6 +159,73 @@ def test_2014_search_uses_only_source_allowed_actor_card_skills(
     asyncio.run(exercise())
 
 
+def test_2014_task_help_advantage_is_consumed_by_matching_search(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        server, campaign_id, searcher, started = await _start_combat(tmp_path, "2014")
+        ended_searcher = await _raw_call(
+            server,
+            "combat_end_turn",
+            {
+                "campaign_id": campaign_id,
+                "actor_id": searcher["id"],
+                "expected_revision": started["campaign_revision"],
+                "idempotency_key": "end-searcher",
+            },
+        )
+        observer = next(
+            item
+            for item in started["combat"]["combatants"]
+            if item["actor_id"] != searcher["id"]
+        )
+        helped = await _raw_call(
+            server,
+            "combat_common_action",
+            {
+                "campaign_id": campaign_id,
+                "actor_id": observer["actor_id"],
+                "action": "help",
+                "target_id": searcher["id"],
+                "payload": {"kind": "task", "action": "search", "ability": "perception"},
+                "expected_revision": ended_searcher["campaign_revision"],
+                "idempotency_key": "task-help",
+            },
+        )
+        ended_observer = await _raw_call(
+            server,
+            "combat_end_turn",
+            {
+                "campaign_id": campaign_id,
+                "actor_id": observer["actor_id"],
+                "expected_revision": helped["campaign_revision"],
+                "idempotency_key": "end-observer",
+            },
+        )
+        settled = await _raw_call(
+            server,
+            "combat_check",
+            {
+                "campaign_id": campaign_id,
+                "actor_id": searcher["id"],
+                "kind": "check",
+                "ability": "perception",
+                "action": "search",
+                "dc": 15,
+                "expected_revision": ended_observer["campaign_revision"],
+                "idempotency_key": "helped-search",
+            },
+        )
+        assert settled["result"]["helped_by"] == observer["actor_id"]
+        assert settled["result"]["roll_mode"] == "advantage"
+        helper_state = next(
+            item
+            for item in settled["combat"]["combatants"]
+            if item["actor_id"] == observer["actor_id"]
+        )
+        assert "helping" not in helper_state.get("turn_flags", {})
+
+    asyncio.run(exercise())
+
+
 @pytest.mark.parametrize("ability", ["wisdom", "survival"])
 def test_2024_search_keeps_its_distinct_wisdom_contract(
     tmp_path: Path, ability: str
