@@ -58,6 +58,7 @@ from sagasmith_dnd.combat_engine import (
     resolve_common_action,
     resolve_death_save_to_sheet,
     resolve_divine_spark_to_sheet,
+    resolve_fall_to_sheet,
     resolve_hypnotic_pattern_target,
     resolve_preserve_life_to_sheets,
     resolve_readied_spell_window,
@@ -106,6 +107,69 @@ def test_damage_reduction_uses_one_round_down_contract() -> None:
     assert damage_amount_after_reduction(7, "none") == 0
     with pytest.raises(CombatEngineError, match="full, half, or none"):
         damage_amount_after_reduction(7, "quarter")
+
+
+def test_2014_falling_damage_is_capped_and_knocks_prone() -> None:
+    actor = _actor("falling", hp=200)
+
+    result = resolve_fall_to_sheet(
+        actor["sheet"],
+        distance_ft=250,
+        ruleset="2014",
+        rng=_SequenceRng(*([6] * 20)),
+    )
+
+    assert result["distance_ft"] == 250
+    assert result["dice_count"] == 20
+    assert result["damage_roll"]["expression"] == "20d6"
+    assert result["damage_roll"]["rolls"] == (6,) * 20
+    assert result["damage"]["applied_amount"] == 120
+    assert result["damage"]["after_hp"] == 80
+    assert result["prone_added"] is True
+    assert result["knocked_prone"] is True
+
+
+def test_2014_falling_rounds_down_and_respects_bludgeoning_defenses() -> None:
+    short = _actor("short", hp=20)
+    short_result = resolve_fall_to_sheet(
+        short["sheet"], distance_ft=9, ruleset="2014", rng=_SequenceRng()
+    )
+    assert short_result["damage_roll"] is None
+    assert short_result["damage"] is None
+    assert short_result["prone_added"] is False
+    assert short_result["sheet"]["combat"]["hp"]["value"] == 20
+
+    resistant = _actor("resistant", hp=20)
+    resistant["sheet"]["traits"]["resistances"] = ["bludgeoning"]
+    resistant_result = resolve_fall_to_sheet(
+        resistant["sheet"],
+        distance_ft=10,
+        ruleset="2014",
+        rng=_SequenceRng(5),
+    )
+    assert resistant_result["damage"]["input_amount"] == 5
+    assert resistant_result["damage"]["applied_amount"] == 2
+    assert resistant_result["prone_added"] is True
+
+    immune = _actor("immune", hp=20)
+    immune["sheet"]["traits"]["immunities"] = ["bludgeoning"]
+    immune_result = resolve_fall_to_sheet(
+        immune["sheet"],
+        distance_ft=10,
+        ruleset="2014",
+        rng=_SequenceRng(6),
+    )
+    assert immune_result["damage"]["applied_amount"] == 0
+    assert immune_result["prone_added"] is False
+    assert immune_result["knocked_prone"] is False
+
+
+def test_falling_is_edition_bound_and_rejects_invalid_distance() -> None:
+    actor = _actor("falling")
+    with pytest.raises(CombatEngineError, match="non-negative integer"):
+        resolve_fall_to_sheet(actor["sheet"], distance_ft=-1, ruleset="2014")
+    with pytest.raises(CombatEngineError, match="2014 ruleset"):
+        resolve_fall_to_sheet(actor["sheet"], distance_ft=10, ruleset="2024")
 
 
 def test_generic_save_damage_rolls_and_applies_half_damage_atomically() -> None:

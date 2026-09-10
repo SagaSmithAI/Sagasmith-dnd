@@ -4921,6 +4921,73 @@ def apply_damage_parts_to_sheet(
     }
 
 
+def resolve_fall_to_sheet(
+    sheet: dict[str, Any],
+    *,
+    distance_ft: int,
+    source: str = "falling",
+    ruleset: str | None = None,
+    death_saves: bool = True,
+    rng: Any = None,
+) -> dict[str, Any]:
+    """Resolve the bounded 2014 Falling rule for one actor.
+
+    The source rule derives one d6 per completed ten feet, caps the packet at
+    20d6, and makes the creature Prone only when the fall actually deals
+    damage. Damage is routed through the normal typed-damage resolver so
+    temporary hit points and bludgeoning resistance or immunity retain their
+    normal ordering.
+    """
+
+    if isinstance(distance_ft, bool) or not isinstance(distance_ft, int) or distance_ft < 0:
+        raise CombatEngineError("fall distance must be a non-negative integer number of feet")
+    normalized_ruleset = _normalize_ruleset(ruleset or sheet.get("edition"))
+    if normalized_ruleset != "2014":
+        raise CombatEngineError("falling settlement is only available for the 2014 ruleset")
+    if not str(source or "").strip():
+        raise CombatEngineError("fall source is required")
+
+    dice_count = min(distance_ft // 10, 20)
+    before_conditions = condition_ids(sheet.get("conditions"))
+    if dice_count == 0:
+        return {
+            "sheet": deepcopy(sheet),
+            "distance_ft": distance_ft,
+            "dice_count": 0,
+            "damage_roll": None,
+            "damage": None,
+            "prone_added": False,
+            "knocked_prone": False,
+        }
+
+    damage_roll = asdict(roll(f"{dice_count}d6", rng=rng))
+    applied = apply_damage_to_sheet(
+        sheet,
+        amount=int(damage_roll["total"]),
+        damage_type="bludgeoning",
+        source=str(source),
+        ruleset=normalized_ruleset,
+        death_saves=death_saves,
+    )
+    landed_sheet = applied["sheet"]
+    took_damage = int(applied.get("applied_amount", 0) or 0) > 0
+    prone_added = False
+    if took_damage:
+        apply_condition_change(landed_sheet, condition_id="prone", add=True)
+        prone_added = "prone" not in before_conditions and "prone" in condition_ids(
+            landed_sheet.get("conditions")
+        )
+    return {
+        "sheet": landed_sheet,
+        "distance_ft": distance_ft,
+        "dice_count": dice_count,
+        "damage_roll": damage_roll,
+        "damage": {key: value for key, value in applied.items() if key != "sheet"},
+        "prone_added": prone_added,
+        "knocked_prone": "prone" in condition_ids(landed_sheet.get("conditions")),
+    }
+
+
 def _validated_standard_source_trait(
     sheet: dict[str, Any],
     kind: str,

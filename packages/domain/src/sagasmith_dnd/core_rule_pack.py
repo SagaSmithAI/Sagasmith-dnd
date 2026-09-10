@@ -615,6 +615,13 @@ BOUNDARIES = (
         "bundled:srd/damage-and-healing",
     ),
     CoreBoundary(
+        "dnd5e.core.movement.falling",
+        ("2014",),
+        "combat_engine.resolve_fall_to_sheet",
+        ("tests/test_combat_engine.py::test_2014_falling_damage_is_capped_and_knocks_prone",),
+        "bundled:srd2014/06_Gameplay/Adventuring.md#falling",
+    ),
+    CoreBoundary(
         "dnd5e.core.damage.relentless_endurance",
         ("2014",),
         "combat_engine._apply_adjusted_damage|apply_hit_point_loss_to_sheet",
