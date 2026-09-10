@@ -28,6 +28,7 @@ from sagasmith_dnd.combat_engine import (
     available_attack_defenses,
     available_reactions,
     can_see,
+    consume_task_help,
     consume_weapon_mastery_attack_effects,
     current_combatant,
     damage_amount_after_reduction,
@@ -4510,6 +4511,89 @@ def test_help_grants_and_then_consumes_attack_advantage() -> None:
     plan = preflight_attack(attacker, target, action={"weapon_id": "sword"}, encounter=encounter)
     assert plan["helped_by"] == "helper"
     assert "help" in plan["advantage_sources"]
+
+
+def test_attack_help_is_bound_to_declared_enemy_target() -> None:
+    helper = _actor("helper")
+    attacker = _actor("attacker")
+    target = _actor("target")
+    other = _actor("other")
+    for actor, initiative in ((helper, 20), (attacker, 15), (target, 10), (other, 5)):
+        actor["initiative"] = initiative
+        actor["tie_breaker"] = 0
+        actor["position"] = {"x": 0, "y": 0}
+    attacker["position"] = {"x": 2, "y": 0}
+    target["position"] = {"x": 1, "y": 0}
+    other["position"] = {"x": 1, "y": 1}
+    attacker["derived"]["inventory"]["weapon_attacks"] = [
+        {"item_id": "sword", "attack_bonus": 5, "damage_expression": "1", "damage_type": "slashing"}
+    ]
+    encounter = _grid_encounter([helper, attacker, target, other])
+    helped = resolve_common_action(
+        encounter,
+        actor_id_value="helper",
+        action="help",
+        target_id="attacker",
+        payload={"kind": "attack", "target_id": "target"},
+    )
+    helped = end_turn(helped, actor_id_value="helper")
+    wrong = preflight_attack(
+        attacker,
+        other,
+        action={"weapon_id": "sword"},
+        encounter=helped,
+    )
+    assert wrong["helped_by"] is None
+    right = preflight_attack(
+        attacker,
+        target,
+        action={"weapon_id": "sword"},
+        encounter=helped,
+    )
+    assert right["helped_by"] == "helper"
+    assert right["help_kind"] == "attack"
+
+
+def test_task_help_grants_and_consumes_matching_check() -> None:
+    helper = _actor("helper")
+    aided = _actor("aided")
+    helper["initiative"] = 20
+    aided["initiative"] = 10
+    helper["position"] = {"x": 0, "y": 0}
+    aided["position"] = {"x": 1, "y": 0}
+    encounter = _grid_encounter([helper, aided])
+    helped = resolve_common_action(
+        encounter,
+        actor_id_value="helper",
+        action="help",
+        target_id="aided",
+        payload={"kind": "task", "action": "search", "ability": "strength"},
+    )
+    helped = end_turn(helped, actor_id_value="helper")
+    check = resolve_actor_check(
+        aided,
+        kind="ability",
+        ability="strength",
+        action="search",
+        dc=10,
+        encounter=helped,
+        rng=_SequenceRng(2, 18),
+    )
+    assert check["helped_by"] == "helper"
+    assert check["roll_mode"] == "advantage"
+    consumed = consume_task_help(helped, actor_id_value="aided", helper_id="helper")
+    helper_state = next(item for item in consumed["combatants"] if item["actor_id"] == "helper")
+    assert "helping" not in helper_state.get("turn_flags", {})
+    mismatch = resolve_actor_check(
+        aided,
+        kind="ability",
+        ability="dexterity",
+        action="search",
+        dc=10,
+        encounter=helped,
+        rng=_SequenceRng(12),
+    )
+    assert mismatch.get("helped_by") is None
 
 
 def test_next_attack_advantage_uses_active_target_effect() -> None:

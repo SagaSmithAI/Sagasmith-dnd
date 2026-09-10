@@ -3282,6 +3282,7 @@ def preflight_attack(
         context["disadvantage"] = True
         context.setdefault("disadvantage_sources", []).append("target_dodging")
     helped_by = None
+    help_kind = None
     next_attack_advantage_effect_id = None
     next_attack_disadvantage_effect_id = None
     if encounter is not None:
@@ -3294,21 +3295,34 @@ def preflight_attack(
         for helper in encounter.get("combatants", []):
             helping = dict(helper.get("turn_flags") or {}).get("helping")
             helper_position = _position(helper.get("position"))
+            helping_kind = str(helping.get("kind") or "") if isinstance(helping, dict) else ""
+            structured_attack_help = (
+                helping_kind == "attack"
+                and str(helping.get("attack_target_id") or "") == actor_id(target)
+            )
+            legacy_help = helping_kind in {"", "legacy"}
             if (
                 isinstance(helping, dict)
                 and helping.get("target_id") == actor_id(attacker)
                 and (
-                    str(helper.get("actor_id") or "") in agent_helper_ids
-                    if agent_helper_ids is not None
-                    else target_position is not None
-                    and helper_position is not None
-                    and _grid_distance(helper_position, target_position) <= 5
+                    structured_attack_help
+                    or (
+                        legacy_help
+                        and (
+                            str(helper.get("actor_id") or "") in agent_helper_ids
+                            if agent_helper_ids is not None
+                            else target_position is not None
+                            and helper_position is not None
+                            and _grid_distance(helper_position, target_position) <= 5
+                        )
+                    )
                 )
                 and not _condition_set(helper.get("conditions")) & INCAPACITATING_STATE_IDS
             ):
                 context["advantage"] = True
                 context.setdefault("advantage_sources", []).append("help")
                 helped_by = str(helper.get("actor_id"))
+                help_kind = "attack" if structured_attack_help else "legacy"
                 break
         for effect in encounter.get("ongoing_effects", []):
             if (
@@ -3478,6 +3492,7 @@ def preflight_attack(
         "attacker_was_hidden": bool(attacker.get("hidden", False)),
         "target_can_see_attacker": target_can_see_attacker,
         "helped_by": helped_by,
+        "help_kind": help_kind,
         "next_attack_advantage_effect_id": next_attack_advantage_effect_id,
         "next_attack_disadvantage_effect_id": next_attack_disadvantage_effect_id,
         "sneak_attack": sneak_attack,
@@ -6468,7 +6483,75 @@ def resolve_common_action(
     elif action == "help":
         if not target_id:
             raise CombatEngineError("help requires a target actor")
-        flags["helping"] = {"target_id": target_id, "payload": deepcopy(payload or {})}
+        if str(target_id) == str(actor_id_value):
+            raise CombatEngineError("Help requires another aided actor")
+        aided = next(
+            (
+                item
+                for item in value.get("combatants", [])
+                if str(item.get("actor_id") or "") == str(target_id)
+            ),
+            None,
+        )
+        if aided is None:
+            raise CombatEngineError("Help requires the aided actor to be in the encounter")
+        declaration = _normalize_help_declaration(payload)
+        helping = {
+            "target_id": str(target_id),
+            "kind": declaration["kind"],
+            "payload": deepcopy(declaration["payload"]),
+            "declared_turn_token": _combat_turn_token(value),
+        }
+        if declaration["kind"] == "attack":
+            attack_target_id = str(declaration["attack_target_id"])
+            if attack_target_id in {str(actor_id_value), str(target_id)}:
+                raise CombatEngineError("attack Help requires a distinct enemy target")
+            attack_target = next(
+                (
+                    item
+                    for item in value.get("combatants", [])
+                    if str(item.get("actor_id") or "") == attack_target_id
+                ),
+                None,
+            )
+            if attack_target is None:
+                raise CombatEngineError("attack Help target must be in the encounter")
+            if str(value.get("positioning_mode") or "grid") == "grid":
+                helper_position = _position(acting.get("position"))
+                target_position = _position(attack_target.get("position"))
+                if helper_position is None or target_position is None:
+                    raise CombatEngineError("attack Help requires recorded grid positions")
+                if _grid_distance(helper_position, target_position) > 5:
+                    raise CombatEngineError(
+                        "attack Help requires the enemy target to be within 5 feet of the helper"
+                    )
+            else:
+                spatial_facts = declaration.get("spatial_facts")
+                if not isinstance(spatial_facts, dict):
+                    raise NeedsRulingError(
+                        "agent-positioned attack Help requires an Agent spatial decision",
+                        missing=("help.spatial_facts",),
+                        ruling_kind="agent_dm_adjudication",
+                    )
+                within = spatial_facts.get("target_within_5_ft")
+                distance = spatial_facts.get("distance_ft")
+                valid_distance = (
+                    isinstance(distance, (int, float))
+                    and not isinstance(distance, bool)
+                    and 0 <= float(distance) <= 5
+                )
+                if within is not True and not valid_distance:
+                    raise CombatEngineError(
+                        "attack Help spatial facts must confirm the enemy is within 5 feet"
+                    )
+            helping["attack_target_id"] = attack_target_id
+            if declaration.get("spatial_facts") is not None:
+                helping["spatial_facts"] = deepcopy(declaration["spatial_facts"])
+        elif declaration["kind"] == "task":
+            for field in ("task", "action", "ability"):
+                if declaration.get(field):
+                    helping[field] = declaration[field]
+        flags["helping"] = helping
     elif action == "stabilize":
         if not target_id:
             raise CombatEngineError("stabilize requires a target actor")
@@ -7758,6 +7841,7 @@ def resolve_actor_check(
     *,
     kind: str,
     ability: str,
+    action: str | None = None,
     dc: int,
     encounter: dict[str, Any] | None = None,
     proficient: bool = False,
@@ -8020,9 +8104,28 @@ def resolve_actor_check(
     if jack_of_all_trades_bonus:
         boundary_ids.append(_JACK_OF_ALL_TRADES_BOUNDARY_ID)
 
+    normalized_action = str(action or "").strip().casefold().replace("-", "_")
+    if not normalized_action and rules is not None:
+        normalized_action = str(dict(rules.facts).get("action") or "").strip().casefold()
+    helped_by = None
+    if kind in ABILITY_CHECK_KINDS:
+        helped_by = _task_help_for_check(
+            encounter,
+            actor_id_value=actor_id(actor),
+            action=normalized_action,
+            ability=normalized_ability,
+        )
+        if helped_by:
+            advantage = True
+            boundary_ids.append("dnd5e.core.check.help")
+
     def with_rule_receipts(result: dict[str, Any]) -> dict[str, Any]:
         result["effect_roll_bonus"] = effect_roll_bonus
         result["equipment_disadvantage"] = equipment_disadvantage
+        if helped_by:
+            result["helped_by"] = helped_by
+            result["advantage_source"] = "help"
+            result["advantage_sources"] = ["help"]
         result["rule_receipts"] = [
             *core_receipts(rules, boundary_ids, "check.resolve"),
             *extension.receipts,
@@ -8846,6 +8949,153 @@ def _position(value: Any) -> tuple[float, float] | None:
 def _grid_distance(left: tuple[float, float], right: tuple[float, float]) -> int:
     """Use the D&D diagonal-grid convention: one square is five feet."""
     return int(max(abs(left[0] - right[0]), abs(left[1] - right[1])) * 5)
+
+
+def _normalize_help_declaration(payload: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalize the two 2014 Help declarations without guessing narrative facts.
+
+    ``target_id`` on the common-action request is always the aided ally.  An
+    attack declaration carries a second target in its payload; a task
+    declaration carries the check context that it may assist.  Empty payloads
+    are retained as a compatibility form for older encounter snapshots.
+    """
+
+    raw = deepcopy(payload or {})
+    if not isinstance(raw, dict):
+        raise CombatEngineError("help payload must be an object")
+    if not raw:
+        return {"kind": "legacy", "payload": {}}
+    kind = str(raw.get("kind") or raw.get("mode") or "").strip().casefold().replace("-", "_")
+    kind = {
+        "attack_help": "attack",
+        "ability_check": "task",
+        "task_help": "task",
+    }.get(kind, kind)
+    if kind not in {"attack", "task"}:
+        raise CombatEngineError("help payload requires kind=attack or kind=task")
+    if kind == "attack":
+        target_values = [
+            raw.get(field)
+            for field in ("attack_target_id", "enemy_target_id", "target_id")
+            if raw.get(field) is not None
+        ]
+        if (
+            len(target_values) != 1
+            or not isinstance(target_values[0], str)
+            or not target_values[0].strip()
+        ):
+            raise CombatEngineError(
+                "attack Help requires exactly one attack_target_id (the enemy target)"
+            )
+        return {
+            "kind": "attack",
+            "attack_target_id": target_values[0].strip(),
+            "spatial_facts": deepcopy(raw.get("spatial_facts")),
+            "payload": raw,
+        }
+    task_value = raw.get("task")
+    task_text = ""
+    task_action = raw.get("action")
+    task_ability = raw.get("ability")
+    if isinstance(task_value, dict):
+        task_action = task_value.get("action", task_action)
+        task_ability = task_value.get("ability", task_ability)
+        task_text = str(task_value.get("name") or task_value.get("task") or "").strip()
+    elif task_value is not None:
+        task_text = str(task_value).strip()
+    normalized_action = (
+        str(task_action).strip().casefold().replace("-", "_") if task_action is not None else ""
+    )
+    normalized_ability = (
+        str(task_ability).strip().casefold().replace(" ", "_")
+        if task_ability is not None
+        else ""
+    )
+    if not normalized_action and not normalized_ability and not task_text:
+        raise CombatEngineError("task Help requires a task, action, or ability")
+    return {
+        "kind": "task",
+        "task": task_text,
+        "action": normalized_action,
+        "ability": normalized_ability,
+        "payload": raw,
+    }
+
+
+def _task_help_matches(
+    helping: dict[str, Any], *, action: str | None, ability: str
+) -> bool:
+    """Return whether one recorded task Help applies to this check."""
+
+    task_action = str(helping.get("action") or "").strip().casefold().replace("-", "_")
+    task_ability = str(helping.get("ability") or "").strip().casefold().replace(" ", "_")
+    task_text = str(helping.get("task") or "").strip().casefold().replace(" ", "_")
+    normalized_action = str(action or "").strip().casefold().replace("-", "_")
+    normalized_ability = str(ability or "").strip().casefold().replace(" ", "_")
+    if task_action and task_action != normalized_action:
+        return False
+    if task_ability and _long_ability_name(task_ability) != _long_ability_name(normalized_ability):
+        return False
+    if task_text and task_text not in {normalized_action, normalized_ability}:
+        return False
+    return bool(task_action or task_ability or task_text)
+
+
+def _task_help_for_check(
+    encounter: dict[str, Any] | None,
+    *,
+    actor_id_value: str,
+    action: str | None,
+    ability: str,
+) -> str | None:
+    """Find the first conscious helper whose task declaration matches."""
+
+    if encounter is None:
+        return None
+    for helper in encounter.get("combatants", []):
+        helping = dict(helper.get("turn_flags") or {}).get("helping")
+        if (
+            not isinstance(helping, dict)
+            or str(helping.get("kind") or "") != "task"
+            or str(helping.get("target_id") or "") != str(actor_id_value)
+            or _condition_set(helper.get("conditions")) & INCAPACITATING_STATE_IDS
+            or not _task_help_matches(helping, action=action, ability=ability)
+        ):
+            continue
+        return str(helper.get("actor_id") or "")
+    return None
+
+
+def consume_task_help(
+    encounter: dict[str, Any], *, actor_id_value: str, helper_id: str
+) -> dict[str, Any]:
+    """Consume one matched task Help declaration on a copy of an encounter."""
+
+    value = deepcopy(encounter)
+    helper = next(
+        (
+            item
+            for item in value.get("combatants", [])
+            if str(item.get("actor_id") or "") == str(helper_id)
+        ),
+        None,
+    )
+    if helper is None:
+        raise CombatEngineError("the recorded Help helper is not in the encounter")
+    helping = dict(helper.get("turn_flags") or {}).get("helping")
+    if (
+        not isinstance(helping, dict)
+        or str(helping.get("kind") or "") != "task"
+        or str(helping.get("target_id") or "") != str(actor_id_value)
+    ):
+        raise CombatEngineError("the recorded task Help declaration no longer matches")
+    flags = dict(helper.get("turn_flags") or {})
+    flags.pop("helping", None)
+    if flags:
+        helper["turn_flags"] = flags
+    else:
+        helper.pop("turn_flags", None)
+    return value
 
 
 def _disengaged(combatant: dict[str, Any]) -> bool:

@@ -565,8 +565,15 @@ BOUNDARIES = (
     CoreBoundary(
         "dnd5e.core.attack.help",
         ("2014", "2024"),
-        "combat_engine.preflight_attack",
+        "combat_engine.resolve_common_action|combat_engine.preflight_attack",
         ("tests/test_combat_engine.py::test_help_grants_and_then_consumes_attack_advantage",),
+        "bundled:srd/help",
+    ),
+    CoreBoundary(
+        "dnd5e.core.check.help",
+        ("2014", "2024"),
+        "combat_engine.resolve_common_action|combat_engine.resolve_actor_check",
+        ("tests/test_combat_engine.py::test_task_help_grants_and_consumes_matching_check",),
         "bundled:srd/help",
     ),
     CoreBoundary(
