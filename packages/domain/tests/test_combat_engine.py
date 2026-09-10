@@ -356,6 +356,176 @@ def _actor(identifier: str, *, hp: int = 12, ac: int = 10) -> dict:
     }
 
 
+def _finesse_actor(identifier: str, *, strength: int, dexterity: int) -> dict:
+    actor = _actor(identifier)
+    sheet = actor["sheet"]
+    sheet["abilities"]["strength"]["score"] = strength
+    sheet["abilities"]["dexterity"]["score"] = dexterity
+    sheet["traits"]["proficiencies"]["weapons"] = ["simple weapons"]
+    sheet, weapon_id = add_inventory_item(
+        sheet,
+        {
+            "id": "finesse-dagger",
+            "name": "Finesse dagger",
+            "kind": "weapon",
+            "mechanics": {
+                "category": "simple",
+                "attack_type": "melee",
+                "attack_ability": "strength",
+                "damage_formula": "1d4",
+                "damage_type": "piercing",
+                "properties": ["finesse", "light"],
+                "magic_bonus": 2,
+            },
+        },
+    )
+    actor["sheet"] = equip_inventory_item(sheet, weapon_id, "main_hand")
+    actor["derived"] = derive_character_sheet(actor["sheet"])
+    return actor
+
+
+@pytest.mark.parametrize(
+    "strength,dexterity,default_ability,explicit_ability",
+    [
+        (18, 12, "strength", "dexterity"),
+        (12, 18, "dexterity", "strength"),
+        (14, 14, "strength", "dexterity"),
+    ],
+)
+def test_finesse_attack_declares_either_ability_and_uses_selected_modifier(
+    strength: int,
+    dexterity: int,
+    default_ability: str,
+    explicit_ability: str,
+) -> None:
+    attacker = _finesse_actor("attacker", strength=strength, dexterity=dexterity)
+    target = _actor("target", ac=30)
+    derived_attack = attacker["derived"]["inventory"]["weapon_attacks"][0]
+
+    assert derived_attack["attack_ability"] == default_ability
+    assert derived_attack["attack_ability_options"] == ["strength", "dexterity"]
+
+    plan = preflight_attack(
+        attacker,
+        target,
+        action={"weapon_id": "finesse-dagger", "attack_ability": explicit_ability},
+    )
+    expected_modifier = (strength if explicit_ability == "strength" else dexterity) // 2 - 5
+    assert plan["attack_ability"] == explicit_ability
+    assert plan["attack_ability_options"] == ["strength", "dexterity"]
+    assert plan["attack_ability_modifier"] == expected_modifier
+    assert plan["attack_bonus"] == expected_modifier + 2 + 2
+    assert plan["damage_expression"] == (
+        f"1d4 {'+' if expected_modifier + 2 >= 0 else '-'} {abs(expected_modifier + 2)}"
+    )
+
+
+def test_finesse_selected_ability_survives_transient_score_override() -> None:
+    attacker = _finesse_actor("attacker", strength=10, dexterity=18)
+    attacker["sheet"], _ = add_effect(
+        attacker["sheet"],
+        {
+            "id": "temporary-strength",
+            "name": "Temporary Strength",
+            "kind": "feature",
+            "changes": [
+                {"path": "abilities.strength.score", "mode": "override", "value": 20}
+            ],
+        },
+    )
+    attacker["derived"] = derive_character_sheet(attacker["sheet"])
+    target = _actor("target", ac=30)
+
+    plan = preflight_attack(
+        attacker,
+        target,
+        action={"weapon_id": "finesse-dagger", "attack_ability": "dexterity"},
+    )
+
+    assert attacker["derived"]["ability_modifiers"]["strength"] == 5
+    assert plan["attack_ability"] == "dexterity"
+    assert plan["attack_ability_modifier"] == 4
+    assert plan["damage_expression"] == "1d4 + 6"
+
+
+def test_finesse_critical_damage_settlement_uses_selected_modifier() -> None:
+    attacker = _finesse_actor("attacker", strength=18, dexterity=8)
+    target = _actor("target", hp=12, ac=10)
+    plan = preflight_attack(
+        attacker,
+        target,
+        action={"weapon_id": "finesse-dagger", "attack_ability": "dexterity"},
+    )
+    attack = roll_attack_action(plan=plan, rng=_SequenceRng(20, 4, 4))
+    _, updated_target, result = resolve_attack_damage(
+        attacker,
+        target,
+        plan=plan,
+        attack=attack,
+        rng=_SequenceRng(4, 4),
+    )
+
+    assert result["attack_ability"] == "dexterity"
+    assert result["attack_ability_modifier"] == -1
+    assert result["damage"]["rolled_expression"] == "2d4 + 1"
+    assert updated_target["sheet"]["combat"]["hp"]["value"] == 3
+
+
+def test_finesse_ability_rejects_illegal_non_finesse_choices() -> None:
+    attacker = _actor("attacker")
+    target = _actor("target")
+    sheet, melee_id = add_inventory_item(
+        attacker["sheet"],
+        {
+            "id": "ordinary-club",
+            "name": "Ordinary club",
+            "kind": "weapon",
+            "mechanics": {
+                "category": "simple",
+                "attack_type": "melee",
+                "attack_ability": "strength",
+                "damage_formula": "1d4",
+                "damage_type": "bludgeoning",
+            },
+        },
+    )
+    attacker["sheet"] = equip_inventory_item(sheet, melee_id, "main_hand")
+    attacker["derived"] = derive_character_sheet(attacker["sheet"])
+    with pytest.raises(CombatEngineError, match="attack_ability must be one of"):
+        preflight_attack(
+            attacker,
+            target,
+            action={"weapon_id": melee_id, "attack_ability": "dexterity"},
+        )
+
+    ranged_sheet, ranged_id = add_inventory_item(
+        default_character_sheet(),
+        {
+            "id": "ordinary-bow",
+            "name": "Ordinary bow",
+            "kind": "weapon",
+            "mechanics": {
+                "category": "simple",
+                "attack_type": "ranged",
+                "attack_ability": "dexterity",
+                "damage_formula": "1d6",
+                "damage_type": "piercing",
+                "normal_range_ft": 80,
+                "long_range_ft": 320,
+            },
+        },
+    )
+    ranged = _actor("ranged")
+    ranged["sheet"] = equip_inventory_item(ranged_sheet, ranged_id, "main_hand")
+    ranged["derived"] = derive_character_sheet(ranged["sheet"])
+    with pytest.raises(CombatEngineError, match="attack_ability must be one of"):
+        preflight_attack(
+            ranged,
+            target,
+            action={"weapon_id": ranged_id, "attack_ability": "strength"},
+        )
+
+
 def _steel_defender(identifier: str, owner_id: str) -> dict:
     actor = _actor(identifier)
     actor["dependent_turn"] = {

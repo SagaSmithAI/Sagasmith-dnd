@@ -225,6 +225,7 @@ def test_weapon_attacks_derive_actor_proficiency_and_finesse_ability() -> None:
 
     finesse_attack = derive_character_sheet(sheet)["inventory"]["weapon_attacks"][0]
     assert finesse_attack["attack_ability"] == "dexterity"
+    assert finesse_attack["attack_ability_options"] == ["strength", "dexterity"]
     assert finesse_attack["attack_bonus"] == 5
     assert finesse_attack["damage_expression"] == "1d4 + 3"
 

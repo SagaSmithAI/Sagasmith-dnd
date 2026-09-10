@@ -4651,10 +4651,12 @@ def _weapon_attacks(
         magic_bonus = mechanics["magic_bonus"] if magic_properties_active else 0
         ability = mechanics["attack_ability"]
         property_keys = {str(value).strip().casefold() for value in mechanics["properties"]}
+        attack_ability_options = [ability]
         if "finesse" in property_keys and ability in {"strength", "dexterity"}:
+            attack_ability_options = ["strength", "dexterity"]
             ability = max(
-                ("strength", "dexterity"),
-                key=lambda candidate: ability_modifiers[candidate],
+                attack_ability_options,
+                key=lambda candidate: ability_modifiers.get(candidate, 0),
             )
         # The current item schema represents magic weapons through their
         # active magic mechanics. Battle Ready changes only those attacks;
@@ -4668,6 +4670,7 @@ def _weapon_attacks(
         )
         if battle_ready and magic_weapon and ability in {"strength", "dexterity"}:
             ability = "intelligence"
+            attack_ability_options = [ability]
         modifier = (
             ability_modifiers.get(spell_ability or "", 0)
             if ability == "spell"
@@ -4705,10 +4708,13 @@ def _weapon_attacks(
                     else reach_ft
                 ),
                 "attack_ability": ability,
+                "attack_ability_options": list(attack_ability_options),
                 "proficient": proficient,
                 "attack_bonus": attack_bonus,
+                "attack_bonus_override": mechanics.get("attack_bonus_override"),
                 "damage_formula": damage_formula,
                 "damage_bonus": damage_bonus,
+                "damage_bonus_override": mechanics.get("damage_bonus_override"),
                 "damage_expression": damage_expression,
                 "damage_type": mechanics["damage_type"],
                 "additional_damage": [
