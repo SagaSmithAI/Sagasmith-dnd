@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from copy import deepcopy
 from dataclasses import asdict, dataclass
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 from uuid import uuid4
 
 from sagasmith_dnd import steel_defender as _steel_defender
@@ -7095,6 +7095,176 @@ def settle_core_activity_effect(
     value["log"] = [
         *list(value.get("log") or []),
         {"type": "action_surge", "actor_id": actor_id_value, "effect": effect},
+    ][-100:]
+    return value, effect
+
+
+def settle_hide(
+    encounter: dict[str, Any],
+    *,
+    actor: dict[str, Any],
+    actor_id_value: str,
+    observer_ids: Iterable[str],
+    observer_passive_perceptions: Mapping[str, int],
+    can_hide: bool,
+    ruling_reason: str,
+    rules: ResolutionContext | None = None,
+    rng: Any = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Resolve a paid Cunning Action Hide declaration.
+
+    The activity payment is deliberately not performed here.  The MCP layer
+    pays the bonus action first, then an Agent-as-DM ruling supplies the scene
+    fact that hiding is possible and the explicit creatures whose passive
+    Perception can detect the attempt.  This continuation consumes the
+    declaration once, rolls Dexterity (Stealth) once, and records the
+    resulting observer visibility in the encounter.
+    """
+
+    value = deepcopy(encounter)
+    if not isinstance(actor, dict) or str(
+        actor.get("id") or actor.get("actor_id") or ""
+    ) != actor_id_value:
+        raise CombatEngineError("Hide settlement actor snapshot does not match actor_id")
+    reason = " ".join(str(ruling_reason or "").split())
+    if not reason or len(reason) > 500:
+        raise CombatEngineError("Hide settlement requires a bounded ruling reason")
+    if not isinstance(can_hide, bool):
+        raise CombatEngineError("Hide settlement can_hide must be boolean")
+    current = current_combatant(value)
+    if current is None or str(current.get("actor_id") or "") != actor_id_value:
+        raise CombatEngineError("Hide settlement can be made only on this actor's turn")
+    combatant = next(
+        (
+            item
+            for item in value.get("combatants", [])
+            if str(item.get("actor_id") or "") == actor_id_value
+        ),
+        None,
+    )
+    if combatant is None:
+        raise CombatEngineError("Hide settlement actor is not a combatant")
+    flags = dict(combatant.get("turn_flags") or {})
+    declared = dict(flags.get("hide_declared") or {})
+    if not declared:
+        raise CombatEngineError("no paid Hide declaration is pending for this actor")
+    source_activity_id = str(declared.get("source_activity_id") or "")
+    if source_activity_id not in {
+        "dnd5e.content.srd2014.feature.rogue-cunning-action",
+        "dnd5e.content.srd2024.feature.rogue-cunning-action",
+    }:
+        raise CombatEngineError("pending Hide declaration is not a Cunning Action payment")
+    declaration = dict(declared.get("declaration") or {})
+    selected = str(declaration.get("action") or "").strip().casefold().replace("-", "_")
+    if selected != "hide":
+        raise CombatEngineError("pending Cunning Action declaration is not Hide")
+
+    participant_ids = {
+        str(item.get("actor_id") or "") for item in value.get("combatants", [])
+    }
+    normalized_observers = [str(item or "").strip() for item in observer_ids]
+    if any(not item for item in normalized_observers) or len(normalized_observers) != len(
+        set(normalized_observers)
+    ):
+        raise CombatEngineError("Hide observers must be unique non-empty actor IDs")
+    if actor_id_value in normalized_observers or not set(normalized_observers) <= participant_ids:
+        raise CombatEngineError("Hide observers must be other encounter participants")
+    living_ids = {
+        str(item.get("actor_id") or "")
+        for item in value.get("combatants", [])
+        if "dead" not in _condition_set(item.get("conditions"))
+        and str(item.get("actor_id") or "") != actor_id_value
+    }
+    if not set(normalized_observers) <= living_ids:
+        raise CombatEngineError("Hide observers must be living encounter participants")
+    if set(normalized_observers) != set(observer_passive_perceptions):
+        raise CombatEngineError("Hide observer passive Perception values must match observer IDs")
+    passives: dict[str, int] = {}
+    for observer_id in normalized_observers:
+        value_for_observer = observer_passive_perceptions[observer_id]
+        if isinstance(value_for_observer, bool) or not isinstance(value_for_observer, int):
+            raise CombatEngineError("Hide observer passive Perception must be an integer")
+        passives[observer_id] = int(value_for_observer)
+
+    # The declaration is consumed even when the Agent rules that the scene
+    # does not permit hiding.  No die is rolled in that case.
+    flags.pop("hide_declared", None)
+    combatant["turn_flags"] = flags
+    if not flags:
+        combatant.pop("turn_flags", None)
+    if not can_hide:
+        combatant["hidden"] = False
+        combatant["visible_to_actor_ids"] = None
+        effect = {
+            "kind": "cunning_action_hide",
+            "action": "hide",
+            "can_hide": False,
+            "ruling_reason": reason,
+            "stealth_check": None,
+            "observers": [],
+            "hidden": False,
+            "visible_to_actor_ids": None,
+            "requires_ruling": False,
+        }
+        value["log"] = [
+            *list(value.get("log") or []),
+            {"type": "hide_settlement", "actor_id": actor_id_value, "effect": deepcopy(effect)},
+        ][-100:]
+        return value, effect
+
+    stealth_check = resolve_actor_check(
+        actor,
+        kind="ability",
+        ability="stealth",
+        dc=0,
+        encounter=value,
+        ruleset=str(value.get("ruleset") or "2014"),
+        rules=rules,
+        rng=rng,
+    )
+    stealth_total = int(stealth_check.get("total") or 0)
+    observer_results = [
+        {
+            "observer_id": observer_id,
+            "passive_perception": passives[observer_id],
+            "detected": stealth_total < passives[observer_id],
+        }
+        for observer_id in normalized_observers
+    ]
+    detected_ids = {
+        item["observer_id"] for item in observer_results if item["detected"]
+    }
+    visible_ids = {actor_id_value, *detected_ids}
+    existing_visibility = combatant.get("visible_to_actor_ids")
+    if isinstance(existing_visibility, list):
+        visible_ids.update(str(item) for item in existing_visibility)
+    # A hidden actor is represented by an explicit audience list.  If every
+    # living participant was adjudicated as detecting the attempt, normalize
+    # back to ordinary visibility instead of keeping a contradictory hidden
+    # flag with an all-participant list.
+    all_living_observers = living_ids
+    if all_living_observers and all_living_observers <= visible_ids:
+        combatant["hidden"] = False
+        combatant["visible_to_actor_ids"] = None
+        normalized_visible_ids: list[str] | None = None
+    else:
+        combatant["hidden"] = True
+        normalized_visible_ids = sorted(visible_ids)
+        combatant["visible_to_actor_ids"] = normalized_visible_ids
+    effect = {
+        "kind": "cunning_action_hide",
+        "action": "hide",
+        "can_hide": True,
+        "ruling_reason": reason,
+        "stealth_check": stealth_check,
+        "observers": observer_results,
+        "hidden": bool(combatant["hidden"]),
+        "visible_to_actor_ids": normalized_visible_ids,
+        "requires_ruling": False,
+    }
+    value["log"] = [
+        *list(value.get("log") or []),
+        {"type": "hide_settlement", "actor_id": actor_id_value, "effect": deepcopy(effect)},
     ][-100:]
     return value, effect
 

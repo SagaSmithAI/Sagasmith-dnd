@@ -67,6 +67,7 @@ from sagasmith_dnd.combat_engine import (
     resolve_turn_undead_to_sheets,
     roll_attack_action,
     settle_core_activity_effect,
+    settle_hide,
     source_speed_multiplier,
     spend_movement,
     stabilize_sheet,
@@ -6186,6 +6187,80 @@ def test_cunning_action_settles_dash_and_disengage_but_not_hide_outcome() -> Non
     )
     assert effect_2024["kind"] == "cunning_action"
     assert dashed_2024["combatants"][0]["turn_budget"]["movement"] == 60
+
+
+def test_settle_hide_consumes_paid_declaration_and_tracks_mixed_observers() -> None:
+    rogue = _actor("rogue")
+    threat = _actor("threat")
+    lookout = _actor("lookout")
+    rogue["initiative"] = 20
+    threat["initiative"] = 10
+    lookout["initiative"] = 5
+    threat["sheet"]["traits"]["senses"]["passive_perception_bonus"] = 10
+    threat["derived"] = derive_character_sheet(threat["sheet"])
+    encounter = start_encounter([rogue, threat, lookout])
+    paid = pay_activity_activation(
+        encounter, actor_id_value="rogue", activation_type="bonus_action"
+    )
+    declared, _ = settle_core_activity_effect(
+        paid,
+        actor_id_value="rogue",
+        activity_id="dnd5e.content.srd2014.feature.rogue-cunning-action",
+        declaration={"action": "hide", "cover": "larger ally"},
+    )
+
+    settled, effect = settle_hide(
+        declared,
+        actor=rogue,
+        actor_id_value="rogue",
+        observer_ids=["threat", "lookout"],
+        observer_passive_perceptions={"threat": 20, "lookout": 10},
+        can_hide=True,
+        ruling_reason="The rogue is fully obscured behind the larger ally.",
+        rng=_SequenceRng(15),
+    )
+
+    assert effect["stealth_check"]["total"] == 15
+    assert effect["observers"] == [
+        {"observer_id": "threat", "passive_perception": 20, "detected": True},
+        {"observer_id": "lookout", "passive_perception": 10, "detected": False},
+    ]
+    assert effect["hidden"] is True
+    assert effect["visible_to_actor_ids"] == ["rogue", "threat"]
+    assert settled["combatants"][0]["hidden"] is True
+    assert "hide_declared" not in settled["combatants"][0]["turn_flags"]
+
+
+def test_settle_hide_ruling_failure_consumes_declaration_without_a_roll() -> None:
+    rogue = _actor("rogue")
+    observer = _actor("observer")
+    rogue["initiative"] = 20
+    observer["initiative"] = 10
+    encounter = start_encounter([rogue, observer])
+    paid = pay_activity_activation(
+        encounter, actor_id_value="rogue", activation_type="bonus_action"
+    )
+    declared, _ = settle_core_activity_effect(
+        paid,
+        actor_id_value="rogue",
+        activity_id="dnd5e.content.srd2014.feature.rogue-cunning-action",
+        declaration={"action": "hide"},
+    )
+    rng = _SequenceRng(1)
+    settled, effect = settle_hide(
+        declared,
+        actor=rogue,
+        actor_id_value="rogue",
+        observer_ids=["observer"],
+        observer_passive_perceptions={"observer": 10},
+        can_hide=False,
+        ruling_reason="There is no cover or obscurement in the scene.",
+        rng=rng,
+    )
+    assert effect["stealth_check"] is None
+    assert rng.values == [1]
+    assert settled["combatants"][0]["hidden"] is False
+    assert "hide_declared" not in settled["combatants"][0].get("turn_flags", {})
 
 
 @pytest.mark.parametrize(

@@ -251,6 +251,7 @@ from sagasmith_dnd.combat_engine import (
     resolve_turn_undead_to_sheets,
     roll_attack_action,
     settle_core_activity_effect,
+    settle_hide,
     source_speed_multiplier,
     source_spell_resolution,
     spend_movement,
@@ -27964,6 +27965,217 @@ def _create_server(
             ],
             actor_knowledge_transfers=actor_knowledge_transfers,
             rule_receipts=list(applied.get("rule_receipts") or []),
+        )
+        return combat_response(campaign_id, principal_id, response)
+
+    @public_tool()
+    @_agent_ruling_boundary
+    def combat_resolve_hide(
+        campaign_id: str,
+        actor_id: str,
+        ruling: dict[str, Any],
+        observer_ids: list[str] | None = None,
+        principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None,
+        branch_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Resolve a paid Cunning Action Hide attempt without another payment."""
+
+        access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
+        require_write_contract(expected_revision, idempotency_key)
+        resolved_branch_id = require_current_branch(campaign_id, branch_id)
+        raw_ruling = dict(ruling or {})
+        if set(raw_ruling) - {"can_hide", "reason", "observers"}:
+            raise CombatEngineError(
+                "Hide ruling accepts only can_hide, reason, and optional observers"
+            )
+        can_hide = raw_ruling.get("can_hide")
+        if not isinstance(can_hide, bool):
+            raise CombatEngineError("Hide ruling can_hide must be boolean")
+        reason = " ".join(str(raw_ruling.get("reason") or "").split())
+        if not reason or len(reason) > 500:
+            raise CombatEngineError("Hide ruling requires a bounded reason")
+        supplied_observer_ids = observer_ids
+        embedded_observers = raw_ruling.get("observers")
+        if supplied_observer_ids is not None and embedded_observers is not None:
+            raise CombatEngineError("provide Hide observers either in ruling or observer_ids")
+        if supplied_observer_ids is None:
+            supplied_observer_ids = embedded_observers
+        if not isinstance(supplied_observer_ids, list):
+            raise CombatEngineError("Hide ruling requires an observers list")
+        normalized_observer_ids: list[str] = []
+        for item in supplied_observer_ids:
+            if isinstance(item, dict):
+                if set(item) - {"observer_id", "reason"}:
+                    raise CombatEngineError(
+                        "Hide observer entries accept observer_id and optional reason"
+                    )
+                observer_id = str(item.get("observer_id") or "").strip()
+            else:
+                observer_id = str(item or "").strip()
+            if not observer_id:
+                raise CombatEngineError("Hide observers require non-empty observer IDs")
+            normalized_observer_ids.append(observer_id)
+        if len(normalized_observer_ids) != len(set(normalized_observer_ids)):
+            raise CombatEngineError("Hide observers must be unique")
+        normalized_ruling = {
+            "can_hide": can_hide,
+            "reason": reason,
+            "observers": list(normalized_observer_ids),
+        }
+        payload = {
+            "actor_id": actor_id,
+            "ruling": normalized_ruling,
+            "branch_id": resolved_branch_id,
+        }
+        scope = f"combat-resolve-hide:{campaign_id}:{resolved_branch_id}:{principal_id}"
+        replay = replay_idempotent(scope, idempotency_key, payload)
+        if replay is not None:
+            return combat_response(campaign_id, principal_id, replay)
+        campaign, encounter = active_encounter(campaign_id)
+        if campaign.revision != expected_revision:
+            raise ValueError(
+                "campaign revision conflict: "
+                f"expected {expected_revision}, found {campaign.revision}"
+            )
+        stream = active_random_stream()
+        if stream is None:
+            stream = CampaignRandomStream.from_campaign_state(
+                campaign_id,
+                campaign.state,
+                operation="combat_resolve_hide",
+                idempotency_key=idempotency_key,
+                campaign_revision=campaign.revision,
+            )
+            with use_random_stream(stream):
+                return combat_resolve_hide(
+                    campaign_id,
+                    actor_id,
+                    ruling=normalized_ruling,
+                    principal_id=principal_id,
+                    expected_revision=expected_revision,
+                    branch_id=resolved_branch_id,
+                    idempotency_key=idempotency_key,
+                )
+        random_state = validate_random_stream_state(
+            dict(campaign.state or {}).get("random_stream")
+            or initial_random_stream(f"sagasmith-dnd:{campaign_id}")
+        )
+        if (
+            stream.campaign_id != campaign_id
+            or (
+                stream.campaign_revision is not None
+                and stream.campaign_revision != campaign.revision
+            )
+            or stream.seed != random_state["seed"]
+            or stream.start_position != random_state["position"]
+        ):
+            raise CombatEngineError("Hide settlement requires the current campaign random snapshot")
+        require_no_blocking_pending(encounter)
+        require_encounter_combatant(encounter, actor_id, role="Hide actor")
+        actor = combat_actor_snapshot(actor_id)
+        observer_passive_perceptions: dict[str, int] = {}
+        for observer_id in normalized_observer_ids:
+            require_encounter_combatant(encounter, observer_id, role="Hide observer")
+            observer = require_campaign_actor(campaign_id, observer_id)
+            observer_snapshot = combat_actor_snapshot(observer.id)
+            passive = dict(observer_snapshot.get("derived") or {}).get("passive_perception")
+            if isinstance(passive, bool) or not isinstance(passive, int):
+                raise CombatEngineError(
+                    f"observer {observer_id} has no authoritative passive Perception"
+                )
+            observer_passive_perceptions[observer_id] = int(passive)
+        hide_rules = effective_rule_context(
+            campaign_id,
+            facts={
+                "actor_id": actor_id,
+                "action": "hide",
+                "kind": "ability",
+                "ability": "stealth",
+                "observers": list(normalized_observer_ids),
+                "can_hide": can_hide,
+            },
+            branch_id=resolved_branch_id,
+        )
+        next_encounter, hide_effect = settle_hide(
+            encounter,
+            actor=actor,
+            actor_id_value=actor_id,
+            observer_ids=normalized_observer_ids,
+            observer_passive_perceptions=observer_passive_perceptions,
+            can_hide=can_hide,
+            ruling_reason=reason,
+            rules=hide_rules,
+            rng=stream,
+        )
+        stealth_check = dict(hide_effect.get("stealth_check") or {})
+        receipts = [
+            *list(stealth_check.get("rule_receipts") or []),
+            *core_receipts(
+                hide_rules,
+                ["dnd5e.core.activity.cunning_action"],
+                "combat.activity.cunning_action.hide",
+            ),
+        ]
+        prior_combatant = next(
+            item
+            for item in encounter.get("combatants", [])
+            if str(item.get("actor_id") or "") == actor_id
+        )
+        source_activity_id = str(
+            dict(dict(prior_combatant.get("turn_flags") or {}).get("hide_declared") or {}).get(
+                "source_activity_id"
+            )
+            or ""
+        )
+        result = {
+            "kind": "cunning_action_hide",
+            "action": "hide",
+            "activity_id": source_activity_id,
+            "core_effect": hide_effect,
+            "payment": {
+                "kind": "activity",
+                "activation_type": "bonus_action",
+                "already_paid": True,
+            },
+            "requires_ruling": False,
+            "ruling": normalized_ruling,
+            "rule_receipts": receipts,
+        }
+        next_state = {**dict(campaign.state or {}), "combat": next_encounter}
+        next_state["resolution_log"] = [
+            *list(next_state.get("resolution_log") or []),
+            {
+                "id": f"resolution-{uuid4().hex}",
+                "type": "combat_hide",
+                "operation": "combat.activity.cunning_action.hide",
+                "actor_id": actor_id,
+                "audience": {
+                    "scope": "actors",
+                    "actor_refs": [actor_id, *normalized_observer_ids],
+                    "disclosure": "private",
+                },
+                "branch_id": resolved_branch_id,
+                "campaign_revision": campaign.revision + 1,
+                "result": deepcopy(result),
+            },
+        ][-100:]
+        response = commit_campaign_state(
+            campaign,
+            next_state,
+            operation="combat.activity.cunning_action.hide",
+            principal_id=principal_id,
+            branch_id=resolved_branch_id,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=payload,
+            response_fields={
+                "status": "committed",
+                "result": result,
+                "combat": next_encounter,
+            },
+            rule_receipts=receipts,
         )
         return combat_response(campaign_id, principal_id, response)
 
