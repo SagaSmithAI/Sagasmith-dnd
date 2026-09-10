@@ -3546,9 +3546,6 @@ _OCR_FIELD_LABELS = (
     "Languages",
     "Challenge",
 )
-_OCR_ENTRY_RE = re.compile(r"^([A-Z][A-Za-z0-9 '/();\-–—]{1,80})\.\s*(.*)$")
-
-
 # Printed recharge qualifiers can make an otherwise ordinary action or reaction
 # name longer than 80 characters.  The terminating period remains the bounded
 # structural marker; the prose guard below rejects sentence-shaped false hits.

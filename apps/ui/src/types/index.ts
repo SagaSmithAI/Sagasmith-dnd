@@ -26,27 +26,6 @@ export interface Character {
   revision: number;
 }
 
-export interface DndSheet {
-  class?: string;
-  level?: number;
-  race?: string;
-  alignment?: string;
-  experience?: number;
-  ability_scores: {
-    str: number; dex: number; con: number;
-    int: number; wis: number; cha: number;
-  };
-  hp: { current: number; max: number; temporary?: number };
-  armor_class: number;
-  initiative: number;
-  speed: number;
-  proficiency_bonus: number;
-  skills: Record<string, number>;
-  spells?: Record<string, number>;
-  equipment?: string[];
-  features?: string[];
-}
-
 export interface ModuleSource {
   id: string;
   title: string;
@@ -176,32 +155,6 @@ export interface RuleSource {
   checksum?: string;
 }
 
-export interface RuleSection {
-  id: string;
-  title: string;
-  path: string[];
-  level: number;
-  content: string;
-  parent_id?: string;
-}
-
-export interface EventLog {
-  id: string;
-  campaign_id: string;
-  type: string;
-  summary: string;
-  payload: Record<string, unknown>;
-  created_at?: string;
-}
-
-export interface MemoryInfo {
-  id: string;
-  subject: string;
-  content: string;
-  type: string;
-  revision_id: string;
-}
-
 export interface HealthStatus {
   status: string;
   version: string;
@@ -252,16 +205,6 @@ export interface CombatStatus {
   combatants: CombatantView[];
   battle_map?: BattleMap | null;
   pending_reactions?: unknown[];
-}
-
-export interface GatewayEnvelope<T> {
-  data: T;
-  meta: {
-    schema_version: number;
-    campaign_revision?: number;
-    branch_id?: string;
-    audience: string;
-  };
 }
 
 // ── Shape map for D&D sheet fields ──

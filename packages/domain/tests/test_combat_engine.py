@@ -1119,6 +1119,7 @@ def test_movement_can_switch_travel_speeds_and_carries_distance_spent() -> None:
         destination={"x": 14, "y": 10},
         travel_mode="fly",
     )
+    assert current_combatant(flown_first)["turn_budget"]["movement"] == 40
     walked_after_flight = spend_movement(
         flown_first,
         "speedster",
@@ -1129,6 +1130,7 @@ def test_movement_can_switch_travel_speeds_and_carries_distance_spent() -> None:
     assert current is not None
     assert current["turn_budget"]["movement_spent"] == 30
     assert current["turn_budget"]["travel_mode"] == "walk"
+    assert current["turn_budget"]["movement"] == 0
 
 
 def test_movement_uses_double_cost_without_swim_or_climb_speed() -> None:
@@ -1530,6 +1532,88 @@ def test_2024_push_and_slow_masteries_update_encounter_state() -> None:
     assert current["actor_id"] == "slow-target"
     assert current["turn_budget"]["speed"] == 20
     assert current["turn_budget"]["movement"] == 20
+
+
+@pytest.mark.parametrize(
+    ("travel_mode", "walking_speed", "special_speed", "expected_speed"),
+    [
+        ("walk", 30, 0, 20),
+        ("fly", 30, 40, 30),
+        ("fly", 0, 20, 10),
+        ("swim", 30, 40, 30),
+        ("climb", 30, 40, 30),
+        ("burrow", 30, 40, 30),
+    ],
+)
+def test_slow_mastery_shares_movement_dash_and_expiry_speed(
+    travel_mode: str, walking_speed: int, special_speed: int, expected_speed: int
+) -> None:
+    slower = _actor("slower")
+    target = _actor("target")
+    slower.update(initiative=20, position={"x": 0, "y": 0})
+    target.update(initiative=10, position={"x": 3, "y": 0})
+    target["sheet"]["combat"]["speed"]["walk"] = walking_speed
+    if travel_mode != "walk":
+        target["sheet"]["combat"]["speed"][travel_mode] = special_speed
+    target["derived"] = derive_character_sheet(target["sheet"])
+    encounter = _grid_encounter([slower, target], ruleset="2024")
+    slow_result = {
+        "weapon_mastery": {
+            "id": "slow",
+            "applied": True,
+            "encounter_effect": {"kind": "speed_penalty", "penalty_ft": 10},
+        }
+    }
+    slowed = apply_weapon_mastery_to_encounter(
+        encounter, slow_result, attacker_id="slower", target_id="target"
+    )["encounter"]
+    target_turn = end_turn(slowed, actor_id_value="slower")
+    moved = spend_movement(
+        target_turn, "target", 5, destination={"x": 4, "y": 0}, travel_mode=travel_mode
+    )
+    assert current_combatant(moved)["turn_budget"]["movement"] == expected_speed - 5
+    dashed = resolve_common_action(moved, actor_id_value="target", action="dash")
+    budget = current_combatant(dashed)["turn_budget"]
+    assert budget["extra_movement_granted"] == expected_speed
+    assert budget["movement"] == expected_speed * 2 - 5
+
+    # A second hit never stacks Slow or loses movement and Dash already spent/granted.
+    reapplied = apply_weapon_mastery_to_encounter(
+        dashed, slow_result, attacker_id="slower", target_id="target"
+    )["encounter"]
+    assert current_combatant(reapplied)["turn_budget"] == budget
+    expired = end_turn(dashed, actor_id_value="target")
+    restored = next(item for item in expired["combatants"] if item["actor_id"] == "target")
+    assert restored["turn_budget"]["movement"] == expected_speed * 2 + 5
+    assert restored["speed_modes"] == target_turn["combatants"][1]["speed_modes"]
+
+
+def test_slow_expiry_restores_speed_without_reactivating_dodge() -> None:
+    slower = _actor("slower")
+    target = _actor("target")
+    slower.update(initiative=20, position={"x": 0, "y": 0})
+    target.update(initiative=10, position={"x": 3, "y": 0})
+    target["sheet"]["combat"]["speed"]["walk"] = 5
+    target["derived"] = derive_character_sheet(target["sheet"])
+    encounter = _grid_encounter([slower, target], ruleset="2024")
+    encounter["combatants"][1]["turn_flags"] = {"dodging": True}
+    slowed = apply_weapon_mastery_to_encounter(
+        encounter,
+        {"weapon_mastery": {
+            "id": "slow", "applied": True,
+            "encounter_effect": {"kind": "speed_penalty", "penalty_ft": 10},
+        }},
+        attacker_id="slower",
+        target_id="target",
+    )["encounter"]
+    assert slowed["combatants"][1]["turn_flags"]["dodge_ended"]["reason"] == "speed_zero"
+    # The target need not start a turn before the source's next turn ends Slow.
+    slowed["combatants"][0]["turns_completed"] = 1
+    slowed["turn_index"] = 1
+    expired = end_turn(slowed, actor_id_value="target")
+    restored = next(item for item in expired["combatants"] if item["actor_id"] == "target")
+    assert restored["turn_budget"]["speed"] == 5
+    assert "dodging" not in restored.get("turn_flags", {})
 
 
 def test_2024_sap_and_vex_apply_only_to_the_next_eligible_attack_roll() -> None:

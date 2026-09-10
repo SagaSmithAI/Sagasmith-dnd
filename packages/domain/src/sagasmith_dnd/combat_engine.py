@@ -1930,11 +1930,15 @@ def _effective_speed_ft(
     mode = str(travel_mode or budget.get("travel_mode") or "walk").strip().lower()
     if mode not in _TRAVEL_SPEED_MODES:
         return 0
-    base_speed = _travel_speed_modes(combatant).get(mode, 0)
+    native_speeds = _travel_speed_modes(combatant)
+    current_speeds = budget.get("speed_modes", native_speeds)
+    base_speed = max(0, int(current_speeds.get(mode, 0) or 0))
     # A missing swim/climb speed still permits that movement at double cost;
     # flight and burrowing require an actual corresponding speed.
-    if mode in {"swim", "climb"} and base_speed <= 0:
-        base_speed = _travel_speed_modes(combatant).get("walk", 0)
+    if mode == "walk" or (
+        mode in {"swim", "climb"} and native_speeds.get(mode, 0) <= 0
+    ):
+        base_speed = max(0, int(budget.get("speed", native_speeds.get("walk", 0)) or 0))
     recorded_speed_multiplier = combatant.get("speed_multiplier")
     speed_multiplier = float(
         1.0 if recorded_speed_multiplier is None else recorded_speed_multiplier
@@ -2049,13 +2053,45 @@ def _update_movement_accounting(
     spent, extra_granted = _movement_accounting(combatant)
     budget["movement_spent"] = spent + max(0, int(spent_delta))
     budget["extra_movement_granted"] = extra_granted + max(0, int(extra_grant_delta))
+    combatant["turn_budget"] = budget
     budget["movement"] = max(
         0,
         _effective_speed_ft(combatant)
         + int(budget["extra_movement_granted"])
         - int(budget["movement_spent"]),
     )
+
+
+def _refresh_weapon_mastery_speed(
+    encounter: dict[str, Any], combatant: dict[str, Any]
+) -> None:
+    """Project active Slow effects into the existing movement budget once."""
+
+    budget = dict(combatant.get("turn_budget") or {})
+    spent, extra_granted = _movement_accounting(combatant)
+    penalty = max(
+        (
+            int(effect.get("penalty_ft", 0) or 0)
+            for effect in encounter.get("ongoing_effects", [])
+            if isinstance(effect, dict)
+            and effect.get("active", True)
+            and effect.get("mechanic_id") == "dnd5e.core.weapon.mastery"
+            and effect.get("kind") == "speed_penalty"
+            and str(effect.get("target_id") or "") == str(combatant.get("actor_id") or "")
+        ),
+        default=0,
+    )
+    base_speeds = _travel_speed_modes(combatant)
+    base_speeds["walk"] = int(combatant.get("base_speed", budget.get("speed", 30)) or 0)
+    budget["speed_modes"] = {
+        mode: max(0, speed - penalty) for mode, speed in base_speeds.items()
+    }
+    budget["speed"] = budget["speed_modes"]["walk"]
+    budget["movement_spent"] = spent
+    budget["extra_movement_granted"] = extra_granted
     combatant["turn_budget"] = budget
+    _update_movement_accounting(combatant, budget)
+    reconcile_dodge_lifecycle(combatant)
 
 
 def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[str]:
@@ -6034,34 +6070,7 @@ def apply_weapon_mastery_to_encounter(
                     existing["ended_reason"] = "replaced_by_slow_mastery"
         value["ongoing_effects"] = [*list(value.get("ongoing_effects") or []), effect]
         if mastery_id == "slow":
-            # Slow changes the target's authoritative speed immediately.  Keep
-            # the source base speed separate so the effect is not subtracted a
-            # second time when the target starts a later turn.
-            budget = dict(target.get("turn_budget") or {})
-            base_speed = int(target.get("base_speed", budget.get("speed", 30)) or 0)
-            active_penalty = max(
-                [
-                    int(item.get("penalty_ft", 0) or 0)
-                    for item in value.get("ongoing_effects", [])
-                    if isinstance(item, dict)
-                    and item.get("active", True)
-                    and item.get("mechanic_id") == "dnd5e.core.weapon.mastery"
-                    and item.get("kind") == "speed_penalty"
-                    and str(item.get("target_id") or "") == target_id
-                ]
-                or [0]
-            )
-            budget["speed"] = max(0, base_speed - active_penalty)
-            spent, extra_granted = _movement_accounting(target)
-            speed_multiplier = float(target.get("speed_multiplier", 1.0) or 0.0)
-            budget["movement"] = max(
-                0,
-                int(budget["speed"] * speed_multiplier)
-                + extra_granted
-                - spent,
-            )
-            target["turn_budget"] = budget
-            reconcile_dodge_lifecycle(target)
+            _refresh_weapon_mastery_speed(value, target)
     elif mastery_id == "cleave":
         if attacker.get("turn_flags", {}).get("weapon_mastery_cleave_used"):
             raise CombatEngineError("Cleave can grant an extra attack only once per turn")
@@ -8705,6 +8714,7 @@ def end_turn(
     next_actor = current_combatant(value)
     if next_actor:
         next_actor_id = str(next_actor.get("actor_id") or "")
+        expired_speed_targets: set[str] = set()
         for effect in value.get("ongoing_effects", []):
             if (
                 isinstance(effect, dict)
@@ -8717,6 +8727,11 @@ def end_turn(
             ):
                 effect["active"] = False
                 effect["ended_reason"] = "source_turn_start"
+                if effect.get("kind") == "speed_penalty":
+                    expired_speed_targets.add(str(effect.get("target_id") or ""))
+        for combatant in value.get("combatants", []):
+            if str(combatant.get("actor_id") or "") in expired_speed_targets:
+                _refresh_weapon_mastery_speed(value, combatant)
         legendary_actions = dict(next_actor.get("legendary_actions") or {})
         if legendary_actions:
             legendary_actions["remaining"] = int(legendary_actions.get("maximum", 0) or 0)
@@ -8739,31 +8754,10 @@ def end_turn(
             if item.get("actor_id") != next_actor.get("actor_id")
         ]
         budget = dict(next_actor.get("turn_budget") or {})
-        slow_penalty = max(
-            [
-                int(effect.get("penalty_ft", 0) or 0)
-                for effect in value.get("ongoing_effects", [])
-                if isinstance(effect, dict)
-                and effect.get("active", True)
-                and effect.get("mechanic_id") == "dnd5e.core.weapon.mastery"
-                and effect.get("kind") == "speed_penalty"
-                and str(effect.get("target_id") or "") == next_actor_id
-            ]
-            or [0]
-        )
-        recorded_base_speed = next_actor.get("base_speed", budget.get("speed"))
-        base_turn_speed = int(30 if recorded_base_speed is None else recorded_base_speed)
-        recorded_speed_multiplier = next_actor.get("speed_multiplier")
-        speed_multiplier = float(
-            1.0 if recorded_speed_multiplier is None else recorded_speed_multiplier
-        )
-        effective_turn_speed = max(0, base_turn_speed - slow_penalty)
         budget.update(
             main_action=1,
             bonus_action=1,
             reaction=1,
-            speed=effective_turn_speed,
-            movement=int(effective_turn_speed * speed_multiplier),
             movement_spent=0,
             extra_movement_granted=0,
             object_interaction=1,
@@ -8778,6 +8772,9 @@ def end_turn(
             next_flags[_TORTLE_SHELL_DEFENSE_FLAG] = next_shell_flag
             next_actor["turn_flags"] = next_flags
             budget["reaction"] = 0
+        next_actor["turn_budget"] = budget
+        _refresh_weapon_mastery_speed(value, next_actor)
+        budget = next_actor["turn_budget"]
         if next_actor.get("surprised") and _normalize_ruleset(value.get("ruleset")) == "2014":
             budget.update(
                 main_action=0,
@@ -8785,7 +8782,7 @@ def end_turn(
                 movement=0,
                 reaction=0,
                 object_interaction=0,
-                movement_spent=int(effective_turn_speed * speed_multiplier),
+                movement_spent=budget["movement"],
             )
         next_actor["turn_budget"] = budget
         _begin_dependent_turn(value, next_actor)
