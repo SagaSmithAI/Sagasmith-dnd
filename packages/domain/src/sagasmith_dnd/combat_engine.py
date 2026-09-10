@@ -5663,9 +5663,19 @@ def spend_movement(
             for item in value.get("pending", [])
             if item.get("status", "pending") == "pending"
         }
-        movement_segments = (
-            list(zip(waypoints, waypoints[1:])) if path is not None else [(origin, target_position)]
-        )
+        if path is not None:
+            movement_segments = list(zip(waypoints, waypoints[1:]))
+        else:
+            # A destination-only request still represents a walk through the
+            # intervening grid cells.  Reconstruct a deterministic straight
+            # route so a creature that enters and then leaves a threat's reach
+            # in one request opens the same reaction window as an explicit path.
+            inferred_waypoints = _inferred_grid_waypoints(origin, target_position)
+            movement_segments = (
+                list(zip(inferred_waypoints, inferred_waypoints[1:]))
+                if inferred_waypoints is not None
+                else [(origin, target_position)]
+            )
         for threat in value.get("combatants", []):
             if not _can_make_opportunity_attack(threat, combatant):
                 continue
@@ -8841,6 +8851,35 @@ def _position(value: Any) -> tuple[float, float] | None:
         return float(value["x"]), float(value["y"])
     except (KeyError, TypeError, ValueError):
         return None
+
+
+def _inferred_grid_waypoints(
+    origin: tuple[float, float], target: tuple[float, float]
+) -> list[tuple[float, float]] | None:
+    """Reconstruct a straight one-cell-at-a-time route for a destination-only move.
+
+    Grid movement stores cell coordinates while ``_grid_distance`` accepts
+    floating-point values for backwards compatibility.  Only infer a route
+    when both deltas are integral cell counts; otherwise the caller retains
+    the historical single-segment behavior rather than inventing geometry.
+    """
+    delta_x = target[0] - origin[0]
+    delta_y = target[1] - origin[1]
+    steps = int(max(abs(delta_x), abs(delta_y)))
+    if steps <= 0:
+        return [origin, target]
+    if (
+        abs(delta_x - round(delta_x)) > 1e-9
+        or abs(delta_y - round(delta_y)) > 1e-9
+    ):
+        return None
+    return [
+        (
+            round(origin[0] + delta_x * index / steps),
+            round(origin[1] + delta_y * index / steps),
+        )
+        for index in range(steps + 1)
+    ]
 
 
 def _grid_distance(left: tuple[float, float], right: tuple[float, float]) -> int:

@@ -6724,6 +6724,23 @@ def test_grid_movement_opens_opportunity_window_only_when_leaving_hostile_reach(
     assert available_reactions(moved_safely, "threat") == []
 
 
+def test_destination_only_movement_detects_enter_then_leave_of_hostile_reach() -> None:
+    mover = _actor("mover")
+    mover.update(initiative=20, position={"x": 0, "y": 0}, disposition="friendly")
+    threat = _actor("threat")
+    threat.update(initiative=10, position={"x": 2, "y": 1}, disposition="hostile", reach_ft=5)
+    encounter = _grid_encounter([mover, threat])
+
+    # The straight cell route is (1, 0), (2, 0), (3, 0), (4, 0): the mover
+    # enters the threat's reach at (1, 0) and leaves it at (4, 0).
+    moved = spend_movement(encounter, "mover", 20, destination={"x": 4, "y": 0})
+
+    reaction = available_reactions(moved, "threat")
+    assert len(reaction) == 1
+    assert reaction[0]["event"] == "movement.leave_reach"
+    assert reaction[0]["target_position"] == {"x": 3, "y": 0}
+
+
 def test_positioned_movement_rejects_declared_distance_that_disagrees_with_grid() -> None:
     mover = _actor("mover")
     mover.update(initiative=20, position={"x": 0, "y": 0})
