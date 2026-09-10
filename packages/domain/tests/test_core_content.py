@@ -98,6 +98,57 @@ def test_srd2014_class_skill_options_match_source_and_can_be_selected(
         )
 
 
+@pytest.mark.parametrize(
+    ("class_name", "skills", "ability", "mode", "cantrips", "leveled", "slot_key"),
+    [
+        ("Bard", ["arcana", "performance", "history"], "charisma", "known", 2, 4, "1"),
+        ("Cleric", ["history", "religion"], "wisdom", "prepared", 3, 0, "1"),
+        ("Druid", ["nature", "survival"], "wisdom", "prepared", 2, 0, "1"),
+        ("Sorcerer", ["arcana", "persuasion"], "charisma", "known", 4, 2, "1"),
+        ("Warlock", ["arcana", "deception"], "charisma", "known", 2, 2, "pact_magic"),
+        ("Wizard", ["arcana", "history"], "intelligence", "spellbook", 3, 6, "1"),
+    ],
+)
+def test_srd2014_level_one_spellcasting_is_materialized_from_class_source(
+    class_name: str,
+    skills: list[str],
+    ability: str,
+    mode: str,
+    cantrips: int,
+    leveled: int,
+    slot_key: str,
+) -> None:
+    workspace = Path(__file__).resolve().parents[3]
+    _, artifacts = build_srd2014_content(workspace / "skills")
+    definition = next(
+        item["card"]["class_definition"]
+        for item in artifacts
+        if item["kind"] == "class" and item["card"]["name"] == class_name
+    )
+
+    result = initialize_base_class(
+        default_character_sheet(),
+        class_name=class_name,
+        class_definition=definition,
+        skill_choices=skills,
+    )
+    spellcasting = result["sheet"]["spellcasting"]
+    assert spellcasting["ability"] == ability
+    assert spellcasting["preparation"]["mode"] == mode
+    assert result["spellcasting"]["spell_choices"] == {
+        "cantrips_to_add": cantrips,
+        "leveled_spells_to_add": leveled,
+    }
+    if slot_key == "pact_magic":
+        assert spellcasting[slot_key]["max"] == 1
+        assert spellcasting[slot_key]["recovers_on"] == "short_rest"
+        assert spellcasting["spell_slots"] == {}
+    else:
+        assert spellcasting["spell_slots"][slot_key]["max"] == 2
+        assert spellcasting["spell_slots"][slot_key]["recovers_on"] == "long_rest"
+        assert spellcasting["pact_magic"] is None
+
+
 def test_non_numeric_feat_prerequisite_defaults_to_agent_review() -> None:
     assert _feat_prerequisites("*Prerequisite: Spellcasting or Pact Magic feature*") == [
         {
@@ -130,7 +181,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     manifest, artifacts = build_srd2014_content(workspace / "skills")
     counts = Counter(item["kind"] for item in artifacts)
 
-    assert manifest["version"] == PACK_VERSION == "1.32.0"
+    assert manifest["version"] == PACK_VERSION == "1.33.0"
     assert "dnd5e.core.spell.structured_resolution" in manifest["native_mechanic_refs"]
     registered = {boundary.id for boundary in get_core_rule_pack("2014").boundaries}
     assert set(manifest["native_mechanic_refs"]) <= registered
