@@ -86,10 +86,7 @@ _SELECTION_FIELDS = {
         "tools",
         "values_include_species_grants",
     ),
-    # A 2014 known caster may replace exactly one existing class spell when
-    # gaining a level.  The new spell remains the selected artifact; the
-    # existing id is removed atomically by the spell materializer.
-    "spell": ("method", "source_class", "replace_existing"),
+    "spell": ("method", "source_class"),
     "subclass": ("target_class_name",),
 }
 
@@ -108,6 +105,12 @@ _ENGINE_SELECTION_FIELDS = {
         }
     ),
     "class": frozenset({"skill_replacements", "tool_replacements"}),
+    # A 2014 known caster may replace exactly one existing class spell when
+    # gaining a level.  The new spell remains the selected artifact and the
+    # existing id is removed atomically by the spell materializer.  The rule is
+    # edition-wide character state rather than spell-card semantics, so it
+    # extends the immutable archive contract without invalidating it.
+    "spell": frozenset({"replace_existing"}),
     # The subclass contract carries the class target in its published schema.
     # These two fields are engine-owned inputs for the SCAG Bladesinging
     # prerequisite and its reviewed Training in War and Song choice.  Keeping
