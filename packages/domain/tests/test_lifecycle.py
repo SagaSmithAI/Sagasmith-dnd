@@ -209,6 +209,48 @@ def test_rest_schedule_is_derived_instead_of_required_from_the_agent() -> None:
     }
 
 
+def test_long_rest_schedule_accounts_for_declared_light_activity() -> None:
+    assert validate_rest_schedule(
+        rest_type="long_rest",
+        duration_minutes=480,
+        rest_activity_minutes={"meditation": 30},
+    ) == {
+        "sleep_minutes": 450,
+        "light_activity_minutes": 30,
+        "strenuous_activity_minutes": 0,
+        "trance_minutes": 0,
+    }
+    assert validate_rest_schedule(
+        rest_type="long_rest",
+        duration_minutes=480,
+        rest_activity_minutes={"reading": 120},
+    )["sleep_minutes"] == 360
+
+
+def test_rest_activity_contract_rejects_interruption_and_short_rest_strain() -> None:
+    with pytest.raises(CombatEngineError, match="interrupted"):
+        validate_rest_schedule(
+            rest_type="long_rest",
+            duration_minutes=480,
+            rest_activity_minutes={"fighting": 60},
+        )
+    with pytest.raises(CombatEngineError, match="short rest"):
+        apply_rest(
+            default_character_sheet(),
+            rest_type="short_rest",
+            rest_activity_minutes={"spellcasting": 1},
+        )
+
+
+def test_long_rest_cannot_trade_away_required_sleep_for_light_activity() -> None:
+    with pytest.raises(CombatEngineError, match="6 hours of sleep"):
+        validate_rest_schedule(
+            rest_type="long_rest",
+            duration_minutes=480,
+            rest_activity_minutes={"reading": 121},
+        )
+
+
 def test_source_granted_trance_completes_a_long_rest_in_four_hours() -> None:
     sheet = default_character_sheet()
     sheet["content"]["features"] = [
