@@ -26,6 +26,7 @@ from sagasmith_dnd.standard_feature_ids import (
     CORE_GNOME_CUNNING_MECHANIC_ID,
     CORE_HALFLING_BRAVE_MECHANIC_ID,
     CORE_RELENTLESS_ENDURANCE_MECHANIC_ID,
+    CORE_UNCANNY_DODGE_MECHANIC_ID,
 )
 from sagasmith_dnd.standard_spell_ids import (
     CORE_FLY_MECHANIC_ID,
@@ -36,7 +37,7 @@ from sagasmith_dnd.standard_spell_ids import (
 )
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.33.0"
+PACK_VERSION = "1.34.0"
 
 _CONDITIONAL_SPECIES_SAVE_TRAITS = {
     "dwarven resilience": ("dwarven_resilience", CORE_DWARVEN_RESILIENCE_MECHANIC_ID),
@@ -852,6 +853,20 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
         return {"mechanic_refs": ["dnd5e.core.check.jack_of_all_trades"]}
     if key == ("rogue", "sneak attack"):
         return {"mechanic_refs": ["dnd5e.core.attack.sneak_attack"]}
+    if key == ("rogue", "uncanny dodge"):
+        return {
+            "activation": {"type": "reaction", "cost": 0, "trigger": "attack.after_hit"},
+            "choices": {
+                "source_trait": {
+                    "kind": "uncanny_dodge",
+                    "trigger": "attacker_visible_hits_with_attack",
+                    "damage_outcome": "half",
+                    "automatic": True,
+                    "source_excerpt": body[:4000],
+                }
+            },
+            "mechanic_refs": [CORE_UNCANNY_DODGE_MECHANIC_ID],
+        }
     if key in {("rogue", "evasion"), ("monk", "evasion")}:
         return {
             "choices": {

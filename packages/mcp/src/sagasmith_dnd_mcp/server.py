@@ -514,6 +514,7 @@ from sagasmith_dnd.standard_feature_ids import (
     CORE_RELENTLESS_ENDURANCE_MECHANIC_ID,
     CORE_TORTLE_NATURAL_ARMOR_MECHANIC_ID,
     CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID,
+    CORE_UNCANNY_DODGE_MECHANIC_ID,
     CORE_WATCHERS_EYE_MECHANIC_ID,
     TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
     TORTLE_NATURAL_ARMOR_AUTHORITY_KEY,
@@ -22711,7 +22712,24 @@ def _create_server(
         activity_result: dict[str, Any] | None = None
         song_defense_payment: dict[str, Any] | None = None
         song_defense_reduction = 0
+        uncanny_dodge_payment: dict[str, Any] | None = None
+        uncanny_dodge_outcome: str | None = None
         if used:
+            if defense_kind == "uncanny_dodge":
+                legal_uncanny = available_attack_defenses(
+                    target,
+                    plan=plan,
+                    attack=attack,
+                    encounter=encounter,
+                )
+                if not any(
+                    str(item.get("id") or "") == selection_id
+                    and str(item.get("kind") or "") == "uncanny_dodge"
+                    for item in legal_uncanny
+                ):
+                    raise CombatEngineError(
+                        "Uncanny Dodge is not currently legal for this attack"
+                    )
             next_encounter = pay_activity_activation(
                 next_encounter,
                 actor_id_value=actor_id,
@@ -22815,9 +22833,16 @@ def _create_server(
                     "amount": 1,
                     "reaction": True,
                 }
+            elif defense_kind == "uncanny_dodge":
+                uncanny_dodge_outcome = "half"
+                uncanny_dodge_payment = {
+                    "kind": "reaction",
+                    "feature_id": selection_id,
+                    "mechanic_id": CORE_UNCANNY_DODGE_MECHANIC_ID,
+                }
             else:
                 raise CombatEngineError("defensive reaction kind is not executable")
-            if defense_kind != "scag_song_defense":
+            if defense_kind not in {"scag_song_defense", "uncanny_dodge"}:
                 attack = apply_attack_ac_bonus(
                     attack,
                     bonus=int(candidate.get("bonus", 0) or 0),
@@ -22840,6 +22865,7 @@ def _create_server(
             attack=attack,
             rules=rule_context,
             damage_reduction=song_defense_reduction,
+            damage_outcome=uncanny_dodge_outcome,
         )
         mastery_commit = apply_weapon_mastery_to_encounter(
             next_encounter,
@@ -22860,6 +22886,8 @@ def _create_server(
                 if used and defense_kind == "spell_armor_class_bonus"
                 else "scag_feature"
                 if used and defense_kind == "scag_song_defense"
+                else "feature"
+                if used and defense_kind == "uncanny_dodge"
                 else "activity"
             ) if used else None,
             "activity_id": (
@@ -22870,6 +22898,29 @@ def _create_server(
             "spell_id": (
                 str(candidate.get("spell_id") or selection_id)
                 if used and defense_kind == "spell_armor_class_bonus"
+                else None
+            ),
+            "feature_id": (
+                selection_id if used and defense_kind == "uncanny_dodge" else None
+            ),
+            "mechanic_id": (
+                CORE_UNCANNY_DODGE_MECHANIC_ID
+                if used and defense_kind == "uncanny_dodge"
+                else None
+            ),
+            "source_key": (
+                str(candidate.get("source_key") or "")
+                if used and defense_kind == "uncanny_dodge"
+                else None
+            ),
+            "rule_refs": (
+                deepcopy(list(candidate.get("rule_refs") or []))
+                if used and defense_kind == "uncanny_dodge"
+                else []
+            ),
+            "source_excerpt": (
+                str(candidate.get("source_excerpt") or "")
+                if used and defense_kind == "uncanny_dodge"
                 else None
             ),
             "cast_level": (
@@ -22886,12 +22937,17 @@ def _create_server(
                 if activity_result
                 else deepcopy(song_defense_payment)
                 if used and defense_kind == "scag_song_defense"
+                else deepcopy(uncanny_dodge_payment)
+                if used and defense_kind == "uncanny_dodge"
                 else None
             ),
             "effect_id": spell_result.get("effect_id") if spell_result else None,
             "bonus": int(candidate.get("bonus", 0) or 0) if used else 0,
             "reduction": (
                 song_defense_reduction if used and defense_kind == "scag_song_defense" else 0
+            ),
+            "damage_outcome": (
+                uncanny_dodge_outcome if used and defense_kind == "uncanny_dodge" else None
             ),
             "payment_override": deepcopy(song_defense_payment),
             "semantic_solution": (
@@ -23042,6 +23098,11 @@ def _create_server(
                     rule_context,
                     [
                         "dnd5e.core.mcp.reaction_defense_atomicity",
+                        *(
+                            [CORE_UNCANNY_DODGE_MECHANIC_ID]
+                            if used and defense_kind == "uncanny_dodge"
+                            else []
+                        ),
                         *(
                             ["dnd5e.core.mcp.shield_attack_reaction_atomicity"]
                             if spell_result is not None

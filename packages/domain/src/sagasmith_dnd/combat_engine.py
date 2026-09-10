@@ -82,6 +82,7 @@ from sagasmith_dnd.standard_feature_ids import (
     CORE_ORC_AGGRESSIVE_MECHANIC_ID,
     CORE_RELENTLESS_ENDURANCE_MECHANIC_ID,
     CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID,
+    CORE_UNCANNY_DODGE_MECHANIC_ID,
     ORC_AGGRESSIVE_ACTIVITY_ID,
     TORTLE_SHELL_DEFENSE_ARTIFACT_ID,
     TORTLE_SHELL_DEFENSE_EFFECT_ID,
@@ -136,6 +137,47 @@ def damage_amount_after_reduction(amount: int, outcome: str) -> int:
     if normalized == "half":
         return amount // 2
     return amount
+
+
+def _apply_damage_outcome_to_parts(
+    parts: list[dict[str, Any]], outcome: str
+) -> tuple[str, int, int]:
+    """Apply one packet-wide damage outcome while retaining typed parts.
+
+    Uncanny Dodge halves the attack packet before each damage type is adjusted
+    for resistance or vulnerability.  A proportional largest-remainder split
+    keeps mixed damage typed and guarantees the packet total is rounded down.
+    """
+
+    normalized = str(outcome or "full").strip().casefold()
+    total = sum(max(0, int(part.get("amount", 0) or 0)) for part in parts)
+    settled = damage_amount_after_reduction(total, normalized)
+    if normalized == "full" or total == 0:
+        return normalized, total, settled
+    if normalized == "none":
+        for part in parts:
+            before = int(part.get("amount", 0) or 0)
+            part["amount_before_outcome"] = before
+            part["amount"] = 0
+        return normalized, total, settled
+
+    # Allocate the packet-wide floor(total / 2) by largest remainder so a
+    # two-part packet such as 1 + 1 still contributes one point of damage.
+    allocations: list[int] = []
+    remainders: list[tuple[int, int]] = []
+    for index, part in enumerate(parts):
+        before = max(0, int(part.get("amount", 0) or 0))
+        numerator = before * settled
+        allocation, remainder = divmod(numerator, total)
+        allocations.append(allocation)
+        remainders.append((remainder, index))
+        part["amount_before_outcome"] = before
+    remainder_count = settled - sum(allocations)
+    for _, index in sorted(remainders, key=lambda item: (-item[0], item[1]))[:remainder_count]:
+        allocations[index] += 1
+    for part, allocation in zip(parts, allocations):
+        part["amount"] = allocation
+    return normalized, total, settled
 
 
 def standard_save_damage_reduction(
@@ -3686,11 +3728,34 @@ def available_attack_defenses(
             return []
     if target_conditions & INCAPACITATING_STATE_IDS:
         return []
+    uncanny_dodge = _validated_standard_uncanny_dodge_feature(actor_sheet(target))
     equipped_melee = any(
         str(item.get("attack_type") or "").casefold() == "melee"
         for item in actor_derived(target).get("inventory", {}).get("weapon_attacks", [])
     )
     options: list[dict[str, Any]] = []
+    if (
+        uncanny_dodge is not None
+        and _normalize_ruleset(plan.get("ruleset") or actor_sheet(target).get("edition"))
+        == "2014"
+        and bool(plan.get("target_can_see_attacker"))
+    ):
+        feature, trait = uncanny_dodge
+        options.append(
+            {
+                "id": str(feature.get("id") or ""),
+                "feature_id": str(feature.get("id") or ""),
+                "name": str(feature.get("name") or "Uncanny Dodge"),
+                "kind": "uncanny_dodge",
+                "damage_outcome": str(trait.get("damage_outcome") or "half"),
+                "source_type": "feature",
+                "source_key": str(feature.get("source_key") or ""),
+                "rule_refs": deepcopy(list(feature.get("rule_refs") or [])),
+                "mechanic_id": CORE_UNCANNY_DODGE_MECHANIC_ID,
+                "mechanic_refs": [CORE_UNCANNY_DODGE_MECHANIC_ID],
+                "source_excerpt": str(trait.get("source_excerpt") or ""),
+            }
+        )
     for activity in actor_sheet(target).get("content", {}).get("activities", []):
         if str(dict(activity.get("activation") or {}).get("type") or "").casefold() != "reaction":
             continue
@@ -3841,9 +3906,24 @@ def resolve_attack_damage(
     attack: dict[str, Any],
     rules: ResolutionContext | None = None,
     damage_reduction: int = 0,
+    damage_outcome: str | None = None,
+    damage_reduction_outcome: str | None = None,
     rng: Any = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Resolve damage and after-effects from one already rolled attack."""
+    if damage_outcome is not None and damage_reduction_outcome is not None:
+        if str(damage_outcome).strip().casefold() != str(
+            damage_reduction_outcome
+        ).strip().casefold():
+            raise CombatEngineError("damage outcome arguments disagree")
+    normalized_damage_outcome = str(
+        damage_outcome if damage_outcome is not None else damage_reduction_outcome or "full"
+    ).strip().casefold()
+    # Validate before rolling any damage so malformed reaction selections are
+    # rejected without consuming randomness or changing either actor.
+    damage_amount_after_reduction(0, normalized_damage_outcome)
+    if isinstance(damage_reduction, bool) or int(damage_reduction) < 0:
+        raise CombatEngineError("damage reduction must be a non-negative integer")
     updated_attacker = deepcopy(attacker)
     updated_target = deepcopy(target)
     weapon_for_song = next(
@@ -3993,6 +4073,11 @@ def resolve_attack_damage(
                     "flat": True,
                 })
         if len(rolled_parts) == 1:
+            outcome_total_before = sum(int(part.get("amount", 0) or 0) for part in rolled_parts)
+            if normalized_damage_outcome != "full":
+                _, _, outcome_total_after = _apply_damage_outcome_to_parts(
+                    rolled_parts, normalized_damage_outcome
+                )
             if damage_reduction:
                 rolled_parts[0]["amount_before_reduction"] = rolled_parts[0]["amount"]
                 rolled_parts[0]["amount"] = max(
@@ -4012,6 +4097,11 @@ def resolve_attack_damage(
                 weapon_attack=str(plan.get("kind") or "") == "attack",
             )
         else:
+            outcome_total_before = sum(int(part.get("amount", 0) or 0) for part in rolled_parts)
+            if normalized_damage_outcome != "full":
+                _, _, outcome_total_after = _apply_damage_outcome_to_parts(
+                    rolled_parts, normalized_damage_outcome
+                )
             if damage_reduction:
                 remaining_reduction = int(damage_reduction)
                 for part in rolled_parts:
@@ -4044,6 +4134,16 @@ def resolve_attack_damage(
         }
         if damage_reduction:
             result["damage"]["reduction"] = int(damage_reduction)
+        if normalized_damage_outcome != "full":
+            result["damage"].update(
+                {
+                    "reduction_outcome": normalized_damage_outcome,
+                    "damage_outcome": normalized_damage_outcome,
+                    "outcome_amount_before": outcome_total_before,
+                    "outcome_amount_after": outcome_total_after,
+                    "outcome_reduction": outcome_total_before - outcome_total_after,
+                }
+            )
         if sneak_roll is not None:
             result["sneak_attack"] = {
                 **sneak_plan,
@@ -4208,6 +4308,14 @@ def resolve_attack_damage(
         resolution_boundaries.append("dnd5e.core.damage.zero_hp")
         if bool(plan.get("knock_out", False)):
             resolution_boundaries.append("dnd5e.core.damage.knockout")
+        if (
+            normalized_damage_outcome != "full"
+            and _normalize_ruleset(
+                plan.get("ruleset") or actor_sheet(updated_target).get("edition")
+            )
+            == "2014"
+        ):
+            resolution_boundaries.append(CORE_UNCANNY_DODGE_MECHANIC_ID)
     if mastery:
         resolution_boundaries.append("dnd5e.core.weapon.mastery")
     extension_receipts: list[dict[str, Any]] = [
@@ -4962,6 +5070,52 @@ def _validated_standard_source_trait(
     if kind not in validators or not validators[kind]:
         raise CombatEngineError(f"standard {kind.replace('_', ' ').title()} trait is malformed")
     return trait
+
+
+def _validated_standard_uncanny_dodge_feature(
+    sheet: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Return the exact 2014 Rogue feature that owns Uncanny Dodge."""
+
+    if _normalize_ruleset(sheet.get("edition")) != "2014":
+        return None
+    matches: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for feature in dict(sheet.get("content") or {}).get("features", []):
+        if not isinstance(feature, dict):
+            continue
+        mechanic_refs = {str(item) for item in feature.get("mechanic_refs", [])}
+        if CORE_UNCANNY_DODGE_MECHANIC_ID not in mechanic_refs:
+            continue
+        trait = dict(dict(feature.get("choices") or {}).get("source_trait") or {})
+        if trait.get("kind") == "uncanny_dodge":
+            matches.append((feature, trait))
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise CombatEngineError("actor card has more than one standard Uncanny Dodge feature")
+    feature, trait = matches[0]
+    activation = dict(feature.get("activation") or {})
+    if (
+        str(feature.get("id") or "")
+        != "dnd5e.content.srd2014.feature.rogue-uncanny-dodge"
+        or str(feature.get("name") or "").casefold() != "uncanny dodge"
+        or str(feature.get("source_key") or "").casefold() != "rogue"
+        or str(activation.get("type") or "").casefold() != "reaction"
+        or str(activation.get("trigger") or "") != "attack.after_hit"
+        or trait.get("trigger") != "attacker_visible_hits_with_attack"
+        or trait.get("damage_outcome") != "half"
+        or trait.get("automatic") is not True
+        or not bool(str(trait.get("source_excerpt") or "").strip())
+    ):
+        raise CombatEngineError("standard Uncanny Dodge feature is malformed")
+    rogue_level = sum(
+        int(item.get("level", 0) or 0)
+        for item in dict(sheet.get("progression") or {}).get("classes", [])
+        if str(item.get("name") or "").casefold() == "rogue"
+    )
+    if rogue_level < 5:
+        return None
+    return feature, trait
 
 
 def _validated_standard_relentless_endurance_feature(
