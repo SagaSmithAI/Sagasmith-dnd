@@ -2300,6 +2300,10 @@ def pay_attack_action(
             "target_id": target_id,
         }
     elif normalized_light_payment:
+        if normalized_light_payment == "nick" and _normalize_ruleset(
+            actor_sheet(attacker).get("edition")
+        ) != "2024":
+            raise CombatEngineError("Nick requires 2024 rules")
         if active_multiattack or multiattack_option_id:
             raise CombatEngineError("the Light extra attack cannot be folded into Multiattack")
         if selected_weapon is None or "light" not in selected_properties:
@@ -2891,8 +2895,10 @@ def preflight_attack(
     if light_extra_attack not in {"", "bonus_action", "nick"}:
         raise CombatEngineError("light_extra_attack must be bonus_action, nick, or omitted")
     if light_extra_attack:
-        if _normalize_ruleset(actor_sheet(attacker).get("edition")) != "2024":
-            raise CombatEngineError("this Light extra-attack contract requires 2024 rules")
+        if light_extra_attack == "nick" and _normalize_ruleset(
+            actor_sheet(attacker).get("edition")
+        ) != "2024":
+            raise CombatEngineError("Nick requires 2024 rules")
         if mastery_followup:
             raise CombatEngineError("a Light extra attack cannot also be a Cleave follow-up")
         if "light" not in properties:
@@ -3406,7 +3412,7 @@ def preflight_attack(
         core_boundary_ids.append("dnd5e.core.weapon.proficiency_and_finesse")
     if weapon_mastery is not None:
         core_boundary_ids.append("dnd5e.core.weapon.mastery")
-    if mastery_followup:
+    if mastery_followup and str(mastery_followup.get("kind") or "") in {"cleave", "nick"}:
         core_boundary_ids.append("dnd5e.core.weapon.mastery")
     return {
         "status": "ready",

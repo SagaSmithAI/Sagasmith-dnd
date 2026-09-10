@@ -1822,6 +1822,93 @@ def test_two_weapon_fighting_retains_the_light_extra_attack_modifier() -> None:
     )
 
 
+def test_2014_two_weapon_fighting_pays_light_bonus_attack() -> None:
+    attacker = _actor("duelist", hp=30)
+    attacker["sheet"]["content"]["features"].append(
+        {"id": "two-weapon-fighting", "name": "Two-Weapon Fighting"}
+    )
+    attacker["sheet"]["inventory"]["items"] = [
+        {
+            "id": "primary-light-weapon",
+            "name": "Primary Light Weapon",
+            "kind": "weapon",
+            "equipped": True,
+            "equipped_slot": "main_hand",
+            "mechanics": {
+                "attack_type": "melee",
+                "attack_ability": "strength",
+                "damage_formula": "1d8",
+                "damage_type": "slashing",
+                "properties": ["light"],
+            },
+        }
+    ]
+    attacker["sheet"]["inventory"]["equipment_slots"]["main_hand"] = "primary-light-weapon"
+    attacker = _add_light_weapon(attacker)
+    target = _actor("target", hp=20, ac=1)
+    attacker.update(initiative=20, position={"x": 0, "y": 0}, disposition="friendly")
+    target.update(initiative=10, position={"x": 1, "y": 0}, disposition="hostile")
+    encounter = _grid_encounter([attacker, target], ruleset="2014")
+
+    encounter, first_payment = pay_attack_action(
+        encounter,
+        attacker,
+        weapon_id="primary-light-weapon",
+        attack_mode="melee",
+        target_id="target",
+    )
+    assert first_payment == {
+        "kind": "attack_action",
+        "payment": "main_action",
+        "attack_count": 1,
+    }
+    before_bonus = current_combatant(encounter)["turn_budget"]["bonus_action"]
+    plan = preflight_attack(
+        attacker,
+        target,
+        action={
+            "weapon_id": "other-light-weapon",
+            "attack_mode": "melee",
+            "light_extra_attack": "bonus_action",
+        },
+        encounter=encounter,
+    )
+    assert plan["damage_expression"] == "1d6 + 3"
+
+    paid, payment = pay_attack_action(
+        encounter,
+        attacker,
+        weapon_id="other-light-weapon",
+        attack_mode="melee",
+        target_id="target",
+        light_extra_attack="bonus_action",
+    )
+    assert payment == {
+        "kind": "light_extra_attack",
+        "weapon_id": "other-light-weapon",
+        "payment": "bonus_action",
+    }
+    assert current_combatant(paid)["turn_budget"]["bonus_action"] == before_bonus - 1
+    assert current_combatant(paid)["turn_flags"]["pending_weapon_attack_modifier"] == {
+        "kind": "bonus_action",
+        "weapon_id": "other-light-weapon",
+        "target_id": "",
+        "include_attack_ability_modifier": True,
+    }
+
+    with pytest.raises(CombatEngineError, match="Nick requires 2024 rules"):
+        preflight_attack(
+            attacker,
+            target,
+            action={
+                "weapon_id": "other-light-weapon",
+                "attack_mode": "melee",
+                "light_extra_attack": "nick",
+            },
+            encounter=encounter,
+        )
+
+
 def _give_magic_resistance(actor: dict) -> None:
     actor["sheet"]["content"]["features"].append(
         {

@@ -44,6 +44,222 @@ def _config(tmp_path: Path) -> McpConfig:
     )
 
 
+def test_2014_two_weapon_bonus_attack_commits_through_mcp_atomically(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "2014 two weapon fighting", "edition": "2014", "idempotency_key": "campaign"},
+        )
+        sheet = default_character_sheet()
+        sheet["abilities"]["strength"]["score"] = 16
+        sheet["combat"]["hp"] = {"value": 30, "max": 30, "temp": 0}
+        sheet["content"]["features"] = [
+            {"id": "two-weapon-fighting", "name": "Two-Weapon Fighting"}
+        ]
+        weapons = [
+            {
+                "id": "primary-light-weapon",
+                "name": "Primary Light Weapon",
+                "kind": "weapon",
+                "equipped": True,
+                "equipped_slot": "main_hand",
+                "mechanics": {
+                    "attack_type": "melee",
+                    "attack_ability": "strength",
+                    "damage_formula": "1d8",
+                    "damage_type": "slashing",
+                    "properties": ["light"],
+                },
+            },
+            {
+                "id": "secondary-light-weapon",
+                "name": "Secondary Light Weapon",
+                "kind": "weapon",
+                "equipped": True,
+                "equipped_slot": "off_hand",
+                "mechanics": {
+                    "attack_type": "melee",
+                    "attack_ability": "strength",
+                    "damage_formula": "1d6",
+                    "damage_type": "piercing",
+                    "properties": ["light"],
+                },
+            },
+        ]
+        sheet["inventory"]["items"] = weapons
+        sheet["inventory"]["equipment_slots"]["main_hand"] = "primary-light-weapon"
+        sheet["inventory"]["equipment_slots"]["off_hand"] = "secondary-light-weapon"
+        attacker = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "2014 duelist",
+                    "sheet": sheet,
+                },
+                "principal_id": "system:local",
+                "idempotency_key": "attacker",
+            },
+        )
+        target = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "target",
+                    "sheet": default_character_sheet(),
+                },
+                "principal_id": "system:local",
+                "idempotency_key": "target",
+            },
+        )
+        target_sheet = target["sheet"]
+        target_sheet["combat"]["hp"] = {"value": 100, "max": 100, "temp": 0}
+        target = await _call(
+            server,
+            "character_sheet_replace",
+            {
+                "character_id": target["id"],
+                "sheet": target_sheet,
+                "expected_revision": target["revision"],
+                "idempotency_key": "target-hp",
+            },
+        )
+        campaign = await _call(
+            server,
+            "campaign_query",
+            {
+                "view": "get",
+                "payload": {"campaign_id": campaign["id"]},
+                "principal_id": "system:local",
+            },
+        )
+        started = await _call_raw(
+            server,
+            "combat_start",
+            {
+                "positioning_mode": "grid",
+                "battle_map": {"width_cells": 12, "height_cells": 12},
+                "campaign_id": campaign["id"],
+                "participant_ids": [attacker["id"], target["id"]],
+                "participant_config": [
+                    {
+                        "actor_id": attacker["id"],
+                        "initiative": 20,
+                        "position": {"x": 0, "y": 0},
+                    },
+                    {
+                        "actor_id": target["id"],
+                        "initiative": 10,
+                        "position": {"x": 1, "y": 0},
+                    },
+                ],
+                "expected_revision": campaign["revision"],
+                "idempotency_key": "start",
+            },
+        )
+        first = await _call_raw(
+            server,
+            "combat_resolve_attack",
+            {
+                "campaign_id": campaign["id"],
+                "actor_id": attacker["id"],
+                "target_id": target["id"],
+                "action": {"weapon_id": "primary-light-weapon", "attack_mode": "melee"},
+                "expected_revision": started["campaign_revision"],
+                "idempotency_key": "primary-attack",
+            },
+        )
+        plan = await _call(
+            server,
+            "combat_preflight_attack",
+            {
+                "campaign_id": campaign["id"],
+                "actor_id": attacker["id"],
+                "target_id": target["id"],
+                "action": {
+                    "weapon_id": "secondary-light-weapon",
+                    "attack_mode": "melee",
+                    "light_extra_attack": "bonus_action",
+                },
+                "principal_id": "system:local",
+            },
+        )
+        assert plan["status"] == "ready"
+        assert plan["damage_expression"] == "1d6 + 3"
+        second = await _call_raw(
+            server,
+            "combat_resolve_attack",
+            {
+                "campaign_id": campaign["id"],
+                "actor_id": attacker["id"],
+                "target_id": target["id"],
+                "action": {
+                    "weapon_id": "secondary-light-weapon",
+                    "attack_mode": "melee",
+                    "light_extra_attack": "bonus_action",
+                },
+                "expected_revision": first["campaign_revision"],
+                "idempotency_key": "secondary-attack",
+            },
+        )
+        assert second["result"]["attack_payment"] == {
+            "kind": "light_extra_attack",
+            "weapon_id": "secondary-light-weapon",
+            "payment": "bonus_action",
+        }
+        combat_before_rejection = deepcopy(second["combat"])
+        revision_before_rejection = second["campaign_revision"]
+        with pytest.raises(Exception, match="Nick requires 2024 rules"):
+            await server.call_tool(
+                "combat_resolve_attack",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": attacker["id"],
+                    "target_id": target["id"],
+                    "action": {
+                        "weapon_id": "secondary-light-weapon",
+                        "attack_mode": "melee",
+                        "light_extra_attack": "nick",
+                    },
+                    "expected_revision": revision_before_rejection,
+                    "idempotency_key": "invalid-nick",
+                },
+            )
+        after_rejection = await _call(
+            server,
+            "campaign_query",
+            {
+                "view": "get",
+                "payload": {"campaign_id": campaign["id"]},
+                "principal_id": "system:local",
+            },
+        )
+        assert after_rejection["revision"] == revision_before_rejection
+        after_combat = after_rejection["state"]["combat"]
+        for field in (
+            "id",
+            "round",
+            "turn_index",
+            "ruleset",
+            "positioning_mode",
+            "combatants",
+            "log",
+            "pending",
+        ):
+            assert after_combat.get(field) == combat_before_rejection.get(field)
+
+    asyncio.run(exercise())
+
+
 def test_engine_rolled_initiative_tie_rewinds_before_explicit_retry(
     tmp_path: Path,
 ) -> None:
