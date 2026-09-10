@@ -91,8 +91,8 @@ def _locked_official_library() -> Path:
     raw = os.environ.get("SAGASMITH_DND_TEST_OFFICIAL_CONTENT_LIBRARY")
     if not raw:
         pytest.skip(
-            "set SAGASMITH_DND_TEST_OFFICIAL_CONTENT_LIBRARY to the checkout at "
-            "the official lock source commit"
+            "set SAGASMITH_DND_TEST_OFFICIAL_CONTENT_LIBRARY to the verified "
+            "repaired library matching the shipped lock"
         )
     library = Path(raw).expanduser().resolve()
     report = verify_official_expansion_library(library)

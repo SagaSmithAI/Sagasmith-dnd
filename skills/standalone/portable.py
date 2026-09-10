@@ -288,7 +288,6 @@ def cmd_module_ingest(args: argparse.Namespace) -> dict[str, Any]:
     title = args.title or source.stem
     source_key = _slug(title)
     content = source.read_text(encoding="utf-8")
-    checksum = hashlib.sha256(content.encode()).hexdigest()
     mod_dir = _data_dir(args.campaign) / "modules"
     mod_dir.mkdir(parents=True, exist_ok=True)
 
@@ -300,22 +299,31 @@ def cmd_module_ingest(args: argparse.Namespace) -> dict[str, Any]:
         chapters.append({"ordinal": 0, "title": title, "scenes": [{"ordinal": 0, "title": title, "line": 1}]})
     else:
         ch_matches = [m for m in matches if len(m.group(1)) == 1]
-        if not ch_matches:
-            ch_matches = [type("m", (), {"start": lambda: 0, "group": lambda _: title, "end": lambda: len(content)})()]
-        for ci, cm in enumerate(ch_matches):
-            ch_start = cm.start()
-            ch_end = ch_matches[ci + 1].start() if ci + 1 < len(ch_matches) else len(content)
-            ch_body = content[ch_start:ch_end]
+        chapter_ranges = [
+            (
+                match.start(),
+                ch_matches[index + 1].start() if index + 1 < len(ch_matches) else len(content),
+                match.group(2).strip(),
+            )
+            for index, match in enumerate(ch_matches)
+        ] or [(0, len(content), title)]
+        for ci, (ch_start, ch_end, ch_title) in enumerate(chapter_ranges):
             scenes = []
-            scene_levels = [m2 for m2 in matches if ch_start < m2.start() < ch_end and len(m2.group(1)) >= 2]
+            scene_levels = [
+                m2 for m2 in matches
+                if ch_start <= m2.start() < ch_end and len(m2.group(1)) >= 2
+            ]
             sc_level = 2
             if scene_levels:
                 h2 = sum(1 for m2 in scene_levels if len(m2.group(1)) == 2)
                 h3 = sum(1 for m2 in scene_levels if len(m2.group(1)) == 3)
                 sc_level = 3 if h2 and h3 >= h2 * 5 else (2 if h2 else 3)
-            sc_heads = [m2 for m2 in matches if ch_start < m2.start() < ch_end and len(m2.group(1)) == sc_level]
+            sc_heads = [m2 for m2 in scene_levels if len(m2.group(1)) == sc_level]
             if not sc_heads:
-                scenes.append({"ordinal": 0, "title": cm.group(2).strip(), "line": content.count("\n", 0, ch_start) + 1})
+                scenes.append({
+                    "ordinal": 0, "title": ch_title,
+                    "line": content.count("\n", 0, ch_start) + 1,
+                })
             for si, sh in enumerate(sc_heads):
                 scenes.append({
                     "ordinal": si,
@@ -324,7 +332,7 @@ def cmd_module_ingest(args: argparse.Namespace) -> dict[str, Any]:
                 })
             chapters.append({
                 "ordinal": ci,
-                "title": cm.group(2).strip() if hasattr(cm, "group") else title,
+                "title": ch_title,
                 "scenes": scenes,
             })
 
