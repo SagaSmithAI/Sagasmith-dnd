@@ -54,6 +54,10 @@ from sagasmith_dnd.standard_feature_ids import (
     TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM,
     TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
     TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+    TORTLE_NATURAL_ARMOR_CURRENT_PACK_VERSION,
+    TORTLE_NATURAL_ARMOR_CURRENT_SELECTION_MECHANIC_REFS,
+    TORTLE_NATURAL_ARMOR_LEGACY_CONTENT_PACKAGE_CHECKSUM,
+    TORTLE_NATURAL_ARMOR_LEGACY_CONTENT_PACKAGE_VERSION,
     TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
     TORTLE_NATURAL_ARMOR_LEGACY_PACK_VERSIONS,
     TORTLE_NATURAL_ARMOR_SOURCE_RULE_REF_PREFIX,
@@ -4225,11 +4229,38 @@ def _2014_tortle_natural_armor_sources(
         if not isinstance(raw_authority, dict):
             continue
         authority = dict(raw_authority)
+        authority_matches = (
+            authority.get("package_id") == TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID
+            and (
+                (
+                    authority.get("package_version")
+                    == TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION
+                    and authority.get("package_checksum")
+                    == TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM
+                )
+                or (
+                    authority.get("package_version")
+                    == TORTLE_NATURAL_ARMOR_LEGACY_CONTENT_PACKAGE_VERSION
+                    and authority.get("package_checksum")
+                    == TORTLE_NATURAL_ARMOR_LEGACY_CONTENT_PACKAGE_CHECKSUM
+                )
+            )
+        )
+        selection_provenance = (
+            (
+                selection.get("pack_version") in TORTLE_NATURAL_ARMOR_LEGACY_PACK_VERSIONS
+                and selection.get("mechanic_refs") == []
+            )
+            or (
+                selection.get("pack_version") == TORTLE_NATURAL_ARMOR_CURRENT_PACK_VERSION
+                and set(selection.get("mechanic_refs") or [])
+                == TORTLE_NATURAL_ARMOR_CURRENT_SELECTION_MECHANIC_REFS
+            )
+        )
         if (
             selection.get("kind") == "species"
             and selection.get("pack_id") == TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID
             and isinstance(selection.get("pack_version"), str)
-            and selection.get("pack_version") in TORTLE_NATURAL_ARMOR_LEGACY_PACK_VERSIONS
             and selection.get("artifact_id") == TORTLE_NATURAL_ARMOR_ARTIFACT_ID
             and isinstance(rule_refs, list)
             and len(rule_refs) == 2
@@ -4239,10 +4270,8 @@ def _2014_tortle_natural_armor_sources(
                 and rule_ref.startswith(TORTLE_NATURAL_ARMOR_SOURCE_RULE_REF_PREFIX)
                 for rule_ref in rule_refs
             )
-            and selection.get("mechanic_refs") == []
-            and authority.get("package_id") == TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID
-            and authority.get("package_version") == TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION
-            and authority.get("package_checksum") == TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM
+            and selection_provenance
+            and authority_matches
             and isinstance(authority.get("authority_id"), str)
             and authority["authority_id"] in trusted_content_authority_ids
         ):

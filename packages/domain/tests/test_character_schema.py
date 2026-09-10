@@ -42,6 +42,8 @@ from sagasmith_dnd.standard_feature_ids import (
     TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM,
     TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
     TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+    TORTLE_NATURAL_ARMOR_CURRENT_PACK_VERSION,
+    TORTLE_NATURAL_ARMOR_CURRENT_SELECTION_MECHANIC_REFS,
     TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
     TORTLE_NATURAL_ARMOR_SOURCE_RULE_REFS,
 )
@@ -2053,6 +2055,139 @@ def test_2014_tortle_natural_armor_ignores_worn_armor_but_allows_shields() -> No
     malformed_formula = deepcopy(sheet)
     malformed_formula["effects"][0]["changes"][0]["value"]["base"] = 18
     assert derive_tortle(malformed_formula)["armor_class"] == 23
+
+
+def test_2014_republished_tortle_natural_armor_beats_class_and_spell_formulas() -> None:
+    authority_id = "test-server-issued-tortle-authority"
+    sheet = default_character_sheet()
+    sheet["progression"]["species"] = "Tortle"
+    sheet["abilities"]["dexterity"]["score"] = 20
+    sheet["abilities"]["wisdom"]["score"] = 20
+    sheet["abilities"]["constitution"]["score"] = 20
+    sheet["content"]["selections"].append(
+        {
+            "artifact_id": TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
+            "kind": "species",
+            "name": "Tortle",
+            "pack_id": TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
+            "pack_version": TORTLE_NATURAL_ARMOR_CURRENT_PACK_VERSION,
+            "rule_refs": list(TORTLE_NATURAL_ARMOR_SOURCE_RULE_REFS),
+            "mechanic_refs": sorted(TORTLE_NATURAL_ARMOR_CURRENT_SELECTION_MECHANIC_REFS),
+            "selection": {
+                TORTLE_NATURAL_ARMOR_AUTHORITY_KEY: {
+                    "package_id": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
+                    "package_version": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+                    "package_checksum": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM,
+                    "authority_id": authority_id,
+                }
+            },
+        }
+    )
+    sheet, natural_armor_effect_id = add_effect(
+        sheet,
+        {
+            "id": "republished-tortle-natural-armor",
+            "name": "Natural Armor",
+            "kind": "feature",
+            "source": TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
+            "changes": [
+                {
+                    "path": "combat.ac.unarmored_formula",
+                    "mode": "override",
+                    "value": {
+                        "base": 17,
+                        "ability": None,
+                        "allows_shield": True,
+                        "includes_dexterity": False,
+                    },
+                }
+            ],
+        },
+    )
+    for name, ability in (
+        ("Monk Unarmored Defense", "wisdom"),
+        ("Barbarian Unarmored Defense", "constitution"),
+    ):
+        sheet, _ = add_effect(
+            sheet,
+            {
+                "name": name,
+                "kind": "feature",
+                "changes": [
+                    {
+                        "path": "combat.ac.unarmored_formula",
+                        "mode": "override",
+                        "value": {
+                            "base": 10,
+                            "ability": ability,
+                            "allows_shield": False,
+                            "includes_dexterity": True,
+                        },
+                    }
+                ],
+            },
+        )
+    sheet, armor_id = add_inventory_item(
+        sheet,
+        {
+            "id": "plate",
+            "name": "Plate",
+            "kind": "armor",
+            "mechanics": {
+                "base_ac": 18,
+                "category": "heavy",
+                "dexterity_mode": "none",
+                "magic_bonus": 0,
+                "strength_requirement": 15,
+                "stealth_disadvantage": True,
+            },
+        },
+    )
+    sheet = equip_inventory_item(sheet, armor_id, "armor")
+    sheet, mage_armor_effect_id = add_effect(
+        sheet,
+        {
+            "name": "Mage Armor",
+            "kind": "spell",
+            "changes": [
+                {
+                    "path": "combat.ac.unarmored_formula",
+                    "mode": "override",
+                    "value": {
+                        "base": 13,
+                        "ability": None,
+                        "allows_shield": True,
+                        "includes_dexterity": True,
+                    },
+                }
+            ],
+        },
+    )
+    sheet, shield_id = add_inventory_item(
+        sheet,
+        {
+            "id": "shield",
+            "name": "Shield",
+            "kind": "shield",
+            "mechanics": {"ac_bonus": 2, "magic_bonus": 0},
+        },
+    )
+    sheet = equip_inventory_item(sheet, shield_id, "shield")
+    derived = derive_character_sheet(
+        validate_character_sheet(sheet),
+        rules=resolution_context(
+            {"edition": "2014", "fingerprint": "republished-tortle", "lock": [], "mechanics": []}
+        ),
+        trusted_content_authority_ids={authority_id},
+    )
+
+    assert derived["armor_class"] == 19
+    applied = {
+        item["effect_id"]: item["applied"] for item in derived["armor_class_breakdown"]["effects"]
+    }
+    assert applied[natural_armor_effect_id] is True
+    assert applied[mage_armor_effect_id] is False
+    assert sum(applied.values()) == 1
 
 
 def test_class_unarmored_formulas_honor_ability_and_shield_conditions() -> None:
