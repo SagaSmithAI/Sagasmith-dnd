@@ -125,6 +125,13 @@ SLOT_ITEM_KINDS = {
 SENSE_NAMES = ("darkvision", "blindsight", "tremorsense", "truesight")
 ATTACK_ABILITIES = {"strength", "dexterity", "spell", "none"}
 RECOVERY_PERIODS = REST_TYPES | {"none", "turn", "dawn", "manual"}
+DAMAGE_DEFENSE_KINDS = {"resistance", "immunity", "vulnerability"}
+DAMAGE_DEFENSE_PREDICATES = {
+    "nonmagical_attack",
+    "not_silvered",
+    "not_adamantine",
+    "unresolved",
+}
 EFFECT_PERIODS = REST_TYPES | {
     "manual",
     "source_turn_start",
@@ -490,6 +497,7 @@ def default_character_sheet() -> dict[str, Any]:
             "resistances": [],
             "immunities": [],
             "vulnerabilities": [],
+            "damage_defenses": [],
             "condition_immunities": [],
             "senses": {
                 "darkvision": 0,
@@ -566,6 +574,54 @@ def _merge_defaults(default: dict[str, Any], supplied: dict[str, Any]) -> dict[s
             result[key] = _merge_defaults(result[key], value)
         else:
             result[key] = value
+    return result
+
+
+def _damage_defenses(value: Any, field: str) -> list[dict[str, Any]]:
+    """Normalize conditional damage defenses without flattening their scope."""
+
+    result: list[dict[str, Any]] = []
+    for index, raw in enumerate(_array(value or [], field)):
+        item_field = f"{field}[{index}]"
+        item = _object(raw, item_field)
+        _reject_unknown(
+            item,
+            item_field,
+            {"kind", "damage_types", "predicates", "source_excerpt", "source_key"},
+        )
+        kind = _text(item.get("kind"), f"{item_field}.kind").casefold()
+        if kind not in DAMAGE_DEFENSE_KINDS:
+            raise ValueError(f"{item_field}.kind is invalid")
+        damage_types = [
+            value.strip().casefold()
+            for value in _string_list(item.get("damage_types"), f"{item_field}.damage_types")
+        ]
+        if not damage_types or len(damage_types) != len(set(damage_types)):
+            raise ValueError(f"{item_field}.damage_types must be unique and non-empty")
+        invalid = sorted(set(damage_types) - DAMAGE_TYPES)
+        if invalid:
+            raise ValueError(f"{item_field}.damage_types contains invalid damage types: {invalid}")
+        predicates = [
+            value.strip().casefold()
+            for value in _string_list(item.get("predicates"), f"{item_field}.predicates")
+        ]
+        if len(predicates) != len(set(predicates)):
+            raise ValueError(f"{item_field}.predicates contains duplicates")
+        invalid_predicates = sorted(set(predicates) - DAMAGE_DEFENSE_PREDICATES)
+        if invalid_predicates:
+            raise ValueError(
+                f"{item_field}.predicates contains unsupported predicates: {invalid_predicates}"
+            )
+        normalized = {
+            "kind": kind,
+            "damage_types": damage_types,
+            "predicates": predicates,
+            "source_excerpt": _text(
+                item.get("source_excerpt"), f"{item_field}.source_excerpt", maximum=1000
+            ),
+            "source_key": _text(item.get("source_key"), f"{item_field}.source_key", maximum=300),
+        }
+        result.append(normalized)
     return result
 
 
@@ -3000,6 +3056,7 @@ def validate_character_sheet(
             "resistances",
             "immunities",
             "vulnerabilities",
+            "damage_defenses",
             "condition_immunities",
             "senses",
         },
@@ -3755,6 +3812,9 @@ def validate_character_sheet(
             "immunities": _string_list(traits["immunities"], "sheet.traits.immunities"),
             "vulnerabilities": _string_list(
                 traits["vulnerabilities"], "sheet.traits.vulnerabilities"
+            ),
+            "damage_defenses": _damage_defenses(
+                traits.get("damage_defenses"), "sheet.traits.damage_defenses"
             ),
             "condition_immunities": _string_list(
                 traits["condition_immunities"], "sheet.traits.condition_immunities"
@@ -4717,6 +4777,7 @@ def _weapon_attacks(
                 "damage_bonus_override": mechanics.get("damage_bonus_override"),
                 "damage_expression": damage_expression,
                 "damage_type": mechanics["damage_type"],
+                "magical": bool(magic_weapon),
                 "additional_damage": [
                     {
                         **part,
@@ -4817,6 +4878,7 @@ def _weapon_attacks(
                 "versatile_damage_formula": "",
                 "properties": [],
                 "materials": [],
+                "magical": False,
                 "range_ft": {"normal": 0, "long": 0},
                 "thrown_range_ft": {"normal": 0, "long": 0},
                 "ammunition_item_id": None,

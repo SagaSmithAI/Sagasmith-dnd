@@ -3976,6 +3976,73 @@ def test_statblock_variant_applies_canonical_damage_defenses() -> None:
 
 
 @pytest.mark.parametrize(
+    ("name", "label", "kind", "predicate", "magic_weapons"),
+    [
+        ("Wraith", "Damage Resistances", "resistance", "not_silvered", False),
+        ("Werewolf", "Damage Resistances", "resistance", "not_silvered", False),
+        ("Iron Golem", "Damage Immunities", "immunity", "not_adamantine", True),
+        ("Xorn", "Damage Resistances", "resistance", "nonmagical_attack", False),
+    ],
+)
+def test_statblock_preserves_conditional_physical_defense_and_attack_facts(
+    name: str,
+    label: str,
+    kind: str,
+    predicate: str,
+    magic_weapons: bool,
+) -> None:
+    material = "adamantine" if predicate == "not_adamantine" else "silvered"
+    condition = (
+        f" from nonmagical attacks that aren't {material}"
+        if predicate != "nonmagical_attack"
+        else " from nonmagical attacks"
+    )
+    source = f"""#{name}
+
+*Medium humanoid, neutral*
+
+**Armor Class** 10
+**Hit Points** 20 (3d8 + 6)
+**Speed** 30 ft.
+
+| STR | DEX | CON | INT | WIS | CHA |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| 10 (+0) | 10 (+0) | 10 (+0) | 10 (+0) | 10 (+0) | 10 (+0) |
+
+**{label}** bludgeoning, piercing, and slashing{condition}
+
+**Senses** passive Perception 10
+**Languages** Common
+**Challenge** 1 (200 XP)
+
+""" + (
+        "***Magic Weapons.*** The golem's weapon attacks are magical.\n\n"
+        if magic_weapons
+        else ""
+    ) + """## Actions
+
+***Slam.*** *Melee Weapon Attack:* +4 to hit, reach 5 ft., one target.
+*Hit:* 6 (1d8 + 2) bludgeoning damage.
+"""
+    parsed = parse_2014_statblock(source, source_key=f"srd2014:{name.casefold()}")
+
+    defense = parsed.sheet["traits"]["damage_defenses"][0]
+    assert defense["kind"] == kind
+    assert defense["damage_types"] == ["bludgeoning", "piercing", "slashing"]
+    expected_predicates = (
+        ["nonmagical_attack", "not_adamantine"]
+        if predicate == "not_adamantine"
+        else ["nonmagical_attack", "not_silvered"]
+        if predicate == "not_silvered"
+        else ["nonmagical_attack"]
+    )
+    assert defense["predicates"] == expected_predicates
+    assert parsed.sheet["traits"]["resistances"] == []
+    derived = derive_character_sheet(parsed.sheet)
+    assert derived["inventory"]["weapon_attacks"][0]["magical"] is magic_weapons
+
+
+@pytest.mark.parametrize(
     ("field", "value", "match"),
     [
         ("damage_resistances", "fire", "must be a list"),

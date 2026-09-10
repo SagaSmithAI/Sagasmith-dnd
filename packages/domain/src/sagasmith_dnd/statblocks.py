@@ -135,6 +135,16 @@ def _field(markdown: str, label: str, *, required: bool = False) -> str:
     return ""
 
 
+def _damage_field(markdown: str, label: str) -> str:
+    """Read a wrapped damage-defense line up to the next statblock field."""
+
+    match = re.search(
+        rf"(?ims)^\*\*{re.escape(label)}\*\*\s+(?P<value>.+?)(?=\n\s*\n|\n\*\*|\n#{1,6}\s|\Z)",
+        markdown,
+    )
+    return " ".join(match.group("value").split()) if match else ""
+
+
 def _signed(value: str) -> int:
     return int(value.replace(" ", ""))
 
@@ -146,6 +156,61 @@ def _split_list(value: str) -> list[str]:
         for item in re.split(r"[,;]", value)
         if item.strip() and item.strip().casefold() not in empty_markers
     ]
+
+
+def _parse_damage_defenses(
+    value: str,
+    *,
+    kind: str,
+    source_key: str,
+) -> tuple[list[str], list[dict[str, Any]]]:
+    """Split printed defenses without losing a shared predicate clause."""
+
+    unconditional: list[str] = []
+    conditional: list[dict[str, Any]] = []
+    for raw_clause in re.split(r"\s*;\s*", value):
+        clause = " ".join(raw_clause.split()).strip(" ,")
+        if not clause or clause.casefold() in {"none", "-"}:
+            continue
+        separator_match = re.search(r"(?i)\s+from\s+", clause)
+        if separator_match is None:
+            type_text = clause
+            predicate_text = ""
+        else:
+            type_text = clause[: separator_match.start()]
+            predicate_text = clause[separator_match.end() :]
+        types = [
+            item.strip().casefold()
+            for item in re.split(r"\s*,\s*|\s*\band\s+", type_text)
+            if item.strip()
+        ]
+        if not types or any(item not in DAMAGE_TYPES for item in types):
+            # Preserve the source in the structured field, but do not make an
+            # unrecognized phrase executable as an unconditional defense.
+            continue
+        if separator_match is None:
+            unconditional.extend(types)
+            continue
+        predicate_source = predicate_text.strip().casefold()
+        predicates: list[str] = []
+        if re.search(r"\bnonmagical\b", predicate_source):
+            predicates.append("nonmagical_attack")
+        if re.search(r"\b(?:not|isn['’]?t|aren['’]?t)\s+silvered\b", predicate_source):
+            predicates.append("not_silvered")
+        if re.search(r"\b(?:not|isn['’]?t|aren['’]?t)\s+adamantine\b", predicate_source):
+            predicates.append("not_adamantine")
+        if not predicates:
+            predicates.append("unresolved")
+        conditional.append(
+            {
+                "kind": kind,
+                "damage_types": list(dict.fromkeys(types)),
+                "predicates": list(dict.fromkeys(predicates)),
+                "source_excerpt": clause,
+                "source_key": source_key,
+            }
+        )
+    return list(dict.fromkeys(unconditional)), conditional
 
 
 def _parse_armor_equipment(
@@ -699,6 +764,11 @@ def _parse_weapon(
         properties.append("thrown")
     if versatile_damage_formula:
         properties.append("versatile")
+    materials = [
+        material
+        for material in ("silvered", "adamantine")
+        if re.search(rf"(?i)\b{material}\b", f"{name} {description}")
+    ]
     mechanics: dict[str, Any] = {
         "attack_type": "ranged" if mode == "ranged" else "melee",
         "attack_ability": (
@@ -715,6 +785,8 @@ def _parse_weapon(
         "on_hit_effect": on_hit_effect,
         "versatile_damage_formula": versatile_damage_formula,
         "properties": properties,
+        "materials": materials,
+        "magical": str(attack.group(2) or "").casefold() == "spell",
         "proficient": False,
         "attack_bonus_override": _signed(attack.group(3).replace("−", "-")),
         "damage_bonus_override": damage_bonus,
@@ -1642,13 +1714,21 @@ def _parse_srd_statblock(
             }[skill]
             sheet["skills"][skill]["bonus"] = target - ability_modifier(ability_scores[ability])
 
-    for label, key in (
-        ("Damage Resistances", "resistances"),
-        ("Damage Immunities", "immunities"),
-        ("Damage Vulnerabilities", "vulnerabilities"),
-        ("Condition Immunities", "condition_immunities"),
+    damage_defenses: list[dict[str, Any]] = []
+    for label, key, defense_kind in (
+        ("Damage Resistances", "resistances", "resistance"),
+        ("Damage Immunities", "immunities", "immunity"),
+        ("Damage Vulnerabilities", "vulnerabilities", "vulnerability"),
     ):
-        sheet["traits"][key] = _split_list(_field(markdown, label))
+        flat, structured = _parse_damage_defenses(
+            _damage_field(markdown, label), kind=defense_kind, source_key=source_key
+        )
+        sheet["traits"][key] = flat
+        damage_defenses.extend(structured)
+    sheet["traits"]["damage_defenses"] = damage_defenses
+    sheet["traits"]["condition_immunities"] = _split_list(
+        _field(markdown, "Condition Immunities")
+    )
     sheet["traits"]["languages"] = _split_list(_field(markdown, "Languages"))
     _parse_senses(_field(markdown, "Senses"), sheet, ability_scores)
 
@@ -1813,6 +1893,13 @@ def _parse_srd_statblock(
         else:
             unresolved_multiattacks.add(entry_name)
             descriptive.append(("actions", entry_name, description))
+    # A statblock's exact Magic Weapons trait applies to the creature's
+    # weapon attacks.  Record it on each parsed attack so the derived plan
+    # carries the fact into damage settlement instead of guessing later.
+    if re.search(r"(?im)^\*{3}Magic Weapons(?:\*{3}\.|\.\*{3})", markdown):
+        for weapon in weapons:
+            weapon["mechanics"]["magical"] = True
+
     for section, entry_name, description in descriptive:
         recharge = _recharge_contract(entry_name)
         daily_uses = _daily_uses_contract(entry_name)

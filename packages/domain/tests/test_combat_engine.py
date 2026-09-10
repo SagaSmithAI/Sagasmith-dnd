@@ -3390,6 +3390,86 @@ def test_damage_applies_resistance_and_vulnerability_in_order() -> None:
     assert result["adjustment"] == "resistant_and_vulnerable"
 
 
+@pytest.mark.parametrize(
+    ("name", "kind", "predicates", "facts", "expected"),
+    [
+        (
+            "Wraith", "resistance", ["nonmagical_attack", "not_silvered"],
+            {"magical": False, "materials": ["wood"]}, 5,
+        ),
+        (
+            "Wraith", "resistance", ["nonmagical_attack", "not_silvered"],
+            {"magical": False, "materials": ["silvered"]}, 10,
+        ),
+        (
+            "Wraith", "resistance", ["nonmagical_attack", "not_silvered"],
+            {"magical": True, "materials": ["wood"]}, 10,
+        ),
+        ("Werewolf", "resistance", ["nonmagical_attack", "not_silvered"], {}, 10),
+        (
+            "Iron Golem", "immunity", ["nonmagical_attack", "not_adamantine"],
+            {"magical": False, "materials": ["wood"]}, 0,
+        ),
+        (
+            "Iron Golem", "immunity", ["nonmagical_attack", "not_adamantine"],
+            {"magical": False, "materials": ["adamantine"]}, 10,
+        ),
+        ("Xorn", "resistance", ["nonmagical_attack"], {"magical": True, "materials": ["wood"]}, 10),
+        ("Xorn", "resistance", ["nonmagical_attack"], {"magical": False, "materials": ["wood"]}, 5),
+    ],
+)
+def test_conditional_physical_defenses_settle_only_when_attack_facts_qualify(
+    name: str,
+    kind: str,
+    predicates: list[str],
+    facts: dict[str, object],
+    expected: int,
+) -> None:
+    target = _actor(name, hp=20)
+    target["sheet"]["traits"]["damage_defenses"] = [
+        {
+            "kind": kind,
+            "damage_types": ["bludgeoning", "piercing", "slashing"],
+            "predicates": predicates,
+            "source_excerpt": f"{name} conditional physical defense",
+            "source_key": f"srd2014:{name.casefold()}",
+        }
+    ]
+
+    result = apply_damage_to_sheet(
+        target["sheet"],
+        amount=10,
+        damage_type="slashing",
+        weapon_attack=True,
+        attack_facts=facts,
+    )
+
+    assert result["applied_amount"] == expected
+    assert result["after_hp"] == 20 - expected
+
+
+def test_attack_plan_carries_magical_and_material_facts() -> None:
+    attacker = _actor("attacker")
+    target = _actor("target", ac=1)
+    attacker["derived"]["inventory"]["weapon_attacks"] = [
+        {
+            "item_id": "silvered-sword",
+            "attack_type": "melee",
+            "reach_ft": 5,
+            "properties": [],
+            "attack_bonus": 99,
+            "damage_expression": "1d8",
+            "damage_type": "slashing",
+            "magical": True,
+            "materials": ["silvered"],
+        }
+    ]
+
+    plan = preflight_attack(attacker, target, action={"weapon_id": "silvered-sword"})
+
+    assert plan["attack_facts"] == {"magical": True, "materials": ["silvered"]}
+
+
 def test_attuned_magic_item_grants_damage_resistance() -> None:
     actor = _actor("target", hp=20)
     actor["sheet"]["inventory"]["items"] = [
