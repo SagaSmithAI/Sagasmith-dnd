@@ -1754,7 +1754,7 @@ Agent-performed DM ruling.
 Every combat write should provide `expected_revision` and `idempotency_key`.
 `combat_preflight_attack` never mutates; `combat_resolve_attack`,
 `combat_movement`, `combat_end_turn`, `combat_check`, `combat_use_activity`,
-`combat_ready`,
+`combat_resolve_hide`, `combat_ready`,
 `combat_concentration_check`, and `combat_hp_change` commit one
 atomic mutation group. Sensitive combat writes require both
 `expected_revision` and `idempotency_key`. Player views are filtered by campaign
@@ -1800,6 +1800,17 @@ The canonical 2014 and 2024 Fighter Action Surge ids are narrow Core exceptions:
 `extra_action`. It rejects off-turn or twice-on-one-turn activation, and any
 unused extra action is cleared when the actor's next turn begins. Its Core receipt
 is `dnd5e.core.activity.action_surge`; clients must not edit the turn budget.
+
+The canonical 2014 and 2024 Rogue Cunning Action Hide path is a two-step
+transaction. `combat_use_activity` pays the Bonus Action and records a
+source-linked declaration, returning `pending_ruling`; the Agent-as-DM then calls
+`combat_resolve_hide` with `ruling={can_hide, reason, observers}`. The server
+derives every listed observer's passive Perception from the campaign character
+card, rolls Dexterity (Stealth) once, compares the result to each passive score,
+and atomically updates `hidden` and `visible_to_actor_ids`. A ruling that hiding
+is impossible consumes the pending declaration without rolling. The continuation
+never charges the Bonus Action a second time and rejects stale or missing paid
+declarations.
 
 The exact 2014 and 2024 Fighter Second Wind cards share one engine-owned base
 activation: `combat_use_activity` pays the Bonus Action and card use, rolls

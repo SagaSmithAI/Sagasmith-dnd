@@ -375,7 +375,10 @@ own exposure. Changing one session's native tools must not expose them to anothe
    prose in the driver, silently dismiss a real rider, or repeat the hit.
 4. Resolve movement with `combat_movement`, checks with `combat_check`, common
    actions with `combat_common_action`, spells with `combat_cast_spell`, activities
-   with `combat_use_activity`, and damage/healing with `combat_hp_change`.
+   with `combat_use_activity`, and damage/healing with `combat_hp_change`. After a
+   Cunning Action Hide payment returns `pending_ruling`, use the DM-only
+   `combat_resolve_hide` continuation with the explicit scene ruling; never pay
+   the Bonus Action again.
    Standard structured areas use their locked standard implementation. A custom
    creature area uses its persisted source-bound plan with Agent-supplied generic
    target bindings; do not add a named area action to the driver or server.
