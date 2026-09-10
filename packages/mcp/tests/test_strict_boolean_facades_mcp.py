@@ -209,3 +209,87 @@ def test_required_boolean_fields_reject_strings(tmp_path: Path) -> None:
                 await _call(server, tool, arguments)
 
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("action", ["resolve_spell", "resolve_action"])
+def test_combat_ready_release_rejects_strings_before_settlement(
+    tmp_path: Path,
+    action: str,
+) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        with pytest.raises(Exception, match=r"payload\.release must be a boolean"):
+            await _call(
+                server,
+                "combat_ready",
+                {
+                    "campaign_id": "missing",
+                    "action": action,
+                    "payload": {
+                        "actor_id": "missing",
+                        "choice_id": "missing",
+                        "release": "false",
+                    },
+                },
+            )
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize(
+    ("tool", "arguments", "field"),
+    [
+        (
+            "combat_cast_spell",
+            {
+                "campaign_id": "missing",
+                "actor_id": "missing",
+                "spell_id": "missing",
+                "ritual": "false",
+            },
+            "ritual",
+        ),
+        (
+            "combat_cast_spell",
+            {
+                "campaign_id": "missing",
+                "actor_id": "missing",
+                "spell_id": "missing",
+                "signature_free_cast": 1,
+            },
+            "signature_free_cast",
+        ),
+        (
+            "combat_check",
+            {
+                "campaign_id": "missing",
+                "actor_id": "missing",
+                "kind": "ability",
+                "advantage": "true",
+            },
+            "advantage",
+        ),
+        (
+            "dnd_check",
+            {
+                "campaign_id": "missing",
+                "dc": 10,
+                "ability_score": 10,
+                "disadvantage": 0,
+            },
+            "disadvantage",
+        ),
+    ],
+)
+def test_direct_public_rule_booleans_reject_non_boolean_values_before_settlement(
+    tmp_path: Path,
+    tool: str,
+    arguments: dict,
+    field: str,
+) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        with pytest.raises(Exception, match=rf"(?s){field}.*boolean"):
+            await _call(server, tool, arguments)
+
+    asyncio.run(exercise())
