@@ -86,7 +86,10 @@ _SELECTION_FIELDS = {
         "tools",
         "values_include_species_grants",
     ),
-    "spell": ("method", "source_class"),
+    # A 2014 known caster may replace exactly one existing class spell when
+    # gaining a level.  The new spell remains the selected artifact; the
+    # existing id is removed atomically by the spell materializer.
+    "spell": ("method", "source_class", "replace_existing"),
     "subclass": ("target_class_name",),
 }
 
