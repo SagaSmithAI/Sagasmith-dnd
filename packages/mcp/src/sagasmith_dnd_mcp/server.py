@@ -1081,35 +1081,6 @@ def _verified_tortle_natural_armor_authority(
     return authority
 
 
-def _load_or_create_content_authority_secret(path: Path) -> bytes:
-    """Load the durable server key used to authorize privileged content effects."""
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        value = path.read_bytes()
-        if len(value) != 32:
-            raise RuntimeError("content authority key is invalid")
-        return value
-    value = secrets.token_bytes(32)
-    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(value)
-            handle.flush()
-            os.fsync(handle.fileno())
-        try:
-            os.link(temporary, path)
-            return value
-        except FileExistsError:
-            published = path.read_bytes()
-            if len(published) != 32:
-                raise RuntimeError("content authority key is invalid")
-            return published
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
 def _verified_content_authority_ids(
     sheet: Mapping[str, Any], *, character_id: str | None, secret: bytes
 ) -> frozenset[str]:
@@ -1333,104 +1304,6 @@ RIGHT_TOOL_FOR_JOB_ARTISAN_TOOL_NAMES = frozenset(
         "woodcarver's tools",
     }
 )
-SCAG_WATCHERS_EYE_BACKGROUND_IDS = frozenset(
-    {
-        (
-            "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide."
-            "16e6a243ef0a.background.city-watch"
-        ),
-        (
-            "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide."
-            "16e6a243ef0a.background.investigator"
-        ),
-    }
-)
-WATCHERS_EYE_CAPABILITIES = frozenset(
-    {
-        "local_law",
-        "local_criminal_activity",
-        "watch_outpost",
-        "law_enforcement_contact",
-        "watch_information",
-        "recognition",
-    }
-)
-WATCHERS_EYE_FACT_METADATA_KEY = "dnd5e_watchers_eye"
-WATCHERS_EYE_FACT_SCHEMA_VERSION = 1
-WATCHERS_EYE_FEATURE_NAME = "Watcher's Eye"
-WATCHERS_EYE_NARRATIVE_SCHEMA = "sagasmith.dnd.narrative-capability.v1"
-
-
-def _watchers_eye_source_binding(artifact: Mapping[str, Any]) -> dict[str, Any] | None:
-    """Return exact source-review binding for the two SCAG background cards."""
-
-    artifact_id = str(artifact.get("id") or "")
-    if artifact_id not in SCAG_WATCHERS_EYE_BACKGROUND_IDS:
-        return None
-    if str(artifact.get("kind") or "") != "background":
-        return None
-    if str(artifact.get("application_state") or "") != "selection_ready":
-        return None
-    if str(artifact.get("execution_state") or "") != "ruling_ready":
-        return None
-    raw_selection_contract = artifact.get("selection_contract")
-    raw_catalog_review = artifact.get("catalog_review")
-    if raw_selection_contract is not None or raw_catalog_review is not None:
-        if selection_contract_errors(artifact):
-            return None
-        selection_contract = dict(raw_selection_contract or {})
-        catalog_review = dict(raw_catalog_review or {})
-        reviewed_content_hash = str(selection_contract.get("reviewed_content_hash") or "")
-        if (
-            selection_contract.get("status") != "ready"
-            or selection_contract.get("materializer") != "dnd5e.character.background.v1"
-            or catalog_review.get("status") != "approved"
-            or reviewed_content_hash != str(catalog_review.get("reviewed_content_hash") or "")
-            or len(reviewed_content_hash) != 64
-        ):
-            return None
-    else:
-        # The import boundary intentionally strips authoring attestations after
-        # binding them into the immutable addon checksum and definition provenance.
-        reviewed_content_hash = content_fingerprint(artifact)
-    card = dict(artifact.get("card") or {})
-    grants = dict(card.get("background_grants") or {})
-    if str(grants.get("feature") or "") != WATCHERS_EYE_FEATURE_NAME:
-        return None
-    source_refs = [
-        dict(item) for item in artifact.get("source_refs") or [] if isinstance(item, dict)
-    ]
-    feature_sources = [
-        item
-        for item in source_refs
-        if "watcher's eye" in str(item.get("note") or "").casefold()
-        and str(item.get("chunk_id") or item.get("chunk_key") or "")
-    ]
-    if len(feature_sources) != 1:
-        return None
-    chunk_key = str(feature_sources[0].get("chunk_id") or feature_sources[0].get("chunk_key"))
-    rule_refs = [str(item) for item in artifact.get("rule_refs") or []]
-    feature_rule_refs = [item for item in rule_refs if item.endswith(f"#chunk:{chunk_key}")]
-    if len(feature_rule_refs) != 1:
-        return None
-    ruling_requirements = [
-        dict(item) for item in card.get("ruling_requirements") or [] if isinstance(item, dict)
-    ]
-    if not any(
-        str(item.get("ruling_kind") or "") == "agent_dm_adjudication"
-        and len(str(item.get("source_excerpt") or "")) >= 100
-        for item in ruling_requirements
-    ):
-        return None
-    return {
-        "artifact_id": artifact_id,
-        "background_name": str(card.get("name") or artifact_id),
-        "reviewed_content_hash": reviewed_content_hash,
-        "rule_refs": rule_refs,
-        "feature_rule_ref": feature_rule_refs[0],
-    }
-
-
 def _semantic_plan_save_facts(
     source_card: dict[str, Any], compiled_plan: Any
 ) -> dict[str, dict[str, Any]]:
@@ -1596,10 +1469,6 @@ def _structured_spell_save_facts(
     return facts
 
 
-SCAG_OFFICIAL_ADDON_ID = (
-    "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a.addon"
-)
-SCAG_RULE_PACK_ID = "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a"
 SCAG_WATCHERS_EYE_BACKGROUND_IDS = frozenset(
     {
         (
@@ -37316,53 +37185,6 @@ def _create_server(
             },
         )
 
-    def memory_add(
-        campaign_id: str,
-        content: str,
-        kind: str = "fact",
-        subject: str = "",
-        metadata: dict[str, Any] | None = None,
-        branch_id: str | None = None,
-        principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
-        idempotency_key: str | None = None,
-    ) -> dict[str, Any]:
-        """Record a durable campaign fact, event, relationship, or NPC memory."""
-        access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
-        if not idempotency_key:
-            raise ValueError("idempotency_key is required for memory writes")
-        branch_id = require_current_branch(campaign_id, branch_id)
-        request_payload = {
-            "content": content,
-            "kind": kind,
-            "subject": subject,
-            "metadata": metadata or {},
-            "branch_id": branch_id,
-        }
-        validate_embedded_module_source_refs(
-            campaign_id,
-            request_payload,
-            field="memory_add",
-        )
-        scope = f"memory-add:{campaign_id}:{branch_id}:{principal_id}"
-        replay = replay_idempotent(scope, idempotency_key, request_payload)
-        if replay is not None:
-            return replay
-        result = memories.add(
-            campaign_id,
-            content=content,
-            kind=kind,
-            subject=subject,
-            metadata=metadata,
-            branch_id=branch_id,
-            idempotency_key=idempotency_key,
-            idempotency_write=IdempotencyWrite(
-                scope=scope,
-                payload=request_payload,
-                response=lambda value: asdict(value),
-            ),
-        )
-        return asdict(result)
-
     def memory_list(
         campaign_id: str,
         kind: str | None = None,
@@ -40434,18 +40256,6 @@ def _create_server(
         path = storage.write_module(name, content)
         return {"artifact": path.name, "path": str(path)}
 
-    def module_inspect(
-        artifact: str, principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID
-    ) -> dict[str, Any]:
-        """Inspect a managed PDF/Markdown/text artifact before campaign import."""
-        if not principal_id:
-            raise PermissionError("authenticated caller identity is required for module artifacts")
-        return modules.inspect_path(
-            storage.artifact_module_path(artifact),
-            parser=MarkdownModuleParser(profile=DndModuleProfile()),
-            **module_document_options(),
-        )
-
     def module_list(
         campaign_id: str, principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID
     ) -> list[dict[str, Any]]:
@@ -40606,68 +40416,6 @@ def _create_server(
         if file_sha256(source_asset["source_path"]) != source_asset["checksum"]:
             raise RuntimeError("module PDF no longer matches its imported checksum")
         return source_asset
-
-    def module_page_render(
-        campaign_id: str,
-        module_id: str,
-        page_number: int,
-        source_asset_id: str | None = None,
-        scale: float = 1.5,
-        include_ocr_text: bool = True,
-        principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
-    ) -> Any:
-        """Render one imported PDF page as visual evidence for maps or handouts."""
-        access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
-        source_asset = module_pdf_asset(campaign_id, module_id, source_asset_id)
-        rendered = render_pdf_page(source_asset["source_path"], page_number, scale=scale)
-        if rendered.source_checksum != source_asset["checksum"]:
-            raise RuntimeError("module PDF no longer matches its imported checksum")
-        if not isinstance(include_ocr_text, bool):
-            raise ValueError("include_ocr_text must be a boolean")
-        ocr_evidence = (
-            local_ocr_page_evidence(
-                source_asset["source_path"],
-                page_number,
-                scope="module",
-            )
-            if include_ocr_text
-            else {"included": False}
-        )
-        target = storage.store_rendered_module_page(
-            module_id=module_id,
-            source_checksum=rendered.source_checksum,
-            page_number=rendered.page_number,
-            scale=rendered.scale,
-            checksum=rendered.checksum,
-            content=rendered.content,
-        )
-        asset = modules.register_asset(
-            campaign_id=campaign_id,
-            module_id=module_id,
-            source_path=str(target),
-            media_type=rendered.media_type,
-            checksum=rendered.checksum,
-            metadata={
-                "kind": "rendered_page",
-                "derived_from_asset_id": source_asset["id"],
-                "source_checksum": rendered.source_checksum,
-                "source_page": rendered.page_number,
-                "page_count": rendered.page_count,
-                "width": rendered.width,
-                "height": rendered.height,
-                "scale": rendered.scale,
-            },
-        )
-        return [
-            {
-                "campaign_id": campaign_id,
-                "module_id": module_id,
-                "asset": asset,
-                "source_asset_id": source_asset["id"],
-                "ocr": ocr_evidence,
-            },
-            Image(path=target),
-        ]
 
     def module_statblock_ocr_recover(
         campaign_id: str,
@@ -41580,18 +41328,6 @@ def _create_server(
         """Stage an allowlisted PDF/Markdown/text rulebook in MCP-owned storage."""
         access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
         return storage.stage_rulebook(source_path)
-
-    def rule_document_inspect(
-        campaign_id: str,
-        artifact: str,
-        principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
-    ) -> dict[str, Any]:
-        """Run Core document normalization and report structure/warnings without importing."""
-        access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
-        return rules.inspect_path(
-            storage.artifact_rulebook_path(artifact),
-            **rule_document_options(storage.rulebook_checksum(artifact)),
-        )
 
     def rule_document_page_render(
         campaign_id: str,
@@ -43775,143 +43511,6 @@ def _create_server(
             review_id,
         )
 
-    def rule_document_import(
-        campaign_id: str,
-        artifact: str,
-        source_key: str,
-        title: str,
-        edition: str,
-        locale: str = "en",
-        publication_id: str = "",
-        version: str = "",
-        authority: str = "supplement",
-        principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
-        idempotency_key: str | None = None,
-    ) -> dict[str, Any]:
-        """Import a staged rulebook through Core's shared structured parser and index."""
-        access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
-        edition = normalize_dnd_edition(edition)
-        if not idempotency_key:
-            raise ValueError("idempotency_key is required for rulebook import")
-        payload = {
-            "artifact": artifact,
-            "source_key": source_key,
-            "title": title,
-            "edition": edition,
-            "locale": locale,
-            "publication_id": publication_id,
-            "version": version,
-            "authority": authority,
-        }
-        scope = f"rule-document-import:{campaign_id}:{principal_id}"
-        replay = replay_idempotent(scope, idempotency_key, payload)
-        if replay is not None:
-            return replay
-        path = storage.artifact_rulebook_path(artifact)
-        embedder, vectors = storage.dense_components()
-
-        def rule_document_response(outcome: dict[str, Any]) -> dict[str, Any]:
-            result_value = outcome["result"]
-            source_metadata = dict(outcome.get("source_metadata") or {})
-            return {
-                **asdict(result_value),
-                "artifact": artifact,
-                "source_checksum": source_metadata.get("source_checksum"),
-                "page_count": source_metadata.get("page_count"),
-                "warnings": list(source_metadata.get("warnings") or []),
-                "metadata": {
-                    key: value
-                    for key, value in source_metadata.items()
-                    if key
-                    not in {
-                        "source_path",
-                        "warnings",
-                        "source_checksum",
-                        "page_count",
-                    }
-                },
-            }
-
-        result = rules.ingest_path(
-            system_id=DND5E.id,
-            path=path,
-            source_key=source_key,
-            title=title,
-            locale=locale,
-            edition=edition,
-            publication_id=publication_id,
-            version=version,
-            authority=authority,
-            embedder=embedder,
-            vector_store=vectors,
-            **rule_document_options(storage.rulebook_checksum(artifact)),
-            idempotency_campaign_id=campaign_id,
-            idempotency_key=idempotency_key,
-            idempotency_write=IdempotencyWrite(
-                scope=scope,
-                payload=payload,
-                response=rule_document_response,
-            ),
-        )
-        source = rules.source(result.source_id)
-        source_metadata = dict(source.get("metadata") or {})
-        response = {
-            **asdict(result),
-            "artifact": artifact,
-            "source_checksum": source_metadata.get("source_checksum"),
-            "page_count": source_metadata.get("page_count"),
-            "warnings": list(source_metadata.get("warnings") or []),
-            "metadata": {
-                key: value
-                for key, value in source_metadata.items()
-                if key not in {"source_path", "warnings", "source_checksum", "page_count"}
-            },
-        }
-        return response
-
-    def rule_ingest(
-        source_key: str,
-        title: str,
-        content: str,
-        locale: str = "en",
-        edition: str = "",
-        publication_id: str = "",
-    ) -> dict[str, Any]:
-        """Ingest Markdown rule content into the MCP-owned D&D rule index."""
-        embedder, vectors = storage.dense_components()
-        result = rules.ingest(
-            system_id=DND5E.id,
-            source_key=source_key,
-            title=title,
-            content=content,
-            locale=locale,
-            edition=edition,
-            publication_id=publication_id,
-            embedder=embedder,
-            vector_store=vectors,
-        )
-        return asdict(result)
-
-    def rule_pack_draft(
-        manifest: dict[str, Any],
-        artifacts: list[dict[str, Any]] | None = None,
-        mechanics: list[dict[str, Any]] | None = None,
-        provenance: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Create or replace an inactive draft and validate its safe D&D mechanic IR."""
-        definition_id = str(manifest.get("id") or "")
-        _validate_unreserved_rule_definition_identity(definition_id)
-        _validate_reserved_official_artifact_identities(
-            definition_id=definition_id,
-            artifacts=(item for item in artifacts or [] if isinstance(item, dict)),
-        )
-        return save_rule_pack_draft(
-            manifest=manifest,
-            artifacts=artifacts,
-            mechanics=mechanics,
-            provenance=provenance,
-        )
-
     def rule_pack_draft_from_source(
         source_id: str,
         manifest: dict[str, Any],
@@ -44106,15 +43705,6 @@ def _create_server(
     def rule_pack_inspect(pack_id: str, version: str) -> dict[str, Any]:
         """Inspect an exact draft or installed version, including validation evidence."""
         return asdict(rule_packs.get_version(pack_id, version))
-
-    def rule_pack_test(pack_id: str, version: str) -> dict[str, Any]:
-        """Run declarative positive/negative examples embedded in a pack manifest."""
-        value = rule_packs.get_version(pack_id, version)
-        return run_mechanic_tests(
-            value.mechanics,
-            list(value.manifest.get("tests") or []),
-            fingerprint=value.checksum,
-        )
 
     def rule_pack_remove(pack_id: str, version: str) -> dict[str, Any]:
         """Remove an unreferenced version; any branch lock makes removal fail closed."""
@@ -51470,78 +51060,6 @@ def _create_server(
             expected_campaign_revision=campaign.revision,
         )
 
-    def character_rule_artifact_add(
-        character_id: str,
-        pack_id: str,
-        version: str,
-        artifact_id: str,
-        principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
-        expected_revision: int | None = None,
-        idempotency_key: str | None = None,
-    ) -> dict[str, Any]:
-        """Add one activated pack card to an actor without copying executable rule logic."""
-        current = characters.get(character_id)
-        require_character_control(current, principal_id)
-        require_outside_active_combat(current, "rule artifact changes")
-        if current.campaign_id is None:
-            raise ValueError("rule artifacts require a campaign-bound character")
-        active = next(
-            (
-                item
-                for item in rule_packs.activations(current.campaign_id)
-                if item.pack_id == pack_id and item.enabled
-            ),
-            None,
-        )
-        if active is None or active.version != version:
-            raise ValueError("the exact rule-pack version must be enabled on this branch")
-        pack = rule_packs.get_version(pack_id, version)
-        artifact = next((item for item in pack.artifacts if item.get("id") == artifact_id), None)
-        if artifact is None:
-            raise LookupError(artifact_id)
-        # Rebind reserved official artifacts only after the immutable archive
-        # verifier has checked the installed definition and runtime fingerprint.
-        # This path predates character_content_apply and must not become a
-        # provenance bypass for privileged Battle Ready mechanics.
-        artifact = reviewed_official_runtime_artifact(pack_id, version, artifact)
-        if artifact_id in SCAG_BLADE_SINGING_FEATURE_IDS:
-            raise ValueError(
-                "SCAG Bladesinging features require character_content_apply for "
-                "level and source prerequisite validation"
-            )
-        section = {
-            "feature": "features",
-            "activity": "activities",
-        }.get(str(artifact.get("kind") or ""))
-        if section is None:
-            raise ValueError(
-                "spell, feat, subclass, and background artifacts must use "
-                "character_content_apply for rule-aware validation"
-            )
-        sheet = deepcopy(current.sheet)
-        if any(item.get("id") == artifact_id for item in sheet["content"][section]):
-            raise ValueError("rule artifact is already present on this character")
-        card = deepcopy(artifact.get("card") or {})
-        card["id"] = artifact_id
-        card["pack_id"] = pack_id
-        card["pack_version"] = version
-        card["rule_refs"] = list(artifact.get("rule_refs") or [])
-        card["mechanic_refs"] = list(artifact.get("mechanic_refs") or [])
-        sheet["content"][section].append(card)
-        return update_sheet(
-            character_id,
-            sheet,
-            operation="character.rule_artifact.add",
-            principal_id=principal_id,
-            expected_revision=expected_revision,
-            idempotency_key=idempotency_key,
-            payload={
-                "pack_id": pack_id,
-                "version": version,
-                "artifact_id": artifact_id,
-            },
-        )
-
     def skill_list() -> list[dict[str, str]]:
         """List installed D&D DM, campaign-manager, and module-generator skill documents."""
         return [
@@ -52025,21 +51543,6 @@ boundary.
                 idempotency_key,
             )
         return facade_result(action, result)
-
-    def _import_job_operation(
-        campaign_id: str,
-        view: Literal["get", "list"] = "list",
-        job_id: str | None = None,
-        kind: Literal["rulebook", "module"] | None = None,
-        principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
-    ) -> dict[str, Any]:
-        """Read staged rulebook or module import jobs without changing their state."""
-        if view == "get":
-            return facade_result(
-                view,
-                import_job_get(campaign_id, required({"job_id": job_id}, "job_id"), principal_id),
-            )
-        return facade_result(view, import_job_list(campaign_id, kind, principal_id))
 
     def export_module_pack(
         campaign_id: str,
@@ -52573,56 +52076,6 @@ boundary.
             **({"package": package} if data.get("include_package") is True else {}),
         }
         return result
-
-    def _content_pack_source_chunks(
-        payload: dict[str, Any] | None,
-        principal_id: str,
-    ) -> Any:
-        data = facade_payload(payload)
-        source_id = str(required(data, "source_id"))
-        source = rules.source(source_id)
-        if str(source.get("system_id") or "") != DND5E.id:
-            raise ValueError("rule source must belong to the dnd5e rule corpus")
-        page = data.get("page")
-        if page is not None and (isinstance(page, bool) or not isinstance(page, int) or page < 1):
-            raise ValueError("payload.page must be a positive integer")
-        query = str(data.get("query") or "").strip().casefold()
-        limit = data.get("limit", 50)
-        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
-            raise ValueError("payload.limit must be an integer between 1 and 200")
-        offset = data.get("offset", 0)
-        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
-            raise ValueError("payload.offset must be a non-negative integer")
-        chunks = rules.source_chunks(source_id)
-        if page is not None:
-            chunks = [
-                item
-                for item in chunks
-                if isinstance(item.get("page_start"), int)
-                and isinstance(item.get("page_end"), int)
-                and int(item["page_start"]) <= page <= int(item["page_end"])
-            ]
-        if query:
-            chunks = [
-                item
-                for item in chunks
-                if query
-                in "\n".join(
-                    [
-                        *[str(value) for value in item.get("heading_path", [])],
-                        str(item.get("content") or ""),
-                    ]
-                ).casefold()
-            ]
-        result = chunks[offset : offset + limit]
-        return result
-
-    def _facade_value(value: Any) -> Any:
-        """Unwrap a nested public-tool result used by another public facade."""
-
-        if isinstance(value, dict) and "result" in value:
-            return value["result"]
-        return value
 
     @public_tool()
     def rulebook_draft(

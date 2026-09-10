@@ -194,7 +194,7 @@ not ordinary campaign writes.
 
 ## Tool contracts and errors
 
-All 77 public tools in the current contract are checked for:
+All public tools in the current contract are checked for:
 
 - constrained, described input fields;
 - an `outputSchema` and validated `structuredContent`;

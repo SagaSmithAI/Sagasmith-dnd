@@ -134,7 +134,7 @@ explicitly retrieves one complete finite import artifact and is not a catalog li
 
 ### Stable catalog and bounded Host projection
 
-The current contract test locks 77 public tools. `tools/list` returns them in
+Contract tests validate the public tool catalog. `tools/list` returns it in
 deterministic name order for the same authorization scope, with a private
 five-minute cache hint. An `exposure` operation cannot mutate the modern list.
 
