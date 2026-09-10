@@ -269,6 +269,7 @@ from sagasmith_dnd.conditions import (
     STANDARD_BINARY_CONDITION_IDS,
     apply_condition_change,
     condition_ids,
+    reconcile_ended_effect_conditions,
 )
 from sagasmith_dnd.consumables import HEALING_POTION_MECHANIC_ID, healing_potion_formula
 from sagasmith_dnd.content_actors import (
@@ -2105,7 +2106,10 @@ SUPPORTED_FEATURE_OPTION_PREREQUISITE_FIELDS = frozenset(
 SUPPORTED_FEATURE_MECHANICAL_GRANTS = frozenset(
     {
         "armor_proficiencies",
+        "conditional_condition_immunities",
+        "condition_immunities",
         "hp_per_class_level",
+        "immunities",
         "languages",
         "resources",
         "skill_proficiencies",
@@ -51184,6 +51188,93 @@ def _create_server(
                 for language in mechanical_grants.get("languages") or []:
                     if str(language).casefold() not in {str(item).casefold() for item in languages}:
                         languages.append(language)
+                for field in ("immunities", "condition_immunities"):
+                    target_values = sheet["traits"][field]
+                    for value in mechanical_grants.get(field) or []:
+                        normalized_value = str(value).strip()
+                        if not normalized_value:
+                            raise ValueError(f"feature {field} grant contains an empty value")
+                        if normalized_value.casefold() not in {
+                            str(item).casefold() for item in target_values
+                        }:
+                            target_values.append(normalized_value)
+                immune_effect_kinds: set[str] = set()
+                if "disease" in {
+                    str(item).strip().casefold()
+                    for item in mechanical_grants.get("condition_immunities") or []
+                }:
+                    immune_effect_kinds.update({"disease", "nonmagical_disease"})
+                if "poison" in {
+                    str(item).strip().casefold()
+                    for item in mechanical_grants.get("immunities") or []
+                } or "poisoned" in {
+                    str(item).strip().casefold()
+                    for item in mechanical_grants.get("condition_immunities") or []
+                }:
+                    immune_effect_kinds.update({"poison", "poisoned"})
+                for existing_effect in sheet.get("effects", []):
+                    existing_kind = (
+                        str(existing_effect.get("kind") or "")
+                        .strip()
+                        .casefold()
+                        .replace("-", "_")
+                    )
+                    if (
+                        not existing_effect.get("active", False)
+                        or existing_kind not in immune_effect_kinds
+                    ):
+                        continue
+                    existing_effect["active"] = False
+                    existing_effect["ended_reason"] = "neutralized_by_feature_immunity"
+                    reconcile_ended_effect_conditions(
+                        sheet,
+                        ended_effects=[existing_effect],
+                    )
+                conditional_immunities = dict(
+                    mechanical_grants.get("conditional_condition_immunities") or {}
+                )
+                if conditional_immunities:
+                    normalized_conditional: dict[str, list[str]] = {}
+                    for raw_condition, raw_sources in conditional_immunities.items():
+                        condition = (
+                            str(raw_condition)
+                            .strip()
+                            .casefold()
+                            .replace("-", "_")
+                            .replace(" ", "_")
+                        )
+                        if not condition:
+                            raise ValueError(
+                                "feature conditional condition immunity has an empty condition"
+                            )
+                        if not isinstance(raw_sources, list) or not raw_sources:
+                            raise ValueError(
+                                "feature conditional condition immunity sources must be "
+                                "a non-empty array"
+                            )
+                        sources = [str(item).strip().casefold() for item in raw_sources]
+                        if any(not item for item in sources) or set(sources) - {
+                            "elemental",
+                            "fey",
+                        }:
+                            raise RulesetUnavailableError(
+                                "feature conditional condition immunity has an "
+                                "unsupported source type"
+                            )
+                        normalized_conditional[condition] = list(dict.fromkeys(sources))
+                    existing_conditional = dict(
+                        dict(card.get("choices") or {}).get(
+                            "_conditional_condition_immunities"
+                        )
+                        or {}
+                    )
+                    if existing_conditional and existing_conditional != normalized_conditional:
+                        raise ValueError(
+                            "feature conditional condition immunity conflicts with existing state"
+                        )
+                    card.setdefault("choices", {})[
+                        "_conditional_condition_immunities"
+                    ] = normalized_conditional
                 for resource_key, resource in dict(
                     mechanical_grants.get("resources") or {}
                 ).items():
