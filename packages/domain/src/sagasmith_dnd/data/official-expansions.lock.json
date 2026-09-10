@@ -2,7 +2,7 @@
   "schema": "sagasmith.dnd-official-expansions-lock.v1",
   "generated_on": "2026-09-10",
   "source_repository": "https://github.com/SagaSmithAI/SagaSmith-dnd-content-library",
-  "source_commit": "cc0c1bd329a53c62371e2c374fffa932c8311c02",
+  "source_commit": "87e6e9b489a2e71ee3b92a1b6a685cf2eeaa53bf",
   "source_commit_role": "Canonical input lineage only; repaired outputs are built locally by packages/mcp/scripts/build_official_expansion_library.py and are not published at this commit.",
   "builtin_rule_definitions": [
     {
