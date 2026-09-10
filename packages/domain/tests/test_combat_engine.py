@@ -3839,6 +3839,7 @@ def test_agent_compiled_reaction_defense_opens_after_hit_and_before_damage() -> 
         == []
     )
 
+
     compiled = compile_resolution_plan(
         {
             "schema_version": 2,
@@ -3957,6 +3958,159 @@ def test_agent_compiled_reaction_defense_opens_after_hit_and_before_damage() -> 
         )
         == []
     )
+
+
+def test_uncanny_dodge_is_offered_after_a_visible_hit() -> None:
+    attacker = _actor("attacker")
+    attacker["derived"]["inventory"]["weapon_attacks"] = [
+        {
+            "item_id": "sword",
+            "attack_type": "melee",
+            "reach_ft": 5,
+            "attack_bonus": 4,
+            "damage_expression": "1d8 + 2",
+            "damage_type": "slashing",
+            "properties": [],
+        }
+    ]
+    attacker.update(initiative=20, position={"x": 0, "y": 0}, disposition="hostile")
+    target = _actor("target", hp=20, ac=15)
+    target["sheet"]["progression"] = {
+        "level": 5,
+        "classes": [{"name": "Rogue", "level": 5, "hit_die": 8}],
+    }
+    target["sheet"]["content"]["features"] = [
+        {
+            "id": "dnd5e.content.srd2014.feature.rogue-uncanny-dodge",
+            "name": "Uncanny Dodge",
+            "source_key": "Rogue",
+            "description": "Uncanny Dodge source text",
+            "activation": {"type": "reaction", "cost": 0, "trigger": "attack.after_hit"},
+            "choices": {
+                "source_trait": {
+                    "kind": "uncanny_dodge",
+                    "trigger": "attacker_visible_hits_with_attack",
+                    "damage_outcome": "half",
+                    "automatic": True,
+                    "source_excerpt": "Uncanny Dodge source text",
+                }
+            },
+            "mechanic_refs": ["dnd5e.core.reaction.uncanny_dodge"],
+        }
+    ]
+    target["sheet"] = validate_character_sheet(target["sheet"])
+    target["derived"] = derive_character_sheet(target["sheet"])
+    target.update(initiative=10, position={"x": 1, "y": 0}, disposition="friendly")
+    encounter = _grid_encounter([attacker, target])
+    plan = preflight_attack(
+        attacker,
+        target,
+        action={"weapon_id": "sword"},
+        encounter=encounter,
+    )
+    attack = roll_attack_action(plan=plan, rng=_SequenceRng(12))
+    defenses = available_attack_defenses(
+        target,
+        plan=plan,
+        attack=attack,
+        encounter=encounter,
+    )
+    assert defenses[0]["kind"] == "uncanny_dodge"
+    assert defenses[0]["id"] == "dnd5e.content.srd2014.feature.rogue-uncanny-dodge"
+    assert defenses[0]["damage_outcome"] == "half"
+    assert available_attack_defenses(
+        target,
+        plan=plan,
+        attack={**attack, "hit": False},
+        encounter=encounter,
+    ) == []
+    assert available_attack_defenses(
+        target,
+        plan={**plan, "target_can_see_attacker": False},
+        attack=attack,
+        encounter=encounter,
+    ) == []
+    no_reaction = deepcopy(encounter)
+    next(
+        item for item in no_reaction["combatants"] if item["actor_id"] == "target"
+    )["turn_budget"]["reaction"] = 0
+    assert available_attack_defenses(
+        target,
+        plan=plan,
+        attack=attack,
+        encounter=no_reaction,
+    ) == []
+    incapacitated = deepcopy(encounter)
+    next(
+        item for item in incapacitated["combatants"] if item["actor_id"] == "target"
+    )["conditions"] = ["stunned"]
+    assert available_attack_defenses(
+        target,
+        plan=plan,
+        attack=attack,
+        encounter=incapacitated,
+    ) == []
+    assert available_attack_defenses(
+        target,
+        plan={**plan, "ruleset": "2024"},
+        attack=attack,
+        encounter=encounter,
+    ) == []
+
+
+def test_uncanny_dodge_halves_attack_damage_before_resistance() -> None:
+    attacker = _actor("attacker")
+    target = _actor("target", hp=30)
+    target["sheet"]["traits"]["resistances"] = ["slashing"]
+    target["sheet"] = validate_character_sheet(target["sheet"])
+    target["derived"] = derive_character_sheet(target["sheet"])
+    plan = {
+        "ruleset": "2014",
+        "damage_expression": "15",
+        "damage_type": "slashing",
+        "attack_mode": "melee",
+        "melee_attack": True,
+        "target_uses_death_saves": True,
+    }
+    _, updated_target, result = resolve_attack_damage(
+        attacker,
+        target,
+        plan=plan,
+        attack={"hit": True, "critical": False},
+        damage_outcome="half",
+    )
+    assert result["damage"]["outcome_amount_before"] == 15
+    assert result["damage"]["outcome_amount_after"] == 7
+    assert result["damage"]["roll_parts"][0]["amount"] == 7
+    assert result["damage"]["applied_amount"] == 3
+    assert result["damage"]["adjustment"] == "resistant"
+    assert updated_target["sheet"]["combat"]["hp"]["value"] == 27
+
+    mixed_target = _actor("mixed-target", hp=30)
+    mixed_target["sheet"]["traits"]["resistances"] = ["slashing"]
+    mixed_target["sheet"]["traits"]["vulnerabilities"] = ["fire"]
+    mixed_target["sheet"] = validate_character_sheet(mixed_target["sheet"])
+    mixed_target["derived"] = derive_character_sheet(mixed_target["sheet"])
+    mixed_plan = {
+        **plan,
+        "damage_expression": "10",
+        "damage_type": "slashing",
+        "additional_damage": [
+            {"damage_expression": "6", "damage_type": "fire", "source": "flame"}
+        ],
+    }
+    _, mixed_updated, mixed_result = resolve_attack_damage(
+        attacker,
+        mixed_target,
+        plan=mixed_plan,
+        attack={"hit": True, "critical": False},
+        damage_outcome="half",
+    )
+    assert mixed_result["damage"]["outcome_amount_before"] == 16
+    assert mixed_result["damage"]["outcome_amount_after"] == 8
+    assert [part["amount"] for part in mixed_result["damage"]["roll_parts"]] == [5, 3]
+    assert mixed_result["damage"]["applied_amount"] == 8
+    assert mixed_updated["sheet"]["combat"]["hp"]["value"] == 22
 
 
 def test_dueling_style_adds_damage_only_for_one_equipped_melee_weapon() -> None:

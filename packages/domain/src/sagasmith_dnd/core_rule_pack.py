@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.79.0"
+CORE_RULE_PACK_VERSION = "1.80.0"
 
 
 @dataclass(frozen=True)
@@ -719,6 +719,18 @@ BOUNDARIES = (
             "test_agent_compiled_reaction_defense_opens_after_hit_and_before_damage",
         ),
         "bundled:srd/reactions",
+    ),
+    CoreBoundary(
+        "dnd5e.core.reaction.uncanny_dodge",
+        ("2014",),
+        "combat_engine.available_attack_defenses|combat_engine.resolve_attack_damage",
+        (
+            "tests/test_combat_engine.py::test_uncanny_dodge_is_offered_after_a_visible_hit",
+            "tests/test_combat_engine.py::test_uncanny_dodge_halves_attack_damage_before_resistance",
+            "packages/mcp/tests/test_reaction_defense_mcp.py::"
+            "test_uncanny_dodge_reaction_halves_damage_atomically",
+        ),
+        "bundled:srd2014/02_Classes/Rogue.md#uncanny-dodge",
     ),
     CoreBoundary(
         "dnd5e.core.spell.shield",
