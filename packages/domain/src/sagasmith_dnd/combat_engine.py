@@ -84,6 +84,8 @@ from sagasmith_dnd.standard_feature_ids import (
     CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID,
     ORC_AGGRESSIVE_ACTIVITY_ID,
     TORTLE_SHELL_DEFENSE_ARTIFACT_ID,
+    TORTLE_SHELL_DEFENSE_CURRENT_PACK_VERSION,
+    TORTLE_SHELL_DEFENSE_CURRENT_SELECTION_MECHANIC_REFS,
     TORTLE_SHELL_DEFENSE_EFFECT_ID,
     TORTLE_SHELL_DEFENSE_FEATURE_ID,
     TORTLE_SHELL_DEFENSE_LEGACY_PACK_ID,
@@ -511,6 +513,19 @@ def _tortle_shell_defense_rule_refs(value: Any) -> bool:
     )
 
 
+def _tortle_shell_defense_mechanic_refs(
+    value: Any, *, pack_version: Any, feature: bool = False
+) -> bool:
+    refs = {str(item) for item in value or []}
+    if pack_version in TORTLE_SHELL_DEFENSE_LEGACY_PACK_VERSIONS:
+        return refs == set()
+    if pack_version != TORTLE_SHELL_DEFENSE_CURRENT_PACK_VERSION:
+        return False
+    if feature:
+        return refs == {CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID}
+    return refs == set(TORTLE_SHELL_DEFENSE_CURRENT_SELECTION_MECHANIC_REFS)
+
+
 def tortle_shell_defense_available(sheet: dict[str, Any]) -> bool:
     """Return whether an actor has the exact finalized 2014 Tortle trait."""
 
@@ -522,9 +537,14 @@ def tortle_shell_defense_available(sheet: dict[str, Any]) -> bool:
         if isinstance(item, dict)
         and item.get("kind") == "species"
         and item.get("pack_id") == TORTLE_SHELL_DEFENSE_LEGACY_PACK_ID
-        and item.get("pack_version") in TORTLE_SHELL_DEFENSE_LEGACY_PACK_VERSIONS
+        and item.get("pack_version") in {
+            *TORTLE_SHELL_DEFENSE_LEGACY_PACK_VERSIONS,
+            TORTLE_SHELL_DEFENSE_CURRENT_PACK_VERSION,
+        }
         and item.get("artifact_id") == TORTLE_SHELL_DEFENSE_ARTIFACT_ID
-        and item.get("mechanic_refs") == []
+        and _tortle_shell_defense_mechanic_refs(
+            item.get("mechanic_refs"), pack_version=item.get("pack_version")
+        )
         and _tortle_shell_defense_rule_refs(item.get("rule_refs"))
     ]
     features = [
@@ -535,8 +555,13 @@ def tortle_shell_defense_available(sheet: dict[str, Any]) -> bool:
         and item.get("name") == "Shell Defense"
         and item.get("source_key") == "Tortle"
         and item.get("pack_id") == TORTLE_SHELL_DEFENSE_LEGACY_PACK_ID
-        and item.get("pack_version") in TORTLE_SHELL_DEFENSE_LEGACY_PACK_VERSIONS
-        and item.get("mechanic_refs") == []
+        and item.get("pack_version") in {
+            *TORTLE_SHELL_DEFENSE_LEGACY_PACK_VERSIONS,
+            TORTLE_SHELL_DEFENSE_CURRENT_PACK_VERSION,
+        }
+        and _tortle_shell_defense_mechanic_refs(
+            item.get("mechanic_refs"), pack_version=item.get("pack_version"), feature=True
+        )
         and _tortle_shell_defense_rule_refs(item.get("rule_refs"))
         and item.get("description")
         == (

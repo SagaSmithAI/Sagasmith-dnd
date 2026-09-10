@@ -73,6 +73,7 @@ from sagasmith_dnd.combat_engine import (
     stand_up,
     standard_save_damage_reduction,
     start_encounter,
+    tortle_shell_defense_available,
     trigger_readied_spell,
 )
 from sagasmith_dnd.content_solution import build_content_solution
@@ -90,6 +91,8 @@ from sagasmith_dnd.standard_feature_ids import (
     CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID,
     ORC_AGGRESSIVE_ACTIVITY_ID,
     TORTLE_SHELL_DEFENSE_ARTIFACT_ID,
+    TORTLE_SHELL_DEFENSE_CURRENT_PACK_VERSION,
+    TORTLE_SHELL_DEFENSE_CURRENT_SELECTION_MECHANIC_REFS,
     TORTLE_SHELL_DEFENSE_FEATURE_ID,
     TORTLE_SHELL_DEFENSE_LEGACY_PACK_ID,
     TORTLE_SHELL_DEFENSE_SOURCE_KEY,
@@ -470,8 +473,13 @@ def test_queued_steel_defender_joins_immediately_after_owner_next_round() -> Non
     ]
 
 
-def _tortle_actor(identifier: str) -> dict:
+def _tortle_actor(identifier: str, *, republished: bool = False) -> dict:
     actor = _actor(identifier, ac=17)
+    pack_version = "1.0.2" if republished else "1.0.1"
+    selection_mechanic_refs = (
+        sorted(TORTLE_SHELL_DEFENSE_CURRENT_SELECTION_MECHANIC_REFS) if republished else []
+    )
+    feature_mechanic_refs = [CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID] if republished else []
     source_ref = (
         f"rule-source:{TORTLE_SHELL_DEFENSE_SOURCE_KEY}#chunk:"
         f"{TORTLE_SHELL_DEFENSE_SOURCE_KEY}/section-9/chunk-10-fb5a021f5935d9e8"
@@ -486,9 +494,9 @@ def _tortle_actor(identifier: str) -> dict:
             ),
             "source_key": "Tortle",
             "pack_id": TORTLE_SHELL_DEFENSE_LEGACY_PACK_ID,
-            "pack_version": "1.0.1",
+            "pack_version": pack_version,
             "rule_refs": [source_ref],
-            "mechanic_refs": [],
+            "mechanic_refs": feature_mechanic_refs,
         }
     )
     actor["sheet"]["content"]["selections"].append(
@@ -497,15 +505,29 @@ def _tortle_actor(identifier: str) -> dict:
             "kind": "species",
             "name": "Tortle",
             "pack_id": TORTLE_SHELL_DEFENSE_LEGACY_PACK_ID,
-            "pack_version": "1.0.1",
+            "pack_version": pack_version,
             "rule_refs": [source_ref],
-            "mechanic_refs": [],
+            "mechanic_refs": selection_mechanic_refs,
             "selection": {},
         }
     )
     actor["sheet"] = validate_character_sheet(actor["sheet"])
     actor["derived"] = derive_character_sheet(actor["sheet"])
     return actor
+
+
+def test_2014_tortle_shell_defense_accepts_republished_contract_and_keeps_legacy_support() -> None:
+    assert tortle_shell_defense_available(_tortle_actor("legacy")["sheet"])
+
+    republished = _tortle_actor("republished", republished=True)
+    assert republished["sheet"]["content"]["selections"][0]["pack_version"] == (
+        TORTLE_SHELL_DEFENSE_CURRENT_PACK_VERSION
+    )
+    assert tortle_shell_defense_available(republished["sheet"])
+
+    forged = deepcopy(republished["sheet"])
+    forged["content"]["features"][0]["mechanic_refs"] = []
+    assert not tortle_shell_defense_available(forged)
 
 
 def test_zero_walk_speed_is_preserved_when_a_combat_turn_starts() -> None:

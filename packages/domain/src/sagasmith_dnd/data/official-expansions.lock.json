@@ -1,8 +1,8 @@
 {
   "schema": "sagasmith.dnd-official-expansions-lock.v1",
-  "generated_on": "2026-09-05",
+  "generated_on": "2026-09-10",
   "source_repository": "https://github.com/SagaSmithAI/SagaSmith-dnd-content-library",
-  "source_commit": "cc83f2339ea1e20651178bb55998ac3f26650d88",
+  "source_commit": "cc0c1bd329a53c62371e2c374fffa932c8311c02",
   "source_commit_role": "Canonical input lineage only; repaired outputs are built locally by packages/mcp/scripts/build_official_expansion_library.py and are not published at this commit.",
   "builtin_rule_definitions": [
     {
@@ -237,9 +237,9 @@
     },
     {
       "id": "dnd5e.addon.rulebook.d-d-5e-the-tortle-package.e3234de670da.addon",
-      "version": "1.0.1",
-      "checksum": "356cbf231ea7ecf8dab48b7cca127523d1d0bd3f5b5535899f45641f24bc5759",
-      "archive_sha256": "c61d41ec634f2ba130802ea2505a40dba0c24fb79d7ea9a22629fdd9f3849747",
+      "version": "1.0.2",
+      "checksum": "b5010b3860ee25ea80aa0ae703644e985ddc418ef81e26f658cceb8e12b3872e",
+      "archive_sha256": "37c46087480dc91db14f65b746d994c8b549bc1b48b26f35c25e6a88d7207c02",
       "publication_id": "tortle2014",
       "title": "D&D 5E - The Tortle Package",
       "classification": "official_supplement",
