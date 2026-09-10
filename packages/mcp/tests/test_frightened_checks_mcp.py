@@ -204,6 +204,135 @@ def test_frightened_checks_use_recorded_sources_and_atomic_receipts(
     asyncio.run(exercise())
 
 
+def test_charmed_social_check_grants_source_bound_advantage(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        try:
+            campaign = await _call(
+                server,
+                "campaign_create",
+                {
+                    "name": "Charmed social check",
+                    "edition": "2014",
+                    "idempotency_key": "create",
+                },
+            )
+            campaign_id = campaign["id"]
+            charmer_sheet = default_character_sheet()
+            charmer_sheet["edition"] = "2014"
+            charmer = await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {
+                        "campaign_id": campaign_id,
+                        "name": "Charmer",
+                        "sheet": charmer_sheet,
+                    },
+                    "idempotency_key": "charmer",
+                },
+            )
+            charmed_sheet = default_character_sheet()
+            charmed_sheet["edition"] = "2014"
+            charmed_sheet["conditions"] = ["charmed"]
+            charmed_sheet["effects"] = [
+                {
+                    "id": "charm-source",
+                    "kind": "timed_conditions",
+                    "source": "pending-charmer-id",
+                    "active": True,
+                    "changes": [
+                        {"path": "conditions", "mode": "add", "value": "charmed"}
+                    ],
+                }
+            ]
+            charmed = await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {
+                        "campaign_id": campaign_id,
+                        "name": "Charmed",
+                        "sheet": charmed_sheet,
+                    },
+                    "idempotency_key": "charmed",
+                },
+            )
+            charmed_view = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": charmed["id"]}},
+            )
+            repaired = dict(charmed_view["sheet"])
+            repaired["effects"] = [
+                {**dict(repaired["effects"][0]), "source": charmer["id"]}
+            ]
+            await _call(
+                server,
+                "character_sheet_replace",
+                {
+                    "character_id": charmed["id"],
+                    "sheet": repaired,
+                    "expected_revision": charmed_view["revision"],
+                    "idempotency_key": "bind-source",
+                },
+            )
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign_id}},
+            )
+            phase = await _call(
+                server,
+                "game_phase",
+                {
+                    "campaign_id": campaign_id,
+                    "action": "set",
+                    "tool_profile": "play",
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "play",
+                },
+            )
+            started = await _call(
+                server,
+                "combat_start",
+                {
+                    "campaign_id": campaign_id,
+                    "positioning_mode": "agent",
+                    "participant_ids": [charmer["id"], charmed["id"]],
+                    "participant_config": [
+                        {"actor_id": charmer["id"], "initiative": 20, "tie_breaker": 0},
+                        {"actor_id": charmed["id"], "initiative": 10, "tie_breaker": 1},
+                    ],
+                    "expected_revision": phase["campaign_revision"],
+                    "idempotency_key": "start",
+                },
+            )
+            settled = await raw(
+                server,
+                "combat_check",
+                {
+                    "campaign_id": campaign_id,
+                    "actor_id": charmer["id"],
+                    "kind": "check",
+                    "ability": "persuasion",
+                    "target_id": charmed["id"],
+                    "dc": 1,
+                    "expected_revision": started["campaign_revision"],
+                    "idempotency_key": "social-check",
+                },
+            )
+            assert settled["result"]["target_id"] == charmed["id"]
+            assert settled["result"]["charmed_social_advantage"] is True
+            assert len(settled["result"]["rolls"]) == 2
+        finally:
+            close_server(server)
+
+    asyncio.run(exercise())
+
+
 @pytest.mark.parametrize("mode", ["grid", "agent"])
 def test_missing_source_check_resumes_after_authoritative_source_entry(
     tmp_path: Path, mode: str

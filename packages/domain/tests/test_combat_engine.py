@@ -28,6 +28,7 @@ from sagasmith_dnd.combat_engine import (
     available_attack_defenses,
     available_reactions,
     can_see,
+    charmed_social_check_advantage,
     consume_weapon_mastery_attack_effects,
     current_combatant,
     damage_amount_after_reduction,
@@ -49,6 +50,7 @@ from sagasmith_dnd.combat_engine import (
     reconcile_dodge_lifecycle,
     reconcile_effect_dependencies,
     reconcile_tortle_shell_defense_projection,
+    require_harmful_targeting_allowed,
     resolve_actor_check,
     resolve_actor_contest,
     resolve_actor_group_check,
@@ -2212,6 +2214,67 @@ def test_generic_effect_changes_speed_attacks_and_preserves_charm_source() -> No
     assert "dazing" in plan["disadvantage_sources"]
     assert source_speed_multiplier(dazed["sheet"]) == 0.5
 
+
+def test_harmful_targeting_rejects_charm_source_and_fails_closed() -> None:
+    charmed = _actor("charmed")
+    charmed["sheet"]["conditions"] = ["charmed"]
+    charmed["sheet"]["effects"] = [
+        {
+            "id": "charm-source",
+            "kind": "timed_conditions",
+            "source": "charmer",
+            "active": True,
+            "changes": [
+                {"path": "conditions", "mode": "add", "value": "charmed"},
+            ],
+        }
+    ]
+
+    with pytest.raises(CombatEngineError, match="harmful effect"):
+        require_harmful_targeting_allowed(charmed, target_ids=["charmer"])
+    require_harmful_targeting_allowed(charmed, target_ids=["bystander"])
+    with pytest.raises(NeedsRulingError, match="condition source"):
+        require_harmful_targeting_allowed(
+            charmed,
+            target_ids=["bystander"],
+            known_actor_ids=["bystander"],
+        )
+    unresolved = deepcopy(charmed)
+    unresolved["sheet"]["effects"][0]["source"] = ""
+    with pytest.raises(NeedsRulingError, match="condition source"):
+        require_harmful_targeting_allowed(unresolved, target_ids=["bystander"])
+
+
+def test_charmed_social_check_advantage_is_source_bound() -> None:
+    charmer = _actor("charmer")
+    charmed = _actor("charmed")
+    charmed["sheet"]["conditions"] = ["charmed"]
+    charmed["sheet"]["effects"] = [
+        {
+            "id": "charm-source",
+            "kind": "timed_conditions",
+            "source": "charmer",
+            "active": True,
+            "changes": [{"path": "conditions", "mode": "add", "value": "charmed"}],
+        }
+    ]
+    assert charmed_social_check_advantage(
+        charmer,
+        charmed,
+        known_actor_ids=["charmer", "charmed"],
+    ) is True
+    assert charmed_social_check_advantage(
+        _actor("bystander"),
+        charmed,
+        known_actor_ids=["charmer", "charmed", "bystander"],
+    ) is False
+
+    with pytest.raises(NeedsRulingError, match="social-check advantage"):
+        charmed_social_check_advantage(
+            charmer,
+            charmed,
+            known_actor_ids=["charmed"],
+        )
 
 def test_telekinetic_ray_moves_up_to_the_last_legal_cell_without_reactions() -> None:
     source = _actor("gazer")

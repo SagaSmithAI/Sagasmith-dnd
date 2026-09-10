@@ -1109,6 +1109,10 @@ derives the complete skill modifier from the actor card and spends the main
 action whether the check succeeds or fails; do not pass `proficient` or `bonus`
 for a named skill. Advantage from an offer of at least 10 gp is a verified scene
 fact and may be supplied only when the actual offer meets that threshold.
+For a social check against a canonical actor, include `target_id`; under the
+2014 Charmed condition the engine grants advantage only when that target's
+source-linked Charmed effect names the checker as its charmer. Missing or
+conflicting source facts return a ruling boundary before the action is paid.
 
 If that check succeeds and the chosen NPC already has a canonical campaign actor
 card, call `combat_join` with its explicit position, disposition, initiative (or
