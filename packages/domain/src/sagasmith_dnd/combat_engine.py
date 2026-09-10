@@ -462,6 +462,112 @@ def active_condition_source_effects(sheet: dict[str, Any], condition: str) -> li
     return matches
 
 
+CHARMED_ATTACK_ERROR = "a charmed creature cannot attack its charmer"
+CHARMED_HARMFUL_TARGET_ERROR = (
+    "a charmed creature cannot target its charmer with a harmful effect"
+)
+
+
+def charmed_source_actor_ids(
+    sheet: dict[str, Any],
+    *,
+    known_actor_ids: Iterable[str] | None = None,
+) -> tuple[set[str], bool]:
+    """Return recorded charmer actor ids and whether that charm source is unresolved.
+
+    A charmed condition is only source-correct when every active effect that
+    owns it names the actor who imposed it, so callers can tell "this creature
+    has no recorded charmer" apart from "this charm has no usable source".
+    """
+
+    effects = active_condition_source_effects(sheet, "charmed")
+    if not effects:
+        return set(), True
+    sources = {
+        str(effect.get("source") or "").strip()
+        for effect in effects
+        if str(effect.get("source") or "").strip()
+    }
+    known = (
+        {str(actor_id or "").strip() for actor_id in known_actor_ids}
+        if known_actor_ids is not None
+        else None
+    )
+    unresolved = not sources or any(
+        not str(effect.get("source") or "").strip() for effect in effects
+    ) or (known is not None and bool(sources - known))
+    return sources, unresolved
+
+
+def require_harmful_targeting_allowed(
+    actor: dict[str, Any],
+    *,
+    target_ids: Iterable[str],
+    known_actor_ids: Iterable[str] | None = None,
+) -> None:
+    """Fail closed when a charmed actor aims a harmful effect at its charmer.
+
+    The charmed condition forbids harming the charmer with any ability or
+    magical effect, so every authoritative harmful path asks the same source
+    question before it pays or settles anything. Harmless or unrelated targets
+    stay legal, and a charm whose recorded source is missing or ambiguous is
+    never resolved by guessing.
+    """
+
+    sheet = actor_sheet(actor)
+    if "charmed" not in _condition_set(actor.get("conditions") or sheet.get("conditions")):
+        return
+    considered = {str(target_id or "").strip() for target_id in target_ids}
+    considered.discard("")
+    if not considered:
+        return
+    charm_sources, unresolved = charmed_source_actor_ids(
+        sheet,
+        known_actor_ids=known_actor_ids,
+    )
+    if unresolved:
+        raise NeedsRulingError(
+            "condition source is required to determine this effect's legality",
+            missing=("charmed",),
+            ruling_kind="missing_or_conflicting_source_review",
+        )
+    if considered & charm_sources:
+        raise CombatEngineError(CHARMED_HARMFUL_TARGET_ERROR)
+
+
+def charmed_social_check_advantage(
+    actor: dict[str, Any],
+    target: dict[str, Any],
+    *,
+    known_actor_ids: Iterable[str] | None = None,
+) -> bool:
+    """Return whether ``actor`` is the recorded charmer of ``target``.
+
+    The 2014 Charmed condition grants the charmer advantage on social
+    ability checks against the charmed creature.  A target that is not
+    charmed has no bonus; a charmed target with a missing or stale source is
+    deliberately unresolved instead of silently granting or denying it.
+    """
+
+    target_sheet = actor_sheet(target)
+    target_conditions = _condition_set(
+        target.get("conditions") or target_sheet.get("conditions")
+    )
+    if "charmed" not in target_conditions:
+        return False
+    sources, unresolved = charmed_source_actor_ids(
+        target_sheet,
+        known_actor_ids=known_actor_ids,
+    )
+    if unresolved:
+        raise NeedsRulingError(
+            "condition source is required to determine social-check advantage",
+            missing=("charmed",),
+            ruling_kind="missing_or_conflicting_source_review",
+        )
+    return actor_id(actor) in sources
+
+
 def timed_condition_sources(sheet: dict[str, Any]) -> dict[str, list[str]]:
     """Index active condition-owning effects by condition and source actor."""
     result: dict[str, list[str]] = {}
@@ -3188,21 +3294,24 @@ def preflight_attack(
         )
     unresolved_condition_sources: list[str] = []
     if "charmed" in attacker_conditions:
-        charmed_effects = active_condition_source_effects(actor_sheet(attacker), "charmed")
-        if not charmed_effects:
+        known_actor_ids = None
+        if encounter is not None:
+            known_actor_ids = [
+                str(item.get("actor_id") or "")
+                for item in [
+                    *encounter.get("combatants", []),
+                    *encounter.get("reinforcements", []),
+                ]
+                if isinstance(item, dict) and str(item.get("actor_id") or "").strip()
+            ]
+        charm_sources, unresolved_charm = charmed_source_actor_ids(
+            actor_sheet(attacker),
+            known_actor_ids=known_actor_ids,
+        )
+        if unresolved_charm:
             unresolved_condition_sources.append("charmed")
-        else:
-            charm_sources = {
-                str(effect.get("source") or "")
-                for effect in charmed_effects
-                if str(effect.get("source") or "")
-            }
-            if not charm_sources or any(
-                not str(effect.get("source") or "") for effect in charmed_effects
-            ):
-                unresolved_condition_sources.append("charmed")
-            elif actor_id(target) in charm_sources:
-                raise CombatEngineError("a charmed creature cannot attack its charmer")
+        elif actor_id(target) in charm_sources:
+            raise CombatEngineError(CHARMED_ATTACK_ERROR)
     if "frightened" in attacker_conditions:
         frightened_effects = active_condition_source_effects(actor_sheet(attacker), "frightened")
         fear_sources = {

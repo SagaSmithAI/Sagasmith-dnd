@@ -207,6 +207,7 @@ from sagasmith_dnd.combat_engine import (
     available_attack_defenses,
     available_reactions,
     can_see,
+    charmed_social_check_advantage,
     consume_weapon_mastery_attack_effects,
     current_combatant,
     damage_amount_after_reduction,
@@ -234,6 +235,7 @@ from sagasmith_dnd.combat_engine import (
     reconcile_witch_bolt_range,
     record_death_save_turn_start,
     require_death_save_eligibility,
+    require_harmful_targeting_allowed,
     resolve_actor_check,
     resolve_actor_contest,
     resolve_actor_group_check,
@@ -10413,6 +10415,40 @@ def _create_server(
         """Build the pure engine input from the canonical Character row."""
         return character_view(characters.get(character_id))
 
+    def encounter_actor_ids(encounter: dict[str, Any]) -> set[str]:
+        return {
+            str(item.get("actor_id") or "").strip()
+            for item in [
+                *encounter.get("combatants", []),
+                *encounter.get("reinforcements", []),
+            ]
+            if isinstance(item, dict) and str(item.get("actor_id") or "").strip()
+        }
+
+    def semantic_plan_harmful_target_ids(plan: BoundResolutionPlan) -> list[str]:
+        """Extract concrete targets of plan steps that can harm or disable."""
+        target_ids: list[str] = []
+        harmful_opcodes = {
+            "check.save",
+            "damage.apply",
+            "condition.apply",
+            "effect.apply",
+            "movement.force",
+            "actor.control",
+        }
+        for step in plan.steps:
+            if str(step.get("op") or "") not in harmful_opcodes:
+                continue
+            arguments = dict(step.get("args") or {})
+            raw_targets = arguments.get("target_ids")
+            if raw_targets is None and "target_actor_id" in arguments:
+                raw_targets = [arguments.get("target_actor_id")]
+            if isinstance(raw_targets, str):
+                raw_targets = [raw_targets]
+            if isinstance(raw_targets, list):
+                target_ids.extend(str(target_id or "").strip() for target_id in raw_targets)
+        return [target_id for target_id in target_ids if target_id]
+
     def require_campaign_actor(campaign_id: str, character_id: str) -> Any:
         character = characters.get(character_id)
         if character.campaign_id != campaign_id:
@@ -12954,6 +12990,13 @@ def _create_server(
                 target_id,
                 role="committed save-damage target",
             )
+        # Charm is checked here so this payment- and settlement-time gate both
+        # reject a charmed source before its action economy is consumed.
+        require_harmful_targeting_allowed(
+            combat_actor_snapshot(source_actor_id),
+            target_ids=normalized_target_ids,
+            known_actor_ids=encounter_actor_ids(encounter),
+        )
         return normalized
 
     def require_agent_save_damage_payment(
@@ -24484,6 +24527,7 @@ def _create_server(
             else effective_spell_resolution(spell_entry)
         )
         compiled_spell_plan = None
+        bound_spell_plan: BoundResolutionPlan | None = None
         standard_spell_agent_ruling: dict[str, Any] | None = None
         if isinstance(spell_entry.get("resolution_plan"), dict):
             if source_item_id:
@@ -24557,7 +24601,7 @@ def _create_server(
                 principal_id,
                 roles=CAMPAIGN_DM_ROLES,
             )
-            semantic_plan_commitment, _bound_plan = validate_agent_resolution_commitment(
+            semantic_plan_commitment, bound_spell_plan = validate_agent_resolution_commitment(
                 campaign_id,
                 dict(declaration or {}).get("agent_resolution_commitment"),
                 encounter=encounter,
@@ -24890,6 +24934,47 @@ def _create_server(
                             and not bool(save.get("ignores_cover"))
                         ),
                     )
+        harmful_target_ids: list[str] = []
+        if magic_missile:
+            harmful_target_ids.extend(
+                str(allocation.get("target_id") or "")
+                for allocation in target_allocations or []
+                if isinstance(allocation, dict)
+            )
+        elif (
+            structured_resolution is not None
+            and str(structured_resolution.get("kind") or "") == "saving_throw"
+            and structured_target is not None
+            and bool(dict(structured_resolution.get("save") or {}).get("damage"))
+        ):
+            target_contexts = (
+                list(structured_target["targets"])
+                if "targets" in structured_target
+                else [structured_target]
+            )
+            harmful_target_ids.extend(
+                str(context.get("target_id") or "") for context in target_contexts
+            )
+        elif hypnotic_pattern and hypnotic_pattern_target is not None:
+            harmful_target_ids.extend(
+                str(context.get("target_id") or "")
+                for context in hypnotic_pattern_target.get("targets", [])
+                if isinstance(context, dict)
+            )
+        elif sleep and sleep_target is not None:
+            harmful_target_ids.extend(
+                str(context.get("target_id") or "")
+                for context in sleep_target.get("targets", [])
+                if isinstance(context, dict)
+            )
+        if bound_spell_plan is not None:
+            harmful_target_ids.extend(semantic_plan_harmful_target_ids(bound_spell_plan))
+        # Harmful spell targets are cleared before the slot or charge is spent.
+        require_harmful_targeting_allowed(
+            combat_actor_snapshot(actor_id),
+            target_ids=harmful_target_ids,
+            known_actor_ids=encounter_actor_ids(encounter),
+        )
         visibility_preview = deepcopy(encounter)
         apply_cast_visibility_ruling(
             visibility_preview,
@@ -26896,6 +26981,7 @@ def _create_server(
                 repair_distance_ft = raw_spatial["distance_ft"]
                 repair_spatial_facts = {**raw_spatial, "reason": reason, "committed": True}
         compiled_activity_plan = None
+        bound_activity_plan: BoundResolutionPlan | None = None
         if isinstance(
             activity_card.get("resolution_plan"),
             dict,
@@ -26940,7 +27026,7 @@ def _create_server(
                 principal_id,
                 roles=CAMPAIGN_DM_ROLES,
             )
-            normalized_commitment, _bound_plan = validate_agent_resolution_commitment(
+            normalized_commitment, bound_activity_plan = validate_agent_resolution_commitment(
                 campaign_id,
                 dict(declaration or {}).get("agent_resolution_commitment"),
                 encounter=encounter,
@@ -27406,6 +27492,28 @@ def _create_server(
                 "result": {key: value for key, value in applied.items() if key != "sheet"},
                 "campaign_revision": campaign.revision,
             }
+        harmful_activity_target_ids: list[str] = []
+        if dragonborn_breath:
+            harmful_activity_target_ids.extend(
+                str(context.get("target_id") or "")
+                for context in breath_target_contexts
+                if isinstance(context, dict)
+            )
+        if turn_undead:
+            harmful_activity_target_ids.extend(str(target_id) for target_id in turn_targets)
+        if divine_spark and str(dict(declaration or {}).get("mode") or "").casefold() == "damage":
+            if divine_spark_target is not None:
+                harmful_activity_target_ids.append(str(divine_spark_target.get("id") or ""))
+        if bound_activity_plan is not None:
+            harmful_activity_target_ids.extend(
+                semantic_plan_harmful_target_ids(bound_activity_plan)
+            )
+        # Check every known harmful target before consuming the action or resource.
+        require_harmful_targeting_allowed(
+            combat_actor_snapshot(actor_id),
+            target_ids=harmful_activity_target_ids,
+            known_actor_ids=encounter_actor_ids(encounter),
+        )
         activation_type = str(applied["activation"].get("type") or "")
         if activation_type == "reaction":
             window = next(
@@ -29134,6 +29242,13 @@ def _create_server(
             str(action).strip().lower().replace("-", "_") if action is not None else None
         )
         normalized_ability = str(ability).strip().casefold().replace(" ", "_")
+        social_ability_names = {
+            "charisma",
+            "deception",
+            "intimidation",
+            "performance",
+            "persuasion",
+        }
         if normalized_check_action not in {
             None,
             "escape",
@@ -29186,8 +29301,47 @@ def _create_server(
                     "stabilize derives its DC and Medicine modifier from the Core rules "
                     "and actor card"
                 )
+        elif target_id is not None and kind not in ABILITY_CHECK_KINDS:
+            raise CombatEngineError(
+                "target_id is accepted for ability checks and kind=stabilize"
+            )
         elif target_id is not None:
-            raise CombatEngineError("target_id is accepted only for kind=stabilize")
+            target_id = str(target_id).strip()
+            if not target_id:
+                raise CombatEngineError("target_id must be non-empty")
+            require_campaign_actor(campaign_id, target_id)
+            if target_id == actor_id:
+                raise CombatEngineError("a social check target must be another actor")
+            if kind not in ABILITY_CHECK_KINDS:
+                raise CombatEngineError("target_id is accepted only for ability checks")
+            if not (
+                normalized_check_action == "influence"
+                or normalized_ability in social_ability_names
+            ):
+                raise CombatEngineError("target_id is accepted only for social ability checks")
+        if normalized_check_action == "influence" and target_id is None:
+            raise CombatEngineError("an influence check requires target_id")
+        social_charm_advantage = False
+        if (
+            target_id is not None
+            and kind in ABILITY_CHECK_KINDS
+            and (
+                normalized_check_action == "influence"
+                or normalized_ability in social_ability_names
+            )
+        ):
+            source_snapshot = combat_actor_snapshot(actor_id)
+            target_snapshot = combat_actor_snapshot(target_id)
+            social_charm_advantage = charmed_social_check_advantage(
+                source_snapshot,
+                target_snapshot,
+                known_actor_ids={
+                    str(item.id)
+                    for item in characters.list(campaign_id=campaign_id)
+                },
+            )
+            if social_charm_advantage:
+                advantage = True
         payload = {
             "actor_id": actor_id,
             "target_id": target_id,
@@ -29217,6 +29371,12 @@ def _create_server(
         active_state = dict(campaign.state or {}).get("combat")
         if isinstance(active_state, dict) and active_state.get("active", False):
             require_encounter_combatant(active_state, actor_id, role="check actor")
+            if target_id is not None and kind in ABILITY_CHECK_KINDS:
+                require_encounter_combatant(
+                    active_state,
+                    target_id,
+                    role="social check target",
+                )
         prepaid_search_encounter: dict[str, Any] | None = None
         if normalized_check_action == "search":
             if not isinstance(active_state, dict) or not active_state.get("active", False):
@@ -29461,6 +29621,13 @@ def _create_server(
                     branch_id=resolved_branch_id,
                 ),
             )
+            if social_charm_advantage:
+                result = {
+                    **result,
+                    "charmed_social_advantage": True,
+                }
+            if target_id is not None:
+                result = {**result, "target_id": target_id}
             if derived_skill:
                 result = {**result, "skill": normalized_ability}
             if normalized_check_action is not None:
@@ -29808,6 +29975,11 @@ def _create_server(
             source_card_id=source_card_id,
             source_card_kind=source_card_kind,
             compiled_plan=compiled_plan,
+        )
+        require_harmful_targeting_allowed(
+            combat_actor_snapshot(source_actor_id),
+            target_ids=semantic_plan_harmful_target_ids(bound_plan),
+            known_actor_ids=encounter_actor_ids(encounter),
         )
         payment_entry = require_agent_resolution_payment(
             encounter,

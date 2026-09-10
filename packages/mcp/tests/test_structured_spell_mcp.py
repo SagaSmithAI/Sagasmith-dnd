@@ -424,6 +424,211 @@ def test_healing_word_cast_roll_and_feature_bonus_commit_once(tmp_path: Path, mo
     asyncio.run(exercise())
 
 
+def test_charmed_caster_cannot_target_charmer_with_harmful_save_spell(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _deterministic_rolls(monkeypatch)
+
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        caster = default_character_sheet()
+        caster["abilities"]["intelligence"]["score"] = 18
+        caster["spellcasting"].update(ability="intelligence", spell_slots=_slot(3))
+        fireball = _spell("Fireball", 3, casting_time="1 action", range_ft=150)
+        hypnotic = _hypnotic_pattern()
+        caster["content"]["spells"] = [fireball, hypnotic]
+        caster["conditions"] = ["charmed"]
+        caster["effects"] = [
+            {
+                "id": "charm-source",
+                "kind": "timed_conditions",
+                "source": "charmer-placeholder",
+                "active": True,
+                "changes": [
+                    {"path": "conditions", "mode": "add", "value": "charmed"},
+                ],
+            }
+        ]
+        target = default_character_sheet()
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Charmed spell", "edition": "2014", "idempotency_key": "campaign"},
+        )
+        actors = []
+        for index, (name, sheet) in enumerate(
+            [("Charmed caster", caster), ("Charmer", target)]
+        ):
+            actors.append(
+                await _call(
+                    server,
+                    "character_create_from",
+                    {
+                        "mode": "direct",
+                        "payload": {
+                            "campaign_id": campaign["id"],
+                            "name": name,
+                            "sheet": sheet,
+                        },
+                        "principal_id": "system:local",
+                        "idempotency_key": f"actor-{index}",
+                    },
+                )
+            )
+        campaign_id = campaign["id"]
+        caster_id = actors[0]["id"]
+        charmer_id = actors[1]["id"]
+        caster_view = await _call(
+            server,
+            "character_query",
+            {
+                "view": "get",
+                "payload": {"character_id": caster_id},
+                "principal_id": "system:local",
+            },
+        )
+        repaired = dict(caster_view["sheet"])
+        repaired["effects"] = [{**dict(repaired["effects"][0]), "source": charmer_id}]
+        await _call(
+            server,
+            "character_sheet_replace",
+            {
+                "character_id": caster_id,
+                "sheet": repaired,
+                "expected_revision": caster_view["revision"],
+                "idempotency_key": "bind-charm-source",
+            },
+        )
+        refreshed = await _call(
+            server,
+            "campaign_query",
+            {
+                "view": "get",
+                "payload": {"campaign_id": campaign_id},
+                "principal_id": "system:local",
+            },
+        )
+        phase = await _call(
+            server,
+            "game_phase",
+            {
+                "campaign_id": campaign_id,
+                "action": "set",
+                "tool_profile": "play",
+                "expected_revision": refreshed["revision"],
+                "idempotency_key": "play",
+            },
+        )
+        await _call(
+            server,
+            "combat_start",
+            {
+                "positioning_mode": "grid",
+                "battle_map": {"width_cells": 40, "height_cells": 40},
+                "campaign_id": campaign_id,
+                "participant_ids": [caster_id, charmer_id],
+                "participant_config": [
+                    {
+                        "actor_id": caster_id,
+                        "initiative": 20,
+                        "position": {"x": 0, "y": 0},
+                        "disposition": "friendly",
+                    },
+                    {
+                        "actor_id": charmer_id,
+                        "initiative": 10,
+                        "position": {"x": 5, "y": 0},
+                        "disposition": "hostile",
+                    },
+                ],
+                "expected_revision": phase["campaign_revision"],
+                "idempotency_key": "start",
+            },
+        )
+        before = await _call(
+            server,
+            "campaign_query",
+            {
+                "view": "get",
+                "payload": {"campaign_id": campaign_id},
+                "principal_id": "system:local",
+            },
+        )
+        with pytest.raises(Exception, match="harmful effect"):
+            await _raw(
+                server,
+                "combat_cast_spell",
+                {
+                    "campaign_id": campaign_id,
+                    "actor_id": caster_id,
+                    "spell_id": fireball["id"],
+                    "cast_level": 3,
+                    "declaration": {
+                        "origin": {"x": 5, "y": 0},
+                        "target_contexts": [
+                            {"target_id": charmer_id, "cover": "none"}
+                        ],
+                    },
+                    "expected_revision": before["revision"],
+                    "idempotency_key": "blocked-harmful-fireball",
+                },
+            )
+        after = await _call(
+            server,
+            "campaign_query",
+            {
+                "view": "get",
+                "payload": {"campaign_id": campaign_id},
+                "principal_id": "system:local",
+            },
+        )
+        assert after["revision"] == before["revision"]
+        caster_after = await _call(
+            server,
+            "character_query",
+            {
+                "view": "get",
+                "payload": {"character_id": caster_id},
+                "principal_id": "system:local",
+            },
+        )
+        assert caster_after["sheet"]["spellcasting"]["spell_slots"]["3"]["value"] == 1
+
+        with pytest.raises(Exception, match="harmful effect"):
+            await _raw(
+                server,
+                "combat_cast_spell",
+                {
+                    "campaign_id": campaign_id,
+                    "actor_id": caster_id,
+                    "spell_id": hypnotic["id"],
+                    "cast_level": 3,
+                    "declaration": {
+                        "origin": {"x": 0, "y": 0},
+                        "cube": {
+                            "min": {"x": 0, "y": 0},
+                            "max": {"x": 5, "y": 5},
+                        },
+                    },
+                    "expected_revision": before["revision"],
+                    "idempotency_key": "blocked-harmful-hypnotic-pattern",
+                },
+            )
+        after_hypnotic = await _call(
+            server,
+            "campaign_query",
+            {
+                "view": "get",
+                "payload": {"campaign_id": campaign_id},
+                "principal_id": "system:local",
+            },
+        )
+        assert after_hypnotic["revision"] == before["revision"]
+
+    asyncio.run(exercise())
+
+
 def test_sight_required_spell_rejects_blinded_caster_without_writes(
     tmp_path: Path,
     monkeypatch,
