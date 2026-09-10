@@ -1483,6 +1483,48 @@ def test_2024_push_and_slow_masteries_update_encounter_state() -> None:
         attacker_id="slower",
         target_id="slow-target",
     )["encounter"]
+    slowed_state = next(
+        item for item in slowed["combatants"] if item["actor_id"] == "slow-target"
+    )
+    assert slowed_state["turn_budget"]["speed"] == 20
+    assert slowed_state["turn_budget"]["movement"] == 20
+
+    # Reapplying Slow replaces the prior effect, never stacks it, and keeps
+    # movement already spent in the current turn accounted for.
+    slowed_state["turn_budget"]["movement_spent"] = 15
+    slowed_state["turn_budget"]["movement"] = 20
+    slowed_state["turn_flags"] = {"dodging": True}
+    reapplied = apply_weapon_mastery_to_encounter(
+        slowed,
+        slow_attack,
+        attacker_id="slower",
+        target_id="slow-target",
+    )["encounter"]
+    reapplied_state = next(
+        item for item in reapplied["combatants"] if item["actor_id"] == "slow-target"
+    )
+    assert reapplied_state["turn_budget"]["speed"] == 20
+    assert reapplied_state["turn_budget"]["movement"] == 5
+    assert reapplied_state["turn_flags"]["dodging"] is True
+
+    # A target whose base speed is below the penalty loses all current
+    # movement, and an active Dodge benefit ends in the same commit.
+    reapplied_state["base_speed"] = 5
+    reapplied_state["turn_budget"].update(speed=5, movement=5, movement_spent=0)
+    zeroed = apply_weapon_mastery_to_encounter(
+        reapplied,
+        slow_attack,
+        attacker_id="slower",
+        target_id="slow-target",
+    )["encounter"]
+    zeroed_state = next(
+        item for item in zeroed["combatants"] if item["actor_id"] == "slow-target"
+    )
+    assert zeroed_state["turn_budget"]["speed"] == 0
+    assert zeroed_state["turn_budget"]["movement"] == 0
+    assert "dodging" not in zeroed_state["turn_flags"]
+    assert zeroed_state["turn_flags"]["dodge_ended"]["reason"] == "speed_zero"
+
     target_turn = end_turn(slowed, actor_id_value="slower")
     current = current_combatant(target_turn)
     assert current["actor_id"] == "slow-target"
