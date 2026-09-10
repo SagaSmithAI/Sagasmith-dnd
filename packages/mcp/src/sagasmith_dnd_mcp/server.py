@@ -22332,6 +22332,25 @@ def _create_server(
             or window.get("target_id") != target_id
         ):
             raise CombatEngineError("choice_id is not this actor's opportunity-attack window")
+        recorded_weapon_ids = window.get("opportunity_attack_weapon_ids")
+        if recorded_weapon_ids is not None:
+            if (
+                not isinstance(recorded_weapon_ids, list)
+                or not recorded_weapon_ids
+                or any(
+                    not isinstance(item, str) or not item.strip()
+                    for item in recorded_weapon_ids
+                )
+                or len(set(recorded_weapon_ids)) != len(recorded_weapon_ids)
+            ):
+                raise CombatEngineError("opportunity-attack window has invalid weapon options")
+            requested_weapon_id = str(
+                action_payload.get("weapon_id") or action_payload.get("item_id") or ""
+            ).strip()
+            if requested_weapon_id not in set(recorded_weapon_ids):
+                raise CombatEngineError(
+                    "the selected weapon did not produce this opportunity-attack boundary"
+                )
         require_campaign_actor(campaign_id, target_id)
         attacker = combat_actor_snapshot(actor_id)
         target = combat_actor_snapshot(target_id)
@@ -24389,6 +24408,8 @@ def _create_server(
             "trigger",
             "attacker_id",
             "target_id",
+            "opportunity_attack_weapon_ids",
+            "opportunity_attack_reach_ft",
         }
         return [
             {key: value for key, value in window.items() if key in allowed} for window in windows

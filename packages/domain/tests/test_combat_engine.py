@@ -6724,6 +6724,46 @@ def test_grid_movement_opens_opportunity_window_only_when_leaving_hostile_reach(
     assert available_reactions(moved_safely, "threat") == []
 
 
+def test_opportunity_window_binds_to_outermost_weapon_reach_for_whole_or_segmented_path() -> None:
+    mover = _actor("mover")
+    mover.update(initiative=20, position={"x": 0, "y": 0}, disposition="friendly")
+    threat = _actor("threat")
+    threat.update(initiative=10, position={"x": 1, "y": 0}, disposition="hostile")
+    threat["derived"]["inventory"]["weapon_attacks"] = [
+        {
+            "item_id": "reach-weapon",
+            "attack_type": "melee",
+            "reach_ft": 10,
+        }
+    ]
+
+    whole = spend_movement(
+        _grid_encounter([mover, threat]),
+        "mover",
+        20,
+        destination={"x": 4, "y": 0},
+    )
+    segmented_start = spend_movement(
+        _grid_encounter([mover, threat]),
+        "mover",
+        10,
+        destination={"x": 2, "y": 0},
+    )
+    segmented = spend_movement(
+        segmented_start,
+        "mover",
+        10,
+        destination={"x": 4, "y": 0},
+    )
+
+    for encounter in (whole, segmented):
+        windows = available_reactions(encounter, "threat")
+        assert len(windows) == 1
+        assert windows[0]["opportunity_attack_weapon_ids"] == ["reach-weapon"]
+        assert windows[0]["opportunity_attack_reach_ft"] == 10
+        assert windows[0]["target_position"] != {"x": 4, "y": 0}
+
+
 def test_positioned_movement_rejects_declared_distance_that_disagrees_with_grid() -> None:
     mover = _actor("mover")
     mover.update(initiative=20, position={"x": 0, "y": 0})

@@ -76,8 +76,8 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
             ]
             rogue_sheet["inventory"]["items"] = [
                 {
-                    "id": "dagger",
-                    "name": "Dagger",
+                    "id": "whip",
+                    "name": "Whip",
                     "kind": "weapon",
                     "equipped": True,
                     "equipped_slot": "main_hand",
@@ -86,12 +86,13 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
                         "attack_type": "melee",
                         "attack_ability": "dexterity",
                         "damage_formula": "1d4",
-                        "damage_type": "piercing",
-                        "properties": ["finesse", "light", "thrown"],
+                        "damage_type": "slashing",
+                        "reach_ft": 10,
+                        "properties": ["finesse", "reach"],
                     },
                 }
             ]
-            rogue_sheet["inventory"]["equipment_slots"]["main_hand"] = "dagger"
+            rogue_sheet["inventory"]["equipment_slots"]["main_hand"] = "whip"
 
             rogue = await _call(
                 server,
@@ -211,7 +212,7 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
                     "campaign_id": campaign["id"],
                     "actor_id": mover["id"],
                     "action": "move",
-                    "payload": {"distance": 15, "destination": {"x": 3, "y": 0}},
+                    "payload": {"distance": 20, "destination": {"x": 4, "y": 0}},
                     "expected_revision": dodged["campaign_revision"],
                     "idempotency_key": "move",
                 },
@@ -226,20 +227,31 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
             moved_target = next(
                 item for item in moved["combat"]["combatants"] if item["actor_id"] == mover["id"]
             )
-            assert moved_target["position"] == {"x": 3, "y": 0}
+            assert moved_target["position"] == {"x": 4, "y": 0}
             request = {
                 "campaign_id": campaign["id"],
                 "actor_id": rogue["id"],
                 "choice_id": reactions[0]["id"],
                 "target_id": mover["id"],
                 "action": {
-                    "weapon_id": "dagger",
+                    "weapon_id": "whip",
                     "use_sneak_attack": True,
                     "context": {"advantage": True},
                 },
                 "expected_revision": moved["campaign_revision"],
                 "idempotency_key": "oa-sneak",
             }
+
+            with pytest.raises(ToolError, match="did not produce this opportunity-attack boundary"):
+                await _raw(
+                    server,
+                    "combat_reaction_attack",
+                    {
+                        **request,
+                        "action": {"weapon_id": "unarmed-strike"},
+                        "idempotency_key": "oa-wrong-weapon",
+                    },
+                )
 
             async def snapshot():
                 return {

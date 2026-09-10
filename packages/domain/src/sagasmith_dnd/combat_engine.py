@@ -1362,6 +1362,7 @@ def start_encounter(
                 "visible_to_actor_ids": deepcopy(actor.get("visible_to_actor_ids")),
                 "disposition": _normalize_disposition(actor.get("disposition")),
                 "reach_ft": _nonnegative_int(actor.get("reach_ft"), default=5),
+                "opportunity_attack_options": _opportunity_attack_options(actor),
                 "can_share_space": bool(actor.get("can_share_space", False)),
                 "surprised": surprised,
                 "vigilant": vigilant,
@@ -5672,40 +5673,68 @@ def spend_movement(
             threat_position = _position(threat.get("position"))
             if threat_position is None:
                 continue
-            reach = _nonnegative_int(threat.get("reach_ft"), default=5)
-            leaving_segment = next(
-                (
-                    start
-                    for start, end in movement_segments
-                    if _grid_distance(start, threat_position)
-                    <= reach
-                    < _grid_distance(end, threat_position)
-                ),
-                None,
+            options = _recorded_opportunity_attack_options(threat)
+            boundaries: list[
+                tuple[int, int, tuple[float, float], tuple[float, float], int, int]
+            ] = []
+            for option in options:
+                reach = int(option["reach_ft"])
+                for segment_index, (start, end) in enumerate(movement_segments):
+                    start_distance = _grid_distance(start, threat_position)
+                    end_distance = _grid_distance(end, threat_position)
+                    if (
+                        start_distance
+                        <= reach
+                        < end_distance
+                    ):
+                        boundaries.append(
+                            (reach, segment_index, start, end, start_distance, end_distance)
+                        )
+                        break
+            if not boundaries:
+                continue
+            # A coarse movement request may cross several reach rings.  The
+            # outermost ring is the first boundary at which an OA can be
+            # made; bind the window to weapons that actually reach it.
+            boundary_reach = max(item[0] for item in boundaries)
+            boundary_index = min(item[1] for item in boundaries if item[0] == boundary_reach)
+            boundary = next(
+                item
+                for item in boundaries
+                if item[0] == boundary_reach and item[1] == boundary_index
             )
-            if leaving_segment is not None:
-                key = ("movement.leave_reach", threat.get("actor_id"), actor_id_value)
-                if key in existing:
-                    continue
-                value["pending"] = [
-                    *list(value.get("pending") or []),
-                    {
-                        "id": f"reaction-{uuid4().hex}",
-                        "kind": "reaction",
-                        "actor_id": threat["actor_id"],
-                        "target_id": actor_id_value,
-                        "target_position": {"x": leaving_segment[0], "y": leaving_segment[1]},
-                        "target_visible": True,
-                        "event": "movement.leave_reach",
-                        "trigger": "opportunity_attack",
-                        "candidates": [
-                            {"id": "opportunity_attack"},
-                            {"id": "decline"},
-                        ],
-                        "deadline": "before_commit",
-                        "status": "pending",
-                    },
-                ]
+            target_boundary = _movement_boundary_position(
+                boundary[2], boundary[3], boundary[4], boundary[5], boundary_reach
+            )
+            weapon_ids = [
+                str(option["weapon_id"])
+                for option in options
+                if int(option["reach_ft"]) == boundary_reach
+            ]
+            key = ("movement.leave_reach", threat.get("actor_id"), actor_id_value)
+            if key in existing:
+                continue
+            value["pending"] = [
+                *list(value.get("pending") or []),
+                {
+                    "id": f"reaction-{uuid4().hex}",
+                    "kind": "reaction",
+                    "actor_id": threat["actor_id"],
+                    "target_id": actor_id_value,
+                    "target_position": {"x": target_boundary[0], "y": target_boundary[1]},
+                    "target_visible": True,
+                    "event": "movement.leave_reach",
+                    "trigger": "opportunity_attack",
+                    "opportunity_attack_weapon_ids": weapon_ids,
+                    "opportunity_attack_reach_ft": boundary_reach,
+                    "candidates": [
+                        {"id": "opportunity_attack"},
+                        {"id": "decline"},
+                    ],
+                    "deadline": "before_commit",
+                    "status": "pending",
+                },
+            ]
     if willing_movement and agent_facts is not None and not _disengaged(combatant):
         combatants = {
             str(item.get("actor_id") or ""): item for item in value.get("combatants", [])
@@ -5740,6 +5769,10 @@ def spend_movement(
                     "target_visible": True,
                     "event": "movement.leave_reach",
                     "trigger": "opportunity_attack",
+                    "opportunity_attack_weapon_ids": [
+                        str(option["weapon_id"])
+                        for option in _recorded_opportunity_attack_options(threat)
+                    ],
                     "candidates": [{"id": "opportunity_attack"}, {"id": "decline"}],
                     "deadline": "before_commit",
                     "status": "pending",
@@ -8834,6 +8867,72 @@ def _nonnegative_int(value: Any, *, default: int) -> int:
     return result if result >= 0 else default
 
 
+def _opportunity_attack_options(actor: dict[str, Any]) -> list[dict[str, Any]]:
+    """Record the currently legal melee attacks that can produce an OA."""
+
+    attacks = list(actor_derived(actor).get("inventory", {}).get("weapon_attacks", []))
+    options: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for attack in attacks:
+        if str(attack.get("attack_type") or "").casefold() != "melee":
+            continue
+        weapon_id = str(attack.get("item_id") or "").strip()
+        if not weapon_id or weapon_id in seen:
+            continue
+        seen.add(weapon_id)
+        options.append(
+            {
+                "weapon_id": weapon_id,
+                "reach_ft": _positive_int(attack.get("reach_ft"), default=5),
+            }
+        )
+    if options:
+        if "unarmed-strike" not in seen:
+            options.append({"weapon_id": "unarmed-strike", "reach_ft": 5})
+        return options
+    # Legacy/statblock callers may not supply a derived attack list.  Retain
+    # the historical actor-level reach only for that compatibility case.
+    return [
+        {
+            "weapon_id": "unarmed-strike",
+            "reach_ft": _positive_int(actor.get("reach_ft"), default=5),
+        }
+    ]
+
+
+def _recorded_opportunity_attack_options(combatant: dict[str, Any]) -> list[dict[str, Any]]:
+    """Validate or reconstruct OA options from an encounter combatant."""
+
+    raw = combatant.get("opportunity_attack_options")
+    if raw is None:
+        return [
+            {
+                "weapon_id": "unarmed-strike",
+                "reach_ft": _positive_int(combatant.get("reach_ft"), default=5),
+            }
+        ]
+    if not isinstance(raw, list) or not raw:
+        raise CombatEngineError("opportunity_attack_options must be a non-empty list")
+    options: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise CombatEngineError("opportunity_attack_options entries must be objects")
+        weapon_id = str(item.get("weapon_id") or "").strip()
+        reach = item.get("reach_ft")
+        if (
+            not weapon_id
+            or isinstance(reach, bool)
+            or not isinstance(reach, int)
+            or reach <= 0
+            or weapon_id in seen
+        ):
+            raise CombatEngineError("opportunity_attack_options contains an invalid weapon")
+        seen.add(weapon_id)
+        options.append({"weapon_id": weapon_id, "reach_ft": reach})
+    return options
+
+
 def _position(value: Any) -> tuple[float, float] | None:
     if not isinstance(value, dict):
         return None
@@ -8846,6 +8945,25 @@ def _position(value: Any) -> tuple[float, float] | None:
 def _grid_distance(left: tuple[float, float], right: tuple[float, float]) -> int:
     """Use the D&D diagonal-grid convention: one square is five feet."""
     return int(max(abs(left[0] - right[0]), abs(left[1] - right[1])) * 5)
+
+
+def _movement_boundary_position(
+    start: tuple[float, float],
+    end: tuple[float, float],
+    start_distance: int,
+    end_distance: int,
+    reach: int,
+) -> tuple[float, float]:
+    """Locate the recorded point immediately before a weapon's reach exit."""
+
+    distance_delta = end_distance - start_distance
+    if distance_delta <= 0:
+        return start
+    ratio = max(0.0, min(1.0, (reach - start_distance) / distance_delta))
+    return (
+        start[0] + (end[0] - start[0]) * ratio,
+        start[1] + (end[1] - start[1]) * ratio,
+    )
 
 
 def _disengaged(combatant: dict[str, Any]) -> bool:
