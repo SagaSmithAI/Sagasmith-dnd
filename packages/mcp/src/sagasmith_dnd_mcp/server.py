@@ -242,6 +242,7 @@ from sagasmith_dnd.combat_engine import (
     resolve_common_action,
     resolve_death_save_to_sheet,
     resolve_divine_spark_to_sheet,
+    resolve_fall_to_sheet,
     resolve_hypnotic_pattern_target,
     resolve_preserve_life_to_sheets,
     resolve_readied_action_window,
@@ -11665,6 +11666,12 @@ def _create_server(
                 "remaining_attacks",
                 "spell_resolution",
                 "deflect_attack",
+                "distance_ft",
+                "dice_count",
+                "damage_roll",
+                "damage",
+                "prone_added",
+                "knocked_prone",
             }
             value["result"] = {key: item for key, item in result.items() if key in allowed}
         value.pop("revisions", None)
@@ -31139,6 +31146,133 @@ def _create_server(
                 )
             ],
             rule_receipts=damage_receipts,
+        )
+        return combat_response(campaign_id, principal_id, response)
+
+    @_agent_ruling_boundary
+    def combat_apply_fall(
+        campaign_id: str,
+        target_id: str,
+        distance_ft: int,
+        principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None,
+        branch_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Resolve source-derived 2014 falling damage atomically."""
+        access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
+        require_write_contract(expected_revision, idempotency_key)
+        resolved_branch_id = require_current_branch(campaign_id, branch_id)
+        require_campaign_actor(campaign_id, target_id)
+        payload = {
+            "target_id": target_id,
+            "distance_ft": distance_ft,
+            "branch_id": resolved_branch_id,
+        }
+        scope = f"combat-fall:{campaign_id}:{resolved_branch_id}:{principal_id}"
+        replay = replay_idempotent(scope, idempotency_key, payload)
+        if replay is not None:
+            return combat_response(campaign_id, principal_id, replay)
+
+        campaign = campaigns.get(campaign_id)
+        if expected_revision is not None and campaign.revision != expected_revision:
+            raise ValueError(
+                "campaign revision conflict: "
+                f"expected {expected_revision}, found {campaign.revision}"
+            )
+        # Direct in-process callers do not pass through the request-scoped
+        # random-stream wrapper. Open the same campaign stream here so tests
+        # and local hosts receive identical deterministic receipts.
+        if active_random_stream() is None:
+            stream = CampaignRandomStream.from_campaign_state(
+                campaign_id,
+                campaign.state,
+                operation="combat.fall.apply",
+                idempotency_key=str(idempotency_key or ""),
+                campaign_revision=campaign.revision,
+            )
+            with use_random_stream(stream):
+                return combat_apply_fall(
+                    campaign_id,
+                    target_id,
+                    distance_ft,
+                    principal_id,
+                    expected_revision,
+                    resolved_branch_id,
+                    idempotency_key,
+                )
+
+        target = combat_actor_snapshot(target_id)
+        existing_encounter = dict(campaign.state or {}).get("combat")
+        target_uses_death_saves = target.get("character_type") == "pc"
+        ruleset = campaign_rules_edition(campaign_id)
+        if isinstance(existing_encounter, dict) and existing_encounter.get("active", False):
+            require_no_blocking_pending(existing_encounter)
+            ruleset = encounter_rules_edition(campaign_id, existing_encounter)
+            target_combatant = require_encounter_combatant(
+                existing_encounter, target_id, role="fall target"
+            )
+            target_uses_death_saves = combatant_zero_hp_buffered(target_combatant)
+        applied = resolve_fall_to_sheet(
+            target["sheet"],
+            distance_ft=distance_ft,
+            source=principal_id,
+            ruleset=ruleset,
+            death_saves=target_uses_death_saves,
+        )
+        applied_result = {key: value for key, value in applied.items() if key != "sheet"}
+        next_state = dict(campaign.state or {})
+        encounter = existing_encounter
+        if isinstance(encounter, dict) and encounter.get("active", False):
+            sync_combatant_conditions(encounter, target_id, applied["sheet"])
+            reconcile_readied_spells(encounter, target_id, applied["sheet"])
+            add_concentration_window(
+                encounter,
+                target_id,
+                dict(applied.get("damage") or {}).get("concentration"),
+                next_revision=campaign.revision + 1,
+            )
+            encounter["log"] = [
+                *list(encounter.get("log") or []),
+                {"type": "fall", "target_id": target_id, "result": applied_result},
+            ][-100:]
+            next_state["combat"] = encounter
+        current = characters.get(target_id)
+        boundary_ids = ["dnd5e.core.movement.falling"]
+        if int(dict(applied.get("damage") or {}).get("after_hp", 1) or 0) == 0:
+            boundary_ids.append("dnd5e.core.damage.zero_hp")
+        response = commit_campaign_state(
+            campaign,
+            next_state,
+            operation="combat.fall.apply",
+            principal_id=principal_id,
+            branch_id=resolved_branch_id,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=payload,
+            response_fields={
+                "status": "committed",
+                "result": applied_result,
+                "combat": next_state.get("combat"),
+                "rule_receipts": core_receipts(
+                    effective_rule_context(campaign_id, branch_id=resolved_branch_id),
+                    boundary_ids,
+                    "movement.falling",
+                ),
+            },
+            character_updates=[
+                CharacterStateUpdate(
+                    character_id=target_id,
+                    sheet=validate_character_sheet(applied["sheet"]),
+                    notes=validate_character_notes(current.notes),
+                    expected_revision=current.revision,
+                )
+            ],
+            rule_receipts=core_receipts(
+                effective_rule_context(campaign_id, branch_id=resolved_branch_id),
+                boundary_ids,
+                "movement.falling",
+            ),
         )
         return combat_response(campaign_id, principal_id, response)
 
@@ -58952,7 +59086,7 @@ boundary.
     def combat_hp_change(
         campaign_id: str,
         target_id: str,
-        action: Literal["damage", "heal", "stabilize", "save_damage"],
+        action: Literal["damage", "fall", "heal", "stabilize", "save_damage"],
         payload: dict[str, Any],
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
         expected_revision: int | None = None,
@@ -58973,6 +59107,16 @@ boundary.
                 idempotency_key,
                 knock_out=facade_bool(data, "knock_out"),
                 melee=facade_bool(data, "melee"),
+            )
+        elif action == "fall":
+            result = combat_apply_fall(
+                campaign_id,
+                target_id,
+                required(data, "distance_ft"),
+                principal_id,
+                expected_revision,
+                branch_id,
+                idempotency_key,
             )
         elif action == "heal":
             result = combat_heal(
