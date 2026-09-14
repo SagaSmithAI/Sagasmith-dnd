@@ -207,6 +207,8 @@ from sagasmith_dnd.combat_engine import (
     available_attack_defenses,
     available_reactions,
     can_see,
+    charmed_social_check_advantage,
+    consume_task_help,
     consume_weapon_mastery_attack_effects,
     current_combatant,
     damage_amount_after_reduction,
@@ -234,6 +236,7 @@ from sagasmith_dnd.combat_engine import (
     reconcile_witch_bolt_range,
     record_death_save_turn_start,
     require_death_save_eligibility,
+    require_harmful_targeting_allowed,
     resolve_actor_check,
     resolve_actor_contest,
     resolve_actor_group_check,
@@ -242,7 +245,9 @@ from sagasmith_dnd.combat_engine import (
     resolve_common_action,
     resolve_death_save_to_sheet,
     resolve_divine_spark_to_sheet,
+    resolve_fall_to_sheet,
     resolve_hypnotic_pattern_target,
+    resolve_lay_on_hands_to_sheets,
     resolve_preserve_life_to_sheets,
     resolve_readied_action_window,
     resolve_readied_spell_window,
@@ -251,6 +256,7 @@ from sagasmith_dnd.combat_engine import (
     resolve_turn_undead_to_sheets,
     roll_attack_action,
     settle_core_activity_effect,
+    settle_hide,
     source_speed_multiplier,
     source_spell_resolution,
     spend_movement,
@@ -269,6 +275,7 @@ from sagasmith_dnd.conditions import (
     STANDARD_BINARY_CONDITION_IDS,
     apply_condition_change,
     condition_ids,
+    reconcile_ended_effect_conditions,
 )
 from sagasmith_dnd.consumables import HEALING_POTION_MECHANIC_ID, healing_potion_formula
 from sagasmith_dnd.content_actors import (
@@ -1081,35 +1088,6 @@ def _verified_tortle_natural_armor_authority(
     return authority
 
 
-def _load_or_create_content_authority_secret(path: Path) -> bytes:
-    """Load the durable server key used to authorize privileged content effects."""
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        value = path.read_bytes()
-        if len(value) != 32:
-            raise RuntimeError("content authority key is invalid")
-        return value
-    value = secrets.token_bytes(32)
-    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(value)
-            handle.flush()
-            os.fsync(handle.fileno())
-        try:
-            os.link(temporary, path)
-            return value
-        except FileExistsError:
-            published = path.read_bytes()
-            if len(published) != 32:
-                raise RuntimeError("content authority key is invalid")
-            return published
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
 def _verified_content_authority_ids(
     sheet: Mapping[str, Any], *, character_id: str | None, secret: bytes
 ) -> frozenset[str]:
@@ -1333,104 +1311,6 @@ RIGHT_TOOL_FOR_JOB_ARTISAN_TOOL_NAMES = frozenset(
         "woodcarver's tools",
     }
 )
-SCAG_WATCHERS_EYE_BACKGROUND_IDS = frozenset(
-    {
-        (
-            "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide."
-            "16e6a243ef0a.background.city-watch"
-        ),
-        (
-            "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide."
-            "16e6a243ef0a.background.investigator"
-        ),
-    }
-)
-WATCHERS_EYE_CAPABILITIES = frozenset(
-    {
-        "local_law",
-        "local_criminal_activity",
-        "watch_outpost",
-        "law_enforcement_contact",
-        "watch_information",
-        "recognition",
-    }
-)
-WATCHERS_EYE_FACT_METADATA_KEY = "dnd5e_watchers_eye"
-WATCHERS_EYE_FACT_SCHEMA_VERSION = 1
-WATCHERS_EYE_FEATURE_NAME = "Watcher's Eye"
-WATCHERS_EYE_NARRATIVE_SCHEMA = "sagasmith.dnd.narrative-capability.v1"
-
-
-def _watchers_eye_source_binding(artifact: Mapping[str, Any]) -> dict[str, Any] | None:
-    """Return exact source-review binding for the two SCAG background cards."""
-
-    artifact_id = str(artifact.get("id") or "")
-    if artifact_id not in SCAG_WATCHERS_EYE_BACKGROUND_IDS:
-        return None
-    if str(artifact.get("kind") or "") != "background":
-        return None
-    if str(artifact.get("application_state") or "") != "selection_ready":
-        return None
-    if str(artifact.get("execution_state") or "") != "ruling_ready":
-        return None
-    raw_selection_contract = artifact.get("selection_contract")
-    raw_catalog_review = artifact.get("catalog_review")
-    if raw_selection_contract is not None or raw_catalog_review is not None:
-        if selection_contract_errors(artifact):
-            return None
-        selection_contract = dict(raw_selection_contract or {})
-        catalog_review = dict(raw_catalog_review or {})
-        reviewed_content_hash = str(selection_contract.get("reviewed_content_hash") or "")
-        if (
-            selection_contract.get("status") != "ready"
-            or selection_contract.get("materializer") != "dnd5e.character.background.v1"
-            or catalog_review.get("status") != "approved"
-            or reviewed_content_hash != str(catalog_review.get("reviewed_content_hash") or "")
-            or len(reviewed_content_hash) != 64
-        ):
-            return None
-    else:
-        # The import boundary intentionally strips authoring attestations after
-        # binding them into the immutable addon checksum and definition provenance.
-        reviewed_content_hash = content_fingerprint(artifact)
-    card = dict(artifact.get("card") or {})
-    grants = dict(card.get("background_grants") or {})
-    if str(grants.get("feature") or "") != WATCHERS_EYE_FEATURE_NAME:
-        return None
-    source_refs = [
-        dict(item) for item in artifact.get("source_refs") or [] if isinstance(item, dict)
-    ]
-    feature_sources = [
-        item
-        for item in source_refs
-        if "watcher's eye" in str(item.get("note") or "").casefold()
-        and str(item.get("chunk_id") or item.get("chunk_key") or "")
-    ]
-    if len(feature_sources) != 1:
-        return None
-    chunk_key = str(feature_sources[0].get("chunk_id") or feature_sources[0].get("chunk_key"))
-    rule_refs = [str(item) for item in artifact.get("rule_refs") or []]
-    feature_rule_refs = [item for item in rule_refs if item.endswith(f"#chunk:{chunk_key}")]
-    if len(feature_rule_refs) != 1:
-        return None
-    ruling_requirements = [
-        dict(item) for item in card.get("ruling_requirements") or [] if isinstance(item, dict)
-    ]
-    if not any(
-        str(item.get("ruling_kind") or "") == "agent_dm_adjudication"
-        and len(str(item.get("source_excerpt") or "")) >= 100
-        for item in ruling_requirements
-    ):
-        return None
-    return {
-        "artifact_id": artifact_id,
-        "background_name": str(card.get("name") or artifact_id),
-        "reviewed_content_hash": reviewed_content_hash,
-        "rule_refs": rule_refs,
-        "feature_rule_ref": feature_rule_refs[0],
-    }
-
-
 def _semantic_plan_save_facts(
     source_card: dict[str, Any], compiled_plan: Any
 ) -> dict[str, dict[str, Any]]:
@@ -1596,10 +1476,6 @@ def _structured_spell_save_facts(
     return facts
 
 
-SCAG_OFFICIAL_ADDON_ID = (
-    "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a.addon"
-)
-SCAG_RULE_PACK_ID = "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a"
 SCAG_WATCHERS_EYE_BACKGROUND_IDS = frozenset(
     {
         (
@@ -2105,7 +1981,10 @@ SUPPORTED_FEATURE_OPTION_PREREQUISITE_FIELDS = frozenset(
 SUPPORTED_FEATURE_MECHANICAL_GRANTS = frozenset(
     {
         "armor_proficiencies",
+        "conditional_condition_immunities",
+        "condition_immunities",
         "hp_per_class_level",
+        "immunities",
         "languages",
         "resources",
         "skill_proficiencies",
@@ -7334,20 +7213,30 @@ def _create_server(
         return validate_dnd_content_actor(matches[0])
 
     def refresh_portable_resolution_plans(value: Any) -> Any:
-        """Re-fingerprint plans after stable/local source locators are remapped."""
+        """Re-fingerprint plans after stable/local source locators are remapped.
+
+        The values passed here are freshly copied from an immutable archive.  Walk
+        them in place so official archive verification does not repeatedly clone
+        every source citation and card while applying several artifacts from the
+        same pack.  Callers that need a reusable value already own the archive
+        copy, and the function still rebuilds every plan reference before return.
+        """
 
         fingerprints: dict[str, str] = {}
 
         def refresh(item: Any) -> Any:
             if isinstance(item, list):
-                return [refresh(child) for child in item]
+                for index, child in enumerate(item):
+                    item[index] = refresh(child)
+                return item
             if not isinstance(item, dict):
-                return deepcopy(item)
+                return item
             if "resolution_solution" in item:
                 raise ValueError(
                     "rule packs cannot carry campaign-compiled resolution_solution state"
                 )
-            result = {key: refresh(child) for key, child in item.items()}
+            for key, child in list(item.items()):
+                item[key] = refresh(child)
             required_plan_fields = {
                 "schema_version",
                 "id",
@@ -7357,17 +7246,19 @@ def _create_server(
                 "steps",
                 "citations",
             }
-            if required_plan_fields.issubset(result):
-                candidate = dict(result)
+            if required_plan_fields.issubset(item):
+                candidate = dict(item)
                 candidate.pop("fingerprint", None)
                 compiled = compile_resolution_plan(candidate)
                 fingerprints[compiled.id] = compiled.fingerprint
                 return resolution_plan_template(compiled)
-            return result
+            return item
 
         def refresh_references(item: Any, *, parent: str = "") -> Any:
             if isinstance(item, list):
-                return [refresh_references(child, parent=parent) for child in item]
+                for index, child in enumerate(item):
+                    item[index] = refresh_references(child, parent=parent)
+                return item
             if not isinstance(item, dict):
                 return item
             if (
@@ -7377,7 +7268,9 @@ def _create_server(
             ):
                 plan_id = str(item["id"])
                 return {"id": plan_id, "fingerprint": fingerprints[plan_id]}
-            return {key: refresh_references(child, parent=key) for key, child in item.items()}
+            for key, child in list(item.items()):
+                item[key] = refresh_references(child, parent=key)
+            return item
 
         return refresh_references(refresh(value))
 
@@ -10413,6 +10306,40 @@ def _create_server(
         """Build the pure engine input from the canonical Character row."""
         return character_view(characters.get(character_id))
 
+    def encounter_actor_ids(encounter: dict[str, Any]) -> set[str]:
+        return {
+            str(item.get("actor_id") or "").strip()
+            for item in [
+                *encounter.get("combatants", []),
+                *encounter.get("reinforcements", []),
+            ]
+            if isinstance(item, dict) and str(item.get("actor_id") or "").strip()
+        }
+
+    def semantic_plan_harmful_target_ids(plan: BoundResolutionPlan) -> list[str]:
+        """Extract concrete targets of plan steps that can harm or disable."""
+        target_ids: list[str] = []
+        harmful_opcodes = {
+            "check.save",
+            "damage.apply",
+            "condition.apply",
+            "effect.apply",
+            "movement.force",
+            "actor.control",
+        }
+        for step in plan.steps:
+            if str(step.get("op") or "") not in harmful_opcodes:
+                continue
+            arguments = dict(step.get("args") or {})
+            raw_targets = arguments.get("target_ids")
+            if raw_targets is None and "target_actor_id" in arguments:
+                raw_targets = [arguments.get("target_actor_id")]
+            if isinstance(raw_targets, str):
+                raw_targets = [raw_targets]
+            if isinstance(raw_targets, list):
+                target_ids.extend(str(target_id or "").strip() for target_id in raw_targets)
+        return [target_id for target_id in target_ids if target_id]
+
     def require_campaign_actor(campaign_id: str, character_id: str) -> Any:
         character = characters.get(character_id)
         if character.campaign_id != campaign_id:
@@ -11665,6 +11592,12 @@ def _create_server(
                 "remaining_attacks",
                 "spell_resolution",
                 "deflect_attack",
+                "distance_ft",
+                "dice_count",
+                "damage_roll",
+                "damage",
+                "prone_added",
+                "knocked_prone",
             }
             value["result"] = {key: item for key, item in result.items() if key in allowed}
         value.pop("revisions", None)
@@ -12954,6 +12887,13 @@ def _create_server(
                 target_id,
                 role="committed save-damage target",
             )
+        # Charm is checked here so this payment- and settlement-time gate both
+        # reject a charmed source before its action economy is consumed.
+        require_harmful_targeting_allowed(
+            combat_actor_snapshot(source_actor_id),
+            target_ids=normalized_target_ids,
+            known_actor_ids=encounter_actor_ids(encounter),
+        )
         return normalized
 
     def require_agent_save_damage_payment(
@@ -13284,6 +13224,13 @@ def _create_server(
                         flags["death_save_due"] = False
                 combatant["condition_sources"] = timed_condition_sources(sheet)
                 combatant["speed_multiplier"] = source_speed_multiplier(sheet)
+                if conditions.intersection(INCAPACITATING_STATE_IDS):
+                    flags = dict(combatant.get("turn_flags") or {})
+                    flags.pop("helping", None)
+                    if flags:
+                        combatant["turn_flags"] = flags
+                    else:
+                        combatant.pop("turn_flags", None)
                 reconcile_tortle_shell_defense_projection(combatant, sheet)
                 current_dodge_transition = reconcile_dodge_lifecycle(combatant)
                 dodge_transition = (
@@ -19212,6 +19159,7 @@ def _create_server(
             unknown = set(raw) - {
                 "actor_id",
                 "initiative",
+                "initiative_group_id",
                 "tie_breaker",
                 "speed_adjustment_ft",
                 "source_excerpt",
@@ -19792,6 +19740,7 @@ def _create_server(
                 "surprised",
                 "death_saves",
                 "initiative",
+                "initiative_group_id",
                 "tie_breaker",
                 "source_conditions",
             }
@@ -20317,6 +20266,7 @@ def _create_server(
             "surprised",
             "death_saves",
             "initiative",
+            "initiative_group_id",
             "tie_breaker",
             "join_round",
             "source_conditions",
@@ -24505,6 +24455,7 @@ def _create_server(
             else effective_spell_resolution(spell_entry)
         )
         compiled_spell_plan = None
+        bound_spell_plan: BoundResolutionPlan | None = None
         standard_spell_agent_ruling: dict[str, Any] | None = None
         if isinstance(spell_entry.get("resolution_plan"), dict):
             if source_item_id:
@@ -24578,7 +24529,7 @@ def _create_server(
                 principal_id,
                 roles=CAMPAIGN_DM_ROLES,
             )
-            semantic_plan_commitment, _bound_plan = validate_agent_resolution_commitment(
+            semantic_plan_commitment, bound_spell_plan = validate_agent_resolution_commitment(
                 campaign_id,
                 dict(declaration or {}).get("agent_resolution_commitment"),
                 encounter=encounter,
@@ -24911,6 +24862,47 @@ def _create_server(
                             and not bool(save.get("ignores_cover"))
                         ),
                     )
+        harmful_target_ids: list[str] = []
+        if magic_missile:
+            harmful_target_ids.extend(
+                str(allocation.get("target_id") or "")
+                for allocation in target_allocations or []
+                if isinstance(allocation, dict)
+            )
+        elif (
+            structured_resolution is not None
+            and str(structured_resolution.get("kind") or "") == "saving_throw"
+            and structured_target is not None
+            and bool(dict(structured_resolution.get("save") or {}).get("damage"))
+        ):
+            target_contexts = (
+                list(structured_target["targets"])
+                if "targets" in structured_target
+                else [structured_target]
+            )
+            harmful_target_ids.extend(
+                str(context.get("target_id") or "") for context in target_contexts
+            )
+        elif hypnotic_pattern and hypnotic_pattern_target is not None:
+            harmful_target_ids.extend(
+                str(context.get("target_id") or "")
+                for context in hypnotic_pattern_target.get("targets", [])
+                if isinstance(context, dict)
+            )
+        elif sleep and sleep_target is not None:
+            harmful_target_ids.extend(
+                str(context.get("target_id") or "")
+                for context in sleep_target.get("targets", [])
+                if isinstance(context, dict)
+            )
+        if bound_spell_plan is not None:
+            harmful_target_ids.extend(semantic_plan_harmful_target_ids(bound_spell_plan))
+        # Harmful spell targets are cleared before the slot or charge is spent.
+        require_harmful_targeting_allowed(
+            combat_actor_snapshot(actor_id),
+            target_ids=harmful_target_ids,
+            known_actor_ids=encounter_actor_ids(encounter),
+        )
         visibility_preview = deepcopy(encounter)
         apply_cast_visibility_ruling(
             visibility_preview,
@@ -26917,6 +26909,7 @@ def _create_server(
                 repair_distance_ft = raw_spatial["distance_ft"]
                 repair_spatial_facts = {**raw_spatial, "reason": reason, "committed": True}
         compiled_activity_plan = None
+        bound_activity_plan: BoundResolutionPlan | None = None
         if isinstance(
             activity_card.get("resolution_plan"),
             dict,
@@ -26961,7 +26954,7 @@ def _create_server(
                 principal_id,
                 roles=CAMPAIGN_DM_ROLES,
             )
-            normalized_commitment, _bound_plan = validate_agent_resolution_commitment(
+            normalized_commitment, bound_activity_plan = validate_agent_resolution_commitment(
                 campaign_id,
                 dict(declaration or {}).get("agent_resolution_commitment"),
                 encounter=encounter,
@@ -27291,6 +27284,65 @@ def _create_server(
                 raise CombatEngineError(
                     "Turn Undead has no undead within 30 feet that can see or hear the cleric"
                 )
+        lay_on_hands = str(activity_id).endswith("paladin-lay-on-hands")
+        lay_on_hands_target_record = None
+        lay_on_hands_target_id = ""
+        additional_updates: list[CharacterStateUpdate] = []
+        if lay_on_hands:
+            if activity_source_card_kind != "feature":
+                raise RulesetUnavailableError(
+                    "Lay on Hands must be recorded as a Paladin feature"
+                )
+            if not is_dm(campaign_id, principal_id):
+                raise PermissionError(
+                    "Lay on Hands multi-actor settlement requires the Agent in the DM role"
+                )
+            declared = dict(declaration or {})
+            mode = str(declared.get("mode") or "").strip().casefold()
+            expected = {"target_id", "mode"}
+            expected.add(
+                "amount" if mode == "heal" else "effect_id" if mode == "cure" else "invalid"
+            )
+            if set(declared) != expected or mode not in {"heal", "cure"}:
+                raise CombatEngineError(
+                    "Lay on Hands declaration requires target_id, mode, and amount for "
+                    "healing or effect_id for curing"
+                )
+            lay_on_hands_target_id = str(declared.get("target_id") or "").strip()
+            if not lay_on_hands_target_id:
+                raise CombatEngineError("Lay on Hands requires target_id")
+            combatants_by_id = {
+                str(item.get("actor_id") or ""): item for item in encounter.get("combatants", [])
+            }
+            source_combatant = combatants_by_id.get(actor_id)
+            target_combatant = combatants_by_id.get(lay_on_hands_target_id)
+            if source_combatant is None or target_combatant is None:
+                raise CombatEngineError("Lay on Hands source and target must be current combatants")
+            if lay_on_hands_target_id == actor_id:
+                distance = 0
+            else:
+                source_position = dict(source_combatant.get("position") or {})
+                target_position = dict(target_combatant.get("position") or {})
+                if set(source_position) != {"x", "y"} or set(target_position) != {"x", "y"}:
+                    raise NeedsRulingError(
+                        "Lay on Hands requires source and target battle-map positions",
+                        missing=("lay_on_hands_positions",),
+                    )
+                distance = (
+                    max(
+                        abs(int(source_position["x"]) - int(target_position["x"])),
+                        abs(int(source_position["y"]) - int(target_position["y"])),
+                    )
+                    * 5
+                )
+            if distance > 5:
+                raise CombatEngineError("Lay on Hands target is outside touch range")
+            lay_on_hands_target_record = require_campaign_actor(
+                campaign_id, lay_on_hands_target_id
+            )
+            access.require_actor(
+                campaign_id, lay_on_hands_target_id, principal_id, control=True
+            )
         preserve_life = str(activity_id).endswith(
             "life-domain-channel-divinity-preserve-life"
         ) or str(activity_id).endswith("life-domain-preserve-life")
@@ -27395,6 +27447,20 @@ def _create_server(
                 "payment": deepcopy(repair_settlement["payment"]),
                 "rule_receipts": [],
             }
+        elif lay_on_hands:
+            applied = {
+                "sheet": deepcopy(current.sheet),
+                "activity_id": activity_id,
+                "content_type": "features",
+                "name": str(activity_card.get("name") or activity_id),
+                "activation": deepcopy(activity_card.get("activation") or {}),
+                "payment": None,
+                "choices": {},
+                "requires_ruling": False,
+                "ruling_requirement": None,
+                "status": "committed",
+                "rule_receipts": [],
+            }
         elif scag_bladesong_dismiss:
             applied = {
                 "sheet": deepcopy(current.sheet),
@@ -27427,6 +27493,28 @@ def _create_server(
                 "result": {key: value for key, value in applied.items() if key != "sheet"},
                 "campaign_revision": campaign.revision,
             }
+        harmful_activity_target_ids: list[str] = []
+        if dragonborn_breath:
+            harmful_activity_target_ids.extend(
+                str(context.get("target_id") or "")
+                for context in breath_target_contexts
+                if isinstance(context, dict)
+            )
+        if turn_undead:
+            harmful_activity_target_ids.extend(str(target_id) for target_id in turn_targets)
+        if divine_spark and str(dict(declaration or {}).get("mode") or "").casefold() == "damage":
+            if divine_spark_target is not None:
+                harmful_activity_target_ids.append(str(divine_spark_target.get("id") or ""))
+        if bound_activity_plan is not None:
+            harmful_activity_target_ids.extend(
+                semantic_plan_harmful_target_ids(bound_activity_plan)
+            )
+        # Check every known harmful target before consuming the action or resource.
+        require_harmful_targeting_allowed(
+            combat_actor_snapshot(actor_id),
+            target_ids=harmful_activity_target_ids,
+            known_actor_ids=encounter_actor_ids(encounter),
+        )
         activation_type = str(applied["activation"].get("type") or "")
         if activation_type == "reaction":
             window = next(
@@ -27512,6 +27600,39 @@ def _create_server(
             declaration=declaration,
             source_card=activity_card,
         )
+        if lay_on_hands:
+            assert lay_on_hands_target_record is not None
+            settled_lay = resolve_lay_on_hands_to_sheets(
+                applied["sheet"],
+                lay_on_hands_target_record.sheet,
+                mode=str(dict(declaration or {}).get("mode") or ""),
+                amount=dict(declaration or {}).get("amount"),
+                effect_id=dict(declaration or {}).get("effect_id"),
+            )
+            if lay_on_hands_target_id == actor_id:
+                self_sheet = deepcopy(settled_lay["target_sheet"])
+                self_sheet["resources"] = deepcopy(settled_lay["source_sheet"]["resources"])
+                applied["sheet"] = validate_character_sheet(self_sheet)
+            else:
+                applied["sheet"] = settled_lay["source_sheet"]
+                target_sheet = validate_character_sheet(settled_lay["target_sheet"])
+                sync_combatant_conditions(next_encounter, lay_on_hands_target_id, target_sheet)
+                additional_updates.append(
+                    CharacterStateUpdate(
+                        character_id=lay_on_hands_target_id,
+                        sheet=target_sheet,
+                        notes=validate_character_notes(lay_on_hands_target_record.notes),
+                        expected_revision=lay_on_hands_target_record.revision,
+                    )
+                )
+            core_effect = {
+                key: value
+                for key, value in settled_lay.items()
+                if key not in {"source_sheet", "target_sheet"}
+            }
+            core_effect["activation_payment"] = activity_activation_payment
+            core_effect["distance_ft"] = 0 if lay_on_hands_target_id == actor_id else distance
+            core_effect["requires_ruling"] = False
         if scag_bladesong_activity and not scag_bladesong_dismiss:
             derived_before_song = derive_character_sheet(
                 applied["sheet"], character_id=actor_id
@@ -27568,7 +27689,6 @@ def _create_server(
                 "activation_payment": activity_activation_payment,
                 "requires_ruling": False,
             }
-        additional_updates: list[CharacterStateUpdate] = []
         if repair_settlement is not None:
             assert repair_target_record is not None
             target_sheet = validate_character_sheet(repair_settlement["target_sheet"])
@@ -27903,14 +28023,17 @@ def _create_server(
                     "legendary_action": ("dnd5e.core.activity.legendary_action"),
                     "second_wind": "dnd5e.core.activity.second_wind",
                     "preserve_life": "dnd5e.core.activity.preserve_life",
+                    "lay_on_hands": "dnd5e.core.activity.lay_on_hands",
                     "turn_undead": "dnd5e.core.activity.turn_undead",
                 }[core_effect_kind]
                 applied["rule_receipts"] = [
                     *list(applied.get("rule_receipts") or []),
-                    *core_receipts(
-                        rule_context,
-                        [mechanic_id],
-                        f"combat.activity.{core_effect_kind}",
+                    *(
+                        core_receipts(
+                            rule_context,
+                            [mechanic_id],
+                            f"combat.activity.{core_effect_kind}",
+                        )
                     ),
                     *(
                         core_receipts(
@@ -27985,6 +28108,217 @@ def _create_server(
             ],
             actor_knowledge_transfers=actor_knowledge_transfers,
             rule_receipts=list(applied.get("rule_receipts") or []),
+        )
+        return combat_response(campaign_id, principal_id, response)
+
+    @public_tool()
+    @_agent_ruling_boundary
+    def combat_resolve_hide(
+        campaign_id: str,
+        actor_id: str,
+        ruling: dict[str, Any],
+        observer_ids: list[str] | None = None,
+        principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None,
+        branch_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Resolve a paid Cunning Action Hide attempt without another payment."""
+
+        access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
+        require_write_contract(expected_revision, idempotency_key)
+        resolved_branch_id = require_current_branch(campaign_id, branch_id)
+        raw_ruling = dict(ruling or {})
+        if set(raw_ruling) - {"can_hide", "reason", "observers"}:
+            raise CombatEngineError(
+                "Hide ruling accepts only can_hide, reason, and optional observers"
+            )
+        can_hide = raw_ruling.get("can_hide")
+        if not isinstance(can_hide, bool):
+            raise CombatEngineError("Hide ruling can_hide must be boolean")
+        reason = " ".join(str(raw_ruling.get("reason") or "").split())
+        if not reason or len(reason) > 500:
+            raise CombatEngineError("Hide ruling requires a bounded reason")
+        supplied_observer_ids = observer_ids
+        embedded_observers = raw_ruling.get("observers")
+        if supplied_observer_ids is not None and embedded_observers is not None:
+            raise CombatEngineError("provide Hide observers either in ruling or observer_ids")
+        if supplied_observer_ids is None:
+            supplied_observer_ids = embedded_observers
+        if not isinstance(supplied_observer_ids, list):
+            raise CombatEngineError("Hide ruling requires an observers list")
+        normalized_observer_ids: list[str] = []
+        for item in supplied_observer_ids:
+            if isinstance(item, dict):
+                if set(item) - {"observer_id", "reason"}:
+                    raise CombatEngineError(
+                        "Hide observer entries accept observer_id and optional reason"
+                    )
+                observer_id = str(item.get("observer_id") or "").strip()
+            else:
+                observer_id = str(item or "").strip()
+            if not observer_id:
+                raise CombatEngineError("Hide observers require non-empty observer IDs")
+            normalized_observer_ids.append(observer_id)
+        if len(normalized_observer_ids) != len(set(normalized_observer_ids)):
+            raise CombatEngineError("Hide observers must be unique")
+        normalized_ruling = {
+            "can_hide": can_hide,
+            "reason": reason,
+            "observers": list(normalized_observer_ids),
+        }
+        payload = {
+            "actor_id": actor_id,
+            "ruling": normalized_ruling,
+            "branch_id": resolved_branch_id,
+        }
+        scope = f"combat-resolve-hide:{campaign_id}:{resolved_branch_id}:{principal_id}"
+        replay = replay_idempotent(scope, idempotency_key, payload)
+        if replay is not None:
+            return combat_response(campaign_id, principal_id, replay)
+        campaign, encounter = active_encounter(campaign_id)
+        if campaign.revision != expected_revision:
+            raise ValueError(
+                "campaign revision conflict: "
+                f"expected {expected_revision}, found {campaign.revision}"
+            )
+        stream = active_random_stream()
+        if stream is None:
+            stream = CampaignRandomStream.from_campaign_state(
+                campaign_id,
+                campaign.state,
+                operation="combat_resolve_hide",
+                idempotency_key=idempotency_key,
+                campaign_revision=campaign.revision,
+            )
+            with use_random_stream(stream):
+                return combat_resolve_hide(
+                    campaign_id,
+                    actor_id,
+                    ruling=normalized_ruling,
+                    principal_id=principal_id,
+                    expected_revision=expected_revision,
+                    branch_id=resolved_branch_id,
+                    idempotency_key=idempotency_key,
+                )
+        random_state = validate_random_stream_state(
+            dict(campaign.state or {}).get("random_stream")
+            or initial_random_stream(f"sagasmith-dnd:{campaign_id}")
+        )
+        if (
+            stream.campaign_id != campaign_id
+            or (
+                stream.campaign_revision is not None
+                and stream.campaign_revision != campaign.revision
+            )
+            or stream.seed != random_state["seed"]
+            or stream.start_position != random_state["position"]
+        ):
+            raise CombatEngineError("Hide settlement requires the current campaign random snapshot")
+        require_no_blocking_pending(encounter)
+        require_encounter_combatant(encounter, actor_id, role="Hide actor")
+        actor = combat_actor_snapshot(actor_id)
+        observer_passive_perceptions: dict[str, int] = {}
+        for observer_id in normalized_observer_ids:
+            require_encounter_combatant(encounter, observer_id, role="Hide observer")
+            observer = require_campaign_actor(campaign_id, observer_id)
+            observer_snapshot = combat_actor_snapshot(observer.id)
+            passive = dict(observer_snapshot.get("derived") or {}).get("passive_perception")
+            if isinstance(passive, bool) or not isinstance(passive, int):
+                raise CombatEngineError(
+                    f"observer {observer_id} has no authoritative passive Perception"
+                )
+            observer_passive_perceptions[observer_id] = int(passive)
+        hide_rules = effective_rule_context(
+            campaign_id,
+            facts={
+                "actor_id": actor_id,
+                "action": "hide",
+                "kind": "ability",
+                "ability": "stealth",
+                "observers": list(normalized_observer_ids),
+                "can_hide": can_hide,
+            },
+            branch_id=resolved_branch_id,
+        )
+        next_encounter, hide_effect = settle_hide(
+            encounter,
+            actor=actor,
+            actor_id_value=actor_id,
+            observer_ids=normalized_observer_ids,
+            observer_passive_perceptions=observer_passive_perceptions,
+            can_hide=can_hide,
+            ruling_reason=reason,
+            rules=hide_rules,
+            rng=stream,
+        )
+        stealth_check = dict(hide_effect.get("stealth_check") or {})
+        receipts = [
+            *list(stealth_check.get("rule_receipts") or []),
+            *core_receipts(
+                hide_rules,
+                ["dnd5e.core.activity.cunning_action"],
+                "combat.activity.cunning_action.hide",
+            ),
+        ]
+        prior_combatant = next(
+            item
+            for item in encounter.get("combatants", [])
+            if str(item.get("actor_id") or "") == actor_id
+        )
+        source_activity_id = str(
+            dict(dict(prior_combatant.get("turn_flags") or {}).get("hide_declared") or {}).get(
+                "source_activity_id"
+            )
+            or ""
+        )
+        result = {
+            "kind": "cunning_action_hide",
+            "action": "hide",
+            "activity_id": source_activity_id,
+            "core_effect": hide_effect,
+            "payment": {
+                "kind": "activity",
+                "activation_type": "bonus_action",
+                "already_paid": True,
+            },
+            "requires_ruling": False,
+            "ruling": normalized_ruling,
+            "rule_receipts": receipts,
+        }
+        next_state = {**dict(campaign.state or {}), "combat": next_encounter}
+        next_state["resolution_log"] = [
+            *list(next_state.get("resolution_log") or []),
+            {
+                "id": f"resolution-{uuid4().hex}",
+                "type": "combat_hide",
+                "operation": "combat.activity.cunning_action.hide",
+                "actor_id": actor_id,
+                "audience": {
+                    "scope": "actors",
+                    "actor_refs": [actor_id, *normalized_observer_ids],
+                    "disclosure": "private",
+                },
+                "branch_id": resolved_branch_id,
+                "campaign_revision": campaign.revision + 1,
+                "result": deepcopy(result),
+            },
+        ][-100:]
+        response = commit_campaign_state(
+            campaign,
+            next_state,
+            operation="combat.activity.cunning_action.hide",
+            principal_id=principal_id,
+            branch_id=resolved_branch_id,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=payload,
+            response_fields={
+                "status": "committed",
+                "result": result,
+                "combat": next_encounter,
+            },
+            rule_receipts=receipts,
         )
         return combat_response(campaign_id, principal_id, response)
 
@@ -29155,6 +29489,13 @@ def _create_server(
             str(action).strip().lower().replace("-", "_") if action is not None else None
         )
         normalized_ability = str(ability).strip().casefold().replace(" ", "_")
+        social_ability_names = {
+            "charisma",
+            "deception",
+            "intimidation",
+            "performance",
+            "persuasion",
+        }
         if normalized_check_action not in {
             None,
             "escape",
@@ -29207,8 +29548,47 @@ def _create_server(
                     "stabilize derives its DC and Medicine modifier from the Core rules "
                     "and actor card"
                 )
+        elif target_id is not None and kind not in ABILITY_CHECK_KINDS:
+            raise CombatEngineError(
+                "target_id is accepted for ability checks and kind=stabilize"
+            )
         elif target_id is not None:
-            raise CombatEngineError("target_id is accepted only for kind=stabilize")
+            target_id = str(target_id).strip()
+            if not target_id:
+                raise CombatEngineError("target_id must be non-empty")
+            require_campaign_actor(campaign_id, target_id)
+            if target_id == actor_id:
+                raise CombatEngineError("a social check target must be another actor")
+            if kind not in ABILITY_CHECK_KINDS:
+                raise CombatEngineError("target_id is accepted only for ability checks")
+            if not (
+                normalized_check_action == "influence"
+                or normalized_ability in social_ability_names
+            ):
+                raise CombatEngineError("target_id is accepted only for social ability checks")
+        if normalized_check_action == "influence" and target_id is None:
+            raise CombatEngineError("an influence check requires target_id")
+        social_charm_advantage = False
+        if (
+            target_id is not None
+            and kind in ABILITY_CHECK_KINDS
+            and (
+                normalized_check_action == "influence"
+                or normalized_ability in social_ability_names
+            )
+        ):
+            source_snapshot = combat_actor_snapshot(actor_id)
+            target_snapshot = combat_actor_snapshot(target_id)
+            social_charm_advantage = charmed_social_check_advantage(
+                source_snapshot,
+                target_snapshot,
+                known_actor_ids={
+                    str(item.id)
+                    for item in characters.list(campaign_id=campaign_id)
+                },
+            )
+            if social_charm_advantage:
+                advantage = True
         payload = {
             "actor_id": actor_id,
             "target_id": target_id,
@@ -29238,6 +29618,12 @@ def _create_server(
         active_state = dict(campaign.state or {}).get("combat")
         if isinstance(active_state, dict) and active_state.get("active", False):
             require_encounter_combatant(active_state, actor_id, role="check actor")
+            if target_id is not None and kind in ABILITY_CHECK_KINDS:
+                require_encounter_combatant(
+                    active_state,
+                    target_id,
+                    role="social check target",
+                )
         prepaid_search_encounter: dict[str, Any] | None = None
         if normalized_check_action == "search":
             if not isinstance(active_state, dict) or not active_state.get("active", False):
@@ -29463,6 +29849,7 @@ def _create_server(
                 actor,
                 kind=kind,
                 ability=normalized_ability,
+                action=normalized_check_action,
                 dc=dc,
                 encounter=encounter,
                 proficient=proficient,
@@ -29477,11 +29864,19 @@ def _create_server(
                         "actor_id": actor_id,
                         "kind": kind,
                         "ability": ability,
+                        "action": normalized_check_action,
                         "dc": dc,
                     },
                     branch_id=resolved_branch_id,
                 ),
             )
+            if social_charm_advantage:
+                result = {
+                    **result,
+                    "charmed_social_advantage": True,
+                }
+            if target_id is not None:
+                result = {**result, "target_id": target_id}
             if derived_skill:
                 result = {**result, "skill": normalized_ability}
             if normalized_check_action is not None:
@@ -29505,6 +29900,12 @@ def _create_server(
                         },
                     )
                 result = {**result, "action": normalized_check_action}
+        if encounter is not None and result.get("helped_by"):
+            encounter = consume_task_help(
+                encounter,
+                actor_id_value=actor_id,
+                helper_id=str(result["helped_by"]),
+            )
         if encounter:
             for update in updates:
                 sync_combatant_conditions(encounter, update.character_id, update.sheet)
@@ -29829,6 +30230,11 @@ def _create_server(
             source_card_id=source_card_id,
             source_card_kind=source_card_kind,
             compiled_plan=compiled_plan,
+        )
+        require_harmful_targeting_allowed(
+            combat_actor_snapshot(source_actor_id),
+            target_ids=semantic_plan_harmful_target_ids(bound_plan),
+            known_actor_ids=encounter_actor_ids(encounter),
         )
         payment_entry = require_agent_resolution_payment(
             encounter,
@@ -31160,6 +31566,133 @@ def _create_server(
                 )
             ],
             rule_receipts=damage_receipts,
+        )
+        return combat_response(campaign_id, principal_id, response)
+
+    @_agent_ruling_boundary
+    def combat_apply_fall(
+        campaign_id: str,
+        target_id: str,
+        distance_ft: int,
+        principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None,
+        branch_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Resolve source-derived 2014 falling damage atomically."""
+        access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
+        require_write_contract(expected_revision, idempotency_key)
+        resolved_branch_id = require_current_branch(campaign_id, branch_id)
+        require_campaign_actor(campaign_id, target_id)
+        payload = {
+            "target_id": target_id,
+            "distance_ft": distance_ft,
+            "branch_id": resolved_branch_id,
+        }
+        scope = f"combat-fall:{campaign_id}:{resolved_branch_id}:{principal_id}"
+        replay = replay_idempotent(scope, idempotency_key, payload)
+        if replay is not None:
+            return combat_response(campaign_id, principal_id, replay)
+
+        campaign = campaigns.get(campaign_id)
+        if expected_revision is not None and campaign.revision != expected_revision:
+            raise ValueError(
+                "campaign revision conflict: "
+                f"expected {expected_revision}, found {campaign.revision}"
+            )
+        # Direct in-process callers do not pass through the request-scoped
+        # random-stream wrapper. Open the same campaign stream here so tests
+        # and local hosts receive identical deterministic receipts.
+        if active_random_stream() is None:
+            stream = CampaignRandomStream.from_campaign_state(
+                campaign_id,
+                campaign.state,
+                operation="combat.fall.apply",
+                idempotency_key=str(idempotency_key or ""),
+                campaign_revision=campaign.revision,
+            )
+            with use_random_stream(stream):
+                return combat_apply_fall(
+                    campaign_id,
+                    target_id,
+                    distance_ft,
+                    principal_id,
+                    expected_revision,
+                    resolved_branch_id,
+                    idempotency_key,
+                )
+
+        target = combat_actor_snapshot(target_id)
+        existing_encounter = dict(campaign.state or {}).get("combat")
+        target_uses_death_saves = target.get("character_type") == "pc"
+        ruleset = campaign_rules_edition(campaign_id)
+        if isinstance(existing_encounter, dict) and existing_encounter.get("active", False):
+            require_no_blocking_pending(existing_encounter)
+            ruleset = encounter_rules_edition(campaign_id, existing_encounter)
+            target_combatant = require_encounter_combatant(
+                existing_encounter, target_id, role="fall target"
+            )
+            target_uses_death_saves = combatant_zero_hp_buffered(target_combatant)
+        applied = resolve_fall_to_sheet(
+            target["sheet"],
+            distance_ft=distance_ft,
+            source=principal_id,
+            ruleset=ruleset,
+            death_saves=target_uses_death_saves,
+        )
+        applied_result = {key: value for key, value in applied.items() if key != "sheet"}
+        next_state = dict(campaign.state or {})
+        encounter = existing_encounter
+        if isinstance(encounter, dict) and encounter.get("active", False):
+            sync_combatant_conditions(encounter, target_id, applied["sheet"])
+            reconcile_readied_spells(encounter, target_id, applied["sheet"])
+            add_concentration_window(
+                encounter,
+                target_id,
+                dict(applied.get("damage") or {}).get("concentration"),
+                next_revision=campaign.revision + 1,
+            )
+            encounter["log"] = [
+                *list(encounter.get("log") or []),
+                {"type": "fall", "target_id": target_id, "result": applied_result},
+            ][-100:]
+            next_state["combat"] = encounter
+        current = characters.get(target_id)
+        boundary_ids = ["dnd5e.core.movement.falling"]
+        if int(dict(applied.get("damage") or {}).get("after_hp", 1) or 0) == 0:
+            boundary_ids.append("dnd5e.core.damage.zero_hp")
+        response = commit_campaign_state(
+            campaign,
+            next_state,
+            operation="combat.fall.apply",
+            principal_id=principal_id,
+            branch_id=resolved_branch_id,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=payload,
+            response_fields={
+                "status": "committed",
+                "result": applied_result,
+                "combat": next_state.get("combat"),
+                "rule_receipts": core_receipts(
+                    effective_rule_context(campaign_id, branch_id=resolved_branch_id),
+                    boundary_ids,
+                    "movement.falling",
+                ),
+            },
+            character_updates=[
+                CharacterStateUpdate(
+                    character_id=target_id,
+                    sheet=validate_character_sheet(applied["sheet"]),
+                    notes=validate_character_notes(current.notes),
+                    expected_revision=current.revision,
+                )
+            ],
+            rule_receipts=core_receipts(
+                effective_rule_context(campaign_id, branch_id=resolved_branch_id),
+                boundary_ids,
+                "movement.falling",
+            ),
         )
         return combat_response(campaign_id, principal_id, response)
 
@@ -34607,6 +35140,7 @@ def _create_server(
             derived_rest_timing = validate_rest_schedule(
                 rest_type=normalized_rest_type,
                 duration_minutes=duration_minutes,
+                rest_activity_minutes=rest_activities,
                 allows_trance=(
                     allows_trance_rest(current_member.sheet)
                     if normalized_rest_type == "long_rest"
@@ -34702,6 +35236,7 @@ def _create_server(
                 rest_type=normalized_rest_type,
                 started_elapsed_ticks=started_elapsed_ticks,
                 completed_elapsed_ticks=completed_elapsed_ticks,
+                rest_activity_minutes=member["rest_activity_minutes"],
             )
             if normalized_rest_type == "long_rest" and member["prepared_spell_ids"] is not None:
                 preparation_hydration = hydrate_class_prepared_spell_cards(
@@ -34853,6 +35388,7 @@ def _create_server(
                     rest_type=normalized_rest_type,
                     started_elapsed_ticks=started_elapsed_ticks,
                     completed_elapsed_ticks=completed_elapsed_ticks,
+                    rest_activity_minutes=member["rest_activity_minutes"],
                     hit_dice_spent_count=len(applied.get("hit_dice_rolls") or []),
                     expected_character_revision=current.revision + 1,
                     song_of_rest_die_sides=(
@@ -35691,6 +36227,126 @@ def _create_server(
                 "character": character_view(current),
                 "campaign_revision": campaign.revision,
             }
+        lay_on_hands = str(activity_id).endswith("paladin-lay-on-hands")
+        if lay_on_hands:
+            if activity_source_card_kind != "feature":
+                raise RulesetUnavailableError(
+                    "Lay on Hands must be recorded as a Paladin feature"
+                )
+            if not is_dm(current.campaign_id, principal_id):
+                raise PermissionError(
+                    "Lay on Hands multi-actor settlement requires the Agent in the DM role"
+                )
+            declared = dict(declaration or {})
+            mode = str(declared.get("mode") or "").strip().casefold()
+            expected = {"target_id", "mode", "expected_revision", "within_touch"}
+            if mode == "heal":
+                expected.add("amount")
+            elif mode == "cure":
+                expected.add("effect_id")
+            if set(declared) != expected or mode not in {"heal", "cure"}:
+                raise CombatEngineError(
+                    "Lay on Hands declaration requires target_id, mode, expected_revision, "
+                    "within_touch, and amount for healing or effect_id for curing"
+                )
+            if declared.get("within_touch") is not True:
+                raise CombatEngineError(
+                    "Lay on Hands requires an authoritative co-location/touch fact"
+                )
+            target_id = str(declared.get("target_id") or "").strip()
+            if not target_id:
+                raise CombatEngineError("Lay on Hands requires target_id")
+            target = require_campaign_actor(current.campaign_id, target_id)
+            access.require_actor(current.campaign_id, target_id, principal_id, control=True)
+            target_revision = declared.get("expected_revision")
+            if isinstance(target_revision, bool) or not isinstance(target_revision, int):
+                raise ValueError("Lay on Hands target expected_revision must be an integer")
+            if target.revision != target_revision:
+                raise ValueError(f"character revision conflict: {target_id}")
+            settled = resolve_lay_on_hands_to_sheets(
+                current.sheet,
+                target.sheet,
+                mode=mode,
+                amount=declared.get("amount"),
+                effect_id=declared.get("effect_id"),
+            )
+            receipts = [
+                *core_receipts(
+                    effective_rule_context(
+                        current.campaign_id,
+                        facts={"actor_id": character_id, "activity_id": activity_id},
+                    ),
+                    ["dnd5e.core.activity.lay_on_hands"],
+                    "activity.lay_on_hands",
+                )
+            ]
+            source_sheet = validate_character_sheet(settled["source_sheet"])
+            target_sheet = validate_character_sheet(settled["target_sheet"])
+            updates = [
+                CharacterStateUpdate(
+                    character_id=character_id,
+                    sheet=source_sheet,
+                    notes=validate_character_notes(current.notes),
+                    expected_revision=expected_revision,
+                )
+            ]
+            if target_id != character_id:
+                updates.append(
+                    CharacterStateUpdate(
+                        character_id=target_id,
+                        sheet=target_sheet,
+                        notes=validate_character_notes(target.notes),
+                        expected_revision=target_revision,
+                    )
+                )
+            else:
+                source_sheet["combat"] = target_sheet["combat"]
+                source_sheet["conditions"] = target_sheet["conditions"]
+                source_sheet["effects"] = target_sheet["effects"]
+                updates[0] = CharacterStateUpdate(
+                    character_id=character_id,
+                    sheet=validate_character_sheet(source_sheet),
+                    notes=validate_character_notes(current.notes),
+                    expected_revision=expected_revision,
+                )
+            projected_source = replace(
+                current, sheet=updates[0].sheet, revision=current.revision + 1
+            )
+            projected_target = (
+                projected_source
+                if target_id == character_id
+                else replace(target, sheet=updates[1].sheet, revision=target.revision + 1)
+            )
+            return commit_campaign_state(
+                campaign,
+                None,
+                operation="character.activity.lay_on_hands",
+                principal_id=principal_id,
+                branch_id=branch_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+                payload=payload,
+                response_fields={
+                    "status": "committed",
+                    "result": {
+                        "activity_id": activity_id,
+                        "target_id": target_id,
+                        "within_touch": True,
+                        "core_effect": {
+                            key: value
+                            for key, value in settled.items()
+                            if key not in {"source_sheet", "target_sheet"}
+                        },
+                        "rule_receipts": receipts,
+                    },
+                    "character": character_view(projected_source),
+                    "target": character_view(projected_target),
+                },
+                character_updates=updates,
+                rule_receipts=receipts,
+                include_campaign_revision=False,
+                include_revisions=False,
+            )
         preserve_life = str(activity_id).endswith(
             "life-domain-channel-divinity-preserve-life"
         ) or str(activity_id).endswith("life-domain-preserve-life")
@@ -37336,53 +37992,6 @@ def _create_server(
                 "notes": normalized_notes,
             },
         )
-
-    def memory_add(
-        campaign_id: str,
-        content: str,
-        kind: str = "fact",
-        subject: str = "",
-        metadata: dict[str, Any] | None = None,
-        branch_id: str | None = None,
-        principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
-        idempotency_key: str | None = None,
-    ) -> dict[str, Any]:
-        """Record a durable campaign fact, event, relationship, or NPC memory."""
-        access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
-        if not idempotency_key:
-            raise ValueError("idempotency_key is required for memory writes")
-        branch_id = require_current_branch(campaign_id, branch_id)
-        request_payload = {
-            "content": content,
-            "kind": kind,
-            "subject": subject,
-            "metadata": metadata or {},
-            "branch_id": branch_id,
-        }
-        validate_embedded_module_source_refs(
-            campaign_id,
-            request_payload,
-            field="memory_add",
-        )
-        scope = f"memory-add:{campaign_id}:{branch_id}:{principal_id}"
-        replay = replay_idempotent(scope, idempotency_key, request_payload)
-        if replay is not None:
-            return replay
-        result = memories.add(
-            campaign_id,
-            content=content,
-            kind=kind,
-            subject=subject,
-            metadata=metadata,
-            branch_id=branch_id,
-            idempotency_key=idempotency_key,
-            idempotency_write=IdempotencyWrite(
-                scope=scope,
-                payload=request_payload,
-                response=lambda value: asdict(value),
-            ),
-        )
-        return asdict(result)
 
     def memory_list(
         campaign_id: str,
@@ -40455,18 +41064,6 @@ def _create_server(
         path = storage.write_module(name, content)
         return {"artifact": path.name, "path": str(path)}
 
-    def module_inspect(
-        artifact: str, principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID
-    ) -> dict[str, Any]:
-        """Inspect a managed PDF/Markdown/text artifact before campaign import."""
-        if not principal_id:
-            raise PermissionError("authenticated caller identity is required for module artifacts")
-        return modules.inspect_path(
-            storage.artifact_module_path(artifact),
-            parser=MarkdownModuleParser(profile=DndModuleProfile()),
-            **module_document_options(),
-        )
-
     def module_list(
         campaign_id: str, principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID
     ) -> list[dict[str, Any]]:
@@ -40627,68 +41224,6 @@ def _create_server(
         if file_sha256(source_asset["source_path"]) != source_asset["checksum"]:
             raise RuntimeError("module PDF no longer matches its imported checksum")
         return source_asset
-
-    def module_page_render(
-        campaign_id: str,
-        module_id: str,
-        page_number: int,
-        source_asset_id: str | None = None,
-        scale: float = 1.5,
-        include_ocr_text: bool = True,
-        principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
-    ) -> Any:
-        """Render one imported PDF page as visual evidence for maps or handouts."""
-        access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
-        source_asset = module_pdf_asset(campaign_id, module_id, source_asset_id)
-        rendered = render_pdf_page(source_asset["source_path"], page_number, scale=scale)
-        if rendered.source_checksum != source_asset["checksum"]:
-            raise RuntimeError("module PDF no longer matches its imported checksum")
-        if not isinstance(include_ocr_text, bool):
-            raise ValueError("include_ocr_text must be a boolean")
-        ocr_evidence = (
-            local_ocr_page_evidence(
-                source_asset["source_path"],
-                page_number,
-                scope="module",
-            )
-            if include_ocr_text
-            else {"included": False}
-        )
-        target = storage.store_rendered_module_page(
-            module_id=module_id,
-            source_checksum=rendered.source_checksum,
-            page_number=rendered.page_number,
-            scale=rendered.scale,
-            checksum=rendered.checksum,
-            content=rendered.content,
-        )
-        asset = modules.register_asset(
-            campaign_id=campaign_id,
-            module_id=module_id,
-            source_path=str(target),
-            media_type=rendered.media_type,
-            checksum=rendered.checksum,
-            metadata={
-                "kind": "rendered_page",
-                "derived_from_asset_id": source_asset["id"],
-                "source_checksum": rendered.source_checksum,
-                "source_page": rendered.page_number,
-                "page_count": rendered.page_count,
-                "width": rendered.width,
-                "height": rendered.height,
-                "scale": rendered.scale,
-            },
-        )
-        return [
-            {
-                "campaign_id": campaign_id,
-                "module_id": module_id,
-                "asset": asset,
-                "source_asset_id": source_asset["id"],
-                "ocr": ocr_evidence,
-            },
-            Image(path=target),
-        ]
 
     def module_statblock_ocr_recover(
         campaign_id: str,
@@ -41601,18 +42136,6 @@ def _create_server(
         """Stage an allowlisted PDF/Markdown/text rulebook in MCP-owned storage."""
         access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
         return storage.stage_rulebook(source_path)
-
-    def rule_document_inspect(
-        campaign_id: str,
-        artifact: str,
-        principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
-    ) -> dict[str, Any]:
-        """Run Core document normalization and report structure/warnings without importing."""
-        access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
-        return rules.inspect_path(
-            storage.artifact_rulebook_path(artifact),
-            **rule_document_options(storage.rulebook_checksum(artifact)),
-        )
 
     def rule_document_page_render(
         campaign_id: str,
@@ -43796,143 +44319,6 @@ def _create_server(
             review_id,
         )
 
-    def rule_document_import(
-        campaign_id: str,
-        artifact: str,
-        source_key: str,
-        title: str,
-        edition: str,
-        locale: str = "en",
-        publication_id: str = "",
-        version: str = "",
-        authority: str = "supplement",
-        principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
-        idempotency_key: str | None = None,
-    ) -> dict[str, Any]:
-        """Import a staged rulebook through Core's shared structured parser and index."""
-        access.require_campaign(campaign_id, principal_id, roles=CAMPAIGN_DM_ROLES)
-        edition = normalize_dnd_edition(edition)
-        if not idempotency_key:
-            raise ValueError("idempotency_key is required for rulebook import")
-        payload = {
-            "artifact": artifact,
-            "source_key": source_key,
-            "title": title,
-            "edition": edition,
-            "locale": locale,
-            "publication_id": publication_id,
-            "version": version,
-            "authority": authority,
-        }
-        scope = f"rule-document-import:{campaign_id}:{principal_id}"
-        replay = replay_idempotent(scope, idempotency_key, payload)
-        if replay is not None:
-            return replay
-        path = storage.artifact_rulebook_path(artifact)
-        embedder, vectors = storage.dense_components()
-
-        def rule_document_response(outcome: dict[str, Any]) -> dict[str, Any]:
-            result_value = outcome["result"]
-            source_metadata = dict(outcome.get("source_metadata") or {})
-            return {
-                **asdict(result_value),
-                "artifact": artifact,
-                "source_checksum": source_metadata.get("source_checksum"),
-                "page_count": source_metadata.get("page_count"),
-                "warnings": list(source_metadata.get("warnings") or []),
-                "metadata": {
-                    key: value
-                    for key, value in source_metadata.items()
-                    if key
-                    not in {
-                        "source_path",
-                        "warnings",
-                        "source_checksum",
-                        "page_count",
-                    }
-                },
-            }
-
-        result = rules.ingest_path(
-            system_id=DND5E.id,
-            path=path,
-            source_key=source_key,
-            title=title,
-            locale=locale,
-            edition=edition,
-            publication_id=publication_id,
-            version=version,
-            authority=authority,
-            embedder=embedder,
-            vector_store=vectors,
-            **rule_document_options(storage.rulebook_checksum(artifact)),
-            idempotency_campaign_id=campaign_id,
-            idempotency_key=idempotency_key,
-            idempotency_write=IdempotencyWrite(
-                scope=scope,
-                payload=payload,
-                response=rule_document_response,
-            ),
-        )
-        source = rules.source(result.source_id)
-        source_metadata = dict(source.get("metadata") or {})
-        response = {
-            **asdict(result),
-            "artifact": artifact,
-            "source_checksum": source_metadata.get("source_checksum"),
-            "page_count": source_metadata.get("page_count"),
-            "warnings": list(source_metadata.get("warnings") or []),
-            "metadata": {
-                key: value
-                for key, value in source_metadata.items()
-                if key not in {"source_path", "warnings", "source_checksum", "page_count"}
-            },
-        }
-        return response
-
-    def rule_ingest(
-        source_key: str,
-        title: str,
-        content: str,
-        locale: str = "en",
-        edition: str = "",
-        publication_id: str = "",
-    ) -> dict[str, Any]:
-        """Ingest Markdown rule content into the MCP-owned D&D rule index."""
-        embedder, vectors = storage.dense_components()
-        result = rules.ingest(
-            system_id=DND5E.id,
-            source_key=source_key,
-            title=title,
-            content=content,
-            locale=locale,
-            edition=edition,
-            publication_id=publication_id,
-            embedder=embedder,
-            vector_store=vectors,
-        )
-        return asdict(result)
-
-    def rule_pack_draft(
-        manifest: dict[str, Any],
-        artifacts: list[dict[str, Any]] | None = None,
-        mechanics: list[dict[str, Any]] | None = None,
-        provenance: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Create or replace an inactive draft and validate its safe D&D mechanic IR."""
-        definition_id = str(manifest.get("id") or "")
-        _validate_unreserved_rule_definition_identity(definition_id)
-        _validate_reserved_official_artifact_identities(
-            definition_id=definition_id,
-            artifacts=(item for item in artifacts or [] if isinstance(item, dict)),
-        )
-        return save_rule_pack_draft(
-            manifest=manifest,
-            artifacts=artifacts,
-            mechanics=mechanics,
-            provenance=provenance,
-        )
-
     def rule_pack_draft_from_source(
         source_id: str,
         manifest: dict[str, Any],
@@ -44127,15 +44513,6 @@ def _create_server(
     def rule_pack_inspect(pack_id: str, version: str) -> dict[str, Any]:
         """Inspect an exact draft or installed version, including validation evidence."""
         return asdict(rule_packs.get_version(pack_id, version))
-
-    def rule_pack_test(pack_id: str, version: str) -> dict[str, Any]:
-        """Run declarative positive/negative examples embedded in a pack manifest."""
-        value = rule_packs.get_version(pack_id, version)
-        return run_mechanic_tests(
-            value.mechanics,
-            list(value.manifest.get("tests") or []),
-            fingerprint=value.checksum,
-        )
 
     def rule_pack_remove(pack_id: str, version: str) -> dict[str, Any]:
         """Remove an unreferenced version; any branch lock makes removal fail closed."""
@@ -51205,6 +51582,93 @@ def _create_server(
                 for language in mechanical_grants.get("languages") or []:
                     if str(language).casefold() not in {str(item).casefold() for item in languages}:
                         languages.append(language)
+                for field in ("immunities", "condition_immunities"):
+                    target_values = sheet["traits"][field]
+                    for value in mechanical_grants.get(field) or []:
+                        normalized_value = str(value).strip()
+                        if not normalized_value:
+                            raise ValueError(f"feature {field} grant contains an empty value")
+                        if normalized_value.casefold() not in {
+                            str(item).casefold() for item in target_values
+                        }:
+                            target_values.append(normalized_value)
+                immune_effect_kinds: set[str] = set()
+                if "disease" in {
+                    str(item).strip().casefold()
+                    for item in mechanical_grants.get("condition_immunities") or []
+                }:
+                    immune_effect_kinds.update({"disease", "nonmagical_disease"})
+                if "poison" in {
+                    str(item).strip().casefold()
+                    for item in mechanical_grants.get("immunities") or []
+                } or "poisoned" in {
+                    str(item).strip().casefold()
+                    for item in mechanical_grants.get("condition_immunities") or []
+                }:
+                    immune_effect_kinds.update({"poison", "poisoned"})
+                for existing_effect in sheet.get("effects", []):
+                    existing_kind = (
+                        str(existing_effect.get("kind") or "")
+                        .strip()
+                        .casefold()
+                        .replace("-", "_")
+                    )
+                    if (
+                        not existing_effect.get("active", False)
+                        or existing_kind not in immune_effect_kinds
+                    ):
+                        continue
+                    existing_effect["active"] = False
+                    existing_effect["ended_reason"] = "neutralized_by_feature_immunity"
+                    reconcile_ended_effect_conditions(
+                        sheet,
+                        ended_effects=[existing_effect],
+                    )
+                conditional_immunities = dict(
+                    mechanical_grants.get("conditional_condition_immunities") or {}
+                )
+                if conditional_immunities:
+                    normalized_conditional: dict[str, list[str]] = {}
+                    for raw_condition, raw_sources in conditional_immunities.items():
+                        condition = (
+                            str(raw_condition)
+                            .strip()
+                            .casefold()
+                            .replace("-", "_")
+                            .replace(" ", "_")
+                        )
+                        if not condition:
+                            raise ValueError(
+                                "feature conditional condition immunity has an empty condition"
+                            )
+                        if not isinstance(raw_sources, list) or not raw_sources:
+                            raise ValueError(
+                                "feature conditional condition immunity sources must be "
+                                "a non-empty array"
+                            )
+                        sources = [str(item).strip().casefold() for item in raw_sources]
+                        if any(not item for item in sources) or set(sources) - {
+                            "elemental",
+                            "fey",
+                        }:
+                            raise RulesetUnavailableError(
+                                "feature conditional condition immunity has an "
+                                "unsupported source type"
+                            )
+                        normalized_conditional[condition] = list(dict.fromkeys(sources))
+                    existing_conditional = dict(
+                        dict(card.get("choices") or {}).get(
+                            "_conditional_condition_immunities"
+                        )
+                        or {}
+                    )
+                    if existing_conditional and existing_conditional != normalized_conditional:
+                        raise ValueError(
+                            "feature conditional condition immunity conflicts with existing state"
+                        )
+                    card.setdefault("choices", {})[
+                        "_conditional_condition_immunities"
+                    ] = normalized_conditional
                 for resource_key, resource in dict(
                     mechanical_grants.get("resources") or {}
                 ).items():
@@ -51489,78 +51953,6 @@ def _create_server(
             flatten_response_extra=True,
             rule_receipts=([content_receipt] if content_receipt is not None else None),
             expected_campaign_revision=campaign.revision,
-        )
-
-    def character_rule_artifact_add(
-        character_id: str,
-        pack_id: str,
-        version: str,
-        artifact_id: str,
-        principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
-        expected_revision: int | None = None,
-        idempotency_key: str | None = None,
-    ) -> dict[str, Any]:
-        """Add one activated pack card to an actor without copying executable rule logic."""
-        current = characters.get(character_id)
-        require_character_control(current, principal_id)
-        require_outside_active_combat(current, "rule artifact changes")
-        if current.campaign_id is None:
-            raise ValueError("rule artifacts require a campaign-bound character")
-        active = next(
-            (
-                item
-                for item in rule_packs.activations(current.campaign_id)
-                if item.pack_id == pack_id and item.enabled
-            ),
-            None,
-        )
-        if active is None or active.version != version:
-            raise ValueError("the exact rule-pack version must be enabled on this branch")
-        pack = rule_packs.get_version(pack_id, version)
-        artifact = next((item for item in pack.artifacts if item.get("id") == artifact_id), None)
-        if artifact is None:
-            raise LookupError(artifact_id)
-        # Rebind reserved official artifacts only after the immutable archive
-        # verifier has checked the installed definition and runtime fingerprint.
-        # This path predates character_content_apply and must not become a
-        # provenance bypass for privileged Battle Ready mechanics.
-        artifact = reviewed_official_runtime_artifact(pack_id, version, artifact)
-        if artifact_id in SCAG_BLADE_SINGING_FEATURE_IDS:
-            raise ValueError(
-                "SCAG Bladesinging features require character_content_apply for "
-                "level and source prerequisite validation"
-            )
-        section = {
-            "feature": "features",
-            "activity": "activities",
-        }.get(str(artifact.get("kind") or ""))
-        if section is None:
-            raise ValueError(
-                "spell, feat, subclass, and background artifacts must use "
-                "character_content_apply for rule-aware validation"
-            )
-        sheet = deepcopy(current.sheet)
-        if any(item.get("id") == artifact_id for item in sheet["content"][section]):
-            raise ValueError("rule artifact is already present on this character")
-        card = deepcopy(artifact.get("card") or {})
-        card["id"] = artifact_id
-        card["pack_id"] = pack_id
-        card["pack_version"] = version
-        card["rule_refs"] = list(artifact.get("rule_refs") or [])
-        card["mechanic_refs"] = list(artifact.get("mechanic_refs") or [])
-        sheet["content"][section].append(card)
-        return update_sheet(
-            character_id,
-            sheet,
-            operation="character.rule_artifact.add",
-            principal_id=principal_id,
-            expected_revision=expected_revision,
-            idempotency_key=idempotency_key,
-            payload={
-                "pack_id": pack_id,
-                "version": version,
-                "artifact_id": artifact_id,
-            },
         )
 
     def skill_list() -> list[dict[str, str]]:
@@ -52046,21 +52438,6 @@ boundary.
                 idempotency_key,
             )
         return facade_result(action, result)
-
-    def _import_job_operation(
-        campaign_id: str,
-        view: Literal["get", "list"] = "list",
-        job_id: str | None = None,
-        kind: Literal["rulebook", "module"] | None = None,
-        principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
-    ) -> dict[str, Any]:
-        """Read staged rulebook or module import jobs without changing their state."""
-        if view == "get":
-            return facade_result(
-                view,
-                import_job_get(campaign_id, required({"job_id": job_id}, "job_id"), principal_id),
-            )
-        return facade_result(view, import_job_list(campaign_id, kind, principal_id))
 
     def export_module_pack(
         campaign_id: str,
@@ -52594,56 +52971,6 @@ boundary.
             **({"package": package} if data.get("include_package") is True else {}),
         }
         return result
-
-    def _content_pack_source_chunks(
-        payload: dict[str, Any] | None,
-        principal_id: str,
-    ) -> Any:
-        data = facade_payload(payload)
-        source_id = str(required(data, "source_id"))
-        source = rules.source(source_id)
-        if str(source.get("system_id") or "") != DND5E.id:
-            raise ValueError("rule source must belong to the dnd5e rule corpus")
-        page = data.get("page")
-        if page is not None and (isinstance(page, bool) or not isinstance(page, int) or page < 1):
-            raise ValueError("payload.page must be a positive integer")
-        query = str(data.get("query") or "").strip().casefold()
-        limit = data.get("limit", 50)
-        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
-            raise ValueError("payload.limit must be an integer between 1 and 200")
-        offset = data.get("offset", 0)
-        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
-            raise ValueError("payload.offset must be a non-negative integer")
-        chunks = rules.source_chunks(source_id)
-        if page is not None:
-            chunks = [
-                item
-                for item in chunks
-                if isinstance(item.get("page_start"), int)
-                and isinstance(item.get("page_end"), int)
-                and int(item["page_start"]) <= page <= int(item["page_end"])
-            ]
-        if query:
-            chunks = [
-                item
-                for item in chunks
-                if query
-                in "\n".join(
-                    [
-                        *[str(value) for value in item.get("heading_path", [])],
-                        str(item.get("content") or ""),
-                    ]
-                ).casefold()
-            ]
-        result = chunks[offset : offset + limit]
-        return result
-
-    def _facade_value(value: Any) -> Any:
-        """Unwrap a nested public-tool result used by another public facade."""
-
-        if isinstance(value, dict) and "result" in value:
-            return value["result"]
-        return value
 
     @public_tool()
     def rulebook_draft(
@@ -58973,7 +59300,7 @@ boundary.
     def combat_hp_change(
         campaign_id: str,
         target_id: str,
-        action: Literal["damage", "heal", "stabilize", "save_damage"],
+        action: Literal["damage", "fall", "heal", "stabilize", "save_damage"],
         payload: dict[str, Any],
         principal_id: str = LOCAL_SYSTEM_PRINCIPAL_ID,
         expected_revision: int | None = None,
@@ -58994,6 +59321,16 @@ boundary.
                 idempotency_key,
                 knock_out=facade_bool(data, "knock_out"),
                 melee=facade_bool(data, "melee"),
+            )
+        elif action == "fall":
+            result = combat_apply_fall(
+                campaign_id,
+                target_id,
+                required(data, "distance_ft"),
+                principal_id,
+                expected_revision,
+                branch_id,
+                idempotency_key,
             )
         elif action == "heal":
             result = combat_heal(

@@ -91,7 +91,6 @@ export function listModules(campaignId: string): Promise<ModuleSource[]> { retur
 export function sceneIndex(campaignId: string): Promise<ModuleScene[]> { return fetchJson(`/api/campaigns/${encodeURIComponent(campaignId)}/scenes`); }
 export function sceneProgress(campaignId: string, scope = 'party'): Promise<SceneProgress[]> { return fetchJson(`/api/campaigns/${encodeURIComponent(campaignId)}/scene-progress?scope=${encodeURIComponent(scope)}`); }
 export function currentScene(campaignId: string, scope = 'party'): Promise<CurrentScene> { return fetchJson(`/api/campaigns/${encodeURIComponent(campaignId)}/current-scene?scope=${encodeURIComponent(scope)}`); }
-export function searchModules(campaignId: string, query: string, limit = 8) { return fetchJson(`/api/campaigns/${encodeURIComponent(campaignId)}/search?query=${encodeURIComponent(query)}&limit=${limit}`); }
 export function listRules(campaignId: string, packId?: string): Promise<RuleSource[]> {
   const query = new URLSearchParams({ campaign_id: campaignId });
   if (packId) query.set('pack_id', packId);
@@ -103,9 +102,7 @@ export function searchRules(queryText: string, campaignId: string, limit = 8, fi
   if (filters?.locale) query.set('locale', filters.locale);
   return fetchJson<any>(`/api/rules/search?${query}`);
 }
-export function listEvents(campaignId: string, limit = 50) { return fetchJson<any[]>(`/api/campaigns/${encodeURIComponent(campaignId)}/events?limit=${limit}`); }
 export function listSaves(campaignId: string): Promise<SaveSlot[]> { return fetchJson(`/api/campaigns/${encodeURIComponent(campaignId)}/saves`); }
-export function saveLineage(campaignId: string): Promise<SaveSlot[]> { return fetchJson(`/api/campaigns/${encodeURIComponent(campaignId)}/lineage`); }
 export function combatStatus(campaignId: string): Promise<CombatStatus> { return fetchJson(`/api/campaigns/${encodeURIComponent(campaignId)}/combat`); }
 
 export function listContentPacks(campaignId: string, kind?: PackKind): Promise<GatewayResult<ContentInventory>> {
@@ -259,8 +256,6 @@ export function subscribeCampaign(campaignId: string, onRevision: () => void): (
   return () => source.close();
 }
 
-export const SUPPORTED_SYSTEMS = ['dnd5e'] as const;
-export function isApiAvailable(): Promise<boolean> { return health().then(() => true).catch(() => false); }
 
 export const MOCK_CAMPAIGNS: Campaign[] = [
   { id: 'campaign-1', name: '灰烬穹顶', slug: 'vault-of-ash', system_id: 'dnd5e', edition: '2024', locale: 'zh', status: 'active', description: '一场围绕失落钟楼与龙裔契约的长期战役', settings: { rule_profile: '2024 + ember-codex' }, state: { game_phase: 'play' }, revision: 18 },
@@ -307,12 +302,6 @@ export const MOCK_COMBAT: CombatStatus = {
     { actor_id: 'mira', token_id: 'token-mira', name: '米拉', initiative: 8, position: { x: 4, y: 6 }, disposition: 'neutral', hp: { current: 24, max: 24 } },
   ],
 };
-
-export const MOCK_RULES: RuleSource[] = [
-  { id: 'core-2024', source_key: 'dnd5e.core.2024', title: 'D&D 5e 2024 Core Rule Pack', edition: '2024', locale: 'en', version: '2024.1', authority: 'core' },
-  { id: 'srd-521', source_key: 'srd-5.2.1', title: 'System Reference Document 5.2.1', edition: '2024', locale: 'en', version: '5.2.1', authority: 'srd' },
-  { id: 'core-2014', source_key: 'dnd5e.core.2014', title: 'D&D 5e 2014 Core Rule Pack', edition: '2014', locale: 'en', version: '2014.1', authority: 'core' },
-];
 
 export function mockCampaign(id?: string | null): Campaign { return MOCK_CAMPAIGNS.find((item) => item.id === id) || MOCK_CAMPAIGNS[0]; }
 export function mockCharacter(id?: string | null): Character { return MOCK_CHARACTERS.find((item) => item.id === id) || MOCK_CHARACTERS[0]; }

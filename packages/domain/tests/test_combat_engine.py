@@ -28,6 +28,8 @@ from sagasmith_dnd.combat_engine import (
     available_attack_defenses,
     available_reactions,
     can_see,
+    charmed_social_check_advantage,
+    consume_task_help,
     consume_weapon_mastery_attack_effects,
     current_combatant,
     damage_amount_after_reduction,
@@ -49,6 +51,7 @@ from sagasmith_dnd.combat_engine import (
     reconcile_dodge_lifecycle,
     reconcile_effect_dependencies,
     reconcile_tortle_shell_defense_projection,
+    require_harmful_targeting_allowed,
     resolve_actor_check,
     resolve_actor_contest,
     resolve_actor_group_check,
@@ -58,7 +61,9 @@ from sagasmith_dnd.combat_engine import (
     resolve_common_action,
     resolve_death_save_to_sheet,
     resolve_divine_spark_to_sheet,
+    resolve_fall_to_sheet,
     resolve_hypnotic_pattern_target,
+    resolve_lay_on_hands_to_sheets,
     resolve_preserve_life_to_sheets,
     resolve_readied_spell_window,
     resolve_save_damage_to_sheet,
@@ -67,6 +72,7 @@ from sagasmith_dnd.combat_engine import (
     resolve_turn_undead_to_sheets,
     roll_attack_action,
     settle_core_activity_effect,
+    settle_hide,
     source_speed_multiplier,
     spend_movement,
     stabilize_sheet,
@@ -106,6 +112,69 @@ def test_damage_reduction_uses_one_round_down_contract() -> None:
     assert damage_amount_after_reduction(7, "none") == 0
     with pytest.raises(CombatEngineError, match="full, half, or none"):
         damage_amount_after_reduction(7, "quarter")
+
+
+def test_2014_falling_damage_is_capped_and_knocks_prone() -> None:
+    actor = _actor("falling", hp=200)
+
+    result = resolve_fall_to_sheet(
+        actor["sheet"],
+        distance_ft=250,
+        ruleset="2014",
+        rng=_SequenceRng(*([6] * 20)),
+    )
+
+    assert result["distance_ft"] == 250
+    assert result["dice_count"] == 20
+    assert result["damage_roll"]["expression"] == "20d6"
+    assert result["damage_roll"]["rolls"] == (6,) * 20
+    assert result["damage"]["applied_amount"] == 120
+    assert result["damage"]["after_hp"] == 80
+    assert result["prone_added"] is True
+    assert result["knocked_prone"] is True
+
+
+def test_2014_falling_rounds_down_and_respects_bludgeoning_defenses() -> None:
+    short = _actor("short", hp=20)
+    short_result = resolve_fall_to_sheet(
+        short["sheet"], distance_ft=9, ruleset="2014", rng=_SequenceRng()
+    )
+    assert short_result["damage_roll"] is None
+    assert short_result["damage"] is None
+    assert short_result["prone_added"] is False
+    assert short_result["sheet"]["combat"]["hp"]["value"] == 20
+
+    resistant = _actor("resistant", hp=20)
+    resistant["sheet"]["traits"]["resistances"] = ["bludgeoning"]
+    resistant_result = resolve_fall_to_sheet(
+        resistant["sheet"],
+        distance_ft=10,
+        ruleset="2014",
+        rng=_SequenceRng(5),
+    )
+    assert resistant_result["damage"]["input_amount"] == 5
+    assert resistant_result["damage"]["applied_amount"] == 2
+    assert resistant_result["prone_added"] is True
+
+    immune = _actor("immune", hp=20)
+    immune["sheet"]["traits"]["immunities"] = ["bludgeoning"]
+    immune_result = resolve_fall_to_sheet(
+        immune["sheet"],
+        distance_ft=10,
+        ruleset="2014",
+        rng=_SequenceRng(6),
+    )
+    assert immune_result["damage"]["applied_amount"] == 0
+    assert immune_result["prone_added"] is False
+    assert immune_result["knocked_prone"] is False
+
+
+def test_falling_is_edition_bound_and_rejects_invalid_distance() -> None:
+    actor = _actor("falling")
+    with pytest.raises(CombatEngineError, match="non-negative integer"):
+        resolve_fall_to_sheet(actor["sheet"], distance_ft=-1, ruleset="2014")
+    with pytest.raises(CombatEngineError, match="2014 ruleset"):
+        resolve_fall_to_sheet(actor["sheet"], distance_ft=10, ruleset="2024")
 
 
 def test_generic_save_damage_rolls_and_applies_half_damage_atomically() -> None:
@@ -557,6 +626,61 @@ def test_steel_defender_shares_owner_initiative_and_immediately_follows_owner() 
     assert defender_state["initiative"] == 17
     assert defender_state["tie_breaker"] == 5
     assert defender_state["initiative_roll"] is None
+
+
+@pytest.mark.parametrize("ruleset", ["2014", "2024"])
+def test_declared_initiative_group_rolls_once_and_copies_complete_result(ruleset: str) -> None:
+    first = _actor("goblin-a")
+    second = _actor("goblin-b")
+    first["sheet"]["edition"] = ruleset
+    second["sheet"]["edition"] = ruleset
+    first.update(initiative_group_id="goblins", tie_breaker=2, character_type="monster")
+    second.update(initiative_group_id="goblins", tie_breaker=1, character_type="monster")
+
+    rng = _SequenceRng(14)
+    encounter = start_encounter([first, second], ruleset=ruleset, rng=rng)
+
+    assert len(rng.values) == 0
+    assert [item["initiative"] for item in encounter["combatants"]] == [14, 14]
+    assert encounter["combatants"][0]["initiative_roll"] == encounter["combatants"][1][
+        "initiative_roll"
+    ]
+    assert all(item["initiative_group_id"] == "goblins" for item in encounter["combatants"])
+    assert "dnd5e.core.initiative.group" in encounter["rule_boundary_ids"]
+
+
+def test_grouped_and_ungrouped_monsters_consume_one_roll_per_group() -> None:
+    grouped_a = _actor("grouped-a")
+    grouped_b = _actor("grouped-b")
+    solo = _actor("solo")
+    grouped_a.update(initiative_group_id="same", tie_breaker=2, character_type="monster")
+    grouped_b.update(initiative_group_id="same", tie_breaker=1, character_type="monster")
+    solo.update(tie_breaker=0, character_type="monster")
+
+    rng = _SequenceRng(10, 5)
+    encounter = start_encounter([grouped_a, grouped_b, solo], rng=rng)
+
+    assert len(rng.values) == 0
+    grouped = [item for item in encounter["combatants"] if item.get("initiative_group_id")]
+    assert len(grouped) == 2
+    assert grouped[0]["initiative_roll"] == grouped[1]["initiative_roll"]
+    assert next(item for item in encounter["combatants"] if item["actor_id"] == "solo")[
+        "initiative_roll"
+    ]["natural"] == 5
+
+
+def test_initiative_group_rejects_incompatible_bonuses_before_any_roll() -> None:
+    first = _actor("goblin-a")
+    second = _actor("goblin-b")
+    first["derived"]["initiative"] = 2
+    second["derived"]["initiative"] = 3
+    first.update(initiative_group_id="goblins", tie_breaker=1, character_type="monster")
+    second.update(initiative_group_id="goblins", tie_breaker=2, character_type="monster")
+
+    rng = _SequenceRng(14)
+    with pytest.raises(CombatEngineError, match="incompatible initiative bonuses"):
+        start_encounter([first, second], rng=rng)
+    assert rng.values == [14]
 
 
 def test_steel_defender_defaults_to_dodge_but_keeps_movement_and_reaction() -> None:
@@ -1119,6 +1243,7 @@ def test_movement_can_switch_travel_speeds_and_carries_distance_spent() -> None:
         destination={"x": 14, "y": 10},
         travel_mode="fly",
     )
+    assert current_combatant(flown_first)["turn_budget"]["movement"] == 40
     walked_after_flight = spend_movement(
         flown_first,
         "speedster",
@@ -1129,6 +1254,7 @@ def test_movement_can_switch_travel_speeds_and_carries_distance_spent() -> None:
     assert current is not None
     assert current["turn_budget"]["movement_spent"] == 30
     assert current["turn_budget"]["travel_mode"] == "walk"
+    assert current["turn_budget"]["movement"] == 0
 
 
 def test_movement_uses_double_cost_without_swim_or_climb_speed() -> None:
@@ -1530,6 +1656,88 @@ def test_2024_push_and_slow_masteries_update_encounter_state() -> None:
     assert current["actor_id"] == "slow-target"
     assert current["turn_budget"]["speed"] == 20
     assert current["turn_budget"]["movement"] == 20
+
+
+@pytest.mark.parametrize(
+    ("travel_mode", "walking_speed", "special_speed", "expected_speed"),
+    [
+        ("walk", 30, 0, 20),
+        ("fly", 30, 40, 30),
+        ("fly", 0, 20, 10),
+        ("swim", 30, 40, 30),
+        ("climb", 30, 40, 30),
+        ("burrow", 30, 40, 30),
+    ],
+)
+def test_slow_mastery_shares_movement_dash_and_expiry_speed(
+    travel_mode: str, walking_speed: int, special_speed: int, expected_speed: int
+) -> None:
+    slower = _actor("slower")
+    target = _actor("target")
+    slower.update(initiative=20, position={"x": 0, "y": 0})
+    target.update(initiative=10, position={"x": 3, "y": 0})
+    target["sheet"]["combat"]["speed"]["walk"] = walking_speed
+    if travel_mode != "walk":
+        target["sheet"]["combat"]["speed"][travel_mode] = special_speed
+    target["derived"] = derive_character_sheet(target["sheet"])
+    encounter = _grid_encounter([slower, target], ruleset="2024")
+    slow_result = {
+        "weapon_mastery": {
+            "id": "slow",
+            "applied": True,
+            "encounter_effect": {"kind": "speed_penalty", "penalty_ft": 10},
+        }
+    }
+    slowed = apply_weapon_mastery_to_encounter(
+        encounter, slow_result, attacker_id="slower", target_id="target"
+    )["encounter"]
+    target_turn = end_turn(slowed, actor_id_value="slower")
+    moved = spend_movement(
+        target_turn, "target", 5, destination={"x": 4, "y": 0}, travel_mode=travel_mode
+    )
+    assert current_combatant(moved)["turn_budget"]["movement"] == expected_speed - 5
+    dashed = resolve_common_action(moved, actor_id_value="target", action="dash")
+    budget = current_combatant(dashed)["turn_budget"]
+    assert budget["extra_movement_granted"] == expected_speed
+    assert budget["movement"] == expected_speed * 2 - 5
+
+    # A second hit never stacks Slow or loses movement and Dash already spent/granted.
+    reapplied = apply_weapon_mastery_to_encounter(
+        dashed, slow_result, attacker_id="slower", target_id="target"
+    )["encounter"]
+    assert current_combatant(reapplied)["turn_budget"] == budget
+    expired = end_turn(dashed, actor_id_value="target")
+    restored = next(item for item in expired["combatants"] if item["actor_id"] == "target")
+    assert restored["turn_budget"]["movement"] == expected_speed * 2 + 5
+    assert restored["speed_modes"] == target_turn["combatants"][1]["speed_modes"]
+
+
+def test_slow_expiry_restores_speed_without_reactivating_dodge() -> None:
+    slower = _actor("slower")
+    target = _actor("target")
+    slower.update(initiative=20, position={"x": 0, "y": 0})
+    target.update(initiative=10, position={"x": 3, "y": 0})
+    target["sheet"]["combat"]["speed"]["walk"] = 5
+    target["derived"] = derive_character_sheet(target["sheet"])
+    encounter = _grid_encounter([slower, target], ruleset="2024")
+    encounter["combatants"][1]["turn_flags"] = {"dodging": True}
+    slowed = apply_weapon_mastery_to_encounter(
+        encounter,
+        {"weapon_mastery": {
+            "id": "slow", "applied": True,
+            "encounter_effect": {"kind": "speed_penalty", "penalty_ft": 10},
+        }},
+        attacker_id="slower",
+        target_id="target",
+    )["encounter"]
+    assert slowed["combatants"][1]["turn_flags"]["dodge_ended"]["reason"] == "speed_zero"
+    # The target need not start a turn before the source's next turn ends Slow.
+    slowed["combatants"][0]["turns_completed"] = 1
+    slowed["turn_index"] = 1
+    expired = end_turn(slowed, actor_id_value="target")
+    restored = next(item for item in expired["combatants"] if item["actor_id"] == "target")
+    assert restored["turn_budget"]["speed"] == 5
+    assert "dodging" not in restored.get("turn_flags", {})
 
 
 def test_2024_sap_and_vex_apply_only_to_the_next_eligible_attack_roll() -> None:
@@ -2212,6 +2420,67 @@ def test_generic_effect_changes_speed_attacks_and_preserves_charm_source() -> No
     assert "dazing" in plan["disadvantage_sources"]
     assert source_speed_multiplier(dazed["sheet"]) == 0.5
 
+
+def test_harmful_targeting_rejects_charm_source_and_fails_closed() -> None:
+    charmed = _actor("charmed")
+    charmed["sheet"]["conditions"] = ["charmed"]
+    charmed["sheet"]["effects"] = [
+        {
+            "id": "charm-source",
+            "kind": "timed_conditions",
+            "source": "charmer",
+            "active": True,
+            "changes": [
+                {"path": "conditions", "mode": "add", "value": "charmed"},
+            ],
+        }
+    ]
+
+    with pytest.raises(CombatEngineError, match="harmful effect"):
+        require_harmful_targeting_allowed(charmed, target_ids=["charmer"])
+    require_harmful_targeting_allowed(charmed, target_ids=["bystander"])
+    with pytest.raises(NeedsRulingError, match="condition source"):
+        require_harmful_targeting_allowed(
+            charmed,
+            target_ids=["bystander"],
+            known_actor_ids=["bystander"],
+        )
+    unresolved = deepcopy(charmed)
+    unresolved["sheet"]["effects"][0]["source"] = ""
+    with pytest.raises(NeedsRulingError, match="condition source"):
+        require_harmful_targeting_allowed(unresolved, target_ids=["bystander"])
+
+
+def test_charmed_social_check_advantage_is_source_bound() -> None:
+    charmer = _actor("charmer")
+    charmed = _actor("charmed")
+    charmed["sheet"]["conditions"] = ["charmed"]
+    charmed["sheet"]["effects"] = [
+        {
+            "id": "charm-source",
+            "kind": "timed_conditions",
+            "source": "charmer",
+            "active": True,
+            "changes": [{"path": "conditions", "mode": "add", "value": "charmed"}],
+        }
+    ]
+    assert charmed_social_check_advantage(
+        charmer,
+        charmed,
+        known_actor_ids=["charmer", "charmed"],
+    ) is True
+    assert charmed_social_check_advantage(
+        _actor("bystander"),
+        charmed,
+        known_actor_ids=["charmer", "charmed", "bystander"],
+    ) is False
+
+    with pytest.raises(NeedsRulingError, match="social-check advantage"):
+        charmed_social_check_advantage(
+            charmer,
+            charmed,
+            known_actor_ids=["charmed"],
+        )
 
 def test_telekinetic_ray_moves_up_to_the_last_legal_cell_without_reactions() -> None:
     source = _actor("gazer")
@@ -3130,6 +3399,65 @@ def test_preserve_life_enforces_pool_half_hp_and_creature_type() -> None:
             {"undead": undead},
             allocations=[{"target_id": "undead", "amount": 1}],
         )
+
+
+def test_2014_lay_on_hands_scales_pool_and_cures_one_owned_effect() -> None:
+    paladin = _actor("paladin", hp=30)["sheet"]
+    paladin["progression"] = {
+        "level": 5,
+        "classes": [{"name": "Paladin", "level": 5, "hit_die": 10}],
+    }
+    paladin["content"]["features"] = [
+        {
+            "id": "dnd5e.content.srd2014.feature.paladin-lay-on-hands",
+            "name": "Lay on Hands",
+            "source_key": "Paladin",
+            "mechanic_refs": ["dnd5e.core.activity.lay_on_hands"],
+        }
+    ]
+    paladin["resources"]["lay_on_hands"] = {
+        "label": "Lay on Hands",
+        "value": 25,
+        "max": 25,
+        "recovers_on": "long_rest",
+        "source_key": "Paladin",
+    }
+    target = _actor("target", hp=20)["sheet"]
+    target["combat"]["hp"]["value"] = 5
+    target, _ = add_effect(
+        target,
+        {
+            "id": "poison-a",
+            "name": "Poison",
+            "kind": "poison",
+            "active": True,
+            "changes": [{"path": "conditions", "mode": "add", "value": "poisoned"}],
+        },
+    )
+    target, _ = add_effect(
+        target,
+        {
+            "id": "poison-b",
+            "name": "Other Poison",
+            "kind": "poison",
+            "active": True,
+            "changes": [{"path": "conditions", "mode": "add", "value": "poisoned"}],
+        },
+    )
+    healed = resolve_lay_on_hands_to_sheets(paladin, target, mode="heal", amount=10)
+    assert healed["target_sheet"]["combat"]["hp"]["value"] == 15
+    assert healed["source_sheet"]["resources"]["lay_on_hands"]["value"] == 15
+    cured = resolve_lay_on_hands_to_sheets(
+        healed["source_sheet"], healed["target_sheet"], mode="cure", effect_id="poison-a"
+    )
+    assert cured["source_sheet"]["resources"]["lay_on_hands"]["value"] == 10
+    by_id = {item["id"]: item for item in cured["target_sheet"]["effects"]}
+    assert by_id["poison-a"]["active"] is False
+    assert by_id["poison-b"]["active"] is True
+    with pytest.raises(CombatEngineError, match="Undead or Constructs"):
+        undead = _actor("undead")["sheet"]
+        undead["progression"]["species"] = "undead"
+        resolve_lay_on_hands_to_sheets(paladin, undead, mode="heal", amount=1)
 
 
 def test_2024_preserve_life_starts_at_level_three_and_can_target_undead() -> None:
@@ -4512,6 +4840,89 @@ def test_help_grants_and_then_consumes_attack_advantage() -> None:
     assert "help" in plan["advantage_sources"]
 
 
+def test_attack_help_is_bound_to_declared_enemy_target() -> None:
+    helper = _actor("helper")
+    attacker = _actor("attacker")
+    target = _actor("target")
+    other = _actor("other")
+    for actor, initiative in ((helper, 20), (attacker, 15), (target, 10), (other, 5)):
+        actor["initiative"] = initiative
+        actor["tie_breaker"] = 0
+        actor["position"] = {"x": 0, "y": 0}
+    attacker["position"] = {"x": 2, "y": 0}
+    target["position"] = {"x": 1, "y": 0}
+    other["position"] = {"x": 1, "y": 1}
+    attacker["derived"]["inventory"]["weapon_attacks"] = [
+        {"item_id": "sword", "attack_bonus": 5, "damage_expression": "1", "damage_type": "slashing"}
+    ]
+    encounter = _grid_encounter([helper, attacker, target, other])
+    helped = resolve_common_action(
+        encounter,
+        actor_id_value="helper",
+        action="help",
+        target_id="attacker",
+        payload={"kind": "attack", "target_id": "target"},
+    )
+    helped = end_turn(helped, actor_id_value="helper")
+    wrong = preflight_attack(
+        attacker,
+        other,
+        action={"weapon_id": "sword"},
+        encounter=helped,
+    )
+    assert wrong["helped_by"] is None
+    right = preflight_attack(
+        attacker,
+        target,
+        action={"weapon_id": "sword"},
+        encounter=helped,
+    )
+    assert right["helped_by"] == "helper"
+    assert right["help_kind"] == "attack"
+
+
+def test_task_help_grants_and_consumes_matching_check() -> None:
+    helper = _actor("helper")
+    aided = _actor("aided")
+    helper["initiative"] = 20
+    aided["initiative"] = 10
+    helper["position"] = {"x": 0, "y": 0}
+    aided["position"] = {"x": 1, "y": 0}
+    encounter = _grid_encounter([helper, aided])
+    helped = resolve_common_action(
+        encounter,
+        actor_id_value="helper",
+        action="help",
+        target_id="aided",
+        payload={"kind": "task", "action": "search", "ability": "strength"},
+    )
+    helped = end_turn(helped, actor_id_value="helper")
+    check = resolve_actor_check(
+        aided,
+        kind="ability",
+        ability="strength",
+        action="search",
+        dc=10,
+        encounter=helped,
+        rng=_SequenceRng(2, 18),
+    )
+    assert check["helped_by"] == "helper"
+    assert check["roll_mode"] == "advantage"
+    consumed = consume_task_help(helped, actor_id_value="aided", helper_id="helper")
+    helper_state = next(item for item in consumed["combatants"] if item["actor_id"] == "helper")
+    assert "helping" not in helper_state.get("turn_flags", {})
+    mismatch = resolve_actor_check(
+        aided,
+        kind="ability",
+        ability="dexterity",
+        action="search",
+        dc=10,
+        encounter=helped,
+        rng=_SequenceRng(12),
+    )
+    assert mismatch.get("helped_by") is None
+
+
 def test_next_attack_advantage_uses_active_target_effect() -> None:
     attacker = _actor("attacker")
     target = _actor("target")
@@ -5158,6 +5569,19 @@ def test_petrified_condition_grants_resistance_to_every_damage_type_once() -> No
     result = apply_damage_to_sheet(actor["sheet"], amount=9, damage_type="force")
     assert result["applied_amount"] == 4
     assert result["adjustment"] == "resistant"
+
+
+def test_petrified_condition_grants_poison_immunity_without_changing_other_resistance() -> None:
+    actor = _actor("target", hp=20)
+    actor["sheet"]["conditions"] = ["petrified"]
+    poison = apply_damage_to_sheet(actor["sheet"], amount=9, damage_type="poison")
+    force = apply_damage_to_sheet(actor["sheet"], amount=9, damage_type="force")
+
+    assert poison["applied_amount"] == 0
+    assert poison["adjustment"] == "immune"
+    assert "condition:petrified" in poison["defense_sources"]
+    assert force["applied_amount"] == 4
+    assert force["adjustment"] == "resistant"
 
 
 def test_negative_damage_is_rejected_instead_of_silently_healing_or_nooping() -> None:
@@ -6188,6 +6612,80 @@ def test_cunning_action_settles_dash_and_disengage_but_not_hide_outcome() -> Non
     assert dashed_2024["combatants"][0]["turn_budget"]["movement"] == 60
 
 
+def test_settle_hide_consumes_paid_declaration_and_tracks_mixed_observers() -> None:
+    rogue = _actor("rogue")
+    threat = _actor("threat")
+    lookout = _actor("lookout")
+    rogue["initiative"] = 20
+    threat["initiative"] = 10
+    lookout["initiative"] = 5
+    threat["sheet"]["traits"]["senses"]["passive_perception_bonus"] = 10
+    threat["derived"] = derive_character_sheet(threat["sheet"])
+    encounter = start_encounter([rogue, threat, lookout])
+    paid = pay_activity_activation(
+        encounter, actor_id_value="rogue", activation_type="bonus_action"
+    )
+    declared, _ = settle_core_activity_effect(
+        paid,
+        actor_id_value="rogue",
+        activity_id="dnd5e.content.srd2014.feature.rogue-cunning-action",
+        declaration={"action": "hide", "cover": "larger ally"},
+    )
+
+    settled, effect = settle_hide(
+        declared,
+        actor=rogue,
+        actor_id_value="rogue",
+        observer_ids=["threat", "lookout"],
+        observer_passive_perceptions={"threat": 20, "lookout": 10},
+        can_hide=True,
+        ruling_reason="The rogue is fully obscured behind the larger ally.",
+        rng=_SequenceRng(15),
+    )
+
+    assert effect["stealth_check"]["total"] == 15
+    assert effect["observers"] == [
+        {"observer_id": "threat", "passive_perception": 20, "detected": True},
+        {"observer_id": "lookout", "passive_perception": 10, "detected": False},
+    ]
+    assert effect["hidden"] is True
+    assert effect["visible_to_actor_ids"] == ["rogue", "threat"]
+    assert settled["combatants"][0]["hidden"] is True
+    assert "hide_declared" not in settled["combatants"][0]["turn_flags"]
+
+
+def test_settle_hide_ruling_failure_consumes_declaration_without_a_roll() -> None:
+    rogue = _actor("rogue")
+    observer = _actor("observer")
+    rogue["initiative"] = 20
+    observer["initiative"] = 10
+    encounter = start_encounter([rogue, observer])
+    paid = pay_activity_activation(
+        encounter, actor_id_value="rogue", activation_type="bonus_action"
+    )
+    declared, _ = settle_core_activity_effect(
+        paid,
+        actor_id_value="rogue",
+        activity_id="dnd5e.content.srd2014.feature.rogue-cunning-action",
+        declaration={"action": "hide"},
+    )
+    rng = _SequenceRng(1)
+    settled, effect = settle_hide(
+        declared,
+        actor=rogue,
+        actor_id_value="rogue",
+        observer_ids=["observer"],
+        observer_passive_perceptions={"observer": 10},
+        can_hide=False,
+        ruling_reason="There is no cover or obscurement in the scene.",
+        rng=rng,
+    )
+    assert effect["stealth_check"] is None
+    assert rng.values == [1]
+    assert settled["combatants"][0]["hidden"] is False
+    assert "hide_declared" not in settled["combatants"][0].get("turn_flags", {})
+
+
 @pytest.mark.parametrize(
     ("ruleset", "activity_id", "speed_multiplier", "expected_movement"),
     [
@@ -6762,6 +7260,23 @@ def test_opportunity_window_binds_to_outermost_weapon_reach_for_whole_or_segment
         assert windows[0]["opportunity_attack_weapon_ids"] == ["reach-weapon"]
         assert windows[0]["opportunity_attack_reach_ft"] == 10
         assert windows[0]["target_position"] != {"x": 4, "y": 0}
+
+
+def test_destination_only_movement_detects_enter_then_leave_of_hostile_reach() -> None:
+    mover = _actor("mover")
+    mover.update(initiative=20, position={"x": 0, "y": 0}, disposition="friendly")
+    threat = _actor("threat")
+    threat.update(initiative=10, position={"x": 2, "y": 1}, disposition="hostile", reach_ft=5)
+    encounter = _grid_encounter([mover, threat])
+
+    # The straight cell route is (1, 0), (2, 0), (3, 0), (4, 0): the mover
+    # enters the threat's reach at (1, 0) and leaves it at (4, 0).
+    moved = spend_movement(encounter, "mover", 20, destination={"x": 4, "y": 0})
+
+    reaction = available_reactions(moved, "threat")
+    assert len(reaction) == 1
+    assert reaction[0]["event"] == "movement.leave_reach"
+    assert reaction[0]["target_position"] == {"x": 3, "y": 0}
 
 
 def test_positioned_movement_rejects_declared_distance_that_disagrees_with_grid() -> None:

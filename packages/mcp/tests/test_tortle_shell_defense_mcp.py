@@ -18,6 +18,7 @@ from sagasmith_dnd.standard_feature_ids import (
 from sagasmith_dnd_mcp import server as server_module
 from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.server import create_server
+from tests.test_official_expansions_mcp import _locked_official_library
 
 
 async def _call(server, name: str, arguments: dict):
@@ -50,13 +51,7 @@ def test_tortle_shell_defense_materializes_and_settles_atomically_across_restart
 ) -> None:
     async def exercise() -> None:
         config = _config(tmp_path)
-        library = (
-            Path(__file__).resolve().parents[4]
-            / "SagaSmith-dnd-content-library"
-            / "content-library"
-        )
-        if not (library / "index.json").is_file():
-            pytest.skip("requires the sibling finalized content library")
+        library = _locked_official_library()
         config = replace(config, official_content_library=library)
         server = create_server(config)
         campaign = await _call(
