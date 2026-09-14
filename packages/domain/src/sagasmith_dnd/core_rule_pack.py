@@ -324,6 +324,16 @@ BOUNDARIES = (
         "bundled:srd2014/02_Classes/Cleric.md#preserve-life",
     ),
     CoreBoundary(
+        "dnd5e.core.activity.lay_on_hands",
+        ("2014",),
+        "combat_engine.resolve_lay_on_hands_to_sheets",
+        (
+            "tests/test_combat_engine.py::"
+            "test_2014_lay_on_hands_scales_pool_and_cures_one_owned_effect",
+        ),
+        "bundled:srd2014/02_Classes/Paladin.md#lay-on-hands",
+    ),
+    CoreBoundary(
         "dnd5e.core.ability_generation",
         ("2014", "2024"),
         "ability_generation.py",
