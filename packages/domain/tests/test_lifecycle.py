@@ -209,6 +209,48 @@ def test_rest_schedule_is_derived_instead_of_required_from_the_agent() -> None:
     }
 
 
+def test_long_rest_schedule_accounts_for_declared_light_activity() -> None:
+    assert validate_rest_schedule(
+        rest_type="long_rest",
+        duration_minutes=480,
+        rest_activity_minutes={"meditation": 30},
+    ) == {
+        "sleep_minutes": 450,
+        "light_activity_minutes": 30,
+        "strenuous_activity_minutes": 0,
+        "trance_minutes": 0,
+    }
+    assert validate_rest_schedule(
+        rest_type="long_rest",
+        duration_minutes=480,
+        rest_activity_minutes={"reading": 120},
+    )["sleep_minutes"] == 360
+
+
+def test_rest_activity_contract_rejects_interruption_and_short_rest_strain() -> None:
+    with pytest.raises(CombatEngineError, match="interrupted"):
+        validate_rest_schedule(
+            rest_type="long_rest",
+            duration_minutes=480,
+            rest_activity_minutes={"fighting": 60},
+        )
+    with pytest.raises(CombatEngineError, match="short rest"):
+        apply_rest(
+            default_character_sheet(),
+            rest_type="short_rest",
+            rest_activity_minutes={"spellcasting": 1},
+        )
+
+
+def test_long_rest_cannot_trade_away_required_sleep_for_light_activity() -> None:
+    with pytest.raises(CombatEngineError, match="6 hours of sleep"):
+        validate_rest_schedule(
+            rest_type="long_rest",
+            duration_minutes=480,
+            rest_activity_minutes={"reading": 121},
+        )
+
+
 def test_source_granted_trance_completes_a_long_rest_in_four_hours() -> None:
     sheet = default_character_sheet()
     sheet["content"]["features"] = [
@@ -299,6 +341,37 @@ def test_effect_duration_and_long_rest_recovery_are_card_local() -> None:
     result = apply_rest(advanced["sheet"], rest_type="long_rest")
     assert result["sheet"]["combat"]["hp"] == {"value": 10, "max": 10, "temp": 0}
     assert result["recovered"]["feature"] == 2
+
+
+def test_petrified_suspends_periodic_and_elapsed_poison_disease_clocks() -> None:
+    sheet = default_character_sheet()
+    sheet["conditions"] = ["petrified", "poisoned"]
+    sheet["effects"] = [
+        {
+            "id": "poison",
+            "name": "Poison",
+            "kind": "poison",
+            "active": True,
+            "duration": {"period": "hour", "remaining": 3},
+            "changes": [{"path": "conditions", "mode": "add", "value": "poisoned"}],
+        },
+        {
+            "id": "disease",
+            "name": "Disease",
+            "kind": "nonmagical_disease",
+            "active": True,
+            "duration": {"period": "minute", "remaining": 5},
+            "changes": [],
+        },
+    ]
+
+    periodic = advance_effect_durations(sheet, period="hour")
+    elapsed = advance_elapsed_effect_durations(periodic["sheet"], elapsed_ticks=60)
+
+    assert periodic["suspended"] == ["poison"]
+    assert periodic["sheet"]["effects"][0]["duration"]["remaining"] == 3
+    assert elapsed["sheet"]["effects"][1]["duration"]["remaining"] == 5
+    assert elapsed["advanced"] == []
 
 
 def test_expiring_timed_conditions_removes_only_conditions_owned_by_the_effect() -> None:

@@ -14,6 +14,7 @@ from sagasmith_dnd.actor_types import NON_PLAYER_CHARACTER_TYPES
 from sagasmith_dnd.conditions import (
     apply_effect_conditions,
     condition_ids,
+    effect_is_suspended_by_petrification,
     reconcile_ended_effect_conditions,
 )
 from sagasmith_dnd.content_solution import (
@@ -3618,6 +3619,10 @@ def validate_character_sheet(
     for effect in effects:
         if not effect["active"]:
             continue
+        if effect_is_suspended_by_petrification(
+            {"edition": edition, "conditions": conditions}, effect
+        ):
+            continue
         for change in effect["changes"]:
             if change["path"] == "combat.hp.maximum_multiplier":
                 hp_maximum_multiplier *= int(change["value"])
@@ -4913,6 +4918,8 @@ def effective_hit_point_maximum(sheet: dict[str, Any]) -> int:
     for effect in sheet.get("effects", []):
         if not isinstance(effect, dict) or not effect.get("active", False):
             continue
+        if effect_is_suspended_by_petrification(sheet, effect):
+            continue
         for change in effect.get("changes", []):
             if isinstance(change, dict) and change.get("path") == "combat.hp.maximum_multiplier":
                 maximum_multiplier *= int(change["value"])
@@ -4931,6 +4938,8 @@ def effective_size(sheet: dict[str, Any]) -> str:
     for effect in value["effects"]:
         if not effect["active"]:
             continue
+        if effect_is_suspended_by_petrification(value, effect):
+            continue
         for change in effect["changes"]:
             if change["path"] == "traits.size":
                 size = str(change["value"]).casefold()
@@ -4944,6 +4953,8 @@ def effective_ability_scores(sheet: dict[str, Any]) -> dict[str, int]:
     scores = {ability: int(entry["score"]) for ability, entry in value["abilities"].items()}
     for effect in value["effects"]:
         if not effect["active"]:
+            continue
+        if effect_is_suspended_by_petrification(value, effect):
             continue
         for change in effect["changes"]:
             match = re.fullmatch(r"abilities\.([a-z_]+)\.score", change["path"])
@@ -4989,6 +5000,8 @@ def active_effect_roll_bonus(sheet: dict[str, Any], kind: str) -> int:
     for effect in validate_character_sheet(sheet)["effects"]:
         if not effect["active"]:
             continue
+        if effect_is_suspended_by_petrification(sheet, effect):
+            continue
         for change in effect["changes"]:
             if change["path"] != path:
                 continue
@@ -5016,6 +5029,8 @@ def active_effect_roll_advantage(
     normalized_key = str(key or "").casefold().replace("-", "_").replace(" ", "_")
     for effect in validate_character_sheet(sheet)["effects"]:
         if not effect["active"]:
+            continue
+        if effect_is_suspended_by_petrification(sheet, effect):
             continue
         restricted = str(dict(effect.get("metadata") or {}).get("skill") or "")
         if restricted and (
@@ -5141,6 +5156,11 @@ def derive_character_sheet(
     level = value["progression"]["level"]
     proficiency = proficiency_bonus(level)
     active_effects = [effect for effect in value["effects"] if effect["active"]]
+    mechanical_effects = [
+        effect
+        for effect in active_effects
+        if not effect_is_suspended_by_petrification(value, effect)
+    ]
     ability_scores = effective_ability_scores(value)
     ability_modifiers = {
         ability: ability_modifier(score) for ability, score in ability_scores.items()
@@ -5170,7 +5190,7 @@ def derive_character_sheet(
     armor_class, armor_class_breakdown, unresolved_effects = _derive_armor_class(
         value,
         ability_modifiers,
-        active_effects,
+        mechanical_effects,
         frozenset(trusted_content_authority_ids or ()),
     )
     equipped_armor_id = inventory["equipment_slots"]["armor"]
@@ -5244,7 +5264,7 @@ def derive_character_sheet(
         if isinstance(options, list):
             multiattack_options.extend(copy.deepcopy(options))
     effective_speed = dict(value["combat"]["speed"])
-    for effect in active_effects:
+    for effect in mechanical_effects:
         for change in effect["changes"]:
             match = re.fullmatch(
                 r"combat\.speed\.(walk|fly|swim|climb|burrow)",
@@ -5364,7 +5384,7 @@ def derive_character_sheet(
                 proficiency,
                 value["traits"]["proficiencies"]["weapons"],
                 spell_ability,
-                active_effects,
+                mechanical_effects,
                 battle_ready,
             ),
         },

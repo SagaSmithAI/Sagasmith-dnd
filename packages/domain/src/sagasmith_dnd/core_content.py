@@ -754,6 +754,19 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
                 "maximum_score": 20,
             }
         }
+    if key == ("paladin", "lay on hands"):
+        return {
+            "activation": {"type": "action", "cost": 1},
+            "resource_key": "lay_on_hands",
+            "choices": {
+                "options": ["heal", "cure"],
+                "outcome": (
+                    "spend one point per hit point restored, or five points to cure "
+                    "one disease or neutralize one poison"
+                ),
+            },
+            "mechanic_refs": ["dnd5e.core.activity.lay_on_hands"],
+        }
     if key == ("fighter", "second wind"):
         return {
             "activation": {"type": "bonus_action", "cost": 1},
@@ -929,6 +942,26 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
             "mechanical_grants": {
                 "hp_per_class_level": 1,
                 "unarmored_base": 13,
+            }
+        }
+    if key == ("paladin", "divine health"):
+        return {"mechanical_grants": {"condition_immunities": ["disease"]}}
+    if key == ("monk", "purity of body"):
+        return {
+            "mechanical_grants": {
+                "immunities": ["poison"],
+                "condition_immunities": ["disease", "poisoned"],
+            }
+        }
+    if key == ("druid", "nature's ward"):
+        return {
+            "mechanical_grants": {
+                "immunities": ["poison"],
+                "condition_immunities": ["disease", "poisoned"],
+                "conditional_condition_immunities": {
+                    "charmed": ["elemental", "fey"],
+                    "frightened": ["elemental", "fey"],
+                },
             }
         }
     if title.casefold() == "fighting style":

@@ -279,7 +279,7 @@ excerpt for Agent adjudication. A module-specific ruling does not require
 | World continuity | `memory_change(action="commit")`, `campaign_event`, `memory_change`, `memory_query` |
 | Actor continuity | `actor_knowledge_change`, `actor_knowledge_query`, `continuity_context` |
 | Saves and audit | `snapshot_create`, `snapshot_query`, `snapshot_restore`, `branch_query`, `branch_change`, `state_revision` |
-| Combat | `combat_start`, `combat_join`, `combat_query`, `combat_preflight_attack`, `combat_resolve_attack`, `combat_movement`, `combat_common_action`, `combat_use_activity`, `combat_cast_spell`, `combat_ready`, `combat_reaction_attack`, `combat_end_turn`, `combat_check`, `combat_concentration_check`, `combat_hp_change`, `combat_map_patch`, `combat_end` |
+| Combat | `combat_start`, `combat_join`, `combat_query`, `combat_preflight_attack`, `combat_resolve_attack`, `combat_movement`, `combat_common_action`, `combat_use_activity`, `combat_resolve_hide`, `combat_cast_spell`, `combat_ready`, `combat_reaction_attack`, `combat_end_turn`, `combat_check`, `combat_concentration_check`, `combat_hp_change`, `combat_map_patch`, `combat_end` |
 | Owned pending combat windows | `combat_choice(resolve/resolve_defense/on_hit_ruling/execute_plan)` |
 | Custom-content solution lookup/compilation | DM-only `content_solution(query/compile)` in Lobby, Play, or Combat |
 | Agent DM adjudication without an owned window | Relevant public dice, check, map, state, memory, and manifest tools |
@@ -1013,11 +1013,14 @@ The canonical 2014 and 2024 Rogue Cunning Action cards are also engine-owned. Ca
 is `dash`, `disengage`, or `hide`. Dash spends the bonus action and adds the
 actor's recorded Speed to remaining movement; Disengage spends it and records
 the no-opportunity-attack turn flag. Hide spends the bonus action and records a
-source-linked Hide declaration, but remains `pending_ruling`: the SagaSmith
-Agent acting as DM decides whether the circumstances permit hiding and resolves
-the Stealth/observer boundary by default. Never spend
-a second main action for the same declaration, and never mark the actor Hidden
-merely because the bonus action was paid.
+source-linked Hide declaration, then returns `pending_ruling`. The SagaSmith
+Agent acting as DM must call `combat_resolve_hide` with a bounded `ruling` whose
+`can_hide` and explicit observer IDs are scene facts. The continuation derives
+each observer's passive Perception from its character card, rolls Dexterity
+(Stealth) once, and records `hidden`/`visible_to_actor_ids` atomically without
+charging the bonus action again. A failed scene ruling consumes the declaration
+without a die roll. Never spend a second main action for the same declaration,
+and never mark the actor Hidden merely because the bonus action was paid.
 
 Standard Orc `Aggressive` is engine-owned. Pay it with `combat_use_activity` and
 `declaration={target_id: "..."}`, naming one recorded living, visible hostile
@@ -1109,6 +1112,10 @@ derives the complete skill modifier from the actor card and spends the main
 action whether the check succeeds or fails; do not pass `proficient` or `bonus`
 for a named skill. Advantage from an offer of at least 10 gp is a verified scene
 fact and may be supplied only when the actual offer meets that threshold.
+For a social check against a canonical actor, include `target_id`; under the
+2014 Charmed condition the engine grants advantage only when that target's
+source-linked Charmed effect names the checker as its charmer. Missing or
+conflicting source facts return a ruling boundary before the action is paid.
 
 If that check succeeds and the chosen NPC already has a canonical campaign actor
 card, call `combat_join` with its explicit position, disposition, initiative (or

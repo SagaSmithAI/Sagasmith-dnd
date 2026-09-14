@@ -22,7 +22,7 @@ As a fighter, you gain the following class features.
 
 **Saving Throws:** Strength, Constitution
 
-**Skills:** Choose two skills from Acrobatics, Animal, Handling, Athletics, History, Insight, Intimidation, Perception, and Survival
+**Skills:** Choose two skills from Acrobatics, Animal Handling, Athletics, History, Insight, Intimidation, Perception, and Survival
 
 #### Equipment
 
