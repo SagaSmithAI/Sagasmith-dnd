@@ -15,6 +15,7 @@ from sagasmith_dnd.conditions import condition_ids, reconcile_condition_projecti
 from sagasmith_dnd.standard_feature_ids import (
     CORE_SUFFOCATION_MECHANIC_ID,
     TORTLE_HOLD_BREATH_ARTIFACT_ID,
+    TORTLE_HOLD_BREATH_CURRENT_SELECTION_MECHANIC_REFS,
     TORTLE_HOLD_BREATH_FEATURE_ID,
     TORTLE_HOLD_BREATH_LEGACY_PACK_ID,
     TORTLE_HOLD_BREATH_LEGACY_PACK_VERSIONS,
@@ -39,7 +40,14 @@ def tortle_hold_breath_available(sheet: dict[str, Any]) -> bool:
         and item.get("pack_id") == TORTLE_HOLD_BREATH_LEGACY_PACK_ID
         and item.get("pack_version") in TORTLE_HOLD_BREATH_LEGACY_PACK_VERSIONS
         and item.get("artifact_id") == TORTLE_HOLD_BREATH_ARTIFACT_ID
-        and item.get("mechanic_refs") == []
+        and (
+            (item.get("pack_version") in {"1.0.0", "1.0.1"} and item.get("mechanic_refs") == [])
+            or (
+                item.get("pack_version") == "1.0.2"
+                and set(item.get("mechanic_refs") or [])
+                == set(TORTLE_HOLD_BREATH_CURRENT_SELECTION_MECHANIC_REFS)
+            )
+        )
         and isinstance(item.get("rule_refs"), list)
         and item["rule_refs"]
         and all(

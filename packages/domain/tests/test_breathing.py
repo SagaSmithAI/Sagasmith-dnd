@@ -15,6 +15,7 @@ from sagasmith_dnd.hit_points import apply_basic_healing_to_sheet
 from sagasmith_dnd.lifecycle import advance_effect_durations, advance_elapsed_effect_durations
 from sagasmith_dnd.standard_feature_ids import (
     TORTLE_HOLD_BREATH_ARTIFACT_ID,
+    TORTLE_HOLD_BREATH_CURRENT_SELECTION_MECHANIC_REFS,
     TORTLE_HOLD_BREATH_FEATURE_ID,
     TORTLE_HOLD_BREATH_LEGACY_PACK_ID,
 )
@@ -192,6 +193,43 @@ def test_tortle_provenance_gets_the_fixed_one_hour_hold(pack_version: str) -> No
     )
     assert not tortle_hold_breath_available(sheet)
     assert begin_holding_breath(sheet)["effect"]["metadata"]["hold_remaining_rounds"] == 10
+
+
+def test_republished_tortle_provenance_gets_the_fixed_one_hour_hold() -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2014"
+    source_ref = "rule-source:user.rulebook.d-d-5e-the-tortle-package.e3234de670#chunk:9"
+    sheet["content"]["selections"] = [
+        {
+            "artifact_id": TORTLE_HOLD_BREATH_ARTIFACT_ID,
+            "kind": "species",
+            "name": "Tortle",
+            "pack_id": TORTLE_HOLD_BREATH_LEGACY_PACK_ID,
+            "pack_version": "1.0.2",
+            "rule_refs": [source_ref],
+            "mechanic_refs": sorted(TORTLE_HOLD_BREATH_CURRENT_SELECTION_MECHANIC_REFS),
+            "selection": {},
+        }
+    ]
+    sheet["content"]["features"] = [
+        {
+            "id": TORTLE_HOLD_BREATH_FEATURE_ID,
+            "name": "Hold Breath",
+            "source_key": "Tortle",
+            "pack_id": TORTLE_HOLD_BREATH_LEGACY_PACK_ID,
+            "pack_version": "1.0.2",
+            "rule_refs": [source_ref],
+            "mechanic_refs": [],
+        }
+    ]
+
+    assert tortle_hold_breath_available(sheet)
+    assert begin_holding_breath(sheet)["effect"]["metadata"]["hold_remaining_rounds"] == 600
+
+    sheet["content"]["features"][0]["mechanic_refs"] = [
+        "dnd5e.core.activity.tortle_shell_defense"
+    ]
+    assert not tortle_hold_breath_available(sheet)
 
 
 def test_suffocation_expiry_waits_for_the_actor_turn_start() -> None:
