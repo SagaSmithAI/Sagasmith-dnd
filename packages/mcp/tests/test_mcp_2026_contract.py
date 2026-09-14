@@ -325,7 +325,7 @@ def test_modern_hosted_tool_policy_rejects_player_and_allows_local_dm(
 
 @pytest.mark.parametrize(
     ("mode", "expected_count"),
-    [("legacy", 7), ("2026-07-28", 78)],
+    [("legacy", 7), ("2026-07-28", 79)],
 )
 def test_real_stdio_legacy_modern_contract_matrix(
     tmp_path: Path,

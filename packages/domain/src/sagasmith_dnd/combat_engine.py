@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from copy import deepcopy
 from dataclasses import asdict, dataclass
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 from uuid import uuid4
 
 from sagasmith_dnd import steel_defender as _steel_defender
@@ -1313,8 +1313,25 @@ def start_encounter(
     validated_participants: list[
         tuple[int, dict[str, Any], str, dict[str, Any], dict[str, Any], set[str], int]
     ] = []
+    initiative_groups: dict[str, list[str]] = {}
     for index, actor in enumerate(participants):
         identifier = actor_id(actor)
+        initiative_group_id = actor.get("initiative_group_id")
+        if initiative_group_id is not None:
+            if not isinstance(initiative_group_id, str) or not initiative_group_id.strip():
+                raise CombatEngineError(
+                    f"actor {identifier} initiative_group_id must be a non-empty string"
+                )
+            initiative_group_id = initiative_group_id.strip()
+            if identifier in dependent_contracts:
+                raise CombatEngineError(
+                    "a dependent Steel Defender cannot be assigned to an initiative group"
+                )
+            if actor.get("initiative") is not None:
+                raise CombatEngineError(
+                    "initiative_group_id requires an engine-owned initiative roll"
+                )
+            initiative_groups.setdefault(initiative_group_id, []).append(identifier)
         derived = actor_derived(actor)
         sheet = actor_sheet(actor)
         conditions = _condition_set(sheet.get("conditions"))
@@ -1354,8 +1371,64 @@ def start_encounter(
                     actor, initiative_roster
                 )
 
+    # Validate complete group compatibility before consuming any random stream
+    # values. A group shares both the d20 result and every roll-affecting
+    # modifier; no grouping is inferred from any actor metadata.
+    preflight_group_signatures: dict[str, tuple[int, bool, bool, bool]] = {}
+    for (
+        _index,
+        actor,
+        identifier,
+        derived,
+        sheet,
+        _conditions,
+        exhaustion,
+    ) in validated_participants:
+        group_id = actor.get("initiative_group_id")
+        if group_id is None:
+            continue
+        group_id = str(group_id).strip()
+        initiative_bonus = int(derived.get("initiative", 0))
+        initiative_bonus += _jack_of_all_trades_bonus(sheet) if normalized_ruleset == "2014" else 0
+        vigilant = normalized_ruleset == "2014" and _steel_defender.has_steel_defender_vigilant(
+            actor
+        )
+        surprised = bool(actor.get("surprised", False)) and not vigilant
+        initiative_disadvantage = bool(actor.get("initiative_disadvantage", False)) or (
+            surprised and normalized_ruleset == "2024"
+        )
+        if identifier in initiative_check_modifiers:
+            effect_bonus, equipment_disadvantage, poisoned = initiative_check_modifiers[identifier]
+            initiative_bonus += effect_bonus
+            initiative_disadvantage |= equipment_disadvantage or poisoned
+        if identifier in frightened_initiative:
+            initiative_disadvantage |= frightened_initiative[identifier]
+        exhaustion_adjustment = d20_exhaustion_adjustment(
+            ruleset=normalized_ruleset,
+            exhaustion=exhaustion,
+            kind="initiative",
+            bonus=initiative_bonus,
+            disadvantage=initiative_disadvantage,
+        )
+        signature = (
+            int(exhaustion_adjustment["bonus"]),
+            bool(actor.get("initiative_advantage", False))
+            or ("invisible" in _conditions and normalized_ruleset == "2024"),
+            bool(exhaustion_adjustment["disadvantage"]),
+            _has_halfling_lucky(sheet),
+        )
+        previous = preflight_group_signatures.get(group_id)
+        if previous is not None and previous != signature:
+            raise CombatEngineError(
+                f"initiative group {group_id!r} has incompatible initiative bonuses "
+                "or roll modifiers"
+            )
+        preflight_group_signatures[group_id] = signature
+
     combatants: list[dict[str, Any]] = []
     rule_boundary_ids: set[str] = set()
+    group_rolls: dict[str, dict[str, Any]] = {}
+    group_signatures: dict[str, tuple[int, bool, bool, bool]] = {}
     for index, actor, identifier, derived, sheet, conditions, exhaustion in validated_participants:
         initiative_bonus = int(derived.get("initiative", 0))
         participant_boundary_ids: list[str] = []
@@ -1396,6 +1469,28 @@ def start_encounter(
         )
         initiative_bonus = int(exhaustion_adjustment["bonus"])
         initiative_disadvantage = bool(exhaustion_adjustment["disadvantage"])
+        initiative_advantage = bool(actor.get("initiative_advantage", False)) or (
+            "invisible" in conditions and normalized_ruleset == "2024"
+        )
+        reroll_ones = _has_halfling_lucky(sheet)
+        initiative_group_id = actor.get("initiative_group_id")
+        if initiative_group_id is not None:
+            initiative_group_id = str(initiative_group_id).strip()
+            signature = (
+                initiative_bonus,
+                initiative_advantage,
+                initiative_disadvantage,
+                reroll_ones,
+            )
+            previous = group_signatures.get(initiative_group_id)
+            if previous is not None and previous != signature:
+                raise CombatEngineError(
+                    f"initiative group {initiative_group_id!r} has incompatible initiative "
+                    "bonuses or roll modifiers"
+                )
+            group_signatures[initiative_group_id] = signature
+            rule_boundary_ids.add("dnd5e.core.initiative.group")
+            participant_boundary_ids.append("dnd5e.core.initiative.group")
         recorded_walk_speed = derived.get("speed", {}).get("walk")
         speed = int(30 if recorded_walk_speed is None else recorded_walk_speed)
         if normalized_ruleset == "2024":
@@ -1412,13 +1507,17 @@ def start_encounter(
             # The source feature assigns its owner's initiative, not another roll.
             initiative = 0
         elif supplied is None:
-            die = roll_d20(
-                advantage=bool(actor.get("initiative_advantage", False))
-                or ("invisible" in conditions and normalized_ruleset == "2024"),
-                disadvantage=initiative_disadvantage,
-                reroll_ones=_has_halfling_lucky(sheet),
-                rng=rng,
-            )
+            if initiative_group_id is not None and initiative_group_id in group_rolls:
+                die = deepcopy(group_rolls[initiative_group_id])
+            else:
+                die = roll_d20(
+                    advantage=initiative_advantage,
+                    disadvantage=initiative_disadvantage,
+                    reroll_ones=reroll_ones,
+                    rng=rng,
+                )
+                if initiative_group_id is not None:
+                    group_rolls[initiative_group_id] = deepcopy(die)
             initiative = die["natural"] + initiative_bonus
         else:
             initiative = int(supplied)
@@ -1431,6 +1530,11 @@ def start_encounter(
                 "initiative": initiative,
                 "initiative_roll": die,
                 "initiative_bonus": initiative_bonus,
+                **(
+                    {"initiative_group_id": initiative_group_id}
+                    if initiative_group_id is not None
+                    else {}
+                ),
                 "_initiative_supplied": supplied is not None,
                 "tie_breaker": int(actor.get("tie_breaker", index)),
                 "_tie_breaker_supplied": "tie_breaker" in actor,
@@ -2036,11 +2140,15 @@ def _effective_speed_ft(
     mode = str(travel_mode or budget.get("travel_mode") or "walk").strip().lower()
     if mode not in _TRAVEL_SPEED_MODES:
         return 0
-    base_speed = _travel_speed_modes(combatant).get(mode, 0)
+    native_speeds = _travel_speed_modes(combatant)
+    current_speeds = budget.get("speed_modes", native_speeds)
+    base_speed = max(0, int(current_speeds.get(mode, 0) or 0))
     # A missing swim/climb speed still permits that movement at double cost;
     # flight and burrowing require an actual corresponding speed.
-    if mode in {"swim", "climb"} and base_speed <= 0:
-        base_speed = _travel_speed_modes(combatant).get("walk", 0)
+    if mode == "walk" or (
+        mode in {"swim", "climb"} and native_speeds.get(mode, 0) <= 0
+    ):
+        base_speed = max(0, int(budget.get("speed", native_speeds.get("walk", 0)) or 0))
     recorded_speed_multiplier = combatant.get("speed_multiplier")
     speed_multiplier = float(
         1.0 if recorded_speed_multiplier is None else recorded_speed_multiplier
@@ -2178,13 +2286,45 @@ def _update_movement_accounting(
     spent, extra_granted = _movement_accounting(combatant)
     budget["movement_spent"] = spent + max(0, int(spent_delta))
     budget["extra_movement_granted"] = extra_granted + max(0, int(extra_grant_delta))
+    combatant["turn_budget"] = budget
     budget["movement"] = max(
         0,
         _effective_speed_ft(combatant)
         + int(budget["extra_movement_granted"])
         - int(budget["movement_spent"]),
     )
+
+
+def _refresh_weapon_mastery_speed(
+    encounter: dict[str, Any], combatant: dict[str, Any]
+) -> None:
+    """Project active Slow effects into the existing movement budget once."""
+
+    budget = dict(combatant.get("turn_budget") or {})
+    spent, extra_granted = _movement_accounting(combatant)
+    penalty = max(
+        (
+            int(effect.get("penalty_ft", 0) or 0)
+            for effect in encounter.get("ongoing_effects", [])
+            if isinstance(effect, dict)
+            and effect.get("active", True)
+            and effect.get("mechanic_id") == "dnd5e.core.weapon.mastery"
+            and effect.get("kind") == "speed_penalty"
+            and str(effect.get("target_id") or "") == str(combatant.get("actor_id") or "")
+        ),
+        default=0,
+    )
+    base_speeds = _travel_speed_modes(combatant)
+    base_speeds["walk"] = int(combatant.get("base_speed", budget.get("speed", 30)) or 0)
+    budget["speed_modes"] = {
+        mode: max(0, speed - penalty) for mode, speed in base_speeds.items()
+    }
+    budget["speed"] = budget["speed_modes"]["walk"]
+    budget["movement_spent"] = spent
+    budget["extra_movement_granted"] = extra_granted
     combatant["turn_budget"] = budget
+    _update_movement_accounting(combatant, budget)
+    reconcile_dodge_lifecycle(combatant)
 
 
 def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[str]:
@@ -3414,6 +3554,7 @@ def preflight_attack(
         context["disadvantage"] = True
         context.setdefault("disadvantage_sources", []).append("target_dodging")
     helped_by = None
+    help_kind = None
     next_attack_advantage_effect_id = None
     next_attack_disadvantage_effect_id = None
     if encounter is not None:
@@ -3426,21 +3567,34 @@ def preflight_attack(
         for helper in encounter.get("combatants", []):
             helping = dict(helper.get("turn_flags") or {}).get("helping")
             helper_position = _position(helper.get("position"))
+            helping_kind = str(helping.get("kind") or "") if isinstance(helping, dict) else ""
+            structured_attack_help = (
+                helping_kind == "attack"
+                and str(helping.get("attack_target_id") or "") == actor_id(target)
+            )
+            legacy_help = helping_kind in {"", "legacy"}
             if (
                 isinstance(helping, dict)
                 and helping.get("target_id") == actor_id(attacker)
                 and (
-                    str(helper.get("actor_id") or "") in agent_helper_ids
-                    if agent_helper_ids is not None
-                    else target_position is not None
-                    and helper_position is not None
-                    and _grid_distance(helper_position, target_position) <= 5
+                    structured_attack_help
+                    or (
+                        legacy_help
+                        and (
+                            str(helper.get("actor_id") or "") in agent_helper_ids
+                            if agent_helper_ids is not None
+                            else target_position is not None
+                            and helper_position is not None
+                            and _grid_distance(helper_position, target_position) <= 5
+                        )
+                    )
                 )
                 and not _condition_set(helper.get("conditions")) & INCAPACITATING_STATE_IDS
             ):
                 context["advantage"] = True
                 context.setdefault("advantage_sources", []).append("help")
                 helped_by = str(helper.get("actor_id"))
+                help_kind = "attack" if structured_attack_help else "legacy"
                 break
         for effect in encounter.get("ongoing_effects", []):
             if (
@@ -3610,6 +3764,7 @@ def preflight_attack(
         "attacker_was_hidden": bool(attacker.get("hidden", False)),
         "target_can_see_attacker": target_can_see_attacker,
         "helped_by": helped_by,
+        "help_kind": help_kind,
         "next_attack_advantage_effect_id": next_attack_advantage_effect_id,
         "next_attack_disadvantage_effect_id": next_attack_disadvantage_effect_id,
         "sneak_attack": sneak_attack,
@@ -5053,6 +5208,73 @@ def apply_damage_parts_to_sheet(
     }
 
 
+def resolve_fall_to_sheet(
+    sheet: dict[str, Any],
+    *,
+    distance_ft: int,
+    source: str = "falling",
+    ruleset: str | None = None,
+    death_saves: bool = True,
+    rng: Any = None,
+) -> dict[str, Any]:
+    """Resolve the bounded 2014 Falling rule for one actor.
+
+    The source rule derives one d6 per completed ten feet, caps the packet at
+    20d6, and makes the creature Prone only when the fall actually deals
+    damage. Damage is routed through the normal typed-damage resolver so
+    temporary hit points and bludgeoning resistance or immunity retain their
+    normal ordering.
+    """
+
+    if isinstance(distance_ft, bool) or not isinstance(distance_ft, int) or distance_ft < 0:
+        raise CombatEngineError("fall distance must be a non-negative integer number of feet")
+    normalized_ruleset = _normalize_ruleset(ruleset or sheet.get("edition"))
+    if normalized_ruleset != "2014":
+        raise CombatEngineError("falling settlement is only available for the 2014 ruleset")
+    if not str(source or "").strip():
+        raise CombatEngineError("fall source is required")
+
+    dice_count = min(distance_ft // 10, 20)
+    before_conditions = condition_ids(sheet.get("conditions"))
+    if dice_count == 0:
+        return {
+            "sheet": deepcopy(sheet),
+            "distance_ft": distance_ft,
+            "dice_count": 0,
+            "damage_roll": None,
+            "damage": None,
+            "prone_added": False,
+            "knocked_prone": False,
+        }
+
+    damage_roll = asdict(roll(f"{dice_count}d6", rng=rng))
+    applied = apply_damage_to_sheet(
+        sheet,
+        amount=int(damage_roll["total"]),
+        damage_type="bludgeoning",
+        source=str(source),
+        ruleset=normalized_ruleset,
+        death_saves=death_saves,
+    )
+    landed_sheet = applied["sheet"]
+    took_damage = int(applied.get("applied_amount", 0) or 0) > 0
+    prone_added = False
+    if took_damage:
+        apply_condition_change(landed_sheet, condition_id="prone", add=True)
+        prone_added = "prone" not in before_conditions and "prone" in condition_ids(
+            landed_sheet.get("conditions")
+        )
+    return {
+        "sheet": landed_sheet,
+        "distance_ft": distance_ft,
+        "dice_count": dice_count,
+        "damage_roll": damage_roll,
+        "damage": {key: value for key, value in applied.items() if key != "sheet"},
+        "prone_added": prone_added,
+        "knocked_prone": "prone" in condition_ids(landed_sheet.get("conditions")),
+    }
+
+
 def _validated_standard_source_trait(
     sheet: dict[str, Any],
     kind: str,
@@ -5795,9 +6017,19 @@ def spend_movement(
             for item in value.get("pending", [])
             if item.get("status", "pending") == "pending"
         }
-        movement_segments = (
-            list(zip(waypoints, waypoints[1:])) if path is not None else [(origin, target_position)]
-        )
+        if path is not None:
+            movement_segments = list(zip(waypoints, waypoints[1:]))
+        else:
+            # A destination-only request still represents a walk through the
+            # intervening grid cells.  Reconstruct a deterministic straight
+            # route so a creature that enters and then leaves a threat's reach
+            # in one request opens the same reaction window as an explicit path.
+            inferred_waypoints = _inferred_grid_waypoints(origin, target_position)
+            movement_segments = (
+                list(zip(inferred_waypoints, inferred_waypoints[1:]))
+                if inferred_waypoints is not None
+                else [(origin, target_position)]
+            )
         for threat in value.get("combatants", []):
             if not _can_make_opportunity_attack(threat, combatant):
                 continue
@@ -6166,34 +6398,7 @@ def apply_weapon_mastery_to_encounter(
                     existing["ended_reason"] = "replaced_by_slow_mastery"
         value["ongoing_effects"] = [*list(value.get("ongoing_effects") or []), effect]
         if mastery_id == "slow":
-            # Slow changes the target's authoritative speed immediately.  Keep
-            # the source base speed separate so the effect is not subtracted a
-            # second time when the target starts a later turn.
-            budget = dict(target.get("turn_budget") or {})
-            base_speed = int(target.get("base_speed", budget.get("speed", 30)) or 0)
-            active_penalty = max(
-                [
-                    int(item.get("penalty_ft", 0) or 0)
-                    for item in value.get("ongoing_effects", [])
-                    if isinstance(item, dict)
-                    and item.get("active", True)
-                    and item.get("mechanic_id") == "dnd5e.core.weapon.mastery"
-                    and item.get("kind") == "speed_penalty"
-                    and str(item.get("target_id") or "") == target_id
-                ]
-                or [0]
-            )
-            budget["speed"] = max(0, base_speed - active_penalty)
-            spent, extra_granted = _movement_accounting(target)
-            speed_multiplier = float(target.get("speed_multiplier", 1.0) or 0.0)
-            budget["movement"] = max(
-                0,
-                int(budget["speed"] * speed_multiplier)
-                + extra_granted
-                - spent,
-            )
-            target["turn_budget"] = budget
-            reconcile_dodge_lifecycle(target)
+            _refresh_weapon_mastery_speed(value, target)
     elif mastery_id == "cleave":
         if attacker.get("turn_flags", {}).get("weapon_mastery_cleave_used"):
             raise CombatEngineError("Cleave can grant an extra attack only once per turn")
@@ -6600,7 +6805,75 @@ def resolve_common_action(
     elif action == "help":
         if not target_id:
             raise CombatEngineError("help requires a target actor")
-        flags["helping"] = {"target_id": target_id, "payload": deepcopy(payload or {})}
+        if str(target_id) == str(actor_id_value):
+            raise CombatEngineError("Help requires another aided actor")
+        aided = next(
+            (
+                item
+                for item in value.get("combatants", [])
+                if str(item.get("actor_id") or "") == str(target_id)
+            ),
+            None,
+        )
+        if aided is None:
+            raise CombatEngineError("Help requires the aided actor to be in the encounter")
+        declaration = _normalize_help_declaration(payload)
+        helping = {
+            "target_id": str(target_id),
+            "kind": declaration["kind"],
+            "payload": deepcopy(declaration["payload"]),
+            "declared_turn_token": _combat_turn_token(value),
+        }
+        if declaration["kind"] == "attack":
+            attack_target_id = str(declaration["attack_target_id"])
+            if attack_target_id in {str(actor_id_value), str(target_id)}:
+                raise CombatEngineError("attack Help requires a distinct enemy target")
+            attack_target = next(
+                (
+                    item
+                    for item in value.get("combatants", [])
+                    if str(item.get("actor_id") or "") == attack_target_id
+                ),
+                None,
+            )
+            if attack_target is None:
+                raise CombatEngineError("attack Help target must be in the encounter")
+            if str(value.get("positioning_mode") or "grid") == "grid":
+                helper_position = _position(acting.get("position"))
+                target_position = _position(attack_target.get("position"))
+                if helper_position is None or target_position is None:
+                    raise CombatEngineError("attack Help requires recorded grid positions")
+                if _grid_distance(helper_position, target_position) > 5:
+                    raise CombatEngineError(
+                        "attack Help requires the enemy target to be within 5 feet of the helper"
+                    )
+            else:
+                spatial_facts = declaration.get("spatial_facts")
+                if not isinstance(spatial_facts, dict):
+                    raise NeedsRulingError(
+                        "agent-positioned attack Help requires an Agent spatial decision",
+                        missing=("help.spatial_facts",),
+                        ruling_kind="agent_dm_adjudication",
+                    )
+                within = spatial_facts.get("target_within_5_ft")
+                distance = spatial_facts.get("distance_ft")
+                valid_distance = (
+                    isinstance(distance, (int, float))
+                    and not isinstance(distance, bool)
+                    and 0 <= float(distance) <= 5
+                )
+                if within is not True and not valid_distance:
+                    raise CombatEngineError(
+                        "attack Help spatial facts must confirm the enemy is within 5 feet"
+                    )
+            helping["attack_target_id"] = attack_target_id
+            if declaration.get("spatial_facts") is not None:
+                helping["spatial_facts"] = deepcopy(declaration["spatial_facts"])
+        elif declaration["kind"] == "task":
+            for field in ("task", "action", "ability"):
+                if declaration.get(field):
+                    helping[field] = declaration[field]
+        flags["helping"] = helping
     elif action == "stabilize":
         if not target_id:
             raise CombatEngineError("stabilize requires a target actor")
@@ -7231,6 +7504,176 @@ def settle_core_activity_effect(
     return value, effect
 
 
+def settle_hide(
+    encounter: dict[str, Any],
+    *,
+    actor: dict[str, Any],
+    actor_id_value: str,
+    observer_ids: Iterable[str],
+    observer_passive_perceptions: Mapping[str, int],
+    can_hide: bool,
+    ruling_reason: str,
+    rules: ResolutionContext | None = None,
+    rng: Any = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Resolve a paid Cunning Action Hide declaration.
+
+    The activity payment is deliberately not performed here.  The MCP layer
+    pays the bonus action first, then an Agent-as-DM ruling supplies the scene
+    fact that hiding is possible and the explicit creatures whose passive
+    Perception can detect the attempt.  This continuation consumes the
+    declaration once, rolls Dexterity (Stealth) once, and records the
+    resulting observer visibility in the encounter.
+    """
+
+    value = deepcopy(encounter)
+    if not isinstance(actor, dict) or str(
+        actor.get("id") or actor.get("actor_id") or ""
+    ) != actor_id_value:
+        raise CombatEngineError("Hide settlement actor snapshot does not match actor_id")
+    reason = " ".join(str(ruling_reason or "").split())
+    if not reason or len(reason) > 500:
+        raise CombatEngineError("Hide settlement requires a bounded ruling reason")
+    if not isinstance(can_hide, bool):
+        raise CombatEngineError("Hide settlement can_hide must be boolean")
+    current = current_combatant(value)
+    if current is None or str(current.get("actor_id") or "") != actor_id_value:
+        raise CombatEngineError("Hide settlement can be made only on this actor's turn")
+    combatant = next(
+        (
+            item
+            for item in value.get("combatants", [])
+            if str(item.get("actor_id") or "") == actor_id_value
+        ),
+        None,
+    )
+    if combatant is None:
+        raise CombatEngineError("Hide settlement actor is not a combatant")
+    flags = dict(combatant.get("turn_flags") or {})
+    declared = dict(flags.get("hide_declared") or {})
+    if not declared:
+        raise CombatEngineError("no paid Hide declaration is pending for this actor")
+    source_activity_id = str(declared.get("source_activity_id") or "")
+    if source_activity_id not in {
+        "dnd5e.content.srd2014.feature.rogue-cunning-action",
+        "dnd5e.content.srd2024.feature.rogue-cunning-action",
+    }:
+        raise CombatEngineError("pending Hide declaration is not a Cunning Action payment")
+    declaration = dict(declared.get("declaration") or {})
+    selected = str(declaration.get("action") or "").strip().casefold().replace("-", "_")
+    if selected != "hide":
+        raise CombatEngineError("pending Cunning Action declaration is not Hide")
+
+    participant_ids = {
+        str(item.get("actor_id") or "") for item in value.get("combatants", [])
+    }
+    normalized_observers = [str(item or "").strip() for item in observer_ids]
+    if any(not item for item in normalized_observers) or len(normalized_observers) != len(
+        set(normalized_observers)
+    ):
+        raise CombatEngineError("Hide observers must be unique non-empty actor IDs")
+    if actor_id_value in normalized_observers or not set(normalized_observers) <= participant_ids:
+        raise CombatEngineError("Hide observers must be other encounter participants")
+    living_ids = {
+        str(item.get("actor_id") or "")
+        for item in value.get("combatants", [])
+        if "dead" not in _condition_set(item.get("conditions"))
+        and str(item.get("actor_id") or "") != actor_id_value
+    }
+    if not set(normalized_observers) <= living_ids:
+        raise CombatEngineError("Hide observers must be living encounter participants")
+    if set(normalized_observers) != set(observer_passive_perceptions):
+        raise CombatEngineError("Hide observer passive Perception values must match observer IDs")
+    passives: dict[str, int] = {}
+    for observer_id in normalized_observers:
+        value_for_observer = observer_passive_perceptions[observer_id]
+        if isinstance(value_for_observer, bool) or not isinstance(value_for_observer, int):
+            raise CombatEngineError("Hide observer passive Perception must be an integer")
+        passives[observer_id] = int(value_for_observer)
+
+    # The declaration is consumed even when the Agent rules that the scene
+    # does not permit hiding.  No die is rolled in that case.
+    flags.pop("hide_declared", None)
+    combatant["turn_flags"] = flags
+    if not flags:
+        combatant.pop("turn_flags", None)
+    if not can_hide:
+        combatant["hidden"] = False
+        combatant["visible_to_actor_ids"] = None
+        effect = {
+            "kind": "cunning_action_hide",
+            "action": "hide",
+            "can_hide": False,
+            "ruling_reason": reason,
+            "stealth_check": None,
+            "observers": [],
+            "hidden": False,
+            "visible_to_actor_ids": None,
+            "requires_ruling": False,
+        }
+        value["log"] = [
+            *list(value.get("log") or []),
+            {"type": "hide_settlement", "actor_id": actor_id_value, "effect": deepcopy(effect)},
+        ][-100:]
+        return value, effect
+
+    stealth_check = resolve_actor_check(
+        actor,
+        kind="ability",
+        ability="stealth",
+        dc=0,
+        encounter=value,
+        ruleset=str(value.get("ruleset") or "2014"),
+        rules=rules,
+        rng=rng,
+    )
+    stealth_total = int(stealth_check.get("total") or 0)
+    observer_results = [
+        {
+            "observer_id": observer_id,
+            "passive_perception": passives[observer_id],
+            "detected": stealth_total < passives[observer_id],
+        }
+        for observer_id in normalized_observers
+    ]
+    detected_ids = {
+        item["observer_id"] for item in observer_results if item["detected"]
+    }
+    visible_ids = {actor_id_value, *detected_ids}
+    existing_visibility = combatant.get("visible_to_actor_ids")
+    if isinstance(existing_visibility, list):
+        visible_ids.update(str(item) for item in existing_visibility)
+    # A hidden actor is represented by an explicit audience list.  If every
+    # living participant was adjudicated as detecting the attempt, normalize
+    # back to ordinary visibility instead of keeping a contradictory hidden
+    # flag with an all-participant list.
+    all_living_observers = living_ids
+    if all_living_observers and all_living_observers <= visible_ids:
+        combatant["hidden"] = False
+        combatant["visible_to_actor_ids"] = None
+        normalized_visible_ids: list[str] | None = None
+    else:
+        combatant["hidden"] = True
+        normalized_visible_ids = sorted(visible_ids)
+        combatant["visible_to_actor_ids"] = normalized_visible_ids
+    effect = {
+        "kind": "cunning_action_hide",
+        "action": "hide",
+        "can_hide": True,
+        "ruling_reason": reason,
+        "stealth_check": stealth_check,
+        "observers": observer_results,
+        "hidden": bool(combatant["hidden"]),
+        "visible_to_actor_ids": normalized_visible_ids,
+        "requires_ruling": False,
+    }
+    value["log"] = [
+        *list(value.get("log") or []),
+        {"type": "hide_settlement", "actor_id": actor_id_value, "effect": deepcopy(effect)},
+    ][-100:]
+    return value, effect
+
+
 def resolve_second_wind_to_sheet(sheet: dict[str, Any], *, rng: Any = None) -> dict[str, Any]:
     """Roll and apply the 2014/2024 Fighter's canonical Second Wind healing."""
     value = deepcopy(sheet)
@@ -7517,6 +7960,116 @@ def resolve_preserve_life_to_sheets(
         "allocated": total,
         "remaining_unallocated": pool - total,
         "targets": results,
+    }
+
+
+def resolve_lay_on_hands_to_sheets(
+    source_sheet: dict[str, Any],
+    target_sheet: dict[str, Any],
+    *,
+    mode: str,
+    amount: int | None = None,
+    effect_id: str | None = None,
+) -> dict[str, Any]:
+    """Settle the source-bound 2014 Paladin Lay on Hands pool.
+
+    The pool is five points per recorded Paladin level.  Healing spends the
+    player-selected number of points; curing spends exactly five and ends one
+    source-owned poison or disease effect without touching overlapping effects.
+    """
+    source = validate_character_sheet(source_sheet)
+    target = validate_character_sheet(target_sheet)
+    if _normalize_ruleset(source.get("edition")) != "2014":
+        raise CombatEngineError("Lay on Hands is available only under the 2014 rules")
+    feature = next(
+        (
+            item
+            for item in source.get("content", {}).get("features", [])
+            if (
+                str(item.get("id") or "").endswith("paladin-lay-on-hands")
+                or "dnd5e.core.activity.lay_on_hands"
+                in {str(ref) for ref in item.get("mechanic_refs", [])}
+            )
+            and str(item.get("source_key") or "").casefold() in {"", "paladin"}
+        ),
+        None,
+    )
+    if feature is None:
+        raise CombatEngineError("source actor does not have source-bound Lay on Hands")
+    paladin_level = sum(
+        int(item.get("level", 0) or 0)
+        for item in source.get("progression", {}).get("classes", [])
+        if str(item.get("name") or "").strip().casefold() == "paladin"
+    )
+    if paladin_level < 1:
+        raise CombatEngineError("Lay on Hands requires a recorded Paladin class level")
+    maximum = paladin_level * 5
+    resource = dict(source.get("resources", {}).get("lay_on_hands") or {})
+    if not resource or int(resource.get("max", 0) or 0) != maximum:
+        raise CombatEngineError("Lay on Hands resource does not match five times Paladin level")
+    remaining = int(resource.get("value", 0) or 0)
+    normalized_mode = str(mode or "").strip().casefold()
+    if normalized_mode not in {"heal", "cure"}:
+        raise CombatEngineError("Lay on Hands mode must be heal or cure")
+    creature_type = str(
+        target.get("creature_type")
+        or target.get("progression", {}).get("creature_type")
+        or target.get("progression", {}).get("species")
+        or ""
+    ).strip().casefold()
+    if "undead" in creature_type or "construct" in creature_type:
+        raise CombatEngineError("Lay on Hands has no effect on Undead or Constructs")
+    if normalized_mode == "heal":
+        if isinstance(amount, bool) or not isinstance(amount, int) or amount < 1:
+            raise CombatEngineError("Lay on Hands healing amount must be a positive integer")
+        hp = dict(target.get("combat", {}).get("hp") or {})
+        missing = max(0, int(hp.get("max", 0) or 0) - int(hp.get("value", 0) or 0))
+        if amount > missing:
+            raise CombatEngineError("Lay on Hands healing cannot exceed missing hit points")
+        if amount > remaining:
+            raise CombatEngineError("Lay on Hands pool is exhausted")
+        settled = apply_healing_to_sheet(target, amount=amount)
+        source["resources"]["lay_on_hands"]["value"] = remaining - amount
+        return {
+            "source_sheet": validate_character_sheet(source),
+            "target_sheet": validate_character_sheet(settled["sheet"]),
+            "kind": "lay_on_hands",
+            "mode": "heal",
+            "paladin_level": paladin_level,
+            "pool_max": maximum,
+            "pool_spent": amount,
+            "pool_remaining": remaining - amount,
+            "healing": {key: value for key, value in settled.items() if key != "sheet"},
+        }
+    if effect_id is None or not str(effect_id).strip():
+        raise CombatEngineError("Lay on Hands cure requires one poison or disease effect id")
+    if remaining < 5:
+        raise CombatEngineError("Lay on Hands requires five pool points to cure an effect")
+    effects = target.get("effects", [])
+    effect = next((item for item in effects if str(item.get("id") or "") == str(effect_id)), None)
+    if effect is None or not effect.get("active", False):
+        raise CombatEngineError("Lay on Hands cure effect is not active")
+    kind = str(effect.get("kind") or "").strip().casefold()
+    metadata = dict(effect.get("metadata") or {})
+    source_kind = str(metadata.get("source_kind") or effect.get("source_kind") or "").casefold()
+    if kind not in {"poison", "disease"} and source_kind not in {"poison", "disease"}:
+        raise CombatEngineError("Lay on Hands can cure only a poison or disease effect")
+    ended = deepcopy(effect)
+    effect["active"] = False
+    effect["ended_reason"] = "neutralized_by_lay_on_hands"
+    reconcile_ended_effect_conditions(target, ended_effects=[ended])
+    source["resources"]["lay_on_hands"]["value"] = remaining - 5
+    return {
+        "source_sheet": validate_character_sheet(source),
+        "target_sheet": validate_character_sheet(target),
+        "kind": "lay_on_hands",
+        "mode": "cure",
+        "paladin_level": paladin_level,
+        "pool_max": maximum,
+        "pool_spent": 5,
+        "pool_remaining": remaining - 5,
+        "cured_effect_id": str(effect_id),
+        "cured_kind": "disease" if kind == "disease" or source_kind == "disease" else "poison",
     }
 
 
@@ -7890,6 +8443,7 @@ def resolve_actor_check(
     *,
     kind: str,
     ability: str,
+    action: str | None = None,
     dc: int,
     encounter: dict[str, Any] | None = None,
     proficient: bool = False,
@@ -8152,9 +8706,28 @@ def resolve_actor_check(
     if jack_of_all_trades_bonus:
         boundary_ids.append(_JACK_OF_ALL_TRADES_BOUNDARY_ID)
 
+    normalized_action = str(action or "").strip().casefold().replace("-", "_")
+    if not normalized_action and rules is not None:
+        normalized_action = str(dict(rules.facts).get("action") or "").strip().casefold()
+    helped_by = None
+    if kind in ABILITY_CHECK_KINDS:
+        helped_by = _task_help_for_check(
+            encounter,
+            actor_id_value=actor_id(actor),
+            action=normalized_action,
+            ability=normalized_ability,
+        )
+        if helped_by:
+            advantage = True
+            boundary_ids.append("dnd5e.core.check.help")
+
     def with_rule_receipts(result: dict[str, Any]) -> dict[str, Any]:
         result["effect_roll_bonus"] = effect_roll_bonus
         result["equipment_disadvantage"] = equipment_disadvantage
+        if helped_by:
+            result["helped_by"] = helped_by
+            result["advantage_source"] = "help"
+            result["advantage_sources"] = ["help"]
         result["rule_receipts"] = [
             *core_receipts(rules, boundary_ids, "check.resolve"),
             *extension.receipts,
@@ -8837,6 +9410,7 @@ def end_turn(
     next_actor = current_combatant(value)
     if next_actor:
         next_actor_id = str(next_actor.get("actor_id") or "")
+        expired_speed_targets: set[str] = set()
         for effect in value.get("ongoing_effects", []):
             if (
                 isinstance(effect, dict)
@@ -8849,6 +9423,11 @@ def end_turn(
             ):
                 effect["active"] = False
                 effect["ended_reason"] = "source_turn_start"
+                if effect.get("kind") == "speed_penalty":
+                    expired_speed_targets.add(str(effect.get("target_id") or ""))
+        for combatant in value.get("combatants", []):
+            if str(combatant.get("actor_id") or "") in expired_speed_targets:
+                _refresh_weapon_mastery_speed(value, combatant)
         legendary_actions = dict(next_actor.get("legendary_actions") or {})
         if legendary_actions:
             legendary_actions["remaining"] = int(legendary_actions.get("maximum", 0) or 0)
@@ -8871,31 +9450,10 @@ def end_turn(
             if item.get("actor_id") != next_actor.get("actor_id")
         ]
         budget = dict(next_actor.get("turn_budget") or {})
-        slow_penalty = max(
-            [
-                int(effect.get("penalty_ft", 0) or 0)
-                for effect in value.get("ongoing_effects", [])
-                if isinstance(effect, dict)
-                and effect.get("active", True)
-                and effect.get("mechanic_id") == "dnd5e.core.weapon.mastery"
-                and effect.get("kind") == "speed_penalty"
-                and str(effect.get("target_id") or "") == next_actor_id
-            ]
-            or [0]
-        )
-        recorded_base_speed = next_actor.get("base_speed", budget.get("speed"))
-        base_turn_speed = int(30 if recorded_base_speed is None else recorded_base_speed)
-        recorded_speed_multiplier = next_actor.get("speed_multiplier")
-        speed_multiplier = float(
-            1.0 if recorded_speed_multiplier is None else recorded_speed_multiplier
-        )
-        effective_turn_speed = max(0, base_turn_speed - slow_penalty)
         budget.update(
             main_action=1,
             bonus_action=1,
             reaction=1,
-            speed=effective_turn_speed,
-            movement=int(effective_turn_speed * speed_multiplier),
             movement_spent=0,
             extra_movement_granted=0,
             object_interaction=1,
@@ -8910,6 +9468,9 @@ def end_turn(
             next_flags[_TORTLE_SHELL_DEFENSE_FLAG] = next_shell_flag
             next_actor["turn_flags"] = next_flags
             budget["reaction"] = 0
+        next_actor["turn_budget"] = budget
+        _refresh_weapon_mastery_speed(value, next_actor)
+        budget = next_actor["turn_budget"]
         if next_actor.get("surprised") and _normalize_ruleset(value.get("ruleset")) == "2014":
             budget.update(
                 main_action=0,
@@ -8917,7 +9478,7 @@ def end_turn(
                 movement=0,
                 reaction=0,
                 object_interaction=0,
-                movement_spent=int(effective_turn_speed * speed_multiplier),
+                movement_spent=budget["movement"],
             )
         next_actor["turn_budget"] = budget
         _begin_dependent_turn(value, next_actor)
@@ -8975,9 +9536,185 @@ def _position(value: Any) -> tuple[float, float] | None:
         return None
 
 
+def _inferred_grid_waypoints(
+    origin: tuple[float, float], target: tuple[float, float]
+) -> list[tuple[float, float]] | None:
+    """Reconstruct a straight one-cell-at-a-time route for a destination-only move.
+
+    Grid movement stores cell coordinates while ``_grid_distance`` accepts
+    floating-point values for backwards compatibility.  Only infer a route
+    when both deltas are integral cell counts; otherwise the caller retains
+    the historical single-segment behavior rather than inventing geometry.
+    """
+    delta_x = target[0] - origin[0]
+    delta_y = target[1] - origin[1]
+    steps = int(max(abs(delta_x), abs(delta_y)))
+    if steps <= 0:
+        return [origin, target]
+    if (
+        abs(delta_x - round(delta_x)) > 1e-9
+        or abs(delta_y - round(delta_y)) > 1e-9
+    ):
+        return None
+    return [
+        (
+            round(origin[0] + delta_x * index / steps),
+            round(origin[1] + delta_y * index / steps),
+        )
+        for index in range(steps + 1)
+    ]
+
+
 def _grid_distance(left: tuple[float, float], right: tuple[float, float]) -> int:
     """Use the D&D diagonal-grid convention: one square is five feet."""
     return int(max(abs(left[0] - right[0]), abs(left[1] - right[1])) * 5)
+
+
+def _normalize_help_declaration(payload: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalize the two 2014 Help declarations without guessing narrative facts.
+
+    ``target_id`` on the common-action request is always the aided ally.  An
+    attack declaration carries a second target in its payload; a task
+    declaration carries the check context that it may assist.  Empty payloads
+    are retained as a compatibility form for older encounter snapshots.
+    """
+
+    raw = deepcopy(payload or {})
+    if not isinstance(raw, dict):
+        raise CombatEngineError("help payload must be an object")
+    if not raw:
+        return {"kind": "legacy", "payload": {}}
+    kind = str(raw.get("kind") or raw.get("mode") or "").strip().casefold().replace("-", "_")
+    kind = {
+        "attack_help": "attack",
+        "ability_check": "task",
+        "task_help": "task",
+    }.get(kind, kind)
+    if kind not in {"attack", "task"}:
+        raise CombatEngineError("help payload requires kind=attack or kind=task")
+    if kind == "attack":
+        target_values = [
+            raw.get(field)
+            for field in ("attack_target_id", "enemy_target_id", "target_id")
+            if raw.get(field) is not None
+        ]
+        if (
+            len(target_values) != 1
+            or not isinstance(target_values[0], str)
+            or not target_values[0].strip()
+        ):
+            raise CombatEngineError(
+                "attack Help requires exactly one attack_target_id (the enemy target)"
+            )
+        return {
+            "kind": "attack",
+            "attack_target_id": target_values[0].strip(),
+            "spatial_facts": deepcopy(raw.get("spatial_facts")),
+            "payload": raw,
+        }
+    task_value = raw.get("task")
+    task_text = ""
+    task_action = raw.get("action")
+    task_ability = raw.get("ability")
+    if isinstance(task_value, dict):
+        task_action = task_value.get("action", task_action)
+        task_ability = task_value.get("ability", task_ability)
+        task_text = str(task_value.get("name") or task_value.get("task") or "").strip()
+    elif task_value is not None:
+        task_text = str(task_value).strip()
+    normalized_action = (
+        str(task_action).strip().casefold().replace("-", "_") if task_action is not None else ""
+    )
+    normalized_ability = (
+        str(task_ability).strip().casefold().replace(" ", "_")
+        if task_ability is not None
+        else ""
+    )
+    if not normalized_action and not normalized_ability and not task_text:
+        raise CombatEngineError("task Help requires a task, action, or ability")
+    return {
+        "kind": "task",
+        "task": task_text,
+        "action": normalized_action,
+        "ability": normalized_ability,
+        "payload": raw,
+    }
+
+
+def _task_help_matches(
+    helping: dict[str, Any], *, action: str | None, ability: str
+) -> bool:
+    """Return whether one recorded task Help applies to this check."""
+
+    task_action = str(helping.get("action") or "").strip().casefold().replace("-", "_")
+    task_ability = str(helping.get("ability") or "").strip().casefold().replace(" ", "_")
+    task_text = str(helping.get("task") or "").strip().casefold().replace(" ", "_")
+    normalized_action = str(action or "").strip().casefold().replace("-", "_")
+    normalized_ability = str(ability or "").strip().casefold().replace(" ", "_")
+    if task_action and task_action != normalized_action:
+        return False
+    if task_ability and _long_ability_name(task_ability) != _long_ability_name(normalized_ability):
+        return False
+    if task_text and task_text not in {normalized_action, normalized_ability}:
+        return False
+    return bool(task_action or task_ability or task_text)
+
+
+def _task_help_for_check(
+    encounter: dict[str, Any] | None,
+    *,
+    actor_id_value: str,
+    action: str | None,
+    ability: str,
+) -> str | None:
+    """Find the first conscious helper whose task declaration matches."""
+
+    if encounter is None:
+        return None
+    for helper in encounter.get("combatants", []):
+        helping = dict(helper.get("turn_flags") or {}).get("helping")
+        if (
+            not isinstance(helping, dict)
+            or str(helping.get("kind") or "") != "task"
+            or str(helping.get("target_id") or "") != str(actor_id_value)
+            or _condition_set(helper.get("conditions")) & INCAPACITATING_STATE_IDS
+            or not _task_help_matches(helping, action=action, ability=ability)
+        ):
+            continue
+        return str(helper.get("actor_id") or "")
+    return None
+
+
+def consume_task_help(
+    encounter: dict[str, Any], *, actor_id_value: str, helper_id: str
+) -> dict[str, Any]:
+    """Consume one matched task Help declaration on a copy of an encounter."""
+
+    value = deepcopy(encounter)
+    helper = next(
+        (
+            item
+            for item in value.get("combatants", [])
+            if str(item.get("actor_id") or "") == str(helper_id)
+        ),
+        None,
+    )
+    if helper is None:
+        raise CombatEngineError("the recorded Help helper is not in the encounter")
+    helping = dict(helper.get("turn_flags") or {}).get("helping")
+    if (
+        not isinstance(helping, dict)
+        or str(helping.get("kind") or "") != "task"
+        or str(helping.get("target_id") or "") != str(actor_id_value)
+    ):
+        raise CombatEngineError("the recorded task Help declaration no longer matches")
+    flags = dict(helper.get("turn_flags") or {})
+    flags.pop("helping", None)
+    if flags:
+        helper["turn_flags"] = flags
+    else:
+        helper.pop("turn_flags", None)
+    return value
 
 
 def _disengaged(combatant: dict[str, Any]) -> bool:

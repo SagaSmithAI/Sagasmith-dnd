@@ -2694,6 +2694,164 @@ def test_cunning_action_dash_uses_bonus_action_and_current_effective_speed(
     asyncio.run(exercise())
 
 
+def test_cunning_action_hide_resolves_paid_declaration_with_passive_perception(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        config = _config(tmp_path)
+        server = create_server(config)
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Cunning Hide", "edition": "2014", "idempotency_key": "campaign"},
+        )
+        activity_id = "dnd5e.content.srd2014.feature.rogue-cunning-action"
+
+        rogue_sheet = default_character_sheet()
+        rogue_sheet["progression"]["level"] = 2
+        rogue_sheet["progression"]["classes"] = [
+            {"name": "Rogue", "level": 2, "subclass": "", "hit_die": 8}
+        ]
+        rogue_sheet["abilities"]["dexterity"]["score"] = 18
+        rogue_sheet["content"]["features"] = [
+            {
+                "id": activity_id,
+                "name": "Cunning Action",
+                "source_key": "Rogue",
+                "description": "Dash, Disengage, or Hide as a bonus action.",
+                "uses": {
+                    "label": "",
+                    "value": 0,
+                    "max": 0,
+                    "unlimited": True,
+                    "recovers_on": "none",
+                },
+                "resource_key": "",
+                "activation": {"type": "bonus_action", "cost": 1, "trigger": ""},
+                "scaling": [],
+                "choices": {"options": ["Dash", "Disengage", "Hide"]},
+            }
+        ]
+        observer_sheet = default_character_sheet()
+        observer_sheet["traits"]["senses"]["passive_perception_bonus"] = 5
+        low_observer_sheet = default_character_sheet()
+
+        async def create(name: str, sheet: dict) -> dict:
+            return await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {"campaign_id": campaign["id"], "name": name, "sheet": sheet},
+                    "principal_id": "system:local",
+                    "idempotency_key": name,
+                },
+            )
+
+        rogue = await create("rogue", rogue_sheet)
+        observer = await create("observer", observer_sheet)
+        low_observer = await create("low-observer", low_observer_sheet)
+        campaign = await _call(
+            server,
+            "campaign_query",
+            {
+                "view": "get",
+                "payload": {"campaign_id": campaign["id"]},
+                "principal_id": "system:local",
+            },
+        )
+        started = await _call_raw(
+            server,
+            "combat_start",
+            {
+                "positioning_mode": "grid",
+                "battle_map": {"width_cells": 8, "height_cells": 4},
+                "campaign_id": campaign["id"],
+                "participant_ids": [rogue["id"], observer["id"], low_observer["id"]],
+                "participant_config": [
+                    {
+                        "actor_id": rogue["id"],
+                        "initiative": 20,
+                        "position": {"x": 0, "y": 0},
+                    },
+                    {
+                        "actor_id": observer["id"],
+                        "initiative": 10,
+                        "position": {"x": 1, "y": 0},
+                    },
+                    {
+                        "actor_id": low_observer["id"],
+                        "initiative": 5,
+                        "position": {"x": 2, "y": 0},
+                    },
+                ],
+                "expected_revision": campaign["revision"],
+                "idempotency_key": "start",
+            },
+        )
+        paid = await _call_raw(
+            server,
+            "combat_use_activity",
+            {
+                "campaign_id": campaign["id"],
+                "actor_id": rogue["id"],
+                "activity_id": activity_id,
+                "declaration": {"action": "hide", "cover": "larger ally"},
+                "expected_revision": started["campaign_revision"],
+                "idempotency_key": "hide-payment",
+            },
+        )
+        assert paid["status"] == "pending_ruling"
+        assert paid["result"]["core_effect"]["requires_ruling"] is True
+        assert (
+            paid["combat"]["combatants"][paid["combat"]["turn_index"]]["turn_budget"][
+                "bonus_action"
+            ]
+            == 0
+        )
+
+        settled = await _call_raw(
+            server,
+            "combat_resolve_hide",
+            {
+                "campaign_id": campaign["id"],
+                "actor_id": rogue["id"],
+                "ruling": {
+                    "can_hide": True,
+                    "reason": "The rogue is obscured behind the larger ally.",
+                    "observers": [observer["id"], low_observer["id"]],
+                },
+                "expected_revision": paid["campaign_revision"],
+                "idempotency_key": "hide-settlement",
+            },
+        )
+        assert settled["status"] == "committed"
+        effect = settled["result"]["core_effect"]
+        assert effect["stealth_check"]["kind"] == "ability"
+        assert len(effect["stealth_check"]["rolls"]) == 1
+        assert settled["result"]["payment"]["already_paid"] is True
+        assert "hide_declared" not in settled["combat"]["combatants"][0].get("turn_flags", {})
+        assert settled["random_stream_receipt"]["draw_count"] == 1
+        assert settled["random_stream_receipt"]["position_after"] == 1
+        assert await _call_raw(
+            server,
+            "combat_resolve_hide",
+            {
+                "campaign_id": campaign["id"],
+                "actor_id": rogue["id"],
+                "ruling": {
+                    "can_hide": True,
+                    "reason": "The rogue is obscured behind the larger ally.",
+                    "observers": [observer["id"], low_observer["id"]],
+                },
+                "expected_revision": paid["campaign_revision"],
+                "idempotency_key": "hide-settlement",
+            },
+        ) == settled
+
+    asyncio.run(exercise())
+
+
 def test_srd_orc_preset_aggressive_settles_and_spends_a_separate_grant(
     tmp_path: Path,
 ) -> None:

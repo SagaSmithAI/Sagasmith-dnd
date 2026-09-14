@@ -30,7 +30,7 @@ def _server(tmp_path: Path):
 def test_every_public_tool_has_model_usable_contract_metadata(tmp_path: Path) -> None:
     async def exercise() -> None:
         tools = await _server(tmp_path).list_tools()
-        assert len(tools) == 78
+        assert len(tools) == 79
         for tool in tools:
             assert tool.description.strip(), tool.name
             properties = tool.input_schema.get("properties") or {}
