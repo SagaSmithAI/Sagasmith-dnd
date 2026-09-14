@@ -1942,6 +1942,29 @@ def _effective_speed_ft(
     return max(0, int(base_speed * speed_multiplier))
 
 
+def _current_turn_effective_speed_ft(combatant: dict[str, Any]) -> int:
+    """Return the effective walking speed recorded for the current turn.
+
+    ``speed_modes`` stores the character's base travel speeds, while the turn
+    budget's ``speed`` is the authoritative value after encounter-scoped
+    penalties (such as Weapon Mastery Slow).  Dodge lifecycle checks must use
+    the latter or a temporary penalty that reaches zero would leave Dodge
+    active until the next turn.
+    """
+
+    if _condition_set(combatant.get("conditions")) & {"grappled", "restrained"}:
+        return 0
+    budget = dict(combatant.get("turn_budget") or {})
+    if "speed" not in budget:
+        return _effective_speed_ft(combatant)
+    recorded_speed = max(0, int(budget.get("speed", 0) or 0))
+    recorded_speed_multiplier = combatant.get("speed_multiplier")
+    speed_multiplier = float(
+        1.0 if recorded_speed_multiplier is None else recorded_speed_multiplier
+    )
+    return max(0, int(recorded_speed * speed_multiplier))
+
+
 def dodge_benefit_active(combatant: dict[str, Any]) -> bool:
     """Return whether an encounter combatant still has its current Dodge benefit.
 
@@ -1956,7 +1979,7 @@ def dodge_benefit_active(combatant: dict[str, Any]) -> bool:
         return False
     if _condition_set(combatant.get("conditions")) & INCAPACITATING_STATE_IDS:
         return False
-    return _effective_speed_ft(combatant) > 0
+    return _current_turn_effective_speed_ft(combatant) > 0
 
 
 def reconcile_dodge_lifecycle(combatant: dict[str, Any]) -> dict[str, Any]:
@@ -1977,7 +2000,7 @@ def reconcile_dodge_lifecycle(combatant: dict[str, Any]) -> dict[str, Any]:
     ended_reason = None
     if conditions & INCAPACITATING_STATE_IDS:
         ended_reason = "incapacitated"
-    elif _effective_speed_ft(combatant) <= 0:
+    elif _current_turn_effective_speed_ft(combatant) <= 0:
         ended_reason = "speed_zero"
     if ended_reason is None:
         return {
