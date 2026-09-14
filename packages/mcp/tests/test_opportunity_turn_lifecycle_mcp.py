@@ -226,6 +226,7 @@ def test_opportunity_help_is_consumed_on_hit_or_miss_and_sneak_attack_resets_eac
                         "actor_id": helper["id"],
                         "target_id": rogue["id"],
                         "action": "help",
+                        "payload": {"kind": "attack", "target_id": mover["id"]},
                         "expected_revision": started["campaign_revision"],
                         "idempotency_key": "help",
                     },
