@@ -308,3 +308,81 @@ def test_public_2014_chase_start_applies_the_same_initiative_contract(
             close_server(server)
 
     asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("edition", ["2014", "2024"])
+def test_public_combat_start_rolls_declared_initiative_groups_once_and_replays(
+    tmp_path: Path, edition: str
+) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path, tmp_path))
+        try:
+            campaign = await _call(server, "campaign_create", {
+                "name": f"Grouped initiative {edition}",
+                "edition": edition,
+                "random_seed": f"grouped-initiative-{edition}",
+                "idempotency_key": "campaign",
+            })
+            campaign_id = campaign["id"]
+            group_sheet = _sheet("ordinary")
+            group_sheet["edition"] = edition
+            group_sheet["abilities"]["dexterity"]["score"] = 14
+            solo_sheet = _sheet("ordinary")
+            solo_sheet["edition"] = edition
+            solo_sheet["abilities"]["dexterity"]["score"] = 12
+            first = await _create_actor(server, campaign_id, "group-a", group_sheet)
+            second = await _create_actor(server, campaign_id, "group-b", group_sheet)
+            solo = await _create_actor(server, campaign_id, "solo", solo_sheet)
+            current = await _snapshot(server, campaign_id)
+            phase = await _call(server, "game_phase", {
+                "campaign_id": campaign_id,
+                "action": "set",
+                "tool_profile": "play",
+                "expected_revision": current["revision"],
+                "idempotency_key": "play",
+            })
+            start_args = {
+                "campaign_id": campaign_id,
+                "positioning_mode": "agent",
+                "participant_ids": [first["id"], second["id"], solo["id"]],
+                "participant_config": [
+                    {
+                        "actor_id": first["id"],
+                        "initiative_group_id": "goblins",
+                        "tie_breaker": 2,
+                    },
+                    {
+                        "actor_id": second["id"],
+                        "initiative_group_id": "goblins",
+                        "tie_breaker": 1,
+                    },
+                    {"actor_id": solo["id"], "tie_breaker": 0},
+                ],
+                "expected_revision": phase["campaign_revision"],
+                "idempotency_key": "start",
+            }
+            before = await _snapshot(server, campaign_id)
+            stream = CampaignRandomStream.from_campaign_state(
+                campaign_id,
+                before["state"],
+                operation="combat_start",
+                idempotency_key="start",
+                campaign_revision=before["revision"],
+            )
+            with use_random_stream(stream):
+                result = await _raw(server, "combat_start", start_args)
+            after = await _snapshot(server, campaign_id)
+            assert stream.draw_count == 2
+            roster = after["state"]["combat"]["combatants"]
+            grouped = [item for item in roster if item.get("initiative_group_id") == "goblins"]
+            assert len(grouped) == 2
+            assert grouped[0]["initiative"] == grouped[1]["initiative"]
+            assert grouped[0]["initiative_roll"] == grouped[1]["initiative_roll"]
+            assert after["state"]["random_stream"]["position"] == 2
+            assert after["state"]["random_stream"]["last_receipt"]["draw_count"] == 2
+            assert await _raw(server, "combat_start", start_args) == result
+            assert await _snapshot(server, campaign_id) == after
+        finally:
+            close_server(server)
+
+    asyncio.run(exercise())
