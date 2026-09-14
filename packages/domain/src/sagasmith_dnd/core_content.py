@@ -916,6 +916,26 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
                 "unarmored_base": 13,
             }
         }
+    if key == ("paladin", "divine health"):
+        return {"mechanical_grants": {"condition_immunities": ["disease"]}}
+    if key == ("monk", "purity of body"):
+        return {
+            "mechanical_grants": {
+                "immunities": ["poison"],
+                "condition_immunities": ["disease", "poisoned"],
+            }
+        }
+    if key == ("druid", "nature's ward"):
+        return {
+            "mechanical_grants": {
+                "immunities": ["poison"],
+                "condition_immunities": ["disease", "poisoned"],
+                "conditional_condition_immunities": {
+                    "charmed": ["elemental", "fey"],
+                    "frightened": ["elemental", "fey"],
+                },
+            }
+        }
     if title.casefold() == "fighting style":
         options = [name for name, _ in _h4_sections(body)]
         return {
