@@ -80,6 +80,8 @@ jobs:
         run: >-
           python skills/dnd-module-generator/scripts/validate_skill.py
           skills/dnd-module-generator
+      - name: Test portable module ingestion
+        run: python -m unittest discover -s skills/tests
 
   ui:
     runs-on: ubuntu-latest
