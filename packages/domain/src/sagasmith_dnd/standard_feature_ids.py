@@ -52,6 +52,7 @@ TORTLE_NATURAL_ARMOR_AUTHORITY_KEY = "sagasmith.official_expansion_authority"
 CORE_ORC_AGGRESSIVE_MECHANIC_ID = "dnd5e.core.activity.orc_aggressive"
 ORC_AGGRESSIVE_ACTIVITY_ID = "aggressive-bonus_action"
 CORE_RELENTLESS_ENDURANCE_MECHANIC_ID = "dnd5e.core.damage.relentless_endurance"
+CORE_UNCANNY_DODGE_MECHANIC_ID = "dnd5e.core.reaction.uncanny_dodge"
 CORE_SUFFOCATION_MECHANIC_ID = "dnd5e.core.environment.suffocation"
 TORTLE_HOLD_BREATH_LEGACY_PACK_ID = TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID
 # Addon archive 1.0.1 contains the immutable rule definition at version 1.0.0.
@@ -77,6 +78,7 @@ __all__ = [
     "CORE_DWARF_HEAVY_ARMOR_SPEED_MECHANIC_ID",
     "CORE_ORC_AGGRESSIVE_MECHANIC_ID",
     "CORE_RELENTLESS_ENDURANCE_MECHANIC_ID",
+    "CORE_UNCANNY_DODGE_MECHANIC_ID",
     "CORE_TORTLE_NATURAL_ARMOR_MECHANIC_ID",
     "CORE_SUFFOCATION_MECHANIC_ID",
     "CORE_WATCHERS_EYE_MECHANIC_ID",

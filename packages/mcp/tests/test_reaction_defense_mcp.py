@@ -363,6 +363,197 @@ def test_public_attack_pauses_for_parry_before_damage(tmp_path: Path, monkeypatc
     asyncio.run(exercise())
 
 
+def test_uncanny_dodge_reaction_halves_damage_atomically(tmp_path: Path, monkeypatch) -> None:
+    config = McpConfig(
+        home=tmp_path / "home",
+        database_url=None,
+        chroma_url=None,
+        chroma_path_override=None,
+        dnd_skills_dir=tmp_path / "dnd",
+        modulegen_skills_dir=tmp_path / "modulegen",
+        auto_seed_rules=False,
+    )
+
+    def deterministic_attack(*, plan):
+        return engine_roll_attack_action(plan=plan, rng=random.Random(0))
+
+    monkeypatch.setattr(server_module, "roll_attack_action", deterministic_attack)
+
+    async def call(server, name: str, arguments: dict):
+        _, result = await server.call_tool(name, arguments)
+        return result.get("result", result) if isinstance(result, dict) else result
+
+    async def call_raw(server, name: str, arguments: dict):
+        _, result = await server.call_tool(name, arguments)
+        return result["result"] if isinstance(result, dict) and "action" in result else result
+
+    async def exercise() -> None:
+        server = create_server(config)
+        campaign = await call(
+            server,
+            "campaign_create",
+            {"name": "Uncanny Dodge", "edition": "2014", "idempotency_key": "uncanny-campaign"},
+        )
+        attacker_sheet = default_character_sheet()
+        attacker_sheet["abilities"]["strength"]["score"] = 16
+        attacker_sheet["inventory"]["items"] = [
+            {
+                "id": "longsword",
+                "name": "Longsword",
+                "kind": "weapon",
+                "equipped": True,
+                "equipped_slot": "main_hand",
+                "mechanics": {
+                    "attack_type": "melee",
+                    "attack_ability": "strength",
+                    "damage_formula": "1d8",
+                    "damage_type": "slashing",
+                    "properties": ["versatile"],
+                },
+            }
+        ]
+        attacker_sheet["inventory"]["equipment_slots"]["main_hand"] = "longsword"
+        attacker = await call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "name": "Attacker",
+                    "sheet": attacker_sheet,
+                },
+                "principal_id": "system:local",
+                "idempotency_key": "uncanny-attacker",
+            },
+        )
+        target_sheet = default_character_sheet()
+        target_sheet["combat"]["hp"] = {"value": 20, "max": 20, "temp": 0}
+        target_sheet["combat"]["ac"]["override"] = 1
+        target_sheet["progression"] = {
+            "level": 5,
+            "classes": [{"name": "Rogue", "level": 5, "hit_die": 8}],
+        }
+        target_sheet["content"]["features"] = [
+            {
+                "id": "dnd5e.content.srd2014.feature.rogue-uncanny-dodge",
+                "name": "Uncanny Dodge",
+                "source_key": "Rogue",
+                "description": "Uncanny Dodge source text",
+                "activation": {"type": "reaction", "cost": 0, "trigger": "attack.after_hit"},
+                "choices": {
+                    "source_trait": {
+                        "kind": "uncanny_dodge",
+                        "trigger": "attacker_visible_hits_with_attack",
+                        "damage_outcome": "half",
+                        "automatic": True,
+                        "source_excerpt": "Uncanny Dodge source text",
+                    }
+                },
+                "mechanic_refs": ["dnd5e.core.reaction.uncanny_dodge"],
+            }
+        ]
+        target = await call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {"campaign_id": campaign["id"], "name": "Rogue", "sheet": target_sheet},
+                "principal_id": "system:local",
+                "idempotency_key": "uncanny-target",
+            },
+        )
+        phase = await call(
+            server,
+            "game_phase",
+            {
+                "campaign_id": campaign["id"],
+                "action": "set",
+                "tool_profile": "play",
+                "expected_revision": campaign["revision"],
+                "idempotency_key": "uncanny-play",
+            },
+        )
+        started = await call(
+            server,
+            "combat_start",
+            {
+                "positioning_mode": "grid",
+                "battle_map": {"width_cells": 12, "height_cells": 12},
+                "campaign_id": campaign["id"],
+                "participant_ids": [attacker["id"], target["id"]],
+                "participant_config": [
+                    {
+                        "actor_id": attacker["id"],
+                        "initiative": 20,
+                        "position": {"x": 0, "y": 0},
+                        "disposition": "hostile",
+                    },
+                    {
+                        "actor_id": target["id"],
+                        "initiative": 10,
+                        "position": {"x": 1, "y": 0},
+                        "disposition": "friendly",
+                    },
+                ],
+                "expected_revision": phase["campaign_revision"],
+                "idempotency_key": "uncanny-start",
+            },
+        )
+        rolled = await call_raw(
+            server,
+            "combat_resolve_attack",
+            {
+                "campaign_id": campaign["id"],
+                "actor_id": attacker["id"],
+                "target_id": target["id"],
+                "action": {"weapon_id": "longsword"},
+                "expected_revision": started["campaign_revision"],
+                "idempotency_key": "uncanny-attack",
+            },
+        )
+        assert rolled["status"] == "pending_reaction"
+        assert rolled["result"]["damage"] is None
+        reactions = await call(
+            server,
+            "combat_query",
+            {"campaign_id": campaign["id"], "view": "reactions", "actor_id": target["id"]},
+        )
+        choice = reactions[0]
+        assert "dnd5e.content.srd2014.feature.rogue-uncanny-dodge" in [
+            str(item.get("id") or "") for item in choice["candidates"]
+        ]
+        resolved = await call(
+            server,
+            "combat_choice",
+            {
+                "campaign_id": campaign["id"],
+                "actor_id": target["id"],
+                "action": "resolve_defense",
+                "payload": {
+                    "choice_id": choice["id"],
+                    "selection": {"id": "dnd5e.content.srd2014.feature.rogue-uncanny-dodge"},
+                },
+                "expected_revision": rolled["campaign_revision"],
+                "idempotency_key": "uncanny-resolve",
+            },
+        )
+        assert resolved["result"]["reaction_defense"]["source_type"] == "feature"
+        assert resolved["result"]["reaction_defense"]["damage_outcome"] == "half"
+        assert resolved["result"]["damage"]["damage_outcome"] == "half"
+        assert resolved["result"]["damage"]["applied_amount"] == resolved["result"][
+            "damage"
+        ]["outcome_amount_after"]
+        assert resolved["result"]["reaction_defense"]["payment"] == {
+            "kind": "reaction",
+            "feature_id": "dnd5e.content.srd2014.feature.rogue-uncanny-dodge",
+            "mechanic_id": "dnd5e.core.reaction.uncanny_dodge",
+        }
+        assert resolved["combat"]["combatants"][1]["turn_budget"]["reaction"] == 0
+
+    asyncio.run(exercise())
+
+
 def test_shield_reaction_atomically_pays_and_expires_at_next_turn_start(
     tmp_path: Path, monkeypatch
 ) -> None:
