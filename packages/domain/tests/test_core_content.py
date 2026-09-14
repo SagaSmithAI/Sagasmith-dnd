@@ -176,6 +176,28 @@ def test_arcane_recovery_reset_is_derived_from_the_source_edition_text() -> None
     assert long_rest["uses"]["recovers_on"] == "long_rest"
 
 
+def test_2014_class_poison_and_disease_immunities_are_source_bound() -> None:
+    assert _known_feature_structure("Paladin", "Divine Health", "") == {
+        "mechanical_grants": {"condition_immunities": ["disease"]}
+    }
+    assert _known_feature_structure("Monk", "Purity of Body", "") == {
+        "mechanical_grants": {
+            "immunities": ["poison"],
+            "condition_immunities": ["disease", "poisoned"],
+        }
+    }
+    assert _known_feature_structure("Druid", "Nature's Ward", "")[
+        "mechanical_grants"
+    ] == {
+        "immunities": ["poison"],
+        "condition_immunities": ["disease", "poisoned"],
+        "conditional_condition_immunities": {
+            "charmed": ["elemental", "fey"],
+            "frightened": ["elemental", "fey"],
+        },
+    }
+
+
 def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     workspace = Path(__file__).resolve().parents[3]
     manifest, artifacts = build_srd2014_content(workspace / "skills")

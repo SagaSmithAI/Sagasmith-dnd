@@ -92,6 +92,12 @@ def validate_dnd_content_actor(actor: Mapping[str, Any]) -> dict[str, Any]:
     if "intrinsic_attacks" not in value["sheet"].get("traits", {}):
         if normalized["sheet"]["traits"].get("intrinsic_attacks") == []:
             normalized["sheet"]["traits"].pop("intrinsic_attacks")
+    # Older immutable archives also predate conditional damage defenses.
+    # Accept only the exact empty default and retain the signed payload;
+    # explicit defenses still have to pass the current schema.
+    if "damage_defenses" not in value["sheet"].get("traits", {}):
+        if normalized["sheet"]["traits"].get("damage_defenses") == []:
+            normalized["sheet"]["traits"].pop("damage_defenses")
     # Older immutable archives also predate the empty anatomy descriptor.
     # Accept only the exact default omission and retain the signed payload.
     if "anatomy" not in value["sheet"].get("traits", {}):

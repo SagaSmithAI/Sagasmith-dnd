@@ -130,6 +130,9 @@ def effect_condition_additions(effect: dict[str, Any]) -> set[str]:
 def apply_effect_conditions(sheet: dict[str, Any], effect: dict[str, Any]) -> None:
     """Project a newly active effect's one-time and condition changes."""
 
+    if effect.get("active", True) and effect_is_immune(sheet, effect):
+        raise ValueError("effect is blocked by an active condition or poison immunity")
+
     if not effect.get("active", True):
         return
     if effect_is_suspended_by_petrification(sheet, effect):
@@ -155,8 +158,16 @@ def apply_effect_conditions(sheet: dict[str, Any], effect: dict[str, Any]) -> No
             max(0, int(hp.get("value", 0) or 0)) * multiplier,
         )
     sheet["combat"]["hp"] = hp
+    source_creature_type = str(
+        dict(effect.get("metadata") or {}).get("source_creature_type") or ""
+    ).strip()
     for condition_id in effect_condition_additions(effect):
-        apply_condition_change(sheet, condition_id=condition_id, add=True)
+        apply_condition_change(
+            sheet,
+            condition_id=condition_id,
+            add=True,
+            source_creature_type=source_creature_type or None,
+        )
 
 
 def reconcile_ended_effect_conditions(
@@ -252,8 +263,9 @@ def apply_condition_change(
     *,
     condition_id: str,
     add: bool,
+    source_creature_type: str | None = None,
 ) -> None:
-    """Apply one direct condition change without defeating immunity or active sources."""
+    """Apply a condition change while honoring source-bound immunities."""
 
     identifiers = condition_ids([condition_id])
     if not identifiers:
@@ -261,9 +273,13 @@ def apply_condition_change(
     normalized = identifiers.pop()
     conditions = condition_ids(sheet.get("conditions"))
     if add:
-        immunities = condition_ids(dict(sheet.get("traits") or {}).get("condition_immunities"))
+        immune = condition_immunities_for_source(
+            sheet,
+            normalized,
+            source_creature_type=source_creature_type,
+        )
         if (
-            normalized not in immunities
+            not immune
             and not (sheet_is_petrified(sheet) and normalized in POISON_DISEASE_CONDITION_IDS)
         ):
             conditions.add(normalized)
@@ -298,6 +314,59 @@ def _restore_petrified_suspended_conditions(sheet: dict[str, Any]) -> None:
     conditions = condition_ids(sheet.get("conditions"))
     conditions.update(_petrified_suspended_condition_ids(sheet) - immunities)
     sheet["conditions"] = sorted(conditions)
+
+
+def condition_immunities_for_source(
+    sheet: dict[str, Any],
+    condition_id: str,
+    *,
+    source_creature_type: str | None = None,
+) -> bool:
+    """Return whether one condition/effect id is blocked by actor features.
+
+    Static immunities live in ``traits.condition_immunities``. Feature cards
+    may additionally retain a reviewed ``_conditional_condition_immunities``
+    map. Missing source classifications fail closed for conditional entries.
+    """
+
+    normalized = next(iter(condition_ids([condition_id])), "")
+    if not normalized:
+        return False
+    static = condition_ids(dict(sheet.get("traits") or {}).get("condition_immunities"))
+    if normalized in static:
+        return True
+    normalized_source = str(source_creature_type or "").strip().casefold()
+    for feature in dict(sheet.get("content") or {}).get("features", []):
+        choices = dict(feature.get("choices") or {})
+        conditional = choices.get("_conditional_condition_immunities")
+        if not isinstance(conditional, dict):
+            continue
+        normalized_conditional = {
+            str(key).strip().casefold().replace("-", "_").replace(" ", "_"): value
+            for key, value in conditional.items()
+        }
+        if normalized not in normalized_conditional:
+            continue
+        if not normalized_source:
+            raise ValueError(f"{normalized} immunity requires authoritative source creature type")
+        if normalized_source not in {"elemental", "fey"}:
+            return False
+        allowed = condition_ids(normalized_conditional.get(normalized) or [])
+        return normalized_source in allowed
+    return False
+
+
+def effect_is_immune(sheet: dict[str, Any], effect: dict[str, Any]) -> bool:
+    """Return whether a disease/poison effect is rejected by actor defenses."""
+
+    kind = str(effect.get("kind") or "").strip().casefold().replace("-", "_")
+    static = condition_ids(dict(sheet.get("traits") or {}).get("condition_immunities"))
+    if kind in {"disease", "nonmagical_disease"}:
+        return "disease" in static
+    if kind in {"poison", "poisoned"}:
+        traits = dict(sheet.get("traits") or {})
+        return "poisoned" in static or "poison" in condition_ids(traits.get("immunities"))
+    return False
 
 
 def reconcile_condition_projection(

@@ -324,6 +324,16 @@ BOUNDARIES = (
         "bundled:srd2014/02_Classes/Cleric.md#preserve-life",
     ),
     CoreBoundary(
+        "dnd5e.core.activity.lay_on_hands",
+        ("2014",),
+        "combat_engine.resolve_lay_on_hands_to_sheets",
+        (
+            "tests/test_combat_engine.py::"
+            "test_2014_lay_on_hands_scales_pool_and_cures_one_owned_effect",
+        ),
+        "bundled:srd2014/02_Classes/Paladin.md#lay-on-hands",
+    ),
+    CoreBoundary(
         "dnd5e.core.ability_generation",
         ("2014", "2024"),
         "ability_generation.py",
@@ -447,6 +457,13 @@ BOUNDARIES = (
         "bundled:srd/initiative",
     ),
     CoreBoundary(
+        "dnd5e.core.initiative.group",
+        ("2014", "2024"),
+        "combat_engine.start_encounter",
+        ("tests/test_combat_engine.py",),
+        "bundled:srd/initiative",
+    ),
+    CoreBoundary(
         "dnd5e.core.action.edition_list",
         ("2014", "2024"),
         "combat_engine.available_actions",
@@ -565,8 +582,15 @@ BOUNDARIES = (
     CoreBoundary(
         "dnd5e.core.attack.help",
         ("2014", "2024"),
-        "combat_engine.preflight_attack",
+        "combat_engine.resolve_common_action|combat_engine.preflight_attack",
         ("tests/test_combat_engine.py::test_help_grants_and_then_consumes_attack_advantage",),
+        "bundled:srd/help",
+    ),
+    CoreBoundary(
+        "dnd5e.core.check.help",
+        ("2014", "2024"),
+        "combat_engine.resolve_common_action|combat_engine.resolve_actor_check",
+        ("tests/test_combat_engine.py::test_task_help_grants_and_consumes_matching_check",),
         "bundled:srd/help",
     ),
     CoreBoundary(
@@ -613,6 +637,13 @@ BOUNDARIES = (
         "combat_engine._apply_adjusted_damage",
         ("tests/test_combat_engine.py",),
         "bundled:srd/damage-and-healing",
+    ),
+    CoreBoundary(
+        "dnd5e.core.movement.falling",
+        ("2014",),
+        "combat_engine.resolve_fall_to_sheet",
+        ("tests/test_combat_engine.py::test_2014_falling_damage_is_capped_and_knocks_prone",),
+        "bundled:srd2014/06_Gameplay/Adventuring.md#falling",
     ),
     CoreBoundary(
         "dnd5e.core.damage.relentless_endurance",

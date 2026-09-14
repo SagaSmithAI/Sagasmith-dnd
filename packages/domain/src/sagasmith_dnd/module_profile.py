@@ -253,10 +253,6 @@ def _location_heading_kind(title: str, body: str = "") -> str | None:
     return None
 
 
-def _looks_like_location_heading(title: str, body: str = "") -> bool:
-    return _location_heading_kind(title, body) is not None
-
-
 def _looks_like_scene_heading(title: str) -> bool:
     """Reject visual-font fragments while preserving short authored headings."""
     text = re.sub(r"\s+", " ", title).strip()
