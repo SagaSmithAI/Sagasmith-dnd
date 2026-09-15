@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 
 import pytest
 from mcp.types import CallToolResult, TextContent
+from sagasmith_dnd_runtime.operations import OperationError
 
 import sagasmith_dnd_mcp.gateway as gateway
 from sagasmith_dnd_mcp.gateway import (
@@ -10,6 +11,7 @@ from sagasmith_dnd_mcp.gateway import (
     McpDispatchUnknownError,
     McpToolRejectedError,
 )
+from sagasmith_dnd_mcp.server import RequestScopedMCPServer
 
 
 def test_rejected_tool_preserves_all_recovery_fields() -> None:
@@ -21,6 +23,18 @@ def test_rejected_tool_preserves_all_recovery_fields() -> None:
         DndMcpClient._raise_tool_error(result)
     assert caught.value.result is result
     assert caught.value.structured_content == envelope
+
+
+def test_typed_runtime_error_survives_mcp_and_gateway():
+    recovery = {"owner": "player:one", "resolution_id": "pending-one", "action": "choose"}
+    failure = OperationError("Choose a defense", code="player_choice_required", recovery=recovery)
+    wrapper = RuntimeError("Adapter wrapper")
+    wrapper.__cause__ = failure
+    result = RequestScopedMCPServer._structured_tool_error("fallback", wrapper)
+    with pytest.raises(McpToolRejectedError) as caught:
+        DndMcpClient._raise_tool_error(result)
+    assert caught.value.structured_content == {"error": failure.envelope}
+    assert caught.value.structured_content["error"]["recovery"] == recovery
 
 
 def test_stable_catalog_dispatch_does_not_use_exposure() -> None:

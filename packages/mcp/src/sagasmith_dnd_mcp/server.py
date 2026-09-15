@@ -328,7 +328,17 @@ class RequestScopedMCPServer(MCPServer):
         )
 
     @staticmethod
-    def _structured_tool_error(message: str) -> CallToolResult:
+    def _structured_tool_error(message: str, cause: BaseException | None = None) -> CallToolResult:
+        visited: set[int] = set()
+        while cause is not None and id(cause) not in visited:
+            visited.add(id(cause))
+            if isinstance(cause, OperationError) and cause.has_explicit_contract:
+                return CallToolResult(
+                    is_error=True,
+                    content=[TextContent(type="text", text=str(cause))],
+                    structured_content={"error": deepcopy(cause.envelope)},
+                )
+            cause = cause.__cause__
         text = message.strip() or "The tool request was rejected."
         lowered = text.casefold()
         retryable = any(
@@ -891,7 +901,7 @@ class RequestScopedMCPServer(MCPServer):
             message = _safe_tool_error_message(exc)
             if message.startswith("Unknown tool") or "validation error" in message.casefold():
                 raise
-            return self._structured_tool_error(message)
+            return self._structured_tool_error(message, exc)
         result = self._ensure_text_fallback(result)
         result = self._attach_random_receipt(result, random_receipt)
         result = self._canonicalize_structured_text(result)

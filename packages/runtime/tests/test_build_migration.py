@@ -23,7 +23,9 @@ def test_implementation_only_upgrade_requires_and_consumes_checkpoint(tmp_path):
             return result.get("result", result) if isinstance(result, dict) else result
 
         try:
-            campaign = await call("campaign_create", name="Build migration", idempotency_key="create")
+            campaign = await call(
+                "campaign_create", name="Build migration", idempotency_key="create"
+            )
             campaign_id = campaign["id"]
             profile = await call("campaign_rules", campaign_id=campaign_id,
                                  action="get_profile", payload={})

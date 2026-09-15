@@ -15,7 +15,18 @@ from .tool_profiles import CORE_TOOLS, policy_for_tool
 
 
 class OperationError(ValueError):
-    """An anticipated application failure; adapters preserve its cause."""
+    """An anticipated failure with a transport-independent recovery envelope."""
+
+    def __init__(
+        self, message: str, *, code: str | None = None, retryable: bool = False,
+        recovery: Any = "Correct the request before retrying.",
+    ) -> None:
+        super().__init__(message)
+        self.has_explicit_contract = code is not None
+        self.envelope = {
+            "code": code or "invalid_request", "message": message, "retryable": retryable,
+            "recovery": deepcopy(recovery),
+        }
 
 
 @dataclass(frozen=True)
@@ -192,6 +203,13 @@ class DndRuntime:
                         for key in operation.parameters.get("properties", {})
                         if "revision" in key
                     ],
+                    "error_envelope": {
+                        "fields": ["code", "message", "retryable", "recovery"],
+                        "unknown_dispatch": (
+                            "Recover using the original request and idempotency key."
+                        ),
+                        "pending_choice": "Return the pending decision to its authorized owner.",
+                    },
                     "description": operation.description,
                 }
             )

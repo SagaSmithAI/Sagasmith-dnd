@@ -1,6 +1,16 @@
 [
   {
     "description": "Grant campaign membership or actor-level authority without exposing unrelated edits.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "access_grant",
     "idempotent": false,
     "input_schema": {
@@ -145,6 +155,16 @@
   },
   {
     "description": "Revoke one campaign member and all subordinate actor authority atomically.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "access_revoke",
     "idempotent": false,
     "input_schema": {
@@ -265,6 +285,16 @@
   },
   {
     "description": "Add or revise actor knowledge without crossing actor-knowledge boundaries.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "actor_knowledge_change",
     "idempotent": true,
     "input_schema": {
@@ -414,6 +444,16 @@
   },
   {
     "description": "Read only one actor's branch-scoped, subjective knowledge.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "actor_knowledge_query",
     "idempotent": true,
     "input_schema": {
@@ -581,6 +621,16 @@
   },
   {
     "description": "Instantiate one enabled, reviewed addon actor template without evaluating prose.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "addon_actor_instantiate",
     "idempotent": true,
     "input_schema": {
@@ -860,6 +910,16 @@
   },
   {
     "description": "Validate one isolated proposal against its live signed context receipt.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "bounded_evaluation",
     "idempotent": true,
     "input_schema": {
@@ -993,6 +1053,16 @@
   },
   {
     "description": "Create or checkout a branch under campaign and branch revision guards.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "branch_change",
     "idempotent": true,
     "input_schema": {
@@ -1162,6 +1232,16 @@
   },
   {
     "description": "List branches or compare two branch heads without changing checkout state.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "branch_query",
     "idempotent": true,
     "input_schema": {
@@ -1325,6 +1405,16 @@
   },
   {
     "description": "Update campaign state, advancement, clock, or structured campaign-space effects.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "campaign_change",
     "idempotent": true,
     "input_schema": {
@@ -1505,6 +1595,16 @@
   },
   {
     "description": "Create a D&D 5e campaign inside the MCP-owned SQLite database.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "campaign_create",
     "idempotent": true,
     "input_schema": {
@@ -1659,6 +1759,16 @@
   },
   {
     "description": "Append an auditable campaign event or retrieve its branch-visible event log.\n\nWhen actor knowledge is included, a DM-only event may only create\nDM-scoped knowledge.  Owner, party, player, and public knowledge must\ncite a party/player/public/actor-visible event.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "campaign_event",
     "idempotent": true,
     "input_schema": {
@@ -1829,6 +1939,16 @@
   },
   {
     "description": "Read bounded campaign pages, party state, or one complete resume bundle.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "campaign_query",
     "idempotent": true,
     "input_schema": {
@@ -1983,6 +2103,16 @@
   },
   {
     "description": "Read and change the base campaign rule profile; Pack changes use content_pack.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "campaign_rules",
     "idempotent": true,
     "input_schema": {
@@ -2160,6 +2290,16 @@
   },
   {
     "description": "Apply manual, standard-array, point-buy, or engine-rolled ability scores.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "character_ability_apply",
     "idempotent": true,
     "input_schema": {
@@ -2316,6 +2456,16 @@
   },
   {
     "description": "Commit one noncombat spell cast or activity activation through the rules engine.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "character_action",
     "idempotent": true,
     "input_schema": {
@@ -2460,6 +2610,16 @@
   },
   {
     "description": "Resolve a check or bounded source feature in the Play phase.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "character_check",
     "idempotent": true,
     "input_schema": {
@@ -2633,6 +2793,16 @@
   },
   {
     "description": "Apply a selection-ready class, background, feat, spell, or feature artifact.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "character_content_apply",
     "idempotent": true,
     "input_schema": {
@@ -2801,6 +2971,16 @@
   },
   {
     "description": "Create directly, by build/template, or from source-bound module evidence.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "character_create_from",
     "idempotent": true,
     "input_schema": {
@@ -2930,6 +3110,16 @@
   },
   {
     "description": "Update identity and notes metadata; whole-sheet changes remain separate.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "character_metadata_update",
     "idempotent": true,
     "input_schema": {
@@ -3061,6 +3251,16 @@
   },
   {
     "description": "Read characters with bounded filtering/paging or inspect an allowlisted document.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "character_query",
     "idempotent": true,
     "input_schema": {
@@ -3226,6 +3426,16 @@
   },
   {
     "description": "Validate and replace a complete D&D v2 sheet, deriving combat and inventory fields.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "character_sheet_replace",
     "idempotent": true,
     "input_schema": {
@@ -3369,6 +3579,16 @@
   },
   {
     "description": "Set one prepared spell or replace the validated prepared-spell list.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "character_spell_prepare",
     "idempotent": true,
     "input_schema": {
@@ -3508,6 +3728,16 @@
   },
   {
     "description": "Apply one noncombat character state transition with its D&D-specific validation.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "character_state_change",
     "idempotent": true,
     "input_schema": {
@@ -3676,6 +3906,16 @@
   },
   {
     "description": "Run the source-reviewed 2014 chase procedure only during Play.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "chase",
     "idempotent": true,
     "input_schema": {
@@ -3842,6 +4082,16 @@
   },
   {
     "description": "Pay a combat action and settle source-bound spell workflows atomically.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "combat_cast_spell",
     "idempotent": true,
     "input_schema": {
@@ -4106,6 +4356,16 @@
   },
   {
     "description": "Resolve a check/save/death-save or an atomic Medicine stabilization.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "combat_check",
     "idempotent": true,
     "input_schema": {
@@ -4346,6 +4606,16 @@
   },
   {
     "description": "Open or resolve a validated choice window during active combat.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "combat_choice",
     "idempotent": true,
     "input_schema": {
@@ -4520,6 +4790,16 @@
   },
   {
     "description": "Settle a common action payment, including a turned creature's escape attempt.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "combat_common_action",
     "idempotent": true,
     "input_schema": {
@@ -4740,6 +5020,16 @@
   },
   {
     "description": "Resolve a pending concentration save and deactivate effects only on failure.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "combat_concentration_check",
     "idempotent": true,
     "input_schema": {
@@ -4911,6 +5201,16 @@
   },
   {
     "description": "Close an encounter atomically while preserving its final audit state.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "combat_end",
     "idempotent": true,
     "input_schema": {
@@ -5067,6 +5367,16 @@
   },
   {
     "description": "Advance a structured encounter turn with optimistic concurrency.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "combat_end_turn",
     "idempotent": true,
     "input_schema": {
@@ -5213,6 +5523,16 @@
   },
   {
     "description": "Apply structured damage or healing; damage parts and healing amounts stay distinct.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "combat_hp_change",
     "idempotent": true,
     "input_schema": {
@@ -5386,6 +5706,16 @@
   },
   {
     "description": "Queue one canonical campaign actor to enter combat at the next round.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "combat_join",
     "idempotent": true,
     "input_schema": {
@@ -5549,6 +5879,16 @@
   },
   {
     "description": "Record Agent-as-DM-confirmed changes from a temporary battle map.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "combat_map_patch",
     "idempotent": true,
     "input_schema": {
@@ -5702,6 +6042,16 @@
   },
   {
     "description": "Move or stand, including source-granted Aggressive movement.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "combat_movement",
     "idempotent": true,
     "input_schema": {
@@ -5873,6 +6223,16 @@
   },
   {
     "description": "Validate an attack and return a non-mutating resolution plan.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "combat_preflight_attack",
     "idempotent": false,
     "input_schema": {
@@ -5998,6 +6358,16 @@
   },
   {
     "description": "Read combat state, render a safe snapshot, or inspect DM-only transactions.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "combat_query",
     "idempotent": true,
     "input_schema": {
@@ -6175,6 +6545,16 @@
   },
   {
     "description": "Resolve an owned opportunity-attack window atomically with its attack.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "combat_reaction_attack",
     "idempotent": true,
     "input_schema": {
@@ -6350,6 +6730,16 @@
   },
   {
     "description": "Run readied spell/action transitions without bypassing trigger or release validation.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "combat_ready",
     "idempotent": true,
     "input_schema": {
@@ -6510,6 +6900,16 @@
   },
   {
     "description": "Resolve an attack and atomically update the attacker, target and encounter.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "combat_resolve_attack",
     "idempotent": true,
     "input_schema": {
@@ -6687,6 +7087,16 @@
   },
   {
     "description": "Resolve a paid Cunning Action Hide attempt without another payment.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "combat_resolve_hide",
     "idempotent": true,
     "input_schema": {
@@ -6868,6 +7278,16 @@
   },
   {
     "description": "Start a structured encounter from canonical campaign actors.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "combat_start",
     "idempotent": true,
     "input_schema": {
@@ -7143,6 +7563,16 @@
   },
   {
     "description": "Pay an activity and settle supported Core outcomes; return rulings for the rest.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "combat_use_activity",
     "idempotent": true,
     "input_schema": {
@@ -7324,6 +7754,16 @@
   },
   {
     "description": "Resolve one attuned Eberron weapon transition through the turn economy.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "combat_use_official_item",
     "idempotent": true,
     "input_schema": {
@@ -7483,6 +7923,16 @@
   },
   {
     "description": "Inspect and manage finalized core-rules, addon, module, and preset Packs.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "content_pack",
     "idempotent": true,
     "input_schema": {
@@ -7661,6 +8111,16 @@
   },
   {
     "description": "Inspect or author one source-bound custom-content solution at first use.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "content_solution",
     "idempotent": true,
     "input_schema": {
@@ -7849,6 +8309,16 @@
   },
   {
     "description": "Retrieve current continuity plus pinned, source-exact DM module context.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "continuity_context",
     "idempotent": true,
     "input_schema": {
@@ -8108,6 +8578,16 @@
   },
   {
     "description": "Generate ability scores and atomically advance the campaign random stream.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "dnd_ability_roll",
     "idempotent": true,
     "input_schema": {
@@ -8261,6 +8741,16 @@
   },
   {
     "description": "Resolve a check and atomically advance the campaign random stream.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "dnd_check",
     "idempotent": true,
     "input_schema": {
@@ -8457,6 +8947,16 @@
   },
   {
     "description": "Roll a validated expression and atomically advance the campaign random stream.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "dnd_dice_roll",
     "idempotent": true,
     "input_schema": {
@@ -8612,6 +9112,16 @@
   },
   {
     "description": "Get or set the persisted noncombat tool profile; combat is engine-controlled.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "game_phase",
     "idempotent": true,
     "input_schema": {
@@ -8772,6 +9282,16 @@
   },
   {
     "description": "Change one character or party inventory while preserving owner-specific validation.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "inventory_change",
     "idempotent": true,
     "input_schema": {
@@ -8941,6 +9461,16 @@
   },
   {
     "description": "Transfer inventory with the revision contract required by every affected owner.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "inventory_transfer",
     "idempotent": true,
     "input_schema": {
@@ -9063,6 +9593,16 @@
   },
   {
     "description": "Add, upsert, supersede, retract, or forget an objective fact.\n\nWrites preserve immutable history. ``expected_revision`` is the campaign\nrevision guard; revision UUIDs belong in ``payload.expected_revision_id``.\nCommit payloads use the same event/ActorKnowledge audience boundary as\n``campaign_event``: a DM-only event cannot back player-visible\nowner/party/player/public knowledge, including NPC conversation closes.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "memory_change",
     "idempotent": true,
     "input_schema": {
@@ -9297,6 +9837,16 @@
   },
   {
     "description": "Read objective campaign memory; actor knowledge remains a separate subjective store.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "memory_query",
     "idempotent": true,
     "input_schema": {
@@ -9462,6 +10012,16 @@
   },
   {
     "description": "Build a D&D Module Pack via start, get, evidence, edit, and finalize.\n\nThe public input schema exposes each action's payload shape. Reuse server-issued\njob/module ids, pass the latest import-job revision on guarded edits, and copy only\nreal module_draft(evidence) source_ref receipts into play-profile decisions.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "module_draft",
     "idempotent": true,
     "input_schema": {
@@ -11420,6 +11980,16 @@
   },
   {
     "description": "Read a complete module chunk after it was selected by search.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "module_expand",
     "idempotent": true,
     "input_schema": {
@@ -11518,6 +12088,16 @@
   },
   {
     "description": "Read module cards, indexes, one scene, or current scoped progress.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "module_query",
     "idempotent": true,
     "input_schema": {
@@ -11689,6 +12269,16 @@
   },
   {
     "description": "Search adventure content, optionally scoped to exact active module revisions.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "module_search",
     "idempotent": true,
     "input_schema": {
@@ -11844,6 +12434,16 @@
   },
   {
     "description": "Persist scoped progress or a source-backed visual atlas review.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "module_set_progress",
     "idempotent": true,
     "input_schema": {
@@ -12066,6 +12666,16 @@
   },
   {
     "description": "Run the complete public NPC conversation workflow through one facade.\n\nFor ``action='ingest'``, put the public stimulus in ``payload.event``\nwith ``type`` (speech, action, scene_prompt, or resolution),\n``speaker_actor_id``, and ``content`` (not ``text``); optional fields\ninclude ``language``, ``delivery``, and ``declared_target_actor_ids``.\nInclude ``payload.audience_facts`` with ``decision_id``,\n``resolver='agent'``, perceived/understood/response actor id lists,\n``partial_renditions``, ``basis_refs``, and a scene-specific ``reason``.\nUnderstood and response actors must be perceived, and response actors\nmust have NPC runtimes.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "npc_conversation",
     "idempotent": false,
     "input_schema": {
@@ -12215,6 +12825,16 @@
   },
   {
     "description": "Host-private activation transport; never exposed to a model tool profile.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "npc_conversation_transport",
     "idempotent": false,
     "input_schema": {
@@ -12336,6 +12956,16 @@
   },
   {
     "description": "Read or atomically maintain the snapshot-managed full-playthrough manifest.\n\nActions are ``get``, ``initialize``, ``replace``, ``extend_modules``,\n``configure_ending``, ``sync``, and ``verify_ending``.  ``initialize``\nrequires ``payload.manifest``; mutation actions require their documented\npayload plus optimistic-concurrency fields.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "playthrough_manifest",
     "idempotent": true,
     "input_schema": {
@@ -12522,6 +13152,16 @@
   },
   {
     "description": "Return one audience-safe, authoritative resolution bubble projection.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "resolution_presentation",
     "idempotent": false,
     "input_schema": {
@@ -12618,6 +13258,16 @@
   },
   {
     "description": "Read one indexed chunk only when its source belongs to this campaign ruleset.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "rule_expand",
     "idempotent": true,
     "input_schema": {
@@ -12725,6 +13375,16 @@
   },
   {
     "description": "Search rules visible to the campaign; first lookup needs only id and query.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "rule_search",
     "idempotent": true,
     "input_schema": {
@@ -12878,6 +13538,16 @@
   },
   {
     "description": "Idempotently index the complete bundled SRD corpus.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "rule_seed_bundled",
     "idempotent": false,
     "input_schema": {
@@ -12971,6 +13641,16 @@
   },
   {
     "description": "Return a bounded inventory of indexed D&D rule sources.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "rule_seed_status",
     "idempotent": true,
     "input_schema": {
@@ -13109,6 +13789,16 @@
   },
   {
     "description": "Create, inspect, edit, and finalize one source-bound rulebook draft.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "rulebook_draft",
     "idempotent": true,
     "input_schema": {
@@ -13292,6 +13982,16 @@
   },
   {
     "description": "Describe the MCP contract and the automatic-vs-ruling combat boundary.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "server_capabilities",
     "idempotent": true,
     "input_schema": {
@@ -13364,6 +14064,16 @@
   },
   {
     "description": "Discover or read bounded installed workflow guidance.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "skill_query",
     "idempotent": true,
     "input_schema": {
@@ -13556,6 +14266,16 @@
   },
   {
     "description": "Commit current D&D state, events, facts, and actor knowledge to this branch.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "snapshot_create",
     "idempotent": true,
     "input_schema": {
@@ -13711,6 +14431,16 @@
   },
   {
     "description": "Read snapshot history, integrity, lineage, or a regenerated recap.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "snapshot_query",
     "idempotent": true,
     "input_schema": {
@@ -13883,6 +14613,16 @@
   },
   {
     "description": "Fork from an earlier save; existing future history remains intact.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "snapshot_restore",
     "idempotent": true,
     "input_schema": {
@@ -14039,6 +14779,16 @@
   },
   {
     "description": "Read revision history or perform guarded undo/redo.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "state_revision",
     "idempotent": true,
     "input_schema": {
@@ -14216,6 +14966,16 @@
   },
   {
     "description": "Run the embedded SQLite schema migrations.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "storage_migrate",
     "idempotent": false,
     "input_schema": {
@@ -14292,6 +15052,16 @@
   },
   {
     "description": "Return storage health without exposing credentials or host paths.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "storage_status",
     "idempotent": true,
     "input_schema": {
@@ -14373,6 +15143,16 @@
   },
   {
     "description": "List systems exposed by this MCP server.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "system_list",
     "idempotent": true,
     "input_schema": {
@@ -14458,6 +15238,16 @@
   },
   {
     "description": "Adjust a wallet or transfer money through the party with all affected revisions.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
     "id": "wallet_change",
     "idempotent": true,
     "input_schema": {
