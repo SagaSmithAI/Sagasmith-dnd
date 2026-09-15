@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import re
 from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
-from typing import Any
+from pathlib import Path
+from threading import RLock
+from types import MappingProxyType
+from typing import Any, Mapping
 
 TEXT_ASSET_EXTENSIONS = {
     ".csv",
@@ -46,21 +49,66 @@ class SkillAsset:
     checksum: str
 
 
+@dataclass(frozen=True)
+class SkillSnapshot:
+    documents: tuple[SkillDocument, ...]
+    assets: tuple[SkillAsset, ...]
+    contents: Mapping[str, bytes]
+
+
 class SkillCatalog:
     def __init__(self, *, dnd_root: Path, modulegen_root: Path) -> None:
         self._roots = {"dnd": dnd_root, "modulegen": modulegen_root}
-        self._documents: tuple[SkillDocument, ...] | None = None
-        self._document_by_id: dict[str, SkillDocument] = {}
-        self._assets: tuple[SkillAsset, ...] | None = None
-        self._asset_by_id: dict[str, SkillAsset] = {}
+        self._snapshot: SkillSnapshot | None = None
+        self._snapshot_lock = RLock()
 
     def refresh(self) -> None:
         """Discard filesystem indexes before an explicit installation reload."""
 
-        self._documents = None
-        self._document_by_id = {}
-        self._assets = None
-        self._asset_by_id = {}
+        with self._snapshot_lock:
+            self._snapshot = self._build_snapshot()
+
+    def _build_snapshot(self) -> SkillSnapshot:
+        documents = []
+        assets = []
+        contents = {}
+        for source, configured_root in self._roots.items():
+            root = configured_root.resolve()
+            if not root.is_dir():
+                continue
+            for path in sorted(root.rglob("*")):
+                if self._is_install_shadow(path, root) or not path.is_file():
+                    continue
+                if not path.resolve().is_relative_to(root):
+                    continue
+                relative = path.relative_to(root)
+                is_document = path.name == "SKILL.md"
+                # Include the text package, not only specially named reference
+                # folders: linked examples and README guidance affect behavior too.
+                is_asset = path.suffix.lower() in TEXT_ASSET_EXTENSIONS and not is_document
+                if not is_document and not is_asset:
+                    continue
+                content = path.read_bytes()
+                checksum = hashlib.sha256(content).hexdigest()
+                if is_document:
+                    parent = relative.parent
+                    suffix = "root" if parent == Path(".") else ".".join(parent.parts)
+                    identifier = f"{source}.{suffix}"
+                    title = next((line[2:].strip() for line in content.decode("utf-8").splitlines()
+                                  if line.startswith("# ")), suffix)
+                    documents.append(SkillDocument(identifier, title, source, path, checksum))
+                    contents[identifier] = content
+                if is_asset:
+                    identifier = f"{source}:{relative.as_posix()}"
+                    assets.append(SkillAsset(identifier, source, path, checksum))
+                    contents[identifier] = content
+        return SkillSnapshot(tuple(documents), tuple(assets), MappingProxyType(contents))
+
+    def _current(self) -> SkillSnapshot:
+        with self._snapshot_lock:
+            if self._snapshot is None:
+                self._snapshot = self._build_snapshot()
+            return self._snapshot
 
     def root(self, source: str) -> Path:
         """Return one configured repository root without exposing mutation."""
@@ -71,122 +119,34 @@ class SkillCatalog:
             raise LookupError(f"unknown skill source {source!r}") from error
 
     def list(self) -> list[SkillDocument]:
-        if self._documents is not None:
-            return list(self._documents)
-        documents: list[SkillDocument] = []
-        for source, root in self._roots.items():
-            if not root.is_dir():
-                continue
-            for path in sorted(root.rglob("SKILL.md")):
-                if self._is_install_shadow(path, root):
-                    continue
-                relative = path.relative_to(root).parent
-                suffix = "root" if relative == Path(".") else ".".join(relative.parts)
-                documents.append(
-                    SkillDocument(
-                        id=f"{source}.{suffix}",
-                        title=self._title(path, suffix),
-                        source=source,
-                        path=path,
-                        checksum=self._checksum(path),
-                    )
-                )
-        self._documents = tuple(documents)
-        self._document_by_id = {document.id: document for document in documents}
-        return list(self._documents)
+        return list(self._current().documents)
 
     def get(self, skill_id: str) -> SkillDocument:
-        if self._documents is None:
-            self.list()
-        try:
-            return self._document_by_id[skill_id]
-        except KeyError as error:
-            raise LookupError(f"unknown skill document {skill_id!r}") from error
+        for document in self._current().documents:
+            if document.id == skill_id:
+                return document
+        raise LookupError(f"unknown skill document {skill_id!r}")
 
     def read(self, skill_id: str) -> str:
-        return self.get(skill_id).path.read_text(encoding="utf-8")
+        snapshot = self._current()
+        if not any(item.id == skill_id for item in snapshot.documents):
+            raise LookupError(f"unknown skill document {skill_id!r}")
+        return snapshot.contents[skill_id].decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
 
     def assets(self) -> list[SkillAsset]:
-        """List text references, data, and templates from installed skill repositories."""
-        if self._assets is not None:
-            return list(self._assets)
-        assets: list[SkillAsset] = []
-        for source, root in self._roots.items():
-            if not root.is_dir():
-                continue
-            paths = (
-                item
-                for item in root.rglob("*")
-                if item.is_file() and not self._is_install_shadow(item, root)
-            )
-            for path in sorted(paths):
-                relative = path.relative_to(root).as_posix()
-                path_parts = {part.lower() for part in Path(relative).parts}
-                is_asset = (
-                    bool(path_parts & TEXT_ASSET_DIRECTORIES)
-                    or "template" in path.stem.lower()
-                )
-                if (
-                    not is_asset
-                    or path.suffix.lower() not in TEXT_ASSET_EXTENSIONS
-                ):
-                    continue
-                assets.append(
-                    SkillAsset(
-                        id=f"{source}:{relative}",
-                        source=source,
-                        path=path,
-                        checksum=self._checksum(path),
-                    )
-                )
-        self._assets = tuple(assets)
-        self._asset_by_id = {asset.id: asset for asset in assets}
-        return list(self._assets)
+        return list(self._current().assets)
 
     def read_asset(self, asset_id: str) -> str:
-        return self.get_asset(asset_id).path.read_text(encoding="utf-8")
+        snapshot = self._current()
+        if not any(item.id == asset_id for item in snapshot.assets):
+            raise LookupError(f"unknown skill asset {asset_id!r}")
+        return snapshot.contents[asset_id].decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
 
     def get_asset(self, asset_id: str) -> SkillAsset:
-        """Resolve one installed text asset together with its stable checksum."""
-
-        cached = self._asset_by_id.get(asset_id)
-        if cached is not None:
-            return cached
-        if self._assets is not None:
-            raise LookupError(f"unknown skill asset {asset_id!r}")
-        source, separator, relative_value = asset_id.partition(":")
-        root = self._roots.get(source)
-        if not separator or root is None or not relative_value:
-            raise LookupError(f"unknown skill asset {asset_id!r}")
-        root = root.resolve()
-        relative = Path(*PurePosixPath(relative_value).parts)
-        if relative.is_absolute() or ".." in relative.parts:
-            raise LookupError(f"unknown skill asset {asset_id!r}")
-        path = (root / relative).resolve()
-        try:
-            path.relative_to(root)
-        except ValueError as error:
-            raise LookupError(f"unknown skill asset {asset_id!r}") from error
-        relative_parts = {part.lower() for part in relative.parts}
-        is_asset = (
-            bool(relative_parts & TEXT_ASSET_DIRECTORIES)
-            or "template" in path.stem.lower()
-        )
-        if (
-            not path.is_file()
-            or self._is_install_shadow(path, root)
-            or not is_asset
-            or path.suffix.lower() not in TEXT_ASSET_EXTENSIONS
-        ):
-            raise LookupError(f"unknown skill asset {asset_id!r}")
-        asset = SkillAsset(
-            id=asset_id,
-            source=source,
-            path=path,
-            checksum=self._checksum(path),
-        )
-        self._asset_by_id[asset_id] = asset
-        return asset
+        for asset in self._current().assets:
+            if asset.id == asset_id:
+                return asset
+        raise LookupError(f"unknown skill asset {asset_id!r}")
 
     @staticmethod
     def resource_id(asset_id: str) -> str:
@@ -342,14 +302,20 @@ class SkillCatalog:
 
     def manifest(self) -> list[dict[str, str]]:
         """Return a deterministic workflow-version manifest for event/snapshot provenance."""
+        snapshot = self._current()
         return [
             {
                 "id": document.id,
                 "source": document.source,
                 "checksum": document.checksum,
             }
-            for document in self.list()
+            for document in (*snapshot.documents, *snapshot.assets)
         ]
+
+    def package_hash(self) -> str:
+        """Hash every exposed workflow document and dependency in this snapshot."""
+        encoded = json.dumps(self.manifest(), sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
     def _text(self, *, kind: str, identifier: str) -> str:
         if kind == "skill":

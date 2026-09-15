@@ -27,13 +27,11 @@ as `mcp_sagasmith_dnd_`.
    Hosts that retain conversation history must also perform the out-of-band
    `campaign_query(view="binding")` check before every later inference; if it
    cannot be verified, do not replay the prior campaign context.
-3. Start every MCP session with `exposure(action="open")`. Use
-   `exposure(action="search")` to find task-relevant public tools and
-   `exposure(action="set")` to add or remove their ids. Refresh native schemas
-   after `tools/list_changed`, then call listed tools directly. Before a campaign
-   exists, add only campaign-bootstrap tools; reopen with the returned
-   `campaign_id` before campaign-bound work. One MCP session/principal has one
-   active exposure, and phase changes may crop its loaded tools.
+3. Read the protocol mode and task capabilities supplied by the Host. The
+   stable catalog path calls listed tools directly with request-scoped context;
+   exposure handles are discovery guidance. The Host selects and implements
+   protocol negotiation. Only a Host explicitly using legacy exposure loads
+   `references/legacy-adapter.md`; never infer legacy mode from a tool rejection.
 4. Use Full Runtime only when the `sagasmith_dnd` MCP tools are available. The
    bounded Skill-group fragments under `references/skill-groups/` are the
    operational loading surface; use the child Skills and
@@ -63,8 +61,8 @@ For Module or rules Pack authoring, load the repository-local
 - Search first, then expand only the selected rule or module chunk.
 - Trust MCP tool results; do not emulate a successful write.
 - Use `lobby` outside play, `play` for live non-combat scenes, and the automatic
-  `combat_start`/`combat_end` transitions for combat. The MCP owns the session
-  exposure; never keep all phase-specific tools visible merely for convenience.
+  `combat_start`/`combat_end` transitions for combat. The Runtime enforces phase
+  authorization on every call; the Host selects task-relevant catalog subsets.
 - Runtime character state uses `sheet v2` / `notes v2`; load
   `references/character-schema-v2.md` before creating or mutating a PC, NPC, or
   monster. All three are full `Character` records, not abbreviated stat blocks.

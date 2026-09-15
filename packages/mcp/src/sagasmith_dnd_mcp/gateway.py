@@ -13,6 +13,7 @@ import secrets
 import tempfile
 import time
 from contextvars import ContextVar
+from copy import deepcopy
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from pathlib import Path
@@ -37,6 +38,23 @@ _REQUEST_CLIENT: ContextVar[DndMcpClient | None]
 
 class McpToolRejectedError(ValueError):
     """A connected MCP server rejected a well-formed tool request."""
+
+    def __init__(self, message: str, result: CallToolResult | None = None):
+        super().__init__(message)
+        self.result = result
+        self.structured_content = dict(result.structured_content or {}) if result else {}
+
+
+class McpDispatchUnknownError(RuntimeError):
+    """A dispatched request needs recovery using its original identity."""
+
+    def __init__(self, request: "_McpRequest") -> None:
+        super().__init__("MCP dispatch outcome is unknown; recover the original operation")
+        self.recovery = {
+            "tool_id": request.tool_id,
+            "idempotency_key": request.arguments.get("idempotency_key"),
+            "action": "query_or_replay_original_operation",
+        }
 
 
 @dataclass(frozen=True)
@@ -95,6 +113,7 @@ class _McpRequest:
     arguments: dict[str, Any]
     future: asyncio.Future[CallToolResult]
     attempts: int = 0
+    dispatched: bool = False
 
 
 @dataclass
@@ -103,12 +122,23 @@ class DndMcpClient:
 
     url: str
     startup_timeout: float = 15.0
+    legacy_exposure: bool = False
+    queue_capacity: int = 64
+    request_timeout: float = 60.0
     _queue: asyncio.Queue[_McpRequest | None] = dataclass_field(
         init=False, default_factory=asyncio.Queue
     )
     _ready: asyncio.Event = dataclass_field(init=False, default_factory=asyncio.Event)
     _runner_task: asyncio.Task[None] | None = dataclass_field(init=False, default=None)
     _startup_error: BaseException | None = dataclass_field(init=False, default=None)
+    _active_request: _McpRequest | None = dataclass_field(init=False, default=None)
+
+    def __post_init__(self) -> None:
+        if self.queue_capacity < 1:
+            raise ValueError("queue_capacity must be positive")
+        if self.request_timeout <= 0:
+            raise ValueError("request_timeout must be positive")
+        self._queue = asyncio.Queue(maxsize=self.queue_capacity)
 
     async def start(self) -> None:
         if self._runner_task is not None:
@@ -128,9 +158,14 @@ class DndMcpClient:
         task = self._runner_task
         if task is None:
             return
-        await self._queue.put(None)
+        try:
+            self._queue.put_nowait(None)
+        except asyncio.QueueFull:
+            task.cancel()
         try:
             await asyncio.wait_for(task, timeout=5)
+        except asyncio.CancelledError:
+            pass
         except TimeoutError:
             task.cancel()
             try:
@@ -139,13 +174,30 @@ class DndMcpClient:
                 pass
         finally:
             self._runner_task = None
+            if self._active_request is not None and not self._active_request.future.done():
+                self._active_request.future.set_exception(
+                    McpDispatchUnknownError(self._active_request)
+                )
+            self._active_request = None
+            while not self._queue.empty():
+                request = self._queue.get_nowait()
+                if request is not None and not request.future.done():
+                    request.future.set_exception(RuntimeError("D&D MCP client stopped"))
+            self._ready.clear()
+            self._startup_error = None
 
     async def call_tool(self, tool_id: str, arguments: dict[str, Any]) -> CallToolResult:
         if self._runner_task is None:
             raise RuntimeError("D&D MCP client is not started")
         future = asyncio.get_running_loop().create_future()
-        await self._queue.put(_McpRequest(tool_id, dict(arguments), future))
-        return await future
+        request = _McpRequest(tool_id, deepcopy(arguments), future)
+        self._queue.put_nowait(request)
+        try:
+            return await asyncio.wait_for(future, timeout=self.request_timeout)
+        except TimeoutError:
+            if request.dispatched:
+                raise McpDispatchUnknownError(request) from None
+            raise TimeoutError("MCP request expired before dispatch") from None
 
     async def _run(self) -> None:
         pending: _McpRequest | None = None
@@ -213,28 +265,37 @@ class DndMcpClient:
                             pending = None
                             if request is None:
                                 return
+                            if request.future.done():
+                                continue
+                            self._active_request = request
                             try:
                                 async with call_lock:
+                                    request.dispatched = True
                                     result = await self._call_in_session(
                                         session,
                                         request.tool_id,
                                         request.arguments,
                                         force_refresh_tools,
                                     )
-                                    await refresh_changed_tools(session)
+                                    # Catalog maintenance must never replay a completed write.
+                                    try:
+                                        await refresh_changed_tools(session)
+                                    except Exception:
+                                        LOGGER.warning("MCP catalog refresh failed", exc_info=True)
                             except McpToolRejectedError as exc:
                                 if not request.future.done():
                                     request.future.set_exception(exc)
-                            except Exception as exc:
-                                if request.attempts == 0:
-                                    request.attempts += 1
-                                    pending = request
-                                    break
+                            except Exception:
+                                # Dispatch may have committed. The caller owns recovery with
+                                # the original idempotency key; never blindly repeat a write.
                                 if not request.future.done():
-                                    request.future.set_exception(exc)
+                                    request.future.set_exception(McpDispatchUnknownError(request))
                             else:
                                 if not request.future.done():
                                     request.future.set_result(result)
+                            finally:
+                                if request.future.done():
+                                    self._active_request = None
             except asyncio.CancelledError:
                 if pending is not None and not pending.future.done():
                     pending.future.cancel()
@@ -265,7 +326,7 @@ class DndMcpClient:
         arguments: dict[str, Any],
         refresh_changed_tools: Callable[[ClientSession], Awaitable[None]],
     ) -> CallToolResult:
-        dynamic_tool = tool_id not in CORE_TOOLS
+        dynamic_tool = self.legacy_exposure and tool_id not in CORE_TOOLS
         if dynamic_tool:
             payload = arguments.get("payload")
             payload_campaign = payload.get("campaign_id") if isinstance(payload, dict) else None
@@ -329,7 +390,7 @@ class DndMcpClient:
             ),
             "D&D MCP rejected the request",
         )
-        raise McpToolRejectedError(message[:2000])
+        raise McpToolRejectedError(message[:2000], result)
 
 
 _REQUEST_CLIENT = ContextVar("sagasmith_dnd_gateway_client", default=None)
@@ -343,27 +404,36 @@ class _BrowserSession:
 
 
 class DndClientPool:
-    """Keep dynamic MCP exposure isolated to one browser and campaign."""
+    """Isolate browser/campaign connections without serializing unrelated startups."""
 
     def __init__(self, config: GatewayConfig):
         self.config = config
         self.sessions: dict[str, _BrowserSession] = {}
-        self._lock = asyncio.Lock()
+        self._session_locks: dict[str, asyncio.Lock] = {}
+        self._closed = False
 
     async def session(
         self,
         token: str | None,
         campaign_id: str | None,
     ) -> tuple[str, DndMcpClient, bool]:
-        async with self._lock:
+        if self._closed:
+            raise RuntimeError("D&D MCP pool is closed")
+        token = token if token in self.sessions or token in self._session_locks else None
+        created = token is None
+        token = token or secrets.token_urlsafe(32)
+        lock = self._session_locks.setdefault(token, asyncio.Lock())
+        async with lock:
             now = time.monotonic()
             expired = [
                 key
                 for key, value in self.sessions.items()
                 if now - value.touched_at > self.config.session_ttl_seconds
+                and key != token and not self._session_locks[key].locked()
             ]
             for key in expired:
                 stale = self.sessions.pop(key)
+                self._session_locks.pop(key, None)
                 await stale.client.stop()
             if token and token in self.sessions:
                 current = self.sessions[token]
@@ -375,18 +445,25 @@ class DndClientPool:
                     current.touched_at = now
                     current.campaign_id = current.campaign_id or campaign_id
                     return token, current.client, False
+                self.sessions.pop(token)
                 await current.client.stop()
                 client = DndMcpClient(self.config.mcp_url)
                 await client.start()
+                if self._closed:
+                    await client.stop()
+                    raise RuntimeError("D&D MCP pool is closed")
                 self.sessions[token] = _BrowserSession(client, now, campaign_id)
                 return token, client, False
-            token = secrets.token_urlsafe(32)
             client = DndMcpClient(self.config.mcp_url)
             await client.start()
+            if self._closed:
+                await client.stop()
+                raise RuntimeError("D&D MCP pool is closed")
             self.sessions[token] = _BrowserSession(client, now, campaign_id)
-            return token, client, True
+            return token, client, created
 
     async def close(self) -> None:
+        self._closed = True
         for current in list(self.sessions.values()):
             await current.client.stop()
         self.sessions.clear()
@@ -1227,6 +1304,27 @@ def create_app(
                 raise
             except IdempotencyConflictError as exc:
                 response = web.json_response({"error": str(exc)}, status=409)
+            except McpToolRejectedError as exc:
+                response = web.json_response(
+                    {"error": str(exc), "structured_content": exc.structured_content,
+                     "tool_result": exc.result.model_dump(mode="json") if exc.result else None},
+                    status=400,
+                )
+            except asyncio.QueueFull:
+                response = web.json_response(
+                    {"error": "MCP request queue is full", "code": "backpressure",
+                     "retryable": True}, status=503,
+                )
+            except McpDispatchUnknownError as exc:
+                response = web.json_response(
+                    {"error": str(exc), "code": "dispatch_unknown", "retryable": False,
+                     "recovery": exc.recovery}, status=504,
+                )
+            except TimeoutError as exc:
+                response = web.json_response(
+                    {"error": str(exc), "code": "deadline_before_dispatch", "retryable": True},
+                    status=504,
+                )
             except PermissionError as exc:
                 response = web.json_response({"error": str(exc)}, status=403)
             except LookupError as exc:
