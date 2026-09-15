@@ -863,7 +863,7 @@ class RequestScopedMCPServer(MCPServer):
             return self._structured_tool_error(str(exc))
         campaign_id = self._argument_campaign_id(arguments) or (
             exposure.campaign_id if exposure is not None else None
-        )
+        ) or (auth_context.campaign_id if auth_context is not None else None)
         context_manager = (
             self._random_context_factory(campaign_id, name, arguments)
             if campaign_id and name not in CORE_TOOLS
@@ -1436,6 +1436,7 @@ def _create_server(config, *, resources):
         return {**exposures.status(current), "changed": changed}
 
     exposure_operation = mcp._tool_manager.get_tool("exposure")
+    exposure_operation.parameters["properties"]["cursor"]["maxLength"] = 1024
     exposure_operation.meta = {"sagasmith_domain_context": "sagasmith-dnd"}
     mcp.runtime = application
     if config.auth_context_secret:

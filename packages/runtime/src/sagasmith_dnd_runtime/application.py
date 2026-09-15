@@ -7687,10 +7687,6 @@ def _create_application(
         """Fail before materialization when a save's exact built-in core is unavailable."""
         profile = dict(document.get("payload", {}).get("rule_profile") or {})
         options = dict(profile.get("options") or {})
-        try:
-            require_compatible_build(dict(options.get("_implementation_identity") or {}))
-        except ValueError as error:
-            raise RulesetUnavailableError(str(error)) from error
         locked = dict(options.get("_core_rule_pack_lock") or {})
         if not locked:
             raise RulesetUnavailableError(
@@ -7714,6 +7710,10 @@ def _create_application(
                 "snapshot's locked built-in core rule pack is unavailable; "
                 "runtime upgrade needs an explicit conversion before restore"
             )
+        try:
+            require_compatible_build(dict(options.get("_implementation_identity") or {}))
+        except ValueError as error:
+            raise RulesetUnavailableError(str(error)) from error
 
     def bundled_rule_seed_status() -> dict[str, Any]:
         root = config.dnd_skills_dir / "full" / "skills" / "dnd-dm" / "srd"

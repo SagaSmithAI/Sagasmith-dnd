@@ -2017,6 +2017,7 @@ def test_positioned_movement_opens_and_resolves_an_owned_reaction(tmp_path: Path
                 "target_id": mover["id"],
                 "expected_revision": moved["campaign_revision"],
                 "idempotency_key": "grid-reaction",
+                "action": {"weapon_id": "unarmed-strike"},
             },
         )
         assert resolved["status"] == "committed"

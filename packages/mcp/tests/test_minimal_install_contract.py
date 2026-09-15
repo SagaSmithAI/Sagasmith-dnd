@@ -163,7 +163,7 @@ def test_optional_image_loaders_do_not_mask_unrelated_import_regressions(monkeyp
     def fail_optional_module(name, globals=None, locals=None, fromlist=(), level=0):
         if name in {
             "sagasmith_dnd.portrait_extraction",
-            "sagasmith_dnd_mcp.combat_render",
+            "sagasmith_dnd_runtime.combat_render",
         }:
             raise ModuleNotFoundError(
                 "simulated internal dependency regression",
