@@ -74,10 +74,15 @@ def base_wheel_runtime(
         cwd=REPOSITORY_ROOT,
     )
     _run(["uv", "venv", "--python", sys.executable, str(environment)])
+    _run(
+        ["uv", "build", "--wheel", "--package", "sagasmith-dnd-runtime",
+         "--out-dir", str(dist)],
+        cwd=REPOSITORY_ROOT,
+    )
 
     python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     wheels = sorted(dist.glob("*.whl"))
-    assert len(wheels) == 3
+    assert len(wheels) == 4
     _run(["uv", "pip", "install", "--python", str(python), *map(str, wheels)])
 
     probe = (
