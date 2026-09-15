@@ -4913,10 +4913,9 @@ def _module_draft_parameters(parameters: Mapping[str, Any]) -> dict[str, Any]:
         "type": "object",
         "description": (
             "D&D play envelope. Level, advancement, and pregenerated-character review always "
-            "need real evidence; party-size advice alone is optional."
+            "need real evidence; party-size advice alone is optional and may be omitted."
         ),
         "required": [
-            "party_size",
             "starting_level",
             "expected_end_level",
             "advancement",

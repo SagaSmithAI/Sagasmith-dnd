@@ -19,7 +19,8 @@ async def main():
         auto_seed_rules=False,
     ))
     try:
-        identity = RequestIdentity("system:local")
+        # Hosted creation carries an empty campaign scope before a campaign exists.
+        identity = RequestIdentity("system:local", "")
         args = {"name": "Application-only campaign", "edition": "2014",
                 "idempotency_key": "create-campaign"}
         campaign = await runtime.execute("campaign_create", args, context=identity)
@@ -30,6 +31,16 @@ async def main():
             "view": "get", "payload": {"campaign_id": campaign["id"]},
         }, context=identity)
         assert campaign["id"] in str(result)
+        await runtime.execute("character_query", {"view": "list", "payload": {}},
+                              context=RequestIdentity("system:local", campaign["id"]))
+        try:
+            await runtime.execute("character_query", {
+                "view": "list", "payload": {"campaign_id": "different-campaign"},
+            }, context=RequestIdentity("system:local", campaign["id"]))
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError("nested campaign must not override trusted scope")
         try:
             await runtime.execute("campaign_query", {
                 "view": "get", "payload": {"campaign_id": campaign["id"]},

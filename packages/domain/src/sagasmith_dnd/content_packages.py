@@ -205,7 +205,7 @@ def _validate_module_source_refs(value: Mapping[str, Any], field: str, *, requir
 
 
 def _validate_module_play_profile(value: Mapping[str, Any]) -> None:
-    missing = sorted(_MODULE_PLAY_PROFILE_FIELDS - set(value))
+    missing = sorted((_MODULE_PLAY_PROFILE_FIELDS - {"party_size"}) - set(value))
     unsupported = sorted(set(value) - _MODULE_PLAY_PROFILE_FIELDS)
     if missing or unsupported:
         details = []
@@ -215,7 +215,9 @@ def _validate_module_play_profile(value: Mapping[str, Any]) -> None:
             details.append("unsupported fields: " + ", ".join(unsupported))
         raise ValueError("D&D module play_profile has " + "; ".join(details))
 
-    party_size = value["party_size"]
+    party_size = value.get("party_size", {
+        "minimum": None, "maximum": None, "source_refs": [],
+    })
     if not isinstance(party_size, Mapping) or set(party_size) != {
         "minimum",
         "maximum",

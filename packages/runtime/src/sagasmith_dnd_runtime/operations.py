@@ -166,7 +166,13 @@ class DndRuntime:
                 campaign_id = self.ports["character_campaign"](actor_id)
         if context.campaign_id and campaign_id and context.campaign_id != campaign_id:
             raise PermissionError("request identity belongs to another campaign")
-        campaign_id = campaign_id or context.campaign_id
+        campaign_id = campaign_id or context.campaign_id or None
+        # This facade nests its campaign selector in payload rather than the
+        # top-level trusted arguments injected by MCP clients.
+        if name == "character_query" and context.campaign_id and arguments.get(
+            "view", "list"
+        ) in {"list", "batch", "catalog"}:
+            arguments["payload"] = {**(payload or {}), "campaign_id": campaign_id}
         self.ports["authorize_tool_policy"](name, context.principal_id, campaign_id)
         manager = (
             self.ports["campaign_random_context"](campaign_id, name, arguments)

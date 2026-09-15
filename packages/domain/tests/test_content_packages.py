@@ -324,6 +324,26 @@ def test_finalized_module_does_not_require_party_size_recommendation(
     assert validated["content"]["play_profile"]["party_size"]["minimum"] is None
 
 
+def test_module_profile_allows_omitted_party_advice_but_validates_provided_advice():
+    from sagasmith_dnd.content_packages import _validate_module_play_profile
+
+    source = [{"source_key": "book", "page": 1, "chunk_hash": "a" * 64, "note": "Reviewed"}]
+    profile = {
+        "starting_level": {"value": 1, "source_refs": source},
+        "expected_end_level": {"value": 2, "source_refs": source},
+        "advancement": {"modes": ["milestone"], "recommended": "milestone",
+                        "source_refs": source},
+        "pregenerated_characters": {"available": False, "applicability": "None included",
+                                   "source_refs": source},
+    }
+    _validate_module_play_profile(profile)
+    assert "party_size" not in profile
+    with pytest.raises(ValueError, match="valid 1 to 20 range"):
+        _validate_module_play_profile({**profile, "party_size": {
+            "minimum": 5, "maximum": 2, "source_refs": source,
+        }})
+
+
 def test_emergent_module_shard_requires_scene_and_lineage_but_not_ending(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
