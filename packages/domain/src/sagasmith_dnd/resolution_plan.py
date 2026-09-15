@@ -14,6 +14,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from sagasmith_dnd.resolution_ir import execute_instruction, lower_instruction
 from sagasmith_dnd.save_context import validated_save_source_facts
 
 SEMANTIC_PLAN_VERSION = 2
@@ -685,11 +686,21 @@ def execute_resolution_plan(
                 )
                 continue
             arguments = _resolve_result_refs(step["args"], results)
-            result = runtime.execute(
-                str(step["op"]),
-                deepcopy(arguments),
+            instruction = lower_instruction(
                 step_id=step_id,
-                prior_results=deepcopy(results),
+                opcode=str(step["op"]),
+                arguments=arguments,
+                source_id=plan.compiled.source_card_id,
+                citations=plan.compiled.citations,
+            )
+            result = execute_instruction(
+                instruction,
+                lambda opcode, values: runtime.execute(
+                    opcode,
+                    values,
+                    step_id=step_id,
+                    prior_results=deepcopy(results),
+                ),
             )
             if not isinstance(result, dict):
                 raise ResolutionPlanExecutionError(
@@ -701,6 +712,7 @@ def execute_resolution_plan(
                     "step_id": step_id,
                     "op": step["op"],
                     "status": "committed",
+                    "instruction": instruction.receipt(),
                 }
             )
         runtime.commit()

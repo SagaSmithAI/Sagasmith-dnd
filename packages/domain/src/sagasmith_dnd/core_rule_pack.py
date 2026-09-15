@@ -1040,8 +1040,7 @@ BOUNDARIES = (
             "record_rest_completion|apply_short_rest_hit_die_choice"
         ),
         (
-            "tests/test_lifecycle.py::"
-            "test_2014_short_rest_requires_sequential_additional_hit_dice",
+            "tests/test_lifecycle.py::test_2014_short_rest_requires_sequential_additional_hit_dice",
             "packages/mcp/tests/test_rest_hit_dice_mcp.py::"
             "test_2014_short_rest_hit_dice_are_chosen_sequentially_across_restart",
             "packages/mcp/tests/test_rest_hit_dice_mcp.py::"
@@ -1061,10 +1060,7 @@ BOUNDARIES = (
     CoreBoundary(
         "dnd5e.core.rest.song_of_rest",
         ("2014",),
-        (
-            "lifecycle.validate_song_of_rest_source|apply_rest|"
-            "apply_short_rest_hit_die_choice"
-        ),
+        ("lifecycle.validate_song_of_rest_source|apply_rest|apply_short_rest_hit_die_choice"),
         (
             "tests/test_lifecycle.py::test_song_of_rest_applies_once_per_eligible_creature",
             "packages/mcp/tests/test_rest_hit_dice_mcp.py::"
@@ -1141,14 +1137,14 @@ BOUNDARIES = (
     CoreBoundary(
         "dnd5e.core.spell.spellbook_copy",
         ("2014", "2024"),
-        "sagasmith_dnd_mcp.server.settle_spellbook_copy",
+        "sagasmith_dnd_runtime.application.settle_spellbook_copy",
         ("packages/mcp/tests/test_spellbook_copy_mcp.py",),
         "bundled:srd/wizard-spellbook-copying",
     ),
     CoreBoundary(
         "dnd5e.core.spell.evocation_savant",
         ("2014",),
-        "sagasmith_dnd_mcp.server.settle_spellbook_copy",
+        "sagasmith_dnd_runtime.application.settle_spellbook_copy",
         ("packages/mcp/tests/test_spellbook_copy_mcp.py",),
         "bundled:srd2014/02_Classes/Wizard.md#evocation-savant",
     ),
@@ -1156,8 +1152,8 @@ BOUNDARIES = (
         "dnd5e.core.narrative.watchers_eye",
         ("2014",),
         (
-            "sagasmith_dnd_mcp.server._watchers_eye_source_binding|"
-            "sagasmith_dnd_mcp.server.character_source_feature"
+            "sagasmith_dnd_runtime.application._watchers_eye_source_binding|"
+            "sagasmith_dnd_runtime.application.character_source_feature"
         ),
         ("packages/mcp/tests/test_scag_watchers_eye_mcp.py",),
         (
@@ -1169,49 +1165,51 @@ BOUNDARIES = (
     CoreBoundary(
         "dnd5e.core.mcp.combat_mutation_guard",
         ("2014", "2024"),
-        "sagasmith_dnd_mcp.server.require_outside_active_combat",
+        "sagasmith_dnd_runtime.application.require_outside_active_combat",
         ("packages/mcp/tests/test_runtime_integrity_mcp.py",),
         "runtime:mcp/action-economy-boundary",
     ),
     CoreBoundary(
         "dnd5e.core.mcp.opportunity_melee_only",
         ("2014", "2024"),
-        "sagasmith_dnd_mcp.server.combat_reaction_attack",
+        "sagasmith_dnd_runtime.application.combat_reaction_attack",
         ("packages/mcp/tests/test_runtime_integrity_mcp.py",),
         "bundled:srd/opportunity-attacks",
     ),
     CoreBoundary(
         "dnd5e.core.mcp.reaction_defense_atomicity",
         ("2014", "2024"),
-        "sagasmith_dnd_mcp.server.combat_reaction_defense",
+        "sagasmith_dnd_runtime.application.combat_reaction_defense",
         ("packages/mcp/tests/test_reaction_defense_mcp.py",),
         "runtime:mcp/post-hit-pre-damage-reaction",
     ),
     CoreBoundary(
         "dnd5e.core.mcp.shield_attack_reaction_atomicity",
         ("2014", "2024"),
-        "sagasmith_dnd_mcp.server.combat_reaction_defense",
+        "sagasmith_dnd_runtime.application.combat_reaction_defense",
         ("packages/mcp/tests/test_reaction_defense_mcp.py",),
         "runtime:mcp/shield-post-hit-reaction",
     ),
     CoreBoundary(
         "dnd5e.core.mcp.magic_missile_atomicity",
         ("2014", "2024"),
-        "sagasmith_dnd_mcp.server.combat_cast_spell|combat_magic_missile_defense",
+        "sagasmith_dnd_runtime.application.combat_cast_spell|combat_magic_missile_defense",
         ("packages/mcp/tests/test_magic_missile_mcp.py",),
         "runtime:mcp/magic-missile-targeting-darts-shield",
     ),
     CoreBoundary(
         "dnd5e.core.mcp.save_damage_atomicity",
         ("2014", "2024"),
-        ("sagasmith_dnd_mcp.server.combat_save_damage|combat_engine.resolve_save_damage_to_sheets"),
+        (
+            "sagasmith_dnd_runtime.application.combat_save_damage|combat_engine.resolve_save_damage_to_sheets"
+        ),
         ("packages/mcp/tests/test_agent_save_damage_mcp.py",),
         "runtime:mcp/source-bound-save-and-damage",
     ),
     CoreBoundary(
         "dnd5e.core.mcp.duration_clock",
         ("2014", "2024"),
-        "sagasmith_dnd_mcp.server.campaign_advance_effects",
+        "sagasmith_dnd_runtime.application.campaign_advance_effects",
         (
             "packages/mcp/tests/test_runtime_integrity_mcp.py",
             "packages/mcp/tests/test_campaign_clock_mcp.py",
@@ -1223,21 +1221,21 @@ BOUNDARIES = (
     CoreBoundary(
         "dnd5e.core.mcp.death_save_turn_cadence",
         ("2014",),
-        "sagasmith_dnd_mcp.server.character_make_death_save|combat_check",
+        "sagasmith_dnd_runtime.application.character_make_death_save|combat_check",
         ("packages/mcp/tests/test_noncombat_death_save_cadence_mcp.py",),
         "bundled:srd2014/06_Gameplay/Order_of_Combat.md#death-saving-throws",
     ),
     CoreBoundary(
         "dnd5e.core.mcp.combat_spell_boundary",
         ("2014", "2024"),
-        "sagasmith_dnd_mcp.server.combat_cast_spell",
+        "sagasmith_dnd_runtime.application.combat_cast_spell",
         ("packages/mcp/tests/test_runtime_integrity_mcp.py",),
         "runtime:mcp/spell-action-economy",
     ),
     CoreBoundary(
         "dnd5e.core.mcp.pending_ruling_atomicity",
         ("2014", "2024"),
-        "sagasmith_dnd_mcp.server",
+        "sagasmith_dnd_runtime.application",
         ("packages/mcp/tests/test_runtime_integrity_mcp.py",),
         "runtime:mcp/dm-ruling-boundary",
     ),

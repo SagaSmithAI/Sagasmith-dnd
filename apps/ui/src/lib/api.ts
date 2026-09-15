@@ -30,12 +30,26 @@ function requestHeaders(extra?: HeadersInit): Headers {
 
 export class GatewayRequestError extends Error {
   status: number;
+  problem: Record<string, unknown>;
+  code?: string;
+  retryable?: boolean;
+  recovery?: unknown;
   category: 'offline' | 'unauthorized' | 'forbidden' | 'conflict' | 'not_found' | 'contract' | 'server';
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, problem: Record<string, unknown> = {}) {
     super(message);
     this.name = 'GatewayRequestError';
     this.status = status;
+    this.problem = problem;
+    const structured = problem.structured_content;
+    const envelope = structured && typeof structured === 'object'
+      ? structured as Record<string, unknown> : problem;
+    const nested = envelope.error;
+    const details = nested && typeof nested === 'object'
+      ? nested as Record<string, unknown> : envelope;
+    this.code = typeof details.code === 'string' ? details.code : undefined;
+    this.retryable = typeof details.retryable === 'boolean' ? details.retryable : undefined;
+    this.recovery = details.recovery;
     this.category = status === 0 ? 'offline'
       : status === 401 ? 'unauthorized'
         : status === 403 ? 'forbidden'
@@ -63,7 +77,9 @@ async function gatewayRequest<T>(path: string, init?: RequestInit, timeoutMs = 8
     });
     if (!res.ok) {
       const problem = await res.json().catch(() => ({})) as { error?: string };
-      throw new GatewayRequestError(res.status, problem.error || `API ${res.status}: ${res.statusText}`);
+      throw new GatewayRequestError(
+        res.status, problem.error || `API ${res.status}: ${res.statusText}`, problem,
+      );
     }
     const value = await res.json() as GatewayResult<T> | T;
     if (value && typeof value === 'object' && 'data' in value && 'meta' in value) {
@@ -168,6 +184,7 @@ export async function downloadContentPackArtifact(
       throw new GatewayRequestError(
         response.status,
         problem.error || `API ${response.status}: ${response.statusText}`,
+        problem,
       );
     }
     return response.blob();
@@ -215,7 +232,7 @@ export async function combatRender(
   );
   if (!response.ok) {
     const problem = await response.json().catch(() => ({})) as { error?: string };
-    throw new Error(problem.error || `Render rejected (${response.status})`);
+    throw new GatewayRequestError(response.status, problem.error || 'Render rejected', problem);
   }
   return response.blob();
 }
@@ -243,7 +260,7 @@ export async function submitCombatMove(
   });
   if (!response.ok) {
     const problem = await response.json().catch(() => ({})) as { error?: string };
-    throw new Error(problem.error || `Move rejected (${response.status})`);
+    throw new GatewayRequestError(response.status, problem.error || 'Move rejected', problem);
   }
   return unwrap(await response.json() as CombatStatus | { data: CombatStatus });
 }
