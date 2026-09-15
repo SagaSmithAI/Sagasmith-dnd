@@ -4,26 +4,26 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sagasmith-dnd"
-version = "0.2.0"
+version = "0.3.0"
 description = "D&D 5e 2014/2024 runtime and unified content-package CLI for SagaSmith Core"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "SagaSmithAI" }]
-dependencies = ["sagasmith-core>=0.2.0,<0.3.0"]
+dependencies = ["sagasmith-core>=0.3.0,<0.4.0"]
 
 [project.optional-dependencies]
-documents = ["sagasmith-core[documents]>=0.2.0,<0.3.0"]
+documents = ["sagasmith-core[documents]>=0.3.0,<0.4.0"]
 images = [
     "pymupdf>=1.26.0,<2.0.0",
     "Pillow>=10.0.0,<13.0.0",
 ]
-embedding = ["sagasmith-core[embedding]>=0.2.0,<0.3.0"]
-vector = ["sagasmith-core[vector]>=0.2.0,<0.3.0"]
-dense = ["sagasmith-core[embedding,vector]>=0.2.0,<0.3.0"]
+embedding = ["sagasmith-core[embedding]>=0.3.0,<0.4.0"]
+vector = ["sagasmith-core[vector]>=0.3.0,<0.4.0"]
+dense = ["sagasmith-core[embedding,vector]>=0.3.0,<0.4.0"]
 all = [
-    "sagasmith-core[documents,embedding,vector]>=0.2.0,<0.3.0",
+    "sagasmith-core[documents,embedding,vector]>=0.3.0,<0.4.0",
     "pymupdf>=1.26.0,<2.0.0",
     "Pillow>=10.0.0,<13.0.0",
 ]
