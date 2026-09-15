@@ -5,6 +5,8 @@
 This is the current vertical source repository for the D&D product line:
 
 - `packages/domain` owns deterministic D&D 5e mechanics and canonical schemas.
+- `packages/runtime` owns extracted protocol-independent application services;
+  it must not import MCP or HTTP. Atomic random/state/receipt commits live here.
 - `packages/mcp` owns authoritative state, authorization, revisions, random
   streams, idempotency, settlement, and request-scoped tool enforcement.
 - `skills` owns reusable Agent procedures and module-authoring review.

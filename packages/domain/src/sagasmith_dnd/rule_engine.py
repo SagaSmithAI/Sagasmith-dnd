@@ -394,11 +394,12 @@ def run_mechanic_tests(
     tests: list[dict[str, Any]] | tuple[dict[str, Any], ...],
     *,
     fingerprint: str = "validation",
+    edition: str = "2014",
 ) -> dict[str, Any]:
     """Run pack-supplied positive/negative examples without executing code."""
     context = ResolutionContext(
         fingerprint,
-        get_core_rule_pack("2014"),
+        get_core_rule_pack(edition),
         compile_mechanics(mechanics),
         {},
         {},
@@ -434,6 +435,17 @@ def run_mechanic_tests(
             result = apply_rule_event(sheet, event, case_context)
             expected_status = str(case.get("expected_status") or "committed")
             errors: list[str] = []
+            if not expectations and not any(
+                field in case
+                for field in ("expected_status", "expected_modifiers", "expected_pending")
+            ):
+                errors.append("test must assert a sheet value or an explicit expected_status")
+            for field, actual in (
+                ("expected_modifiers", list(result.modifiers)),
+                ("expected_pending", list(result.pending)),
+            ):
+                if field in case and case[field] != actual:
+                    errors.append(f"{field} expected {case[field]!r}, got {actual!r}")
             if result.status != expected_status:
                 errors.append(f"expected status {expected_status}, got {result.status}")
             exercised.update(str(item["mechanic_id"]) for item in result.receipts)
@@ -451,6 +463,7 @@ def run_mechanic_tests(
     mechanic_ids = {str(item.get("id") or "") for item in mechanics}
     uncovered = sorted(mechanic_ids - exercised)
     return {
+        "edition": context.core_pack.edition,
         "passed": (bool(cases) and all(case["passed"] for case in cases) and not uncovered),
         "total": len(cases),
         "cases": cases,

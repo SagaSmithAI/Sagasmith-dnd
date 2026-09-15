@@ -7001,15 +7001,20 @@ def _create_server(
         if mechanics and not declared_tests:
             compiler_warnings.append("executable rule pack has no declarative tests")
         elif mechanics and not compiler_errors:
-            report = run_mechanic_tests(mechanics or [], declared_tests)
-            compiler_errors.extend(
-                error for case in report["cases"] if not case["passed"] for error in case["errors"]
-            )
-            if report["mechanics_uncovered"]:
-                compiler_warnings.append(
-                    "declarative tests do not exercise mechanics: "
-                    + ", ".join(report["mechanics_uncovered"])
+            for test_edition in manifest_value.get("editions") or []:
+                report = run_mechanic_tests(
+                    mechanics or [], declared_tests, edition=test_edition,
                 )
+                compiler_errors.extend(
+                    f"{test_edition}: {error}"
+                    for case in report["cases"] if not case["passed"]
+                    for error in case["errors"]
+                )
+                if report["mechanics_uncovered"]:
+                    compiler_warnings.append(
+                        f"{test_edition}: declarative tests do not exercise mechanics: "
+                        + ", ".join(report["mechanics_uncovered"])
+                    )
         result = rule_packs.save_draft(
             manifest=manifest_value,
             artifacts=artifact_values,
