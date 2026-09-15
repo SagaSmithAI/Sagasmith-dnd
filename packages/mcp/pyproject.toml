@@ -34,7 +34,7 @@ all = [
     "Pillow>=10.0.0,<13.0.0",
 ]
 gateway = ["aiohttp>=3.11.0,<4.0.0"]
-dev = ["pytest>=9.0.0,<10.0.0", "ruff>=0.1.0"]
+dev = ["pytest>=9.0.0,<10.0.0", "pytest-xdist>=3.8.0,<4.0.0", "ruff>=0.1.0"]
 
 [project.scripts]
 sagasmith-dnd-mcp = "sagasmith_dnd_mcp.server:main"

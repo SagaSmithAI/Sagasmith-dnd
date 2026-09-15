@@ -1436,7 +1436,13 @@ def _create_server(config, *, resources):
         return {**exposures.status(current), "changed": changed}
 
     exposure_operation = mcp._tool_manager.get_tool("exposure")
+    for parameter_name, parameter_schema in exposure_operation.parameters["properties"].items():
+        parameter_schema.setdefault(
+            "description", _application._parameter_description("exposure", parameter_name)
+        )
     exposure_operation.parameters["properties"]["cursor"]["maxLength"] = 1024
+    exposure_operation.fn_metadata.output_schema = _application._tool_output_schema("exposure")
+    exposure_operation.__dict__.pop("output_schema", None)
     exposure_operation.meta = {"sagasmith_domain_context": "sagasmith-dnd"}
     mcp.runtime = application
     if config.auth_context_secret:
