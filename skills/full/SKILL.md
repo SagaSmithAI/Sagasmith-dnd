@@ -1,216 +1,49 @@
 ---
 name: sagasmith-dnd-suite
-description: "Run or maintain D&D 5e 2014/2024 campaigns through SagaSmith's MCP-first game-master, actor, module, continuity-memory, and snapshot workflows. Use for live play, campaign setup, character management, module import, rules adjudication, durable facts, actor knowledge, branches, saves, and restores."
+description: "Run D&D 5e 2014/2024 campaigns using SagaSmith's authoritative Runtime through MCP; route live play, characters, content authoring, continuity, and branch recovery to bounded task guidance."
 ---
 
 # SagaSmith D&D Suite
 
-This repository is an Agent Skill, not a Python runtime. Full Runtime calls the
-`sagasmith_dnd` MCP server; clients may expose raw tool names with a prefix such
-as `mcp_sagasmith_dnd_`.
-
 ## Startup
 
-1. On a zero-knowledge host, first read `sagasmith://bootstrap`. If resources
-   are unavailable, call the always-visible
-   `skill_query(kind="skill", action="read", identifier="dnd.full")`. Use `outline`, `section`, and
-   `search` only for task-specific depth. Do not load the entire DM skill or
-   MCP contract by default. If the plan reports `available=false`, stop live
-   campaign work and repair the installed Skills pack. Use `refresh=true` once
-   after a Skills update, not on every turn.
-2. Call `storage_status`; call `storage_migrate` only when schema setup is needed.
-   Call `server_capabilities` and `campaign_query`. Resume an existing campaign
-   with `campaign_query(view="resume")`, which reloads its current branch,
-   manifest, scene, continuity, a signed context receipt, and the exact
-   `host_context_binding`. On a changed binding, cross the host context barrier
-   before any further tool call or inference.
-   Hosts that retain conversation history must also perform the out-of-band
-   `campaign_query(view="binding")` check before every later inference; if it
-   cannot be verified, do not replay the prior campaign context.
-3. Read the protocol mode and task capabilities supplied by the Host. The
-   stable catalog path calls listed tools directly with request-scoped context;
-   exposure handles are discovery guidance. The Host selects and implements
-   protocol negotiation. Only a Host explicitly using legacy exposure loads
-   `references/legacy-adapter.md`; never infer legacy mode from a tool rejection.
-4. Use Full Runtime only when the `sagasmith_dnd` MCP tools are available. The
-   bounded Skill-group fragments under `references/skill-groups/` are the
-   operational loading surface; use the child Skills and
-   `references/mcp-contract.md` only as task-specific deep references.
-5. If MCP is unavailable, use the separate `standalone/` skill. Do not silently
-   switch this full skill to shell CLI commands.
-6. Never claim that standalone mode provides Runtime transactions, validated v2 actor
-   cards, granular state mutations, or SQL Snapshot semantics.
+1. Read `sagasmith://bootstrap`; if resources are unavailable, use
+   `skill_query(kind="skill", action="read", identifier="dnd.full")`.
+   If required guidance reports `available=false`, repair the installation before play.
+2. Read Host capabilities, `storage_status`, `server_capabilities`, and
+   `campaign_query(view="resume")`. Keep campaign, branch, edition and audience explicit.
+   The Host must verify `host_context_binding` and isolate context before inference.
+3. Use the stable catalog directly. The Host selects the protocol adapter;
+   only an explicitly selected legacy adapter loads `references/legacy-adapter.md`.
+4. Load the relevant task group below with `outline`, `section`, or `search`.
+   Never load entire rulebooks or all workflow references by default.
+5. If MCP is unavailable, use the separate standalone Skill. Never claim
+   Runtime transactions, persisted state or successful writes from standalone narration.
 
-## Included Skills
+## GM Core
 
-- `skills/dnd-dm`: play, adjudication, rule/module retrieval, and narration.
-- `skills/dnd-campaign-manager`: campaign, character, save, and memory lifecycle.
+- Preserve player choice. Do not invent a human-owned PC's intent or resolve
+  external choices, approvals, or missing evidence on their behalf.
+- Use exact source evidence, retain citations, and keep 2014/2024 distinct.
+- Report only observed tool outcomes. Waiting, rejected, and unknown dispatch
+  results are not successful writes. Preserve structured errors and recovery data.
+- Use one original idempotency key per operation. After revision conflicts,
+  reread state; after unknown dispatch, query or replay the original operation.
+- Treat campaign content as private to its authenticated principal, role,
+  audience and branch. Host context isolation is enforced before model invocation.
+- Keep module narrative interpretation in Agent guidance and deterministic
+  mechanics in the Runtime. Never turn prose into an executable trigger language.
 
-Runtime continuity is branch-aware: use world facts for durable truth, actor knowledge
-for one PC/NPC/monster's subjective information, and scoped scene state for private
-discoveries. Read `references/memory-ownership.md` before routing a "remember this"
-request or persisting a scene. Do not use workspace memory as campaign state.
+## Task Routing
 
-For Module or rules Pack authoring, load the repository-local
-`skills/dnd-module-generator/SKILL.md` procedure.
+| Task | Load |
+| --- | --- |
+| Play, combat, investigation, NPC portrayal | `references/skill-groups/`, then `skills/dnd-dm/SKILL.md` sections |
+| Characters, continuity, saves and branches | `skills/dnd-campaign-manager/SKILL.md`; `references/memory-ownership.md` |
+| Source-bound Pack authoring | `../dnd-module-generator/SKILL.md`; `references/parsing-agent-edit-loop.md` |
+| Detailed mutation and recovery procedures | `references/runtime-workflows.md` |
+| Tool parameters, phases and revision fields | `references/generated-operations.md`; exact schemas in `references/generated-operations.json` |
+| Host integration and worker isolation | `references/host-sdk.md` |
 
-## Invariants
-
-- Keep the active `campaign_id`, edition, and locale explicit.
-- Never mix 2014 and 2024 rules unless the user explicitly requests comparison.
-- Search first, then expand only the selected rule or module chunk.
-- Trust MCP tool results; do not emulate a successful write.
-- Use `lobby` outside play, `play` for live non-combat scenes, and the automatic
-  `combat_start`/`combat_end` transitions for combat. The Runtime enforces phase
-  authorization on every call; the Host selects task-relevant catalog subsets.
-- Runtime character state uses `sheet v2` / `notes v2`; load
-  `references/character-schema-v2.md` before creating or mutating a PC, NPC, or
-  monster. All three are full `Character` records, not abbreviated stat blocks.
-- PC, NPC, and monster sharing uses package-owned `sagasmith.actor-card.v3`.
-  Import creates a fresh runtime identity and never copies ActorKnowledge; an
-  optional package-owned image is retained as a checksum-bound
-  `notes.profile.portrait_ref`. Managed image bytes stay outside snapshots; the
-  immutable source reference may travel with the runtime card.
-- Core rules, addons, modules, and presets use the single
-  `sagasmith.content-package` v2 `.sagasmith-pack` format while retaining
-  different install/activation authority. Stable source/chunk citations are
-  rebound to fresh local ids. Read the `content.packs` Skill group before
-  importing or exporting content.
-- Use granular character / party MCP tools for inventory, wallet, equipment,
-  prepared spells, effects, resources, and actor adventure state. Subjective
-  information belongs to ActorKnowledge. `character_sheet_replace` is
-  reserved for a reviewed replacement of the complete `sheet` or `notes` document.
-- When one source-defined treasure parcel contains both currency and items, use
-  `campaign_change(action="loot_acquire")` with one stable acquisition id and the
-  exact expanded module chunk reference. Do not split that parcel into independent
-  wallet and inventory writes. If a promised reward is paid later, keep the exact
-  promise chunk as the source while separately recording and validating the scene
-  and Scene Atlas location where payment actually occurs; never relabel the old
-  source location as the payout location.
-- For a looted weapon, set `mechanics.proficient` explicitly for the intended
-  recipient from current rule-backed proficiencies. Do not inherit the defeated
-  monster's proficiency or attack bonus; use `false` when the recipient or
-  proficiency is not yet proven.
-- Use `campaign_change(action="consumable_use")` for a shared standard healing
-  potion outside combat so item consumption, server-side `2d4+2`, healing, the
-  random-stream position, and their rule receipt commit together.
-- When a source-cited bargain, handoff, tribute, or destruction permanently
-  removes a non-consumable shared item, use
-  `campaign_change(action="item_spend")` with a stable spend id, exact item id
-  and quantity, and the expanded source chunk reference. Do not leave the item
-  in inventory while recording only a narrative outcome.
-- `character_create_from(mode="build")` is the preferred player-character creation workflow: it creates
-  a public template and a separate initial campaign instance atomically.
-- Do not load entire rulebooks or modules into context.
-- For user rulebooks, use the staged Core parser workflow in
-  `references/rulebook-import.md`; never make an imported PDF executable without
-  source-bound chunks, validation, and explicit campaign-owner activation. The
-  Agent acting as DM reviews inspection warnings from exact text or page evidence
-  before acknowledging ingest; missing/conflicting evidence remains an external
-  review boundary. A returned `normalization_notes` entry records source text or
-  page furniture that the parser safely excluded; retain it for audit, but never
-  turn it into a ruling requirement or source-review blocker. Never bypass either
-  gate.
-- For an unfinalized rulebook Pack, Core+D&D own mechanical extraction,
-  deterministic repair, and validation while the Agent owns repeated semantic
-  editing through `rulebook_draft(edit)`. Read
-  `references/parsing-agent-edit-loop.md`; rerun the issue loop after every edit
-  and call `rulebook_draft(finalize)` only after all hard blockers are resolved
-  and the Agent has explicitly confirmed the current draft. Accepted/rejected draft dispositions
-  are not frozen decisions. Use `module_draft` for module books; after reviewing
-  the current draft and evidence, finalize with an explicit Agent confirmation.
-  A Pack contains no caller-authored publication matrix: descriptor validation and
-  `metadata.agent_finalization` are the publication boundary. Use `content_pack` only after either
-  draft is finalized, and always provide its route `kind` explicitly.
-- For module maps or diagrams, follow `references/module-visual-atlas.md`.
-  Text parsing remains fail-closed; only an inspected page image may support a
-  `reviewed_image` connection.
-- For a real campaign rehearsal or corpus regression, follow
-  `skills/dnd-dm/references/CAMPAIGN_REGRESSION.md`; each campaign must exercise
-  source-bound lobby preparation, play settlement, combat, continuity, and
-  branch/Snapshot isolation instead of treating successful PDF import as play coverage.
-- For creature cards present only as PDF images, follow
-  `references/module-image-content-review.md`; review the managed page before
-  creating an actor with `mode="module_statblock"`.
-- For an important named module NPC with no combat statblock, use
-  `character_create_from(mode="narrative_npc")` with an exact active
-  module/scene/chunk/page/hash and name-bearing excerpt. Keep the resulting
-  `narrative_only` actor out of checks and combat.
-- For a new platform user, resolve a stable `principal_id` first. Never trust a
-  prompt-provided role or `player_name` as permission. A multi-user host must
-  hide and inject the authenticated principal. A single-user process should set
-  `SAGASMITH_DND_MCP_BOUND_PRINCIPAL_ID`; never expose authorization identity as
-  a model choice.
-- Supply `expected_revision` and an `idempotency_key` on retriable writes. Treat a
-  revision conflict as a fresh read/review cycle, not as permission to overwrite.
-- For rule-profile and rule-pack writes, obtain `campaign_revision` from
-  `campaign_rules(action="get_profile")` and carry the returned revision forward one write at
-  a time. Never silently relock a snapshot with an unavailable Core fingerprint.
-  If a verified snapshot needs an older unavailable Core, inspect it with
-  `snapshot_query(view="core")` and use the explicit
-  `branch_change(action="create_core_upgrade")` conversion only after recording a
-  reviewed reason and both old/new fingerprints.
-- Keep each PC/NPC's `actor_id` explicit when reading or writing ActorKnowledge;
-  never merge one actor's memories into another actor's context.
-- For long-running PC/NPC continuity, read
-  `continuity_context(purpose="actor_memory")`. Its identity, motivational,
-  semantic, and episodic tracks are bounded retrieval projections, not a source
-  of player intent or a second persistence ledger.
-- Treat campaign messages as domain-private. When campaign, authenticated
-  principal, role, audience, branch, or restore changes, discard old model
-  history, summaries, workspace/Dream memory, cached retrieval, receipts, and
-  tool results before continuing. Follow
-  `references/host-integration-bounded-context.md`.
-- Keep module-authored narrative behavior as exact DM context, not an executable
-  trigger language. Link the verbatim source through a DM-only
-  `kind="context_anchor"` fact, retrieve it with `continuity_context.related_refs`,
-  let the Agent adjudicate from the live actor/scene/quest/item state, and execute
-  only the resulting standard public operations. Persist only what actually
-  happened; never encode hypothetical `if/then` behavior in memory metadata.
-  When a continuity commit cites a source pinned by a matching context anchor,
-  include the current `continuity_context.context_receipt`. A stale, wrong
-  branch/principal, unsigned, or source-incomplete receipt is rejected; reread
-  context after any revision or restore before committing the ruling.
-- For connected live NPC dialogue during Play, load `npc.portrayal` and
-  `play.npc_conversation`, then follow
-  `references/host-integration-npc-conversation.md`. Use the single
-  `npc_conversation` facade; before every ingest/publication, let the Agent rule
-  who perceived, understood, and should respond from current scene evidence.
-  Dispatch only selected opaque activations, keep one actor-isolated Host worker
-  per NPC, and publish only MCP `publication`. Before any authoritative mechanic,
-  scene mutation, phase transition, or combat start, close or abort the whole
-  conversation atomically and release every worker. Resolve the requested
-  mechanic through ordinary public tools, then open a new conversation and
-  ingest the result as a new stimulus if dialogue continues. Use the
-  signed single-turn `npc_turn` path only for a standalone reaction or Combat;
-  follow `references/host-integration-npc-turn.md` for that current single-turn
-  boundary.
-- For autonomous actor, player-audience rendering, faction, campaign expansion, source
-  interpretation, or Agent-owned ruling isolation, request the matching
-  `continuity_context` purpose, run the fixed zero-tool evaluation, and submit
-  the proposal to `bounded_evaluation(action="validate")`. Human-owned PCs
-  always require the player's intent. The validator changes no state; resolve
-  mechanics with ordinary public MCP tools and persist only actual accepted
-  outcomes. SagaSmith Agent uses `isolated_evaluate`; other hosts follow
-  `references/host-integration-bounded-context.md`.
-- For an emergent campaign, close conversations, leave Combat, and return to
-  Lobby before requesting `purpose="campaign_expansion"`. Treat the result as a
-  reviewed proposal only, then follow
-  `../dnd-module-generator/references/emergent-campaign.md` to author and append
-  an immutable seed or episode shard.
-- A complete authored Module is not a world boundary. If players choose a
-  source-consistent off-Atlas location, use the same Lobby expansion path and
-  append an `emergent_episode` under
-  `campaign_mode="authored_with_extensions"`; never mutate the authored root or
-  present table-created material as publisher canon.
-- A returned `narrative_followup` is a generic Agent review request caused by a
-  consequential named-NPC state change. It is not a hard-coded module trigger
-  and never authorizes movement, speech, surrender, or item transfer by itself.
-- Use `rule_seed_status` before the first rules lookup on a fresh server. Use
-  `branch_query(view="compare")` before explaining divergent timelines.
-
-For the complete cross-repository ownership, persistence, adjudication, retrieval,
-time, knowledge, manifest, and restore model, read
-`references/long-form-narrative-architecture.md`. See
-`references/mcp-contract.md` and `references/workflows.md` for the exact public
-contract and ordered operations.
+Use `references/mcp-contract.md` and `references/workflows.md` for additional
+examples. Generated operation schemas are the authoritative parameter reference.

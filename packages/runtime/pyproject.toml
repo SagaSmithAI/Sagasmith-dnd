@@ -4,10 +4,10 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sagasmith-dnd-runtime"
-version = "0.1.0"
+version = "0.3.0"
 description = "Protocol-independent D&D application services"
 requires-python = ">=3.11"
-dependencies = ["sagasmith-core>=0.2.3,<0.3.0", "sagasmith-dnd>=0.2.0,<0.3.0"]
+dependencies = ["sagasmith-core>=0.3.0,<0.4.0", "sagasmith-dnd>=0.3.0,<0.4.0"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sagasmith_dnd_runtime"]

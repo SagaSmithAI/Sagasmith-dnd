@@ -255,7 +255,10 @@ class DndMcpClient:
                         write_stream,
                         message_handler=handle_server_message,
                     ) as session:
-                        await session.initialize()
+                        if self.legacy_exposure:
+                            await session.initialize()
+                        else:
+                            await session.discover()
                         await session.list_tools()
                         if first_attempt:
                             self._ready.set()

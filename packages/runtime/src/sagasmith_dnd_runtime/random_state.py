@@ -14,6 +14,8 @@ from sagasmith_dnd.character_schema import validate_party_state
 from sagasmith_dnd.external_custody import validate_external_inventory_custody
 from sagasmith_dnd.random_stream import active_random_stream
 
+from sagasmith_dnd_runtime.build_identity import implementation_identity
+
 
 @dataclass(frozen=True)
 class PendingIdempotencyRequest:
@@ -58,6 +60,11 @@ class RandomStateMutationService(CoreStateMutationService):
         **kwargs: Any,
     ):
         idempotency_key = kwargs.get("idempotency_key")
+        if kwargs.get("rule_receipts"):
+            kwargs["rule_receipts"] = [
+                {**deepcopy(receipt), "implementation_identity": implementation_identity()}
+                for receipt in kwargs["rule_receipts"]
+            ]
         branch_id = kwargs.get("branch_id")
         pending = _PENDING_IDEMPOTENCY_REQUEST.get()
         bound_public_request = (
@@ -92,7 +99,8 @@ class RandomStateMutationService(CoreStateMutationService):
         # cross-actor custody before state, audit groups or replay receipts can
         # commit, including callers that bypass server-level preflight helpers.
         with self.database.transaction():
-            result = super().replace(
+            commit = super().commit if bound_public_request else super().replace
+            result = commit(
                 campaign_id,
                 campaign_state=campaign_state,
                 **kwargs,

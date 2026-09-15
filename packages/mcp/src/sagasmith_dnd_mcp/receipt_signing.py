@@ -1,10 +1,6 @@
-"""MCP naming facade for core canonical envelope integrity primitives."""
+"""Compatibility alias for the Runtime-owned implementation."""
+import sys
 
-from sagasmith_core.integrity import (
-    sign_canonical_envelope as sign_receipt,
-)
-from sagasmith_core.integrity import (
-    verify_canonical_envelope as verify_receipt_signature,
-)
+from sagasmith_dnd_runtime import receipt_signing as _implementation
 
-__all__ = ["sign_receipt", "verify_receipt_signature"]
+sys.modules[__name__] = _implementation

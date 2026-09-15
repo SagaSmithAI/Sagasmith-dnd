@@ -3451,7 +3451,7 @@ wheels = [
 
 [[package]]
 name = "sagasmith-core"
-version = "0.2.3"
+version = "0.3.0"
 source = { editable = "../sagasmith-core" }
 dependencies = [
     { name = "alembic" },
@@ -3510,7 +3510,7 @@ dev = [{ name = "pytest", specifier = ">=9.1.1" }]
 
 [[package]]
 name = "sagasmith-dnd"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "packages/domain" }
 dependencies = [
     { name = "sagasmith-core" },
@@ -3564,7 +3564,7 @@ provides-extras = ["documents", "images", "embedding", "vector", "dense", "all",
 
 [[package]]
 name = "sagasmith-dnd-mcp"
-version = "0.1.0"
+version = "0.3.0"
 source = { editable = "packages/mcp" }
 dependencies = [
     { name = "mcp" },
@@ -3630,7 +3630,7 @@ provides-extras = ["documents", "images", "ocr", "embedding", "vector", "dense",
 
 [[package]]
 name = "sagasmith-dnd-runtime"
-version = "0.1.0"
+version = "0.3.0"
 source = { editable = "packages/runtime" }
 dependencies = [
     { name = "sagasmith-core" },

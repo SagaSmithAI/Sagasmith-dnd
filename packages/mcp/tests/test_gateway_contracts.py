@@ -53,6 +53,9 @@ def test_cancelled_queue_entry_never_dispatches(monkeypatch) -> None:
             async def initialize(self):
                 pass
 
+            async def discover(self):
+                pass
+
             async def list_tools(self):
                 pass
 
@@ -99,6 +102,9 @@ def test_transport_error_does_not_repeat_dispatched_write(monkeypatch) -> None:
 
         class Session:
             async def initialize(self):
+                pass
+
+            async def discover(self):
                 pass
 
             async def list_tools(self):
@@ -168,5 +174,60 @@ def test_explicit_legacy_adapter_loads_exposure() -> None:
         assert calls == [("exposure", "get"), ("exposure", "open"),
                          ("exposure", "set"), ("combat_query", None)]
         assert refreshes == [True]
+
+    asyncio.run(exercise())
+
+
+def test_deadline_cancels_queued_request_without_dispatch() -> None:
+    async def exercise() -> None:
+        client = DndMcpClient("unused", request_timeout=0.01)
+        client._runner_task = asyncio.create_task(asyncio.Event().wait())
+        try:
+            with pytest.raises(TimeoutError):
+                await client.call_tool("write", {"idempotency_key": "deadline"})
+            request = client._queue.get_nowait()
+            assert request.future.cancelled()
+        finally:
+            await client.stop()
+
+    asyncio.run(exercise())
+
+
+def test_pool_slow_start_does_not_block_another_browser(monkeypatch) -> None:
+    async def exercise() -> None:
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        clients = []
+
+        class Client:
+            def __init__(self, url):
+                self.number = len(clients)
+                self.stopped = False
+                clients.append(self)
+
+            async def start(self):
+                if self.number == 0:
+                    entered.set()
+                    await release.wait()
+
+            async def stop(self):
+                self.stopped = True
+
+        monkeypatch.setattr(gateway, "DndMcpClient", Client)
+        pool = gateway.DndClientPool(gateway.GatewayConfig())
+        first = asyncio.create_task(pool.session(None, "slow"))
+        await entered.wait()
+        try:
+            token, client, created = await asyncio.wait_for(pool.session(None, "fast"), 1)
+            assert token and created and client.number == 1
+            await pool.close()
+            release.set()
+            with pytest.raises(RuntimeError, match="closed"):
+                await first
+            assert all(client.stopped for client in clients)
+            assert pool.sessions == {}
+        finally:
+            release.set()
+            await pool.close()
 
     asyncio.run(exercise())
