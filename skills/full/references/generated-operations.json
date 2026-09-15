@@ -10521,7 +10521,7 @@
                           },
                           "play_profile": {
                             "additionalProperties": false,
-                            "description": "D&D play envelope. Level, advancement, and pregenerated-character review always need real evidence; party-size advice alone is optional.",
+                            "description": "D&D play envelope. Level, advancement, and pregenerated-character review always need real evidence; party-size advice alone is optional and may be omitted.",
                             "properties": {
                               "advancement": {
                                 "additionalProperties": false,
@@ -10934,7 +10934,6 @@
                               }
                             },
                             "required": [
-                              "party_size",
                               "starting_level",
                               "expected_end_level",
                               "advancement",
@@ -11304,7 +11303,7 @@
                       },
                       "play_profile": {
                         "additionalProperties": false,
-                        "description": "D&D play envelope. Level, advancement, and pregenerated-character review always need real evidence; party-size advice alone is optional.",
+                        "description": "D&D play envelope. Level, advancement, and pregenerated-character review always need real evidence; party-size advice alone is optional and may be omitted.",
                         "properties": {
                           "advancement": {
                             "additionalProperties": false,
@@ -11717,7 +11716,6 @@
                           }
                         },
                         "required": [
-                          "party_size",
                           "starting_level",
                           "expected_end_level",
                           "advancement",
