@@ -18,7 +18,7 @@ idempotency key when recovering an unknown dispatch. Never retry with a new key.
 | `campaign_change` | lobby, play | expected_revision | True |
 | `campaign_create` | lobby | — | True |
 | `campaign_event` | lobby, play | — | True |
-| `campaign_query` |  | — | True |
+| `campaign_query` | lobby, play, combat | — | True |
 | `campaign_rules` | combat, lobby, play | expected_revision | True |
 | `character_ability_apply` | lobby | expected_revision | True |
 | `character_action` | lobby, play | expected_revision | True |
@@ -57,7 +57,7 @@ idempotency key when recovering an unknown dispatch. Never retry with a new key.
 | `dnd_ability_roll` | lobby, play | expected_campaign_revision | True |
 | `dnd_check` | combat, play | expected_campaign_revision | True |
 | `dnd_dice_roll` | combat, lobby, play | expected_campaign_revision | True |
-| `game_phase` |  | expected_revision | True |
+| `game_phase` | lobby, play, combat | expected_revision | True |
 | `inventory_change` | lobby, play | expected_revision | True |
 | `inventory_transfer` | lobby, play | — | True |
 | `memory_change` | lobby, play | expected_revision | True |
@@ -70,19 +70,19 @@ idempotency key when recovering an unknown dispatch. Never retry with a new key.
 | `npc_conversation` | play | — | False |
 | `npc_conversation_transport` |  | — | False |
 | `playthrough_manifest` | combat, lobby, play | expected_revision | True |
-| `resolution_presentation` |  | — | False |
+| `resolution_presentation` | lobby, play, combat | — | False |
 | `rule_expand` | combat, lobby, play | — | True |
 | `rule_search` | combat, lobby, play | — | True |
 | `rule_seed_bundled` | lobby | — | False |
 | `rule_seed_status` | lobby | — | True |
 | `rulebook_draft` | lobby | expected_revision | True |
-| `server_capabilities` |  | — | True |
-| `skill_query` |  | — | True |
+| `server_capabilities` | lobby, play, combat | — | True |
+| `skill_query` | lobby, play, combat | — | True |
 | `snapshot_create` | combat, lobby, play | expected_revision | True |
 | `snapshot_query` | combat, lobby, play | — | True |
 | `snapshot_restore` | combat, lobby | expected_revision | True |
 | `state_revision` | combat, lobby, play | — | True |
 | `storage_migrate` | lobby | — | False |
-| `storage_status` |  | — | True |
+| `storage_status` | lobby, play, combat | — | True |
 | `system_list` | lobby | — | True |
 | `wallet_change` | lobby, play | expected_revision | True |

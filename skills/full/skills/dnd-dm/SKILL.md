@@ -19,25 +19,23 @@ in Agent spatial mode present the DM ruling without inventing coordinates.
 ## Start with the runtime
 
 1. Read this Skill and only the task-relevant deep reference.
-2. Resume with `campaign_query(view="resume")`, then call
-   `exposure(action="open")` for that campaign.
-3. Search for the smallest useful tool set and change it with
-   `exposure(action="set")`.
-4. Refresh after `tools/list_changed` and call the listed native tool directly.
+2. Resume with `campaign_query(view="resume")` and read the authoritative phase.
+3. Use the Host-selected subset of the stable public catalog.
+4. Call the selected tool directly using its native schema.
 
 Server-owned phase, trusted principal, campaign role, actor grants, revision,
 idempotency, source validation, and transactions remain authoritative.
 
 ## Route by phase and capability
 
-| Work | Search/add these native tools | Read deeper only when needed |
+| Work | Use these public tools | Read deeper only when needed |
 |---|---|---|
 | Scene evidence and narration | `module_query`, `module_search`, `module_expand`, `continuity_context` | `references/RUNTIME_DEEP_REFERENCE.md` |
 | Scene/world/knowledge writes | `memory_change`, `campaign_event`, `actor_knowledge_change` | `../../references/memory-ownership.md` |
-| Checks and contests | `character_check`, `dnd_check`, `dnd_dice_roll` | `references/DM_RULES.md` |
+| Checks and contests | `combat_check` for combat actors; `character_check` outside combat; `dnd_check` for numeric calculations; `dnd_dice_roll` for raw dice | `references/DM_RULES.md` |
 | Character resources and rests | `character_*`, `campaign_change` | `../../references/character-schema-v2.md` |
 | Enter/end combat | `combat_start`, `combat_end`, `combat_join` | `references/RUNTIME_DEEP_REFERENCE.md` |
-| Observe, turns, and actions | `combat_query`, `combat_turn`, `combat_*` | `references/DM_RULES.md` |
+| Observe, turns, and actions | `combat_query`, `combat_end_turn`, `combat_*` | `references/DM_RULES.md` |
 | Tactical map or Agent spatial facts | map tools or action-specific Agent facts | `references/DM_MAP_SYS.md` |
 | Campaign/module preparation | `module_draft`, `content_pack`, `character_*` | `references/MODULE_INDEX.md`, `references/MODULE_ARC.md` |
 | Full campaign regression | tools required by the current phase | `references/CAMPAIGN_REGRESSION.md`; for missing mechanical opposition, read `references/OPPOSITION_HYDRATION.md` |
@@ -76,10 +74,8 @@ load a whole large document by default.
 - Let `combat_start` and `combat_end` own Combat phase transitions.
 - Use server dice and the campaign random stream.
 - Snapshot meaningful boundaries and branches, not every roll or turn.
-- After restore, discard old context and revisions, consume `tools/list_changed`,
-  refresh the native list, resume again, then use `exposure(search/set)` on the
-  existing binding to load the needed current-phase tools. Reopen only for a
-  genuinely new campaign/principal binding.
+- After restore, discard old context and revisions, resume again, cross the
+  changed host context binding, and reread current campaign and actor state.
 - Keep `standalone/` separate; never silently downgrade Full Runtime.
 
 For exact facade payloads, inspect the selected tool/action and use

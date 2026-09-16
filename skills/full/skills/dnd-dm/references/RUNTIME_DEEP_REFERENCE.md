@@ -20,9 +20,8 @@ the concise parent Skill and the MCP native tool list are the current entry poin
 ## Runtime
 
 This full skill is MCP-first. Start with `storage_status`, then call
-`exposure(action="open")` for the active campaign. Search for exact tool ids,
-change the native list with `exposure(action="set")`, refresh after
-`tools/list_changed`, and call listed tools directly. The short fragments under
+`campaign_query(view="resume")` and read authoritative state. Use the stable
+public catalog and call Host-selected tools directly. The short fragments under
 `../../references/skill-groups/` route ordinary work; this larger document is
 an on-demand deep reference.
 All raw tool names below may be prefixed by the host, for example

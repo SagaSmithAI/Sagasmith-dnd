@@ -11,9 +11,8 @@ continue with `character_state_change(death_save|stabilize)` until settled. Use
 an audited structured outcome; do not force a module ending from narration
 alone.
 
-After `combat_end`, consume `tools/list_changed`, refresh the native Play tool
-list, and use `exposure(search/set)` on the existing binding for the needed Play
-tools. Re-query character and campaign state, then commit durable casualties,
+After `combat_end`, use the Host-selected Play tools. Re-query character
+and campaign state, then commit durable casualties,
 relationships, clues, loot, scene progress, and manifest changes through normal
 Play continuity tools.
 

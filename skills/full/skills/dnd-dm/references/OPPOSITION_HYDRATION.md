@@ -6,11 +6,9 @@ Do not treat that gap alone as proof that the active Pack needs a new review.
 
 ## Establish the source path
 
-1. Move to `lobby` before authoring or actor creation. Consume
-   `tools/list_changed`, refresh the native list, and use
-   `exposure(search/set)` to load `rule_search`, `rule_seed_status`,
-   `rulebook_draft`, `character_create_from`, and module authoring tools only as
-   needed.
+1. Move to `lobby` before authoring or actor creation. Use `rule_search`,
+   `rule_seed_status`, `rulebook_draft`, `character_create_from`, and module
+   authoring tools from the public catalog only as needed.
 2. Re-read `character_query(view="list")`. Reuse every existing actor whose
    returned `statblock.source_identity` matches the required printed card, and
    create only the exact shortfall.
@@ -160,7 +158,7 @@ spells are disabled; retain those diagnostics and avoid only the unavailable
 capability. Repair first when the whole card is invalid, the intended action is
 disabled, or indispensable evidence is absent or conflicting.
 
-Restore the entry phase after preparation, consume the native tool-list change,
-refresh the list, and use `exposure(search/set)` for the next phase. Stop for
+Restore the entry phase after preparation and re-read authoritative state.
+Use the Host-selected tools for that phase. Stop for
 external input only after the exact rule, reviewed rulebook, and module-review
 paths are absent, contradictory, or unavailable.

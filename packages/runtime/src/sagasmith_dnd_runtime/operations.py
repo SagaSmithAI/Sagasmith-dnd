@@ -11,7 +11,7 @@ from typing import Any, Callable, get_type_hints
 
 from pydantic import ConfigDict, create_model
 
-from .tool_profiles import CORE_TOOLS, policy_for_tool
+from .tool_profiles import CORE_TOOLS, PROFILES, policy_for_tool
 
 
 class OperationError(ValueError):
@@ -193,7 +193,9 @@ class DndRuntime:
                     "id": operation.name,
                     "input_schema": operation.parameters,
                     "output_schema": operation.fn_metadata.output_schema,
-                    "phases": sorted(policy.phases) if policy else [],
+                    "phases": sorted(policy.phases) if policy else (
+                        list(PROFILES) if operation.name in CORE_TOOLS else []
+                    ),
                     "roles": {phase: sorted(policy.roles(phase)) for phase in policy.phases}
                     if policy
                     else {},

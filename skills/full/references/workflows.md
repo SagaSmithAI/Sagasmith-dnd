@@ -11,16 +11,10 @@ settlement, continuity ledgers, the playthrough manifest, and Snapshot recovery.
 ## Exposure and session start
 
 1. Call `storage_status`, then `campaign_query(view="list")` and select a campaign.
-2. Call `exposure(action="open", campaign_id=...)`. Its phase is authoritative.
-3. Call `exposure(action="search")`, then add or remove exact tool ids with
-   `exposure(action="set")`. Authorization and phase filtering remain server-owned.
-   Keep each search to one short capability phrase or exact tool id. Never join
-   several tool ids and narrative requirements into one query; empty matches are
-   not evidence that the phase has no tools.
-4. Refresh `tools/list` after `tools/list_changed`, then call listed domain tools
-   directly. A core tool is not a proxy for a newly exposed domain tool: after
-   loading `character_query` or `combat_query`, call that native tool rather than
-   placing its name or action inside `campaign_query`.
+2. Resume with `campaign_query(view="resume")` and read authoritative phase.
+3. Use the Host-selected subset of the stable public operation catalog.
+4. Call the selected native tool directly. Never tunnel `character_query`,
+   `combat_query`, or mutations through `campaign_query`.
 5. In `play`, read `module_query(view="current")`, expand the exact scene with
    `module_query(view="scene")`, read recent `campaign_event(action="list")`, and
    call `continuity_context` separately for each acting PC or NPC. For a DM
@@ -31,8 +25,8 @@ settlement, continuity ledgers, the playthrough manifest, and Snapshot recovery.
    `character_query(view="get")` cards. Never carry a card or revision across a
    write, phase transition, branch checkout, or restore.
 
-An exposure belongs to one MCP session and principal. Every other Agent opens its
-own exposure. Changing one session's native tools must not expose them to another.
+Each request has its own trusted principal and campaign binding. Host tool
+selection must not leak private state or capabilities across principals.
 
 ## Module-authored narrative behavior
 
@@ -55,8 +49,8 @@ own exposure. Changing one session's native tools must not expose them to anothe
 
 ## New campaign and module PDF
 
-1. Without a campaign, open an exposure and add `campaign_create`; after creation,
-   reopen the exposure with the new campaign id.
+1. Call `campaign_create` with trusted identity; after creation, bind subsequent
+   requests to the returned campaign id.
 2. Lock the correct Core edition with `campaign_rules`. Do not silently use a
    different edition or optional publication.
 3. Inventory every allowlisted file before importing. Call
@@ -311,11 +305,9 @@ own exposure. Changing one session's native tools must not expose them to anothe
    `character_check(action="group")`; the engine, not the Agent, applies each
    actor card and the "at least half succeed" threshold. Record the comparisons
    and source condition in a campaign event.
-6. After `combat_start`, consume `tools/list_changed`, refresh the native list,
-   and keep the existing exposure binding. The server phase is now `combat`;
-   use `exposure(search/set)` to load `combat.observe`, `combat.turn`, or
-   `combat.actions` for an acting player.
-   Load `combat.control`, `combat.save`, or `combat.map` only for an owner/DM.
+6. After `combat_start`, re-read encounter state; the phase is now `combat`.
+   Use player-authorized observation/action tools for acting players and
+   owner/DM control, save, and map tools only with the appropriate role.
    When the host can send MCP image content, request
    `combat_query(view="render", payload={audience_projection:"party_public"})`
    for the shared table channel. Use `caller` only for the same authorized private
@@ -447,9 +439,7 @@ own exposure. Changing one session's native tools must not expose them to anothe
    deliberate pass.
 8. Call `combat_end` through owner/DM `combat.control` with a structured outcome
    when the encounter is actually over. It returns unfinished 0-HP actors in
-   `post_combat_recovery` and moves the campaign to `play`; consume
-   `tools/list_changed`, refresh the native list, and use
-   `exposure(search/set)` on the existing binding before calling
+   `post_combat_recovery` and moves the campaign to `play`. Re-read state and use
    `character_state_change(death_save|stabilize)` until each is settled.
 9. After combat, a Stable actor at 0 HP cannot rest. If the scene permits the party
    to wait, call `campaign_change(action="stable_recovery")` once with every
@@ -485,9 +475,9 @@ own exposure. Changing one session's native tools must not expose them to anothe
 5. Do not change a prepared list during advancement. Re-read the actor and
    verify all resources and derived values; submit any revised complete list
    through the next completed `campaign_change(action="party_rest")`.
-6. Create a snapshot, switch back to `play`, consume `tools/list_changed`, and
-   use `exposure(search/set)` on the existing binding to load the needed Play
-   tools. Stop if the runtime reports unsupported multiclass state or any
+6. Create a snapshot, switch back to `play`, and re-read authoritative state.
+   Use the public Play tools. Stop if the runtime reports unsupported
+   multiclass state or any
    catalog item remains unresolved.
 
 ## Feature settlement examples
@@ -581,12 +571,12 @@ continuity, and its authorized actor knowledge.
    snapshot or branch recovery when the server reports that boundary.
 
 For destructive or stateful regression, enter `lobby`, create and verify a source
-checkpoint, then create-and-checkout a disposable branch. Return to `play`, refresh
-the native list and use `exposure(search/set)` on the existing binding, run the scene/combat workflow, record actor-scoped knowledge and a full
+checkpoint, then create-and-checkout a disposable branch. Return to `play`, re-read
+authoritative state, run the scene/combat workflow, record actor-scoped knowledge and a full
 snapshot, then return through `lobby`. The phase change dirties the disposable
 branch, so create and verify a second lobby checkpoint before checkout; otherwise
-the clean-branch guard must reject the switch. Checkout the source branch. Refresh
-the native list and use `exposure(search/set)` after every phase or branch change;
-call `open` only for a genuinely different campaign/principal binding. Verify source HP/resources and query
+the clean-branch guard must reject the switch. Checkout the source branch. Resume
+authoritative state after every phase or branch change and cross changed host
+context bindings. Verify source HP/resources and query
 each actor's knowledge on both branches; a branch comparison must show the test
 memory and subjective knowledge only on the disposable branch. There is no merge.

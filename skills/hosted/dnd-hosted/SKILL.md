@@ -34,7 +34,17 @@ the real result and continue with a new combat task. Player combat tasks support
 attack preflight/resolve, spells, movement, reactions, choices and end turn. Tool
 availability never overrides the Runtime's role, phase or actor checks.
 
-For a generic ability check or dice request during combat, if dnd_check or
+Use this routing table; a numeric roll alone never settles a character action:
+
+| Intent | Operation |
+| --- | --- |
+| Character check, save, death save or Search during combat | `combat_check` |
+| Defense reaction | `combat_choice(action="resolve_defense")` |
+| Character check outside combat | `character_check` |
+| Explicit standalone numeric check with reviewed inputs | `dnd_check` |
+| Explicit raw dice expression | `dnd_dice_roll` |
+
+For a standalone numeric check or raw dice request during combat, if dnd_check or
 dnd_dice_roll is absent, submit next_task="roll" before any mutating call. The Host
 validates one bounded catalog handoff and continues the same request. Do not ask
 the player to repeat it, claim a roll happened, or request a handoff after an action

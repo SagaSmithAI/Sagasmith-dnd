@@ -9,10 +9,8 @@ This is a Claude/Hermes/plugin discovery wrapper. Require the
 `sagasmith_dnd` MCP server and read `sagasmith://bootstrap`. Then read the
 canonical workflow at
 `{baseDir}/../../full/SKILL.md`.
-Resume with `campaign_query(view="resume")`; open one campaign-bound
-exposure with `exposure(action="open")`, search for the needed tools, and use
-`exposure(action="set")` to change the native list. Refresh after
-`tools/list_changed` and call listed tools directly. Never trust a
+Resume with `campaign_query(view="resume")` and call public tools from the
+Host-selected catalog using their native schemas. Never trust a
 model-authored principal. Do not silently switch to `standalone/`.
 
 Treat the `host_context_binding` returned by resume/continuity as a hard model

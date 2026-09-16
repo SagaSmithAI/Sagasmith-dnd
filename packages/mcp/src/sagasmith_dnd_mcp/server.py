@@ -18,6 +18,7 @@ from uuid import uuid4
 from weakref import WeakValueDictionary
 
 import sagasmith_dnd_runtime.application as _application
+import sagasmith_dnd_runtime.application_support as _application_support
 from mcp.server.caching import CacheHint
 from mcp.server.context import ServerRequestContext
 from mcp.server.lowlevel.server import NotificationOptions
@@ -81,13 +82,15 @@ from sagasmith_dnd_mcp.tool_profiles import (
 
 
 def __getattr__(name):
-    return getattr(_application, name)
+    return getattr(_application_support, name)
 
 
 class _CompatibilityModule(_types.ModuleType):
     def __setattr__(self, name, value):
-        if hasattr(_application, name) and name not in {"create_server", "main", "close_server"}:
-            setattr(_application, name, value)
+        if hasattr(_application_support, name) and name not in {
+            "create_server", "main", "close_server"
+        }:
+            setattr(_application_support, name, value)
         super().__setattr__(name, value)
 
 
