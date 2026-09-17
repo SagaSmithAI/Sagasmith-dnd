@@ -11,17 +11,12 @@ from sagasmith_core.content_pack import (
     loads_content_archive,
 )
 from sagasmith_core.indexed_source import rule_chunk_key
-
 from sagasmith_dnd.character_schema import default_character_notes, default_character_sheet
 from sagasmith_dnd.content_actors import build_dnd_content_actor
 from sagasmith_dnd.content_packages import (
     _module_scene_metadata,
-    _portrait_cache_key,
-    _portrait_sources,
     _refresh_reviewed_content_hashes,
     _translate_module_refs,
-    attach_actor_portraits,
-    attach_auxiliary_assets,
     build_preset_content_package,
     build_rule_content_package,
     canonicalize_dnd_content_package,
@@ -29,7 +24,13 @@ from sagasmith_dnd.content_packages import (
     validate_dnd_content_package,
 )
 from sagasmith_dnd.content_validation import content_fingerprint
-from sagasmith_dnd.portrait_extraction import ExtractedPortrait, PortraitInspection
+from sagasmith_dnd_runtime.content_assets import (
+    _portrait_cache_key,
+    _portrait_sources,
+    attach_actor_portraits,
+    attach_auxiliary_assets,
+)
+from sagasmith_dnd_runtime.portrait_extraction import ExtractedPortrait, PortraitInspection
 
 
 def test_module_scene_metadata_isolates_dnd_profile_fields() -> None:
@@ -755,11 +756,11 @@ def test_portraits_attach_to_source_statblock_cards_without_runtime_instances(
         method="test-reviewed-crop",
     )
     monkeypatch.setattr(
-        "sagasmith_dnd.portrait_extraction.PortraitExtractor.inspect",
+        "sagasmith_dnd_runtime.portrait_extraction.PortraitExtractor.inspect",
         lambda *args, **kwargs: PortraitInspection(portrait, "extracted", True, 1, 0.95),
     )
     monkeypatch.setattr(
-        "sagasmith_dnd.portrait_extraction.PortraitExtractor.extract_reviewed_crop",
+        "sagasmith_dnd_runtime.portrait_extraction.PortraitExtractor.extract_reviewed_crop",
         lambda *args, **kwargs: portrait,
     )
     source_path = tmp_path / "source.pdf"
@@ -799,7 +800,7 @@ def test_portraits_attach_to_source_statblock_cards_without_runtime_instances(
     assert audit["reviewed"][0]["decision"] == "crop"
 
     monkeypatch.setattr(
-        "sagasmith_dnd.portrait_extraction.PortraitExtractor.inspect",
+        "sagasmith_dnd_runtime.portrait_extraction.PortraitExtractor.inspect",
         lambda *args, **kwargs: PortraitInspection(
             None, "no_visual_candidate", True, 0, 0.0
         ),

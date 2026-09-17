@@ -4,6 +4,11 @@ Protocol-independent application services between the deterministic domain and
 transport adapters. Runtime may depend on `sagasmith-core` and `sagasmith-dnd`;
 it must not import MCP, HTTP, gateway, or Host code.
 
+Runtime also owns the `sagasmith-dnd` CLI, its database/dense bootstrap, package
+asset files, PDF portrait extraction and local content-library operations.
+Install `sagasmith-dnd-runtime` for the CLI; select its `images`, `documents` or
+`dense` extras as needed. See the [ownership and compatibility table](../../docs/domain-runtime-boundary.md).
+
 ## Application boundary
 
 `RandomStateMutationService` owns the existing atomic state/random/replay-receipt

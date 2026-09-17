@@ -7,8 +7,7 @@ from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
-
-from sagasmith_dnd import cli, official_expansions
+from sagasmith_dnd import official_expansions
 from sagasmith_dnd.core_content import PACK_ID as CORE_CONTENT_PACK_ID
 from sagasmith_dnd.core_content import PACK_VERSION as CORE_CONTENT_PACK_VERSION
 from sagasmith_dnd.official_expansions import (
@@ -17,6 +16,9 @@ from sagasmith_dnd.official_expansions import (
     load_official_expansion_lock,
     matching_official_expansion_dependency_rebinds,
     official_expansion_catalog,
+)
+from sagasmith_dnd_runtime import cli, official_library
+from sagasmith_dnd_runtime.official_library import (
     resolve_official_expansion_archives,
     verify_official_expansion_library,
 )
@@ -279,6 +281,7 @@ def test_standalone_verifier_includes_locked_core_dependencies(
     monkeypatch: pytest.MonkeyPatch,
     tamper: str | None,
 ) -> None:
+    monkeypatch.setattr(official_library, "validate_dnd_content_package", lambda package: package)
     lock, expansion_path = _fixture_library(tmp_path)
     monkeypatch.setattr(
         official_expansions, "validate_dnd_content_package", lambda package: package

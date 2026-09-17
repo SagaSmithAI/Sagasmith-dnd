@@ -37,10 +37,7 @@ from sagasmith_dnd.content_packages import (
 )
 from sagasmith_dnd.core_content import PACK_ID as CORE_CONTENT_PACK_ID
 from sagasmith_dnd.core_content import PACK_VERSION as CORE_CONTENT_PACK_VERSION
-from sagasmith_dnd.official_expansions import (
-    load_official_expansion_lock,
-    verify_official_expansion_library,
-)
+from sagasmith_dnd.official_expansions import load_official_expansion_lock
 from sagasmith_dnd.spells import CORE_SHIELD_MECHANIC_ID, CORE_SHIELD_SPELL_ID
 from sagasmith_dnd.standard_feature_ids import (
     TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
@@ -48,6 +45,7 @@ from sagasmith_dnd.standard_feature_ids import (
     TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
     TORTLE_NATURAL_ARMOR_LEGACY_PACK_VERSIONS,
 )
+from sagasmith_dnd_runtime.official_library import verify_official_expansion_library
 
 import sagasmith_dnd_mcp.server as server_module
 from sagasmith_dnd_mcp.config import McpConfig

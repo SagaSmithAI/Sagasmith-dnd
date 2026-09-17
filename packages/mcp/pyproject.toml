@@ -22,7 +22,7 @@ dependencies = [
 documents = ["sagasmith-core[documents]>=0.3.0,<0.4.0"]
 images = [
     "Pillow>=10.0.0,<13.0.0",
-    "sagasmith-dnd[images]>=0.3.0,<0.4.0",
+    "sagasmith-dnd-runtime[images]>=0.3.0,<0.4.0",
 ]
 ocr = ["sagasmith-core[documents,ocr]>=0.3.0,<0.4.0"]
 embedding = ["sagasmith-core[embedding]>=0.3.0,<0.4.0"]
@@ -30,7 +30,7 @@ vector = ["sagasmith-core[vector]>=0.3.0,<0.4.0"]
 dense = ["sagasmith-core[embedding,vector]>=0.3.0,<0.4.0"]
 all = [
     "sagasmith-core[documents,embedding,ocr,vector]>=0.3.0,<0.4.0",
-    "sagasmith-dnd[images]>=0.3.0,<0.4.0",
+    "sagasmith-dnd-runtime[images]>=0.3.0,<0.4.0",
     "Pillow>=10.0.0,<13.0.0",
 ]
 gateway = ["aiohttp>=3.11.0,<4.0.0"]

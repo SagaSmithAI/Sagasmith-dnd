@@ -366,8 +366,6 @@ from sagasmith_dnd.official_expansions import (
     official_expansion_catalog,
     official_expansion_dependency_rebinds,
     official_expansion_support_catalog,
-    resolve_official_expansion_archives,
-    resolve_official_expansion_support_archives,
 )
 from sagasmith_dnd.official_item_materialization import (
     ARCANE_PROPULSION_ARM_ID,
@@ -614,6 +612,10 @@ from sagasmith_dnd_runtime.npc_turns import (
     normalize_npc_turn_proposal,
     validate_npc_basis_refs,
     validate_npc_targets,
+)
+from sagasmith_dnd_runtime.official_library import (
+    resolve_official_expansion_archives,
+    resolve_official_expansion_support_archives,
 )
 from sagasmith_dnd_runtime.operations import (
     DndRuntime,

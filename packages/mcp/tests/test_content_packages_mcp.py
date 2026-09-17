@@ -28,10 +28,7 @@ from sagasmith_dnd.character_schema import (
     equip_inventory_item,
 )
 from sagasmith_dnd.content_actors import build_dnd_content_actor
-from sagasmith_dnd.content_packages import (
-    build_preset_content_package,
-    build_rule_content_package,
-)
+from sagasmith_dnd.content_packages import build_preset_content_package, build_rule_content_package
 from sagasmith_dnd.standard_feature_ids import (
     TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
     TORTLE_NATURAL_ARMOR_AUTHORITY_KEY,

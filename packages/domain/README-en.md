@@ -12,7 +12,7 @@ the repository-local MCP with tested actor, spell, activity, rule-pack,
 content-package, spatial, and combat mechanics.
 
 The Domain package does not own Agent identity or Hosted authorization and is
-not a direct browser write API. Skills teach the Agent how to run the game; MCP
+not a direct browser write API. Skills teach the Agent how to run the game; Runtime
 owns campaign/actor/role/phase/revision/idempotency authority; Domain settles
 already-determined rules inputs into verifiable results.
 
@@ -39,10 +39,14 @@ ruling-required results.
 
 ## Install and CLI
 
+Install `sagasmith-dnd` for the rules/content library alone. The CLI and file
+adapters belong to `sagasmith-dnd-runtime`; old Domain imports delegate lazily.
+See [boundary and compatibility](../../docs/domain-runtime-boundary.md).
+
 Python 3.11+ is required:
 
 ```bash
-pip install sagasmith-dnd
+pip install sagasmith-dnd-runtime
 sagasmith-dnd doctor --json
 sagasmith-dnd --help
 ```
@@ -57,12 +61,12 @@ vector, or Torch dependencies:
 | `embedding` | Sentence Transformers embeddings |
 | `vector` | ChromaDB vector storage |
 | `dense` | `embedding` + `vector` |
-| `all` | all Domain optional capabilities |
+| `all` | all Runtime optional capabilities |
 
 ```bash
-pip install "sagasmith-dnd[documents]"
-pip install "sagasmith-dnd[images]"
-pip install "sagasmith-dnd[dense]"
+pip install "sagasmith-dnd-runtime[documents]"
+pip install "sagasmith-dnd-runtime[images]"
+pip install "sagasmith-dnd-runtime[dense]"
 ```
 
 Scanned-document OCR belongs to `sagasmith-dnd-mcp[ocr]`, not the Domain
@@ -134,7 +138,7 @@ uv run ruff check packages/domain
 For package-local development:
 
 ```bash
-pip install -e ".[all,dev]"
+uv sync --all-packages --all-extras
 pytest --cov
 ruff check .
 ```

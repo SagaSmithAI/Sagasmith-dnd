@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from sagasmith_dnd.cli import main
+from sagasmith_dnd_runtime.cli import main
 
 
 def _call(capsys, *args: str) -> tuple[int, dict]:

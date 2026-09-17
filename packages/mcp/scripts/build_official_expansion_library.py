@@ -25,8 +25,8 @@ from sagasmith_core.content_pack import loads_content_archive
 from sagasmith_dnd.official_expansions import (
     CONTENT_LIBRARY_INDEX_SCHEMA,
     load_official_expansion_lock,
-    verify_official_expansion_library,
 )
+from sagasmith_dnd_runtime.official_library import verify_official_expansion_library
 
 _STEPS = {
     "subclass_grants": repair_subclass_grants.repair_archive,

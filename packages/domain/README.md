@@ -10,7 +10,7 @@
 规则包、内容包、空间与战斗机制。
 
 Domain 不拥有 Agent 身份或 Hosted 授权，也不面向浏览器直接提供权威写入：Skills 教
-Agent 如何主持，MCP 负责 campaign/actor/role/phase/revision/idempotency 权威，Domain
+Agent 如何主持，Runtime 负责 campaign/actor/role/phase/revision/idempotency 权威，Domain
 只把已经确定的规则输入结算成可验证结果。
 
 ## 能力边界
@@ -30,10 +30,14 @@ preflight、choice window 和 ruling-required 结果保持这条边界。
 
 ## 安装与 CLI
 
+仅使用规则/内容库时安装 `sagasmith-dnd`。CLI 和文件适配器由
+`sagasmith-dnd-runtime` 提供，旧 Domain 导入入口延迟转发到 Runtime。
+详见[边界与兼容说明](../../docs/domain-runtime-boundary.md)。
+
 需要 Python 3.11+：
 
 ```bash
-pip install sagasmith-dnd
+pip install sagasmith-dnd-runtime
 sagasmith-dnd doctor --json
 sagasmith-dnd --help
 ```
@@ -47,12 +51,12 @@ sagasmith-dnd --help
 | `embedding` | Sentence Transformers 嵌入 |
 | `vector` | ChromaDB 向量存储 |
 | `dense` | `embedding` + `vector` |
-| `all` | Domain 的全部可选能力 |
+| `all` | Runtime 的全部可选能力 |
 
 ```bash
-pip install "sagasmith-dnd[documents]"
-pip install "sagasmith-dnd[images]"
-pip install "sagasmith-dnd[dense]"
+pip install "sagasmith-dnd-runtime[documents]"
+pip install "sagasmith-dnd-runtime[images]"
+pip install "sagasmith-dnd-runtime[dense]"
 ```
 
 扫描件 OCR 属于 `sagasmith-dnd-mcp[ocr]`，不是 Domain 基础依赖。Agent/Hosted
@@ -113,7 +117,7 @@ uv run ruff check packages/domain
 如只在本目录开发，也可使用：
 
 ```bash
-pip install -e ".[all,dev]"
+uv sync --all-packages --all-extras
 pytest --cov
 ruff check .
 ```

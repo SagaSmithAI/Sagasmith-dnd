@@ -2,7 +2,7 @@
 
 推荐的 Agent/Hosted 入口是仓内 [D&D MCP](../mcp/README.md) 与
 [Full Skills](../../skills/full/SKILL.md)。只有规则引擎开发、诊断或便携脚本才直接安装
-Domain CLI。
+Runtime CLI。
 
 ## 前置条件
 
@@ -10,10 +10,13 @@ Domain CLI。
 - 对当前环境可写的独立数据目录；
 - 需要升级现有数据库时，先停止写入并创建一致性备份。
 
-## Domain CLI
+## Runtime CLI
+
+规则/内容库本身可单独安装 `sagasmith-dnd`；CLI 由 Runtime 包提供。
+详见[边界与兼容说明](../../docs/domain-runtime-boundary.md)。
 
 ```bash
-pip install sagasmith-dnd
+pip install sagasmith-dnd-runtime
 sagasmith-dnd doctor --json
 sagasmith-dnd --help
 ```
@@ -21,10 +24,10 @@ sagasmith-dnd --help
 按需安装可选能力：
 
 ```bash
-pip install "sagasmith-dnd[documents]"  # PDF 解析
-pip install "sagasmith-dnd[images]"     # 角色图提取
-pip install "sagasmith-dnd[dense]"      # embedding + vector
-pip install "sagasmith-dnd[all]"        # Domain 全部可选能力
+pip install "sagasmith-dnd-runtime[documents]"  # PDF 解析
+pip install "sagasmith-dnd-runtime[images]"     # 角色图提取
+pip install "sagasmith-dnd-runtime[dense]"      # embedding + vector
+pip install "sagasmith-dnd-runtime[all]"        # Runtime 全部可选能力
 ```
 
 扫描件 OCR 由 `sagasmith-dnd-mcp[ocr]` 提供，不属于 Domain 基础安装。

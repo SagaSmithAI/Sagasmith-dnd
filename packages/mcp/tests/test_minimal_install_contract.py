@@ -76,7 +76,7 @@ def test_optional_profiles_follow_the_runtime_import_boundaries() -> None:
     assert any("sagasmith-core[embedding]" in item for item in _normalized(domain["embedding"]))
     assert any("sagasmith-core[vector]" in item for item in _normalized(domain["vector"]))
     assert any("sagasmith-core[documents,ocr]" in item for item in _normalized(mcp["ocr"]))
-    assert any("sagasmith-dnd[images]" in item for item in _normalized(mcp["images"]))
+    assert any("sagasmith-dnd-runtime[images]" in item for item in _normalized(mcp["images"]))
 
 
 def test_minimal_text_mcp_starts_without_importing_heavy_capabilities(tmp_path: Path) -> None:
@@ -125,7 +125,7 @@ def test_minimal_text_mcp_starts_without_importing_heavy_capabilities(tmp_path: 
         try:
             _portrait_extractor_type()
         except RuntimeError as exc:
-            assert "sagasmith-dnd[images]" in str(exc)
+            assert "sagasmith-dnd-runtime[images]" in str(exc)
         else:
             raise AssertionError("portrait extraction did not require the images extra")
 
@@ -154,7 +154,7 @@ def test_minimal_text_mcp_starts_without_importing_heavy_capabilities(tmp_path: 
 
 
 def test_optional_image_loaders_do_not_mask_unrelated_import_regressions(monkeypatch) -> None:
-    from sagasmith_dnd.content_packages import _portrait_extractor_type
+    from sagasmith_dnd_runtime.content_assets import _portrait_extractor_type
 
     from sagasmith_dnd_mcp.server import _render_combat_png
 
@@ -162,7 +162,7 @@ def test_optional_image_loaders_do_not_mask_unrelated_import_regressions(monkeyp
 
     def fail_optional_module(name, globals=None, locals=None, fromlist=(), level=0):
         if name in {
-            "sagasmith_dnd.portrait_extraction",
+            "sagasmith_dnd_runtime.portrait_extraction",
             "sagasmith_dnd_runtime.combat_render",
         }:
             raise ModuleNotFoundError(

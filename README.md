@@ -113,10 +113,14 @@ it requests one complete, finite import artifact rather than a catalog page.
 
 Python 3.11 or newer is required.
 
-### Deterministic Domain package
+### Runtime CLI and Domain library
+
+The CLI is installed by `sagasmith-dnd-runtime`, which depends on the Domain
+library. Rules-only integrations can install `sagasmith-dnd` on its own.
+See [Domain / Runtime ownership](docs/domain-runtime-boundary.md).
 
 ```bash
-pip install sagasmith-dnd
+pip install sagasmith-dnd-runtime
 sagasmith-dnd doctor --json
 sagasmith-dnd --help
 ```
