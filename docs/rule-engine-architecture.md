@@ -4,16 +4,25 @@
 
 | Layer | Responsibility | Entry point |
 | --- | --- | --- |
+| Capability contracts | Versioned operation catalog, semantic fields and handler mapping | `primitive_contracts.py` |
 | Domain primitives | Deterministic sheet transitions and resolved instruction validation | `rule_primitives.py` |
-| Edition strategies | Explicit 2014/2024 spell-turn and exhaustion policies | `edition_policy.py` |
+| Encounter primitives | Target predicates, weighted selection, links/control, counters and assertions | `encounter_primitives.py` |
+| Edition strategies | Spell turns, HP, rest recovery and d20 exhaustion | `edition_policy.py`, `edition_strategies.py` |
 | Rule registration | Edition selection, identity/source validation, duplicate rejection | `rule_registry.py` |
 | Authoring | Event predicates/operations and source-bound typed multi-step plans | `rule_engine.py`, `resolution_plan.py` |
 | Execution | Immutable instructions, dependency stages, conflict selection, receipts | `resolution_ir.py`, `rule_schedule.py` |
 | Runtime | Authorization, encounter context, random streams, pause/resume, revisions, atomic persistence | `sagasmith_dnd_runtime` |
 
+The encounter adapter is a separate `services/semantic_execution.py` component
+with explicit context. Its dispatcher uses the capability registry instead of a
+growing opcode conditional in `CombatService`. Every general-plan capability has
+a tested handler; paid attack-defense capabilities remain a separate context.
+See [extension authoring](extension-authoring.md) for the supported addition path.
+
 Healing, temporary HP, conditions, effects, resources and spell slots have one
-sheet-transition implementation. Native character/combat functions retain their
-source-specific checks and bonuses, then delegate to these primitives. Semantic
+sheet-transition implementation. The migrated character effect and combat healing
+functions retain source-specific checks and bonuses, then delegate to these primitives.
+Other native rules may call their shared lower-level domain helpers directly. Semantic
 encounter adapters resolve authorized actors and delegate to the same domain
 functions. Damage, attacks, movement and checks keep their existing domain
 implementations; they require encounter context and are not sheet-only operations.
@@ -70,6 +79,8 @@ Event fingerprints include compiler version, selected compiled definitions and
 options as well as Core/effective-pack fingerprints. Facts are invocation context,
 not rule identity. Default semantic-plan template fingerprints remain compatible;
 explicit edition restrictions participate in the template fingerprint.
+Optional `requires` capability versions also participate. Installed providers are
+frozen at startup and cannot change compiled mechanics through later dictionary mutation.
 
 The existing implementation digest and checkpointed `core_relock` upgrade flow
 remain authoritative for saved campaigns. Back up the old environment, explicitly
@@ -85,7 +96,7 @@ transitions, resource failure atomicity and distinct edition policies.
 post-substitution validation with rollback. Existing Domain, Runtime and MCP
 suites exercise native rules, encounter settlement and persisted continuations.
 
-Local verification on 2026-09-17 (Windows):
+Prior primitive extraction verification on 2026-09-17 (Windows):
 
 | Check | Result |
 | --- | --- |
@@ -98,3 +109,22 @@ Local verification on 2026-09-17 (Windows):
 
 MCP emitted three upstream Pydantic `TypedDictExtraConfigWarning` warnings.
 These results are local verification, not hosted deployment acceptance.
+
+## Extension-oriented refactor verification
+
+The subsequent 2026-09-17 refactor was verified locally with:
+
+- Domain: 1,620 passed; Runtime: 14 passed.
+- MCP: 1,458 passed, 29 skipped (five upstream Pydantic warnings with four workers).
+- Ruff across all three Python packages, generated-contract check and whitespace check passed.
+- CLI capability discovery, Domain/Runtime wheel and source builds, and immutable
+  workflow bundle publication passed.
+- The synthetic field-medic extension executes on both editions using existing
+  capabilities. Its failure case verifies that consumed supplies roll back when
+  the later healing step is rejected. This is adapter integration evidence, not
+  hosted authorization or paid-model acceptance.
+
+Remaining specialized class/spell implementations and native feature registries
+are intentional domain composition points. Adding content expressible through
+the catalog needs no new dispatcher branch; adding a genuinely new engine
+capability still requires reviewed code, a registered contract and regression tests.

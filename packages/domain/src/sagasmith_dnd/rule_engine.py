@@ -10,6 +10,7 @@ from typing import Any, Iterable
 from sagasmith_dnd.conditions import condition_ids
 from sagasmith_dnd.core_rule_pack import BuiltinCoreRulePack, get_core_rule_pack
 from sagasmith_dnd.immutable_rules import ImmutableRuleFields
+from sagasmith_dnd.primitive_contracts import require_capabilities
 from sagasmith_dnd.resolution_ir import execute_instruction, lower_instruction, resolve_conflicts
 from sagasmith_dnd.rule_primitives import apply_sheet_primitive, validate_primitive
 from sagasmith_dnd.rule_registry import compose_mechanics
@@ -211,6 +212,7 @@ class CompiledMechanic(ImmutableRuleFields):
     citations: tuple[dict[str, Any], ...]
     priority: int = 0
     after: tuple[str, ...] = ()
+    requirements: tuple[tuple[str, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -301,6 +303,7 @@ def compile_mechanics(
                 citations=citations,
                 priority=priority,
                 after=tuple(after),
+                requirements=_mechanic_requirements(value),
             )
         )
         seen.add(mechanic_id)
@@ -317,6 +320,13 @@ def compile_mechanics(
         ordered.append(item)
         del pending[item.id]
     return tuple(ordered)
+
+
+def _mechanic_requirements(value):
+    try:
+        return tuple(require_capabilities(value.get("requires", {})).items())
+    except ValueError as error:
+        raise RuleCompilationError(str(error)) from error
 
 
 def validate_source_bound_mechanics(

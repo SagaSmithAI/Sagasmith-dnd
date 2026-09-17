@@ -1,0 +1,493 @@
+{
+  "actor.control": {
+    "allowed_fields": [
+      "controller_actor_id",
+      "mental_ability_source",
+      "mode",
+      "source",
+      "target_actor_id"
+    ],
+    "execution_context": "encounter",
+    "required_fields": [
+      "controller_actor_id",
+      "mode",
+      "target_actor_id"
+    ],
+    "semantic_plan": true,
+    "sheet_local": false,
+    "version": 1
+  },
+  "actor.link": {
+    "allowed_fields": [
+      "link_kind",
+      "properties",
+      "source",
+      "source_actor_id",
+      "target_actor_id"
+    ],
+    "execution_context": "encounter",
+    "required_fields": [
+      "link_kind",
+      "source_actor_id",
+      "target_actor_id"
+    ],
+    "semantic_plan": true,
+    "sheet_local": false,
+    "version": 1
+  },
+  "actor.unlink": {
+    "allowed_fields": [
+      "link_kind",
+      "source",
+      "source_actor_id",
+      "target_actor_id"
+    ],
+    "execution_context": "encounter",
+    "required_fields": [
+      "link_kind",
+      "source_actor_id",
+      "target_actor_id"
+    ],
+    "semantic_plan": true,
+    "sheet_local": false,
+    "version": 1
+  },
+  "advantage.add": {
+    "allowed_fields": [],
+    "execution_context": "event",
+    "required_fields": [],
+    "semantic_plan": false,
+    "sheet_local": false,
+    "version": 1
+  },
+  "attack.ac_bonus": {
+    "allowed_fields": [
+      "attack_modes",
+      "bonus",
+      "requires_visible_attacker",
+      "requires_wielded_melee_weapon"
+    ],
+    "execution_context": "paid_attack",
+    "required_fields": [
+      "attack_modes",
+      "bonus"
+    ],
+    "semantic_plan": true,
+    "sheet_local": false,
+    "version": 1
+  },
+  "attack.resolve": {
+    "allowed_fields": [
+      "attack_mode",
+      "attack_ref",
+      "context",
+      "source_actor_id",
+      "target_actor_id"
+    ],
+    "execution_context": "encounter",
+    "required_fields": [
+      "attack_ref",
+      "source_actor_id",
+      "target_actor_id"
+    ],
+    "semantic_plan": true,
+    "sheet_local": false,
+    "version": 1
+  },
+  "check.ability": {
+    "allowed_fields": [
+      "ability",
+      "actor_id",
+      "advantage",
+      "bonus",
+      "dc",
+      "disadvantage",
+      "proficient",
+      "source"
+    ],
+    "execution_context": "encounter",
+    "required_fields": [
+      "ability",
+      "actor_id",
+      "dc"
+    ],
+    "semantic_plan": true,
+    "sheet_local": false,
+    "version": 1
+  },
+  "check.contest": {
+    "allowed_fields": [
+      "source_ability",
+      "source_actor_id",
+      "source_advantage",
+      "source_bonus",
+      "source_disadvantage",
+      "source_proficient",
+      "target_ability",
+      "target_actor_id",
+      "target_advantage",
+      "target_bonus",
+      "target_disadvantage",
+      "target_proficient"
+    ],
+    "execution_context": "encounter",
+    "required_fields": [
+      "source_ability",
+      "source_actor_id",
+      "target_ability",
+      "target_actor_id"
+    ],
+    "semantic_plan": true,
+    "sheet_local": false,
+    "version": 1
+  },
+  "check.save": {
+    "allowed_fields": [
+      "ability",
+      "advantage",
+      "dc",
+      "disadvantage",
+      "source",
+      "success_damage",
+      "target_ids"
+    ],
+    "execution_context": "encounter",
+    "required_fields": [
+      "ability",
+      "dc",
+      "target_ids"
+    ],
+    "semantic_plan": true,
+    "sheet_local": false,
+    "version": 1
+  },
+  "choice.require": {
+    "allowed_fields": [],
+    "execution_context": "event",
+    "required_fields": [],
+    "semantic_plan": false,
+    "sheet_local": false,
+    "version": 1
+  },
+  "condition.apply": {
+    "allowed_fields": [
+      "condition_id",
+      "duration",
+      "effect_id",
+      "repeat_save",
+      "source",
+      "source_actor_id",
+      "target_ids"
+    ],
+    "execution_context": "encounter",
+    "required_fields": [
+      "condition_id",
+      "source",
+      "target_ids"
+    ],
+    "semantic_plan": true,
+    "sheet_local": true,
+    "version": 1
+  },
+  "condition.remove": {
+    "allowed_fields": [
+      "condition_id",
+      "source",
+      "target_ids"
+    ],
+    "execution_context": "encounter",
+    "required_fields": [
+      "condition_id",
+      "target_ids"
+    ],
+    "semantic_plan": true,
+    "sheet_local": true,
+    "version": 1
+  },
+  "damage.apply": {
+    "allowed_fields": [
+      "amount",
+      "critical",
+      "damage_type",
+      "expression",
+      "reduction",
+      "source",
+      "target_ids"
+    ],
+    "execution_context": "encounter",
+    "required_fields": [
+      "damage_type",
+      "source",
+      "target_ids"
+    ],
+    "semantic_plan": true,
+    "sheet_local": false,
+    "version": 1
+  },
+  "disadvantage.add": {
+    "allowed_fields": [],
+    "execution_context": "event",
+    "required_fields": [],
+    "semantic_plan": false,
+    "sheet_local": false,
+    "version": 1
+  },
+  "effect.apply": {
+    "allowed_fields": [
+      "effect",
+      "effect_id",
+      "source",
+      "target_ids"
+    ],
+    "execution_context": "encounter",
+    "required_fields": [
+      "effect",
+      "effect_id",
+      "target_ids"
+    ],
+    "semantic_plan": true,
+    "sheet_local": true,
+    "version": 1
+  },
+  "effect.remove": {
+    "allowed_fields": [
+      "effect_id",
+      "source",
+      "target_ids"
+    ],
+    "execution_context": "encounter",
+    "required_fields": [
+      "effect_id",
+      "target_ids"
+    ],
+    "semantic_plan": true,
+    "sheet_local": true,
+    "version": 1
+  },
+  "healing.apply": {
+    "allowed_fields": [
+      "amount",
+      "expression",
+      "source",
+      "target_ids"
+    ],
+    "execution_context": "encounter",
+    "required_fields": [
+      "source",
+      "target_ids"
+    ],
+    "semantic_plan": true,
+    "sheet_local": true,
+    "version": 1
+  },
+  "hp.temp.set": {
+    "allowed_fields": [],
+    "execution_context": "sheet",
+    "required_fields": [],
+    "semantic_plan": false,
+    "sheet_local": true,
+    "version": 1
+  },
+  "knowledge.transfer": {
+    "allowed_fields": [
+      "from_actor_id",
+      "knowledge_ids",
+      "reason",
+      "source",
+      "to_actor_id"
+    ],
+    "execution_context": "encounter",
+    "required_fields": [
+      "from_actor_id",
+      "knowledge_ids",
+      "to_actor_id"
+    ],
+    "semantic_plan": true,
+    "sheet_local": false,
+    "version": 1
+  },
+  "modifier.add": {
+    "allowed_fields": [],
+    "execution_context": "event",
+    "required_fields": [],
+    "semantic_plan": false,
+    "sheet_local": false,
+    "version": 1
+  },
+  "movement.force": {
+    "allowed_fields": [
+      "destination",
+      "direction",
+      "distance_ft",
+      "source",
+      "source_actor_id",
+      "target_actor_id"
+    ],
+    "execution_context": "encounter",
+    "required_fields": [
+      "distance_ft",
+      "source_actor_id",
+      "target_actor_id"
+    ],
+    "semantic_plan": true,
+    "sheet_local": false,
+    "version": 1
+  },
+  "movement.move": {
+    "allowed_fields": [
+      "actor_id",
+      "destination",
+      "distance_ft",
+      "path",
+      "source"
+    ],
+    "execution_context": "encounter",
+    "required_fields": [
+      "actor_id"
+    ],
+    "semantic_plan": true,
+    "sheet_local": false,
+    "version": 1
+  },
+  "resource.recover": {
+    "allowed_fields": [
+      "actor_id",
+      "amount",
+      "resource_ref",
+      "source"
+    ],
+    "execution_context": "encounter",
+    "required_fields": [
+      "actor_id",
+      "amount",
+      "resource_ref"
+    ],
+    "semantic_plan": true,
+    "sheet_local": true,
+    "version": 1
+  },
+  "resource.spend": {
+    "allowed_fields": [
+      "actor_id",
+      "amount",
+      "resource_ref",
+      "source"
+    ],
+    "execution_context": "encounter",
+    "required_fields": [
+      "actor_id",
+      "amount",
+      "resource_ref"
+    ],
+    "semantic_plan": true,
+    "sheet_local": true,
+    "version": 1
+  },
+  "roll.table": {
+    "allowed_fields": [
+      "exclude",
+      "roll_id",
+      "table"
+    ],
+    "execution_context": "encounter",
+    "required_fields": [
+      "table"
+    ],
+    "semantic_plan": true,
+    "sheet_local": false,
+    "version": 1
+  },
+  "ruling.require": {
+    "allowed_fields": [],
+    "execution_context": "event",
+    "required_fields": [],
+    "semantic_plan": false,
+    "sheet_local": false,
+    "version": 1
+  },
+  "spell_slot.recover": {
+    "allowed_fields": [],
+    "execution_context": "sheet",
+    "required_fields": [],
+    "semantic_plan": false,
+    "sheet_local": true,
+    "version": 1
+  },
+  "spell_slot.spend": {
+    "allowed_fields": [],
+    "execution_context": "sheet",
+    "required_fields": [],
+    "semantic_plan": false,
+    "sheet_local": true,
+    "version": 1
+  },
+  "state.assert": {
+    "allowed_fields": [
+      "expected",
+      "message",
+      "operator",
+      "subject"
+    ],
+    "execution_context": "encounter",
+    "required_fields": [
+      "expected",
+      "operator",
+      "subject"
+    ],
+    "semantic_plan": true,
+    "sheet_local": false,
+    "version": 1
+  },
+  "target.validate": {
+    "allowed_fields": [
+      "exclude_self",
+      "forbid_conditions",
+      "maximum_range_ft",
+      "require_conditions",
+      "require_visible",
+      "source",
+      "source_actor_id",
+      "target_ids"
+    ],
+    "execution_context": "encounter",
+    "required_fields": [
+      "source_actor_id",
+      "target_ids"
+    ],
+    "semantic_plan": true,
+    "sheet_local": false,
+    "version": 1
+  },
+  "world.counter.adjust": {
+    "allowed_fields": [
+      "amount",
+      "key",
+      "maximum",
+      "minimum",
+      "source"
+    ],
+    "execution_context": "encounter",
+    "required_fields": [
+      "amount",
+      "key"
+    ],
+    "semantic_plan": true,
+    "sheet_local": false,
+    "version": 1
+  },
+  "world.counter.set": {
+    "allowed_fields": [
+      "key",
+      "source",
+      "value"
+    ],
+    "execution_context": "encounter",
+    "required_fields": [
+      "key",
+      "value"
+    ],
+    "semantic_plan": true,
+    "sheet_local": false,
+    "version": 1
+  }
+}

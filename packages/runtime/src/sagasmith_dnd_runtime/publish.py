@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from sagasmith_dnd.primitive_contracts import capability_manifest
+
 from .application import create_runtime
 from .config import McpConfig
 from .skills import SkillCatalog
@@ -51,6 +53,9 @@ def main() -> None:
             f"{', '.join(row['revision_fields']) or '—'} | {row['idempotent']} |"
         )
     generated = {
+        "generated-primitives.json": json.dumps(
+            capability_manifest(), ensure_ascii=False, indent=2, sort_keys=True
+        ) + "\n",
         "generated-operations.json": json.dumps(
             contract, ensure_ascii=False, indent=2, sort_keys=True
         ) + "\n",

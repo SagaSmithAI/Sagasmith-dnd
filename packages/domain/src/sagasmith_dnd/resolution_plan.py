@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from sagasmith_dnd.immutable_rules import ImmutableRuleFields
+from sagasmith_dnd.primitive_contracts import PLAN_FIELDS as _STEP_FIELDS
+from sagasmith_dnd.primitive_contracts import PLAN_OPS, require_capabilities
 from sagasmith_dnd.resolution_ir import execute_instruction, lower_instruction
 from sagasmith_dnd.rule_registry import RuleRegistration, RuleRegistry
 from sagasmith_dnd.save_context import validated_save_source_facts
@@ -125,34 +127,6 @@ TRIGGER_EVENT_FIELDS: dict[str, frozenset[str]] = {
         }
     ),
 }
-PLAN_OPS = frozenset(
-    {
-        "actor.control",
-        "actor.link",
-        "actor.unlink",
-        "attack.ac_bonus",
-        "attack.resolve",
-        "check.ability",
-        "check.contest",
-        "check.save",
-        "condition.apply",
-        "condition.remove",
-        "damage.apply",
-        "effect.apply",
-        "effect.remove",
-        "healing.apply",
-        "knowledge.transfer",
-        "movement.force",
-        "movement.move",
-        "resource.recover",
-        "resource.spend",
-        "roll.table",
-        "state.assert",
-        "target.validate",
-        "world.counter.adjust",
-        "world.counter.set",
-    }
-)
 SLOT_KINDS = frozenset(
     {
         "ability",
@@ -186,226 +160,7 @@ _DICE_RE = re.compile(r"^[1-9]\d*d[1-9]\d*(?:[+-]\d+)?$")
 _SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,199}$")
 _RESULT_REF_RE = re.compile(r"^[a-zA-Z0-9_.:-]+$")
 
-_STEP_FIELDS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
-    "attack.ac_bonus": (
-        frozenset({"bonus", "attack_modes"}),
-        frozenset(
-            {
-                "bonus",
-                "attack_modes",
-                "requires_visible_attacker",
-                "requires_wielded_melee_weapon",
-            }
-        ),
-    ),
-    "roll.table": (
-        frozenset({"table"}),
-        frozenset({"table", "roll_id", "exclude"}),
-    ),
-    "target.validate": (
-        frozenset({"source_actor_id", "target_ids"}),
-        frozenset(
-            {
-                "source_actor_id",
-                "target_ids",
-                "exclude_self",
-                "forbid_conditions",
-                "maximum_range_ft",
-                "require_conditions",
-                "require_visible",
-                "source",
-            }
-        ),
-    ),
-    "check.save": (
-        frozenset({"target_ids", "ability", "dc"}),
-        frozenset(
-            {
-                "target_ids",
-                "ability",
-                "dc",
-                "advantage",
-                "disadvantage",
-                "source",
-                "success_damage",
-            }
-        ),
-    ),
-    "check.ability": (
-        frozenset({"actor_id", "ability", "dc"}),
-        frozenset(
-            {
-                "actor_id",
-                "ability",
-                "dc",
-                "proficient",
-                "bonus",
-                "advantage",
-                "disadvantage",
-                "source",
-            }
-        ),
-    ),
-    "check.contest": (
-        frozenset(
-            {
-                "source_actor_id",
-                "target_actor_id",
-                "source_ability",
-                "target_ability",
-            }
-        ),
-        frozenset(
-            {
-                "source_actor_id",
-                "target_actor_id",
-                "source_ability",
-                "target_ability",
-                "source_proficient",
-                "target_proficient",
-                "source_bonus",
-                "target_bonus",
-                "source_advantage",
-                "source_disadvantage",
-                "target_advantage",
-                "target_disadvantage",
-            }
-        ),
-    ),
-    "attack.resolve": (
-        frozenset({"source_actor_id", "target_actor_id", "attack_ref"}),
-        frozenset(
-            {
-                "source_actor_id",
-                "target_actor_id",
-                "attack_ref",
-                "attack_mode",
-                "context",
-            }
-        ),
-    ),
-    "damage.apply": (
-        frozenset({"target_ids", "damage_type", "source"}),
-        frozenset(
-            {
-                "target_ids",
-                "expression",
-                "amount",
-                "damage_type",
-                "source",
-                "critical",
-                "reduction",
-            }
-        ),
-    ),
-    "healing.apply": (
-        frozenset({"target_ids", "source"}),
-        frozenset({"target_ids", "expression", "amount", "source"}),
-    ),
-    "condition.apply": (
-        frozenset({"target_ids", "condition_id", "source"}),
-        frozenset(
-            {
-                "target_ids",
-                "condition_id",
-                "source",
-                "effect_id",
-                "duration",
-                "repeat_save",
-                "source_actor_id",
-            }
-        ),
-    ),
-    "condition.remove": (
-        frozenset({"target_ids", "condition_id"}),
-        frozenset({"target_ids", "condition_id", "source"}),
-    ),
-    "effect.apply": (
-        frozenset({"target_ids", "effect_id", "effect"}),
-        frozenset({"target_ids", "effect_id", "effect", "source"}),
-    ),
-    "effect.remove": (
-        frozenset({"target_ids", "effect_id"}),
-        frozenset({"target_ids", "effect_id", "source"}),
-    ),
-    "resource.spend": (
-        frozenset({"actor_id", "resource_ref", "amount"}),
-        frozenset({"actor_id", "resource_ref", "amount", "source"}),
-    ),
-    "resource.recover": (
-        frozenset({"actor_id", "resource_ref", "amount"}),
-        frozenset({"actor_id", "resource_ref", "amount", "source"}),
-    ),
-    "movement.move": (
-        frozenset({"actor_id"}),
-        frozenset({"actor_id", "distance_ft", "destination", "path", "source"}),
-    ),
-    "movement.force": (
-        frozenset({"source_actor_id", "target_actor_id", "distance_ft"}),
-        frozenset(
-            {
-                "source_actor_id",
-                "target_actor_id",
-                "distance_ft",
-                "direction",
-                "destination",
-                "source",
-            }
-        ),
-    ),
-    "actor.link": (
-        frozenset({"source_actor_id", "target_actor_id", "link_kind"}),
-        frozenset(
-            {
-                "source_actor_id",
-                "target_actor_id",
-                "link_kind",
-                "properties",
-                "source",
-            }
-        ),
-    ),
-    "actor.unlink": (
-        frozenset({"source_actor_id", "target_actor_id", "link_kind"}),
-        frozenset({"source_actor_id", "target_actor_id", "link_kind", "source"}),
-    ),
-    "actor.control": (
-        frozenset({"controller_actor_id", "target_actor_id", "mode"}),
-        frozenset(
-            {
-                "controller_actor_id",
-                "target_actor_id",
-                "mode",
-                "mental_ability_source",
-                "source",
-            }
-        ),
-    ),
-    "knowledge.transfer": (
-        frozenset({"from_actor_id", "to_actor_id", "knowledge_ids"}),
-        frozenset(
-            {
-                "from_actor_id",
-                "to_actor_id",
-                "knowledge_ids",
-                "reason",
-                "source",
-            }
-        ),
-    ),
-    "world.counter.adjust": (
-        frozenset({"key", "amount"}),
-        frozenset({"key", "amount", "minimum", "maximum", "source"}),
-    ),
-    "world.counter.set": (
-        frozenset({"key", "value"}),
-        frozenset({"key", "value", "source"}),
-    ),
-    "state.assert": (
-        frozenset({"subject", "operator", "expected"}),
-        frozenset({"subject", "operator", "expected", "message"}),
-    ),
-}
+
 
 
 class ResolutionPlanError(ValueError):
@@ -438,6 +193,7 @@ class CompiledResolutionPlan(ImmutableRuleFields):
     citations: tuple[dict[str, Any], ...]
     fingerprint: str
     editions: tuple[str, ...] = ("2014", "2024")
+    requirements: tuple[tuple[str, int], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -496,6 +252,7 @@ def compile_resolution_plan(value: dict[str, Any]) -> CompiledResolutionPlan:
         "citations",
         "fingerprint",
         "editions",
+        "requires",
     }
     unknown = set(value) - allowed
     if unknown:
@@ -570,6 +327,7 @@ def compile_resolution_plan(value: dict[str, Any]) -> CompiledResolutionPlan:
     if not isinstance(editions, (list, tuple)):
         raise ResolutionPlanCompilationError("plan editions must be a list")
     try:
+        requirements = require_capabilities(value.get("requires", {}))
         registration = RuleRegistration(
             id=plan_id, kind="plan", event=trigger, source=citations[0]["source"],
             editions=tuple(editions), definition={},
@@ -602,6 +360,8 @@ def compile_resolution_plan(value: dict[str, Any]) -> CompiledResolutionPlan:
     }
     if registration.editions != ("2014", "2024"):
         canonical["editions"] = list(registration.editions)
+    if requirements:
+        canonical["requires"] = requirements
     fingerprint = _fingerprint(canonical)
     supplied_fingerprint = str(value.get("fingerprint") or "")
     if supplied_fingerprint and supplied_fingerprint != fingerprint:
@@ -620,6 +380,7 @@ def compile_resolution_plan(value: dict[str, Any]) -> CompiledResolutionPlan:
         citations=citations,
         fingerprint=fingerprint,
         editions=registration.editions,
+        requirements=tuple(requirements.items()),
     )
 
 
@@ -777,6 +538,7 @@ def resolution_plan_contract(plan: CompiledResolutionPlan) -> dict[str, Any]:
     """Return the bounded Agent/external-input contract without executable internals."""
 
     return {
+        **({"requires": dict(plan.requirements)} if plan.requirements else {}),
         **({"editions": list(plan.editions)} if plan.editions != ("2014", "2024") else {}),
         "schema_version": plan.schema_version,
         "plan_id": plan.id,
@@ -794,6 +556,7 @@ def resolution_plan_template(plan: CompiledResolutionPlan) -> dict[str, Any]:
     """Serialize the canonical rule-card template for durable content storage."""
 
     return {
+        **({"requires": dict(plan.requirements)} if plan.requirements else {}),
         **({"editions": list(plan.editions)} if plan.editions != ("2014", "2024") else {}),
         "schema_version": plan.schema_version,
         "id": plan.id,

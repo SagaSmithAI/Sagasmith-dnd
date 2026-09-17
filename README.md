@@ -335,6 +335,7 @@ deployment environment's change-management, backup, secret, and rollback policy.
 - [Independent Runtime and immutable workflow publication](packages/runtime/README.md)
 - [Design refactor acceptance](docs/design-refactor-status.md)
 - [Rule engine architecture and upgrade semantics](docs/rule-engine-architecture.md)
+- [Adding rule extensions](docs/extension-authoring.md)
 - [Host integration contract](skills/HOST-INTEGRATION.md)
 - [Agent Skills](skills/README.md)
 - [D&D Workbench](apps/ui/README.md)

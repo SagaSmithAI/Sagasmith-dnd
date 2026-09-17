@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
 
+from .edition_strategies import D20Policy, RestPolicy
 from .editions import normalize_dnd_edition
 from .rule_registry import RuleRegistration, RuleRegistry
 
@@ -15,6 +16,14 @@ class EditionPolicy:
     one_slot_per_turn: bool
     bonus_action_spell_limit: bool
     exhaustion_halves_max_hp: bool
+
+    @property
+    def rest(self) -> RestPolicy:
+        return RestPolicy(self.edition)
+
+    @property
+    def d20(self) -> D20Policy:
+        return D20Policy(self.edition)
 
     def validate_spell_turn(
         self, casts: list[dict[str, Any]], *, payment: str, spell_level: int,

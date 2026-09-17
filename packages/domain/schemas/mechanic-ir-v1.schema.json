@@ -6,6 +6,7 @@
   "additionalProperties": false,
   "required": ["id", "event", "operations", "citations"],
   "properties": {
+    "requires": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 1}},
     "id": {"type": "string"},
     "event": {
       "enum": [

@@ -6,32 +6,9 @@ random streams and persistence belong to the caller's Runtime adapter.
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass
-from types import MappingProxyType
 from typing import Any
 
-ALIASES = {"condition.add": "condition.apply", "hp.heal": "healing.apply",
-           "effect.add": "effect.apply"}
-
-
-@dataclass(frozen=True)
-class PrimitiveDefinition:
-    opcode: str
-    sheet_local: bool = False
-
-
-SHEET_OPS = frozenset({
-    "resource.spend", "resource.recover", "spell_slot.spend", "spell_slot.recover",
-    "healing.apply", "hp.temp.set", "condition.apply", "condition.remove",
-    "effect.apply", "effect.remove",
-})
-PRIMITIVES = MappingProxyType({name: PrimitiveDefinition(name, name in SHEET_OPS) for name in (
-    *sorted(SHEET_OPS), "actor.control", "actor.link", "actor.unlink", "attack.ac_bonus",
-    "attack.resolve", "check.ability", "check.contest", "check.save", "damage.apply",
-    "knowledge.transfer", "movement.force", "movement.move", "roll.table", "state.assert",
-    "target.validate", "world.counter.adjust", "world.counter.set", "modifier.add",
-    "advantage.add", "disadvantage.add", "choice.require", "ruling.require",
-)})
+from .primitive_contracts import ALIASES, PRIMITIVES, SHEET_OPS
 
 
 def validate_primitive(opcode: str, arguments: dict[str, Any]) -> str:

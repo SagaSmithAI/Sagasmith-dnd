@@ -305,7 +305,10 @@ def _dispatch(args) -> Any:
     if args.group == "version":
         return {"version": __version__, "system_id": DND5E.id}
     if args.group == "capabilities":
+        from .primitive_contracts import capability_manifest
+
         return {
+            "rule_primitives": capability_manifest(),
             "system_id": DND5E.id,
             "editions": list(SUPPORTED_DND_EDITIONS),
             "default_edition": DEFAULT_CAMPAIGN_EDITION,

@@ -58,7 +58,7 @@ class ContentService:
             context = _support.resolution_context(value, facts=facts)
         except ValueError as error:
             raise _support.RulesetUnavailableError(
-                "campaign requires an unsupported built-in core edition"
+                f"campaign rule composition is unavailable: {error}"
             ) from error
         expected_core = dict((profile.options if profile else {}).get("_core_rule_pack_lock") or {})
         if not expected_core:

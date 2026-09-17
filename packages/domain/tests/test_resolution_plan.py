@@ -367,6 +367,19 @@ def test_plan_and_binding_are_detached_and_edition_scoped() -> None:
     assert compile_resolution_plan(resolution_plan_template(compiled)) == compiled
 
 
+def test_plan_capabilities_are_checked_and_retained_in_its_fingerprint() -> None:
+    raw = _plan()
+    baseline = compile_resolution_plan(raw)
+    raw["requires"] = {"check.save": 1, "damage.apply": 1}
+    compiled = compile_resolution_plan(raw)
+    assert compiled.fingerprint != baseline.fingerprint
+    assert resolution_plan_contract(compiled)["requires"] == raw["requires"]
+    assert compile_resolution_plan(resolution_plan_template(compiled)) == compiled
+    raw["requires"]["damage.apply"] = 99
+    with pytest.raises(ResolutionPlanCompilationError, match="unsupported primitive version"):
+        compile_resolution_plan(raw)
+
+
 def test_resolved_result_is_revalidated_before_primitive_execution() -> None:
     plan = _plan()
     plan["steps"][1]["args"]["dc"] = {"$result": "targets.arguments.source"}

@@ -243,30 +243,14 @@ def d20_exhaustion_adjustment(
 ) -> dict[str, Any]:
     """Apply the edition-specific exhaustion rule to one d20 roll."""
 
-    normalized_ruleset = _normalize_ruleset(ruleset)
-    if isinstance(exhaustion, bool) or not isinstance(exhaustion, int) or exhaustion < 0:
-        raise CombatEngineError("exhaustion must be a non-negative integer")
-    if kind not in {"ability", "attack", "check", "death_save", "initiative", "save"}:
-        raise CombatEngineError("unsupported exhaustion roll kind")
-    adjusted_bonus = int(bonus)
-    adjusted_disadvantage = bool(disadvantage)
-    exhaustion_disadvantage = False
-    if normalized_ruleset == "2024":
-        adjusted_bonus -= 2 * exhaustion
-    elif (
-        kind in ABILITY_CHECK_KINDS | {"initiative"}
-        and exhaustion >= 1
-        or kind in {"attack", "death_save", "save"}
-        and exhaustion >= 3
-    ):
-        adjusted_disadvantage = True
-        exhaustion_disadvantage = True
-    return {
-        "bonus": adjusted_bonus,
-        "disadvantage": adjusted_disadvantage,
-        "exhaustion_disadvantage": exhaustion_disadvantage,
-        "applied": adjusted_bonus != int(bonus) or adjusted_disadvantage != bool(disadvantage),
-    }
+    from sagasmith_dnd.edition_policy import edition_policy
+
+    try:
+        return edition_policy(ruleset).d20.exhaustion_adjustment(
+            exhaustion=exhaustion, kind=kind, bonus=bonus, disadvantage=disadvantage,
+        )
+    except ValueError as error:
+        raise CombatEngineError(str(error)) from error
 
 
 class CombatEngineError(ValueError):
