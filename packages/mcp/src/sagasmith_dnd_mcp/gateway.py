@@ -397,6 +397,8 @@ class DndMcpClient:
 
 
 _REQUEST_CLIENT = ContextVar("sagasmith_dnd_gateway_client", default=None)
+# RequestKey is available on newer aiohttp; retain the supported 3.11 floor.
+READ_META_KEY = getattr(web, "RequestKey", web.AppKey)("read_meta", dict)
 
 
 @dataclass
@@ -604,8 +606,16 @@ class DndGateway:
         self, request: web.Request, data: Any, campaign_id: str | None = None
     ) -> web.Response:
         principal_id = self.principal(request)
+        if request.method == "POST":
+            # This is the primary write receipt. Never replace it with the outcome
+            # of a later projection read (which may fail after the write committed).
+            metadata = {"schema_version": 1, "audience": principal_id}
+            if isinstance(data, dict):
+                metadata.update({key: data[key] for key in ("campaign_revision", "branch_id")
+                                 if key in data})
+            return web.json_response({"data": data, "meta": metadata})
         meta = (
-            await self.campaign_meta(campaign_id, principal_id)
+            request.get(READ_META_KEY) or await self.campaign_meta(campaign_id, principal_id)
             if campaign_id
             else {"schema_version": 1, "audience": principal_id}
         )
@@ -1182,7 +1192,7 @@ class DndGateway:
             },
         )
         if isinstance(result, dict):
-            meta = await self.campaign_meta(campaign_id, principal_id)
+            meta = request.get(READ_META_KEY) or await self.campaign_meta(campaign_id, principal_id)
             result = {
                 **result,
                 "campaign_revision": meta.get("campaign_revision"),
@@ -1230,7 +1240,7 @@ class DndGateway:
         campaign_id = request.match_info["campaign_id"]
         principal_id = self.principal(request)
         body = await request.json()
-        await self.call(
+        result = await self.call(
             "combat_movement",
             {
                 "campaign_id": campaign_id,
@@ -1248,7 +1258,11 @@ class DndGateway:
                 "idempotency_key": body["idempotency_key"],
             },
         )
-        return await self.combat(request)
+        combat = dict(result.get("combat") or {})
+        combat.update({key: result[key] for key in ("campaign_revision", "branch_id")
+                       if key in result})
+        combat["operation_status"] = result.get("status")
+        return await self.envelope(request, combat, campaign_id)
 
     async def stream(self, request: web.Request) -> web.StreamResponse:
         campaign_id = request.match_info["campaign_id"]
@@ -1339,7 +1353,27 @@ def create_app(
                     request.match_info.get("campaign_id") or None,
                 )
                 context_token = _REQUEST_CLIENT.set(client)
-            response = await handler(request)
+            campaign_id = request.match_info.get("campaign_id")
+            consistent_read = (request.method == "GET" and campaign_id
+                               and not request.path.endswith("/stream")
+                               and not request.path.endswith("/render")
+                               and "/artifacts/" not in request.path)
+            for attempt in range(3):
+                before = (await gateway.campaign_meta(campaign_id, gateway.principal(request))
+                          if consistent_read else None)
+                if consistent_read:
+                    request[READ_META_KEY] = before
+                response = await handler(request)
+                if not consistent_read:
+                    break
+                after = await gateway.campaign_meta(campaign_id, gateway.principal(request))
+                if before == after:
+                    break
+            else:
+                response = web.json_response({
+                    "error": "campaign changed while reading; refresh the view",
+                    "code": "read_snapshot_conflict", "retryable": True,
+                }, status=409)
         except web.HTTPException:
             raise
         except IdempotencyConflictError as exc:

@@ -6,6 +6,7 @@ from typing import Any
 
 from sagasmith_dnd import encounter_primitives as _domain
 from sagasmith_dnd.primitive_contracts import PRIMITIVES
+from sagasmith_dnd.resolution_plan import ResolutionPlanPauseError
 from sagasmith_dnd.rule_primitives import validate_primitive
 
 from .. import application_support as _support
@@ -30,10 +31,28 @@ class CombatPlanRuntime:
         self.records: dict[str, Any] = {}
         self.sheets: dict[str, dict[str, Any]] = {}
         self.knowledge_transfers: list[_support.ActorKnowledgeTransfer] = []
+        self.application_id = str((context.bound_plan.agent_ruling or {}).get("application_id")
+                                  or context.bound_plan.fingerprint)
+        self.continuation = self.encounter.setdefault("semantic_state", {}).setdefault(
+            "continuations", {}
+        ).get(self.application_id, {})
+        self.completed = _support.deepcopy(self.continuation.get("results", {}))
 
     def begin(self, plan: _support.BoundResolutionPlan) -> None:
         if plan.fingerprint != self.context.bound_plan.fingerprint:
             raise _support.CombatEngineError("semantic plan runtime fingerprint mismatch")
+        waiting = set(self.continuation.get("waiting_ids", []))
+        if any(item.get("id") in waiting and item.get("status", "pending") == "pending"
+               for item in self.encounter.get("pending", [])):
+            raise _support.NeedsRulingError(
+                "resolve the recorded semantic plan choices before resuming",
+                missing=tuple(sorted(waiting)), ruling_kind="player_owned_choice",
+            )
+        if self.continuation and (
+            self.continuation["plan_fingerprint"] != plan.compiled.fingerprint
+            or self.continuation["bindings"] != plan.bindings
+        ):
+            raise _support.CombatEngineError("semantic continuation plan changed")
         for step in plan.steps:
             spec = PRIMITIVES.get(step["op"])
             if spec is None or not spec.handler or not callable(getattr(self, spec.handler, None)):
@@ -104,13 +123,33 @@ class CombatPlanRuntime:
 
     def execute(self, opcode, arguments, *, step_id, prior_results):
         del prior_results
+        if step_id in self.completed:
+            return _support.deepcopy(self.completed[step_id])
         validate_primitive(opcode, arguments)
         spec = PRIMITIVES.get(opcode)
         if spec is None or not spec.handler:
             raise _support.CombatEngineError(
                 f"semantic plan primitive requires a specialized execution context: {opcode}"
             )
-        return getattr(self, spec.handler)(opcode, arguments, step_id=step_id)
+        previous = {item.get("id") for item in self.encounter.get("pending", [])}
+        result = getattr(self, spec.handler)(opcode, arguments, step_id=step_id)
+        self.completed[step_id] = _support.deepcopy(result)
+        pending = [item["id"] for item in self.encounter.get("pending", [])
+                   if item.get("id") not in previous
+                   and item.get("status", "pending") == "pending"]
+        if pending:
+            self.pause(pending, result)
+        return result
+
+    def pause(self, waiting_ids, result=None):
+        self.encounter.setdefault("semantic_state", {}).setdefault("continuations", {})[
+            self.application_id
+        ] = {
+            "plan_fingerprint": self.context.compiled_plan.fingerprint,
+            "bindings": _support.deepcopy(self.context.bound_plan.bindings),
+            "results": _support.deepcopy(self.completed), "waiting_ids": list(waiting_ids),
+        }
+        raise ResolutionPlanPauseError(result)
 
     def _execute_roll_table(self, opcode, arguments, *, step_id):
         table = _domain.weighted_table(arguments)
@@ -274,12 +313,18 @@ class CombatPlanRuntime:
             encounter=self.encounter,
         )
         if defenses:
-            raise _support.NeedsRulingError(
-                "semantic-plan attack opened a target-owned reaction "
-                "window before damage",
-                missing=tuple(f"reaction:{item['id']}" for item in defenses),
-                ruling_kind="player_owned_choice",
+            self.encounter = _support.add_choice_window(
+                self.encounter, kind="reaction", actor_id_value=target_id,
+                event="attack.hit.before_damage",
+                candidates=[*defenses, {"id": "decline", "name": "Decline"}],
             )
+            window = self.encounter["pending"][-1]
+            window.update(
+                trigger="attack_hit_defense", attacker_id=attacker_id, target_id=target_id,
+                plan=_support.deepcopy(attack_plan), attack=_support.deepcopy(attack),
+                semantic_application_id=self.application_id, semantic_step_id=step_id,
+            )
+            self.pause([window["id"]])
         updated_attacker, updated_target, result = _support.resolve_attack_damage(
             self.actor(attacker_id),
             self.actor(target_id),

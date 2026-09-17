@@ -634,6 +634,7 @@ class CombatService:
             value.pop("effects", None)
             value.pop("reinforcements", None)
             value.pop("participant_manifest", None)
+            value.pop("semantic_state", None)
             battle_map = value.get("battle_map")
             if isinstance(battle_map, dict):
                 value["battle_map"] = {
@@ -691,6 +692,7 @@ class CombatService:
             "log",
             "rulings",
             "pending",
+            "semantic_state",
             "readied",
             "effects",
             "reinforcements",
@@ -6803,7 +6805,7 @@ class CombatService:
         branch_id: str | None,
         idempotency_key: str | None,
     ) -> dict[str, Any]:
-        """Execute one paid, source-bound semantic plan as an atomic mutation."""
+        """Execute one atomic segment of a paid, source-bound semantic plan."""
 
         runtime_services = self
         runtime_services.access.require_campaign(
@@ -6829,6 +6831,9 @@ class CombatService:
                 f"expected {expected_revision}, found {campaign.revision}"
             )
         source_record = runtime_services.require_campaign_actor(campaign_id, source_actor_id)
+        continuations = encounter.get("semantic_state", {}).get("continuations", {})
+        if continuations and str(commitment.get("application_id") or "") not in continuations:
+            raise _support.CombatEngineError("resume the pending semantic application first")
         source_card_id = str(commitment.get("source_card_id") or "")
         source_card_kind = str(commitment.get("source_card_kind") or "")
         _source_card, compiled_plan = runtime_services.character_resolution_plan(
@@ -6888,12 +6893,19 @@ class CombatService:
             # The primitive executor has already rolled back. Preserve a source
             # ruling so the outer boundary rewinds RNG and returns a retryable
             # pause instead of erasing it into a generic tool failure.
+            if isinstance(error, _support.NeedsRulingError):
+                raise
             if isinstance(error.__cause__, _support.NeedsRulingError):
                 raise error.__cause__
             raise _support.CombatEngineError(str(error)) from error
         next_encounter = runtime.encounter
         application_id = str(normalized_commitment.get("application_id") or "")
-        if source_card_kind == "item":
+        completed = settled.status == "committed"
+        if completed:
+            next_encounter.get("semantic_state", {}).get("continuations", {}).pop(
+                application_id, None,
+            )
+        if completed and source_card_kind == "item":
             next_encounter["pending"] = [
                 item
                 for item in next_encounter.get("pending", [])
@@ -6902,7 +6914,7 @@ class CombatService:
         next_encounter["log"] = [
             *list(next_encounter.get("log") or []),
             {
-                "type": "semantic_plan",
+                "type": "semantic_plan" if completed else "semantic_plan_paused",
                 "application_id": application_id,
                 "actor_id": source_actor_id,
                 "source_card_id": source_card_id,
@@ -6950,9 +6962,13 @@ class CombatService:
             scope=scope,
             payload=request_payload,
             response_fields={
-                "status": "committed",
+                "status": settled.status,
                 "result": {
                     "plan_id": compiled_plan.id,
+                    "application_id": application_id,
+                    "waiting_choice_ids": list(runtime.encounter.get("semantic_state", {}).get(
+                        "continuations", {}
+                    ).get(application_id, {}).get("waiting_ids", [])),
                     "plan_fingerprint": compiled_plan.fingerprint,
                     "bound_plan_fingerprint": bound_plan.fingerprint,
                     "results": _support.deepcopy(settled.results),
@@ -7772,6 +7788,8 @@ class CombatService:
             raise _support.CombatEngineError(
                 "attack-defense windows must use combat_choice(action=resolve_defense)"
             )
+        if pending_choice and pending_choice.get("kind") == "concentration":
+            raise _support.CombatEngineError("concentration windows require a concentration check")
         next_encounter = _support.resolve_choice_window(
             encounter,
             choice_id=choice_id,

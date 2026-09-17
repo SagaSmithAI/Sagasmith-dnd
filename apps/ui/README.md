@@ -32,6 +32,13 @@ Browser
 - Writes preserve one end-to-end idempotency key and authority revision. A stale
   revision is a recoverable conflict, not permission to silently retry as a new
   operation.
+- Write responses return the primary MCP receipt without a follow-up metadata
+  read. Refreshing a view cannot turn a committed write into a dispatch failure.
+  A movement awaiting a ruling does not replace the displayed combat with an
+  incomplete projection or report success.
+- Aggregated campaign reads compare authority metadata before and after reading.
+  Concurrent UI/Agent writes trigger a bounded reread; sustained conflicts return
+  `409 read_snapshot_conflict` instead of mixing old state with a new revision.
 - Before dispatch, writes are retained in IndexedDB with their exact payload,
   uploaded bytes and original key. Network loss or `dispatch_unknown` keeps the
   request across reloads. **恢复原请求** replays that request; a changed operation

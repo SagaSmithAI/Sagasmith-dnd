@@ -777,7 +777,23 @@ class PresentationService:
                 == source_card_id
             ):
                 declaration = dict(entry.get("payload") or {}).get("agent_resolution_commitment")
-            if declaration == commitment:
+            def payment_identity(value):
+                identity = _support.deepcopy(value)
+                if isinstance(identity, dict):
+                    identity.pop("bound_plan_fingerprint", None)
+                    if isinstance(identity.get("agent_ruling"), dict):
+                        identity["agent_ruling"].pop("target_facts", None)
+                return identity
+
+            # Scene evidence can be refreshed after another client's write without
+            # changing the paid source, application, actor bindings or executable plan.
+            if declaration == commitment or (
+                declaration is not None
+                and payment_identity(declaration) == payment_identity(commitment)
+                and dict(commitment.get("agent_ruling") or {}).get("target_facts", {}).get(
+                    "campaign_revision"
+                ) == self.campaigns.get(campaign_id).revision
+            ):
                 payment = _support.deepcopy(entry)
                 if bound_plan.compiled.schema_version >= 2:
                     trigger_event = {

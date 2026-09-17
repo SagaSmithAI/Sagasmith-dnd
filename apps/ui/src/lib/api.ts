@@ -321,8 +321,8 @@ export async function submitCombatMove(
   distance: number,
   expectedRevision: number,
   branchId?: string,
-): Promise<CombatStatus> {
-  const response = await gatewayRequest<CombatStatus>(`/api/campaigns/${encodeURIComponent(campaignId)}/combat/move`, {
+): Promise<CombatStatus | { operation_status: string }> {
+  const response = await gatewayRequest<CombatStatus | { operation_status: string }>(`/api/campaigns/${encodeURIComponent(campaignId)}/combat/move`, {
     method: 'POST',
     credentials: 'include',
     headers: requestHeaders({ 'Content-Type': 'application/json' }),

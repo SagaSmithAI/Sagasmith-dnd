@@ -41,7 +41,7 @@ def test_attack_creates_concentration_window_and_rolls_it_back_atomically(
         "source_actor_id": "attacker", "target_actor_id": "target", "attack_ref": "unarmed-strike",
     }}]
     if fail_after_hit:
-        steps.append({"id": "fail", "op": "state.assert", "args": {
+        steps.insert(0, {"id": "fail", "op": "state.assert", "args": {
             "subject": 1, "expected": 2, "operator": "equals",
         }})
     plan = bind_resolution_plan({
@@ -81,7 +81,7 @@ def test_attack_creates_concentration_window_and_rolls_it_back_atomically(
         assert runtime.encounter == encounter
     else:
         result = execute_resolution_plan(plan, runtime)
-        assert result.status == "committed"
+        assert result.status == "pending_choice"
         assert runtime.sheets["target"]["combat"]["hp"]["value"] == 96
         window, = runtime.encounter["pending"]
         assert window["kind"] == "concentration"

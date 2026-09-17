@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
+import pytest
 from aiohttp import FormData, web
 from aiohttp.test_utils import TestClient, TestServer
 from mcp.types import CallToolResult, ImageContent, TextContent
@@ -61,6 +62,66 @@ def app_for(tmp_path: Path, gateway_config: GatewayConfig | None = None):
         InProcessTestClient(value),
         value,
     )
+
+
+@pytest.mark.parametrize("failure", [TimeoutError, asyncio.QueueFull])
+def test_committed_movement_does_not_depend_on_followup_reads(tmp_path, failure):
+    class Client:
+        async def start(self):
+            pass
+
+        async def stop(self):
+            pass
+
+        async def call_tool(self, tool, arguments):
+            if tool != "combat_movement":
+                raise failure("projection unavailable after commit")
+            return CallToolResult(content=[], structuredContent={
+                "status": "committed", "action": "move", "result": {
+                    "status": "committed", "campaign_revision": 8, "branch_id": "branch",
+                    "combat": {"combatants": [], "round": 2},
+                },
+            })
+
+    async def exercise():
+        async with TestClient(TestServer(create_app(
+            GatewayConfig(), Client(), config(tmp_path),
+        ))) as client:
+            response = await client.post("/api/campaigns/campaign/combat/move", json={
+                "actor_id": "actor", "distance": 5, "destination": {"x": 1, "y": 0},
+                "expected_revision": 7, "idempotency_key": "original-key",
+            })
+            assert response.status == 200
+            result = await response.json()
+            assert result["data"]["operation_status"] == "committed"
+            assert result["data"]["round"] == 2
+            assert result["meta"]["campaign_revision"] == 8
+
+    asyncio.run(exercise())
+
+
+def test_read_under_continuous_writes_returns_conflict_instead_of_torn_view(tmp_path):
+    async def exercise():
+        app = app_for(tmp_path)
+        gateway = app[GATEWAY_KEY]
+        revisions = []
+
+        async def changing_meta(*args):
+            revisions.append(len(revisions) + 1)
+            return {"campaign_revision": revisions[-1]}
+
+        async def projection(*args):
+            return {"combatants": []}
+
+        gateway.campaign_meta = changing_meta
+        gateway.call = projection
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get("/api/campaigns/campaign/combat")
+            assert response.status == 409
+            assert (await response.json())["code"] == "read_snapshot_conflict"
+            assert len(revisions) == 6
+
+    asyncio.run(exercise())
 
 
 def test_token_cors_preflight_does_not_bypass_actual_request_auth(tmp_path):

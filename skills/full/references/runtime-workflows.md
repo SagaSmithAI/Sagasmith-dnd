@@ -2,6 +2,15 @@
 
 ## Invariants
 
+- UI and Agent share the same revision and authority boundary. Refresh state
+  after a revision conflict. For a paid semantic plan, refresh only target facts
+  and omit the old bound fingerprint; preserve its application, plan, bindings,
+  ruling and source evidence. Never pay the action again just to refresh facts.
+- When `combat_choice(execute_plan)` returns `pending_choice`, let the owning
+  player resolve the recorded defense or concentration save, then resume the
+  same application with the current revision and a new request key. Runtime
+  persists completed steps and dice across restarts. Retries of an uncertain
+  request must keep its original key and payload.
 - Keep the active `campaign_id`, edition, and locale explicit.
 - Never mix 2014 and 2024 rules unless the user explicitly requests comparison.
 - Search first, then expand only the selected rule or module chunk.

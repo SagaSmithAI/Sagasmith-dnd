@@ -8,6 +8,7 @@ from sagasmith_dnd.resolution_plan import (
     ResolutionPlanBindingError,
     ResolutionPlanCompilationError,
     ResolutionPlanExecutionError,
+    ResolutionPlanPauseError,
     bind_resolution_plan,
     compile_resolution_plan,
     execute_resolution_plan,
@@ -143,6 +144,30 @@ def _agent_ruling() -> dict:
         "source_ref": _citation()["source_ref"],
         "source_excerpt": _citation()["source_excerpt"],
     }
+
+
+@pytest.mark.parametrize("completed_step", [False, True])
+def test_choice_checkpoint_records_step_and_stops_later_execution(completed_step):
+    class PausingRuntime(RecordingRuntime):
+        def execute(self, opcode, arguments, *, step_id, prior_results):
+            result = super().execute(
+                opcode, arguments, step_id=step_id, prior_results=prior_results,
+            )
+            raise ResolutionPlanPauseError(result if completed_step else None)
+
+    bound = bind_resolution_plan(compile_resolution_plan(_plan()), {
+        "source_actor": "beast", "targets": ["hero"], "save_dc": 14, "damage": "3d8",
+    }, agent_ruling=_agent_ruling())
+    runtime = PausingRuntime()
+    result = execute_resolution_plan(bound, runtime)
+    assert result.status == "pending_choice"
+    assert runtime.events[-1] == "commit"
+    assert len(runtime.events) == 3
+    assert ("targets" in result.results) is completed_step
+    assert result.receipt["steps"][0]["status"] == (
+        "committed" if completed_step else "pending_choice"
+    )
+    assert result.receipt["committed"] is False
 
 
 def test_rule_card_locks_steps_while_agent_only_fills_typed_slots() -> None:

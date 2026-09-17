@@ -2432,6 +2432,10 @@ class SharedService:
         ][-100:]
 
     def require_no_blocking_pending(self, encounter: dict[str, Any]) -> None:
+        if encounter.get("semantic_state", {}).get("continuations"):
+            raise _support.CombatEngineError(
+                "resolve choices and resume the paid semantic plan before another action"
+            )
         if any(item.get("status", "pending") == "pending" for item in encounter.get("pending", [])):
             raise _support.CombatEngineError(
                 "resolve the pending save or choice before another action"

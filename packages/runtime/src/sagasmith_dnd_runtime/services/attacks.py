@@ -2230,6 +2230,16 @@ class AttacksService:
                 "result": result,
             },
         ][-100:]
+        semantic_application = window.get("semantic_application_id")
+        if semantic_application:
+            continuation = next_encounter["semantic_state"]["continuations"][semantic_application]
+            continuation["results"][window["semantic_step_id"]] = _support.deepcopy(result)
+            continuation["waiting_ids"] = [
+                item["id"] for item in next_encounter.get("pending", [])
+                if item.get("status", "pending") == "pending"
+                and (item["id"] in continuation["waiting_ids"]
+                     or item["id"] not in {p.get("id") for p in encounter.get("pending", [])})
+            ]
         next_state = {**dict(campaign.state or {}), "combat": next_encounter}
         next_resolution = {
             "id": resolution_id,

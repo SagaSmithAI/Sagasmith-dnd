@@ -216,6 +216,13 @@ class ResolutionPlanResult:
     receipt: dict[str, Any]
 
 
+class ResolutionPlanPauseError(Exception):
+    """The adapter has staged a durable choice; commit this execution segment."""
+
+    def __init__(self, result: dict[str, Any] | None = None):
+        self.result = result
+
+
 class ResolutionPrimitiveRuntime(Protocol):
     """Atomic adapter from semantic opcodes to engine-owned state mutations."""
 
@@ -452,12 +459,13 @@ def execute_resolution_plan(
     plan: BoundResolutionPlan,
     runtime: ResolutionPrimitiveRuntime,
 ) -> ResolutionPlanResult:
-    """Execute a fully bound plan in one runtime-owned atomic transaction."""
+    """Execute one atomic segment, checkpointing at an external choice boundary."""
 
     if not isinstance(plan, BoundResolutionPlan):
         raise ResolutionPlanExecutionError("execute_resolution_plan requires a bound plan")
     results: dict[str, dict[str, Any]] = {}
     executed: list[dict[str, Any]] = []
+    status = "committed"
     runtime.begin(plan)
     try:
         for step in plan.steps:
@@ -505,6 +513,20 @@ def execute_resolution_plan(
                 }
             )
         runtime.commit()
+    except ResolutionPlanPauseError as pause:
+        if pause.result is not None:
+            results[step_id] = deepcopy(pause.result)
+        executed.append({
+            "step_id": step_id, "op": step["op"],
+            "status": "committed" if pause.result is not None else "pending_choice",
+            "instruction": instruction.receipt(),
+        })
+        status = "pending_choice"
+        try:
+            runtime.commit()
+        except Exception:
+            runtime.rollback()
+            raise
     except Exception as error:
         runtime.rollback()
         if isinstance(error, ResolutionPlanExecutionError):
@@ -523,10 +545,10 @@ def execute_resolution_plan(
         "citations": [deepcopy(item) for item in plan.compiled.citations],
         "agent_ruling": deepcopy(plan.agent_ruling),
         "steps": executed,
-        "committed": True,
+        "committed": status == "committed",
     }
     return ResolutionPlanResult(
-        status="committed",
+        status=status,
         plan_id=plan.compiled.id,
         plan_fingerprint=plan.fingerprint,
         results=deepcopy(results),
