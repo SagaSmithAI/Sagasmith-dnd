@@ -348,6 +348,38 @@ def _attack_ac_bonus_plan(arguments: dict) -> dict:
     }
 
 
+def test_plan_and_binding_are_detached_and_edition_scoped() -> None:
+    raw = _plan()
+    raw["editions"] = ["2024"]
+    compiled = compile_resolution_plan(raw)
+    bindings = {"source_actor": "prism-beast", "targets": ["hero-1"],
+                "save_dc": 14, "damage": "3d8"}
+    with pytest.raises(ResolutionPlanBindingError, match="incompatible"):
+        bind_resolution_plan(compiled, bindings, edition="2014")
+    bound = bind_resolution_plan(compiled, bindings, edition="2024")
+    raw["steps"][0]["args"]["exclude_self"] = False
+    compiled.steps[0]["args"]["exclude_self"] = False
+    bindings["targets"].append("hero-2")
+    bound.steps[0]["args"]["target_ids"].append("hero-3")
+    bound.bindings["targets"].append("hero-4")
+    assert compiled.steps[0]["args"]["exclude_self"] is True
+    assert bound.steps[0]["args"]["target_ids"] == ["hero-1"]
+    assert compile_resolution_plan(resolution_plan_template(compiled)) == compiled
+
+
+def test_resolved_result_is_revalidated_before_primitive_execution() -> None:
+    plan = _plan()
+    plan["steps"][1]["args"]["dc"] = {"$result": "targets.arguments.source"}
+    del plan["slots"]["save_dc"]
+    bound = bind_resolution_plan(plan, {"source_actor": "prism-beast", "targets": ["hero-1"],
+                                       "damage": "3d8"})
+    runtime = RecordingRuntime()
+    with pytest.raises(ResolutionPlanExecutionError):
+        execute_resolution_plan(bound, runtime)
+    assert runtime.events[-1] == "rollback"
+    assert not any(event.startswith("execute:save:") for event in runtime.events)
+
+
 @pytest.mark.parametrize(
     ("arguments", "message"),
     [

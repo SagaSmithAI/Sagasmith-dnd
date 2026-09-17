@@ -14,7 +14,9 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from sagasmith_dnd.immutable_rules import ImmutableRuleFields
 from sagasmith_dnd.resolution_ir import execute_instruction, lower_instruction
+from sagasmith_dnd.rule_registry import RuleRegistration, RuleRegistry
 from sagasmith_dnd.save_context import validated_save_source_facts
 
 SEMANTIC_PLAN_VERSION = 2
@@ -423,7 +425,8 @@ class ResolutionPlanExecutionError(ResolutionPlanError):
 
 
 @dataclass(frozen=True)
-class CompiledResolutionPlan:
+class CompiledResolutionPlan(ImmutableRuleFields):
+    snapshot_fields = ("trigger_filter", "slots", "steps", "citations")
     schema_version: int
     id: str
     source_card_id: str
@@ -434,10 +437,12 @@ class CompiledResolutionPlan:
     steps: tuple[dict[str, Any], ...]
     citations: tuple[dict[str, Any], ...]
     fingerprint: str
+    editions: tuple[str, ...] = ("2014", "2024")
 
 
 @dataclass(frozen=True)
-class BoundResolutionPlan:
+class BoundResolutionPlan(ImmutableRuleFields):
+    snapshot_fields = ("bindings", "trigger_filter", "steps", "agent_ruling")
     compiled: CompiledResolutionPlan
     bindings: dict[str, Any]
     trigger_filter: dict[str, Any]
@@ -490,6 +495,7 @@ def compile_resolution_plan(value: dict[str, Any]) -> CompiledResolutionPlan:
         "steps",
         "citations",
         "fingerprint",
+        "editions",
     }
     unknown = set(value) - allowed
     if unknown:
@@ -560,6 +566,16 @@ def compile_resolution_plan(value: dict[str, Any]) -> CompiledResolutionPlan:
         )
 
     citations = _validate_citations(value.get("citations"))
+    editions = value.get("editions", ["2014", "2024"])
+    if not isinstance(editions, (list, tuple)):
+        raise ResolutionPlanCompilationError("plan editions must be a list")
+    try:
+        registration = RuleRegistration(
+            id=plan_id, kind="plan", event=trigger, source=citations[0]["source"],
+            editions=tuple(editions), definition={},
+        )
+    except ValueError as error:
+        raise ResolutionPlanCompilationError(str(error)) from error
     for step in steps:
         if step["op"] != "check.save":
             continue
@@ -584,6 +600,8 @@ def compile_resolution_plan(value: dict[str, Any]) -> CompiledResolutionPlan:
         "steps": steps,
         "citations": list(citations),
     }
+    if registration.editions != ("2014", "2024"):
+        canonical["editions"] = list(registration.editions)
     fingerprint = _fingerprint(canonical)
     supplied_fingerprint = str(value.get("fingerprint") or "")
     if supplied_fingerprint and supplied_fingerprint != fingerprint:
@@ -601,6 +619,7 @@ def compile_resolution_plan(value: dict[str, Any]) -> CompiledResolutionPlan:
         steps=tuple(deepcopy(steps)),
         citations=citations,
         fingerprint=fingerprint,
+        editions=registration.editions,
     )
 
 
@@ -609,10 +628,18 @@ def bind_resolution_plan(
     bindings: dict[str, Any],
     *,
     agent_ruling: dict[str, Any] | None = None,
+    edition: str | None = None,
 ) -> BoundResolutionPlan:
     """Fill only declared slots and produce a fully validated immutable plan."""
 
     compiled = plan if isinstance(plan, CompiledResolutionPlan) else compile_resolution_plan(plan)
+    if edition is not None:
+        registry = RuleRegistry((RuleRegistration(
+            id=compiled.id, kind="plan", event=compiled.trigger,
+            source=compiled.source_card_id, editions=compiled.editions, definition={},
+        ),))
+        if not registry.select(edition):
+            raise ResolutionPlanBindingError("resolution plan is incompatible with this edition")
     if not isinstance(bindings, dict):
         raise ResolutionPlanBindingError("resolution plan bindings must be an object")
     if set(bindings) != set(compiled.slots):
@@ -686,6 +713,7 @@ def execute_resolution_plan(
                 )
                 continue
             arguments = _resolve_result_refs(step["args"], results)
+            _validate_common_concrete_arguments(str(step["op"]), arguments, index=0)
             instruction = lower_instruction(
                 step_id=step_id,
                 opcode=str(step["op"]),
@@ -749,6 +777,7 @@ def resolution_plan_contract(plan: CompiledResolutionPlan) -> dict[str, Any]:
     """Return the bounded Agent/external-input contract without executable internals."""
 
     return {
+        **({"editions": list(plan.editions)} if plan.editions != ("2014", "2024") else {}),
         "schema_version": plan.schema_version,
         "plan_id": plan.id,
         "plan_fingerprint": plan.fingerprint,
@@ -765,6 +794,7 @@ def resolution_plan_template(plan: CompiledResolutionPlan) -> dict[str, Any]:
     """Serialize the canonical rule-card template for durable content storage."""
 
     return {
+        **({"editions": list(plan.editions)} if plan.editions != ("2014", "2024") else {}),
         "schema_version": plan.schema_version,
         "id": plan.id,
         "source_card_id": plan.source_card_id,

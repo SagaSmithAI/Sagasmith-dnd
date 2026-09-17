@@ -56,7 +56,6 @@ from sagasmith_dnd.engine import (
     roll,
     roll_d20,
 )
-from sagasmith_dnd.hit_points import apply_basic_healing_to_sheet
 from sagasmith_dnd.official_item_materialization import (
     ARCANE_PROPULSION_ARM_ID,
     ARMBLADE_ID,
@@ -7387,7 +7386,9 @@ def apply_healing_to_sheet(
         }
     effective_amount = max(0, requested_amount + bonus)
     try:
-        basic = apply_basic_healing_to_sheet(value, amount=effective_amount)
+        from sagasmith_dnd.rule_primitives import apply_sheet_primitive
+
+        basic = apply_sheet_primitive(value, "healing.apply", {"amount": effective_amount})
     except ValueError as error:
         raise CombatEngineError(str(error)) from error
     value = basic["sheet"]

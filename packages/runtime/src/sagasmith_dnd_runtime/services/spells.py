@@ -157,35 +157,15 @@ class SpellsService:
     ) -> list[dict[str, Any]]:
         """Enforce the edition's per-turn spell limit before any resource is spent."""
         turn_casts = list(dict(encounter.get("turn_spell_casts") or {}).get(actor_id, []))
-        ruleset = str(encounter.get("ruleset") or "2014")
-        if ruleset == "2024" and spent_slot and any(item.get("spent_slot") for item in turn_casts):
-            raise _support.CombatEngineError(
-                "2024 rules allow only one expended spell slot per turn"
+        from sagasmith_dnd.edition_policy import edition_policy
+
+        try:
+            edition_policy(encounter.get("ruleset")).validate_spell_turn(
+                turn_casts, payment=payment, spell_level=spell_level,
+                casting_time=casting_time, spent_slot=spent_slot,
             )
-        if ruleset == "2014":
-            current_is_bonus = payment == "bonus_action"
-            previous_bonus = any(item.get("payment") == "bonus_action" for item in turn_casts)
-            if current_is_bonus or previous_bonus:
-                casts = [
-                    *turn_casts,
-                    {
-                        "payment": payment,
-                        "spell_level": spell_level,
-                        "casting_time": casting_time,
-                    },
-                ]
-                if any(
-                    item.get("payment") != "bonus_action"
-                    and not (
-                        int(item.get("spell_level", 1)) == 0
-                        and str(item.get("casting_time") or "").startswith("1 action")
-                    )
-                    for item in casts
-                ):
-                    raise _support.CombatEngineError(
-                        "2014 bonus-action spell rule permits only a 1-action cantrip "
-                        "as another spell on the same turn"
-                    )
+        except ValueError as error:
+            raise _support.CombatEngineError(str(error)) from error
         return turn_casts
 
     def record_combat_spell_cast(

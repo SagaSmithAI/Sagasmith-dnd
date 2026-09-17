@@ -334,6 +334,7 @@ deployment environment's change-management, backup, secret, and rollback policy.
 - [MCP server, gateway, protocol, and operations](packages/mcp/README.md)
 - [Independent Runtime and immutable workflow publication](packages/runtime/README.md)
 - [Design refactor acceptance](docs/design-refactor-status.md)
+- [Rule engine architecture and upgrade semantics](docs/rule-engine-architecture.md)
 - [Host integration contract](skills/HOST-INTEGRATION.md)
 - [Agent Skills](skills/README.md)
 - [D&D Workbench](apps/ui/README.md)

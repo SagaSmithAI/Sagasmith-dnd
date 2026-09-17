@@ -7382,11 +7382,9 @@ class CombatService:
                                 },
                             )
                         else:
-                            _support.apply_condition_change(
-                                sheet,
-                                condition_id=str(arguments["condition_id"]),
-                                add=add,
-                            )
+                            from sagasmith_dnd.rule_primitives import apply_sheet_primitive
+
+                            sheet = apply_sheet_primitive(sheet, opcode, arguments)["sheet"]
                         self.set_sheet(target_id, sheet)
                         target_results.append(
                             {
@@ -7437,26 +7435,14 @@ class CombatService:
                     actor_id = str(arguments["actor_id"])
                     sheet = _support.deepcopy(self.sheet(actor_id))
                     resource_ref = str(arguments["resource_ref"])
-                    resource_key = resource_ref.removeprefix("resources.")
-                    if not resource_ref.startswith("resources.") or not resource_key:
-                        raise _support.CombatEngineError(
-                            "semantic plan resource_ref must use resources.<key>"
-                        )
-                    resource = dict(sheet.get("resources") or {}).get(resource_key)
-                    if not isinstance(resource, dict):
-                        raise _support.CombatEngineError(
-                            f"semantic plan resource is not recorded: {resource_key}"
-                        )
-                    _support.mutate_bounded_resource(
-                        resource,
-                        amount=int(arguments["amount"]),
-                        direction=("spend" if opcode == "resource.spend" else "recover"),
-                    )
-                    self.set_sheet(actor_id, sheet)
+                    from sagasmith_dnd.rule_primitives import apply_sheet_primitive
+
+                    settled = apply_sheet_primitive(sheet, opcode, arguments)
+                    self.set_sheet(actor_id, settled["sheet"])
                     return {
                         "actor_id": actor_id,
                         "resource_ref": resource_ref,
-                        "value": int(resource["value"]),
+                        "value": settled["value"],
                     }
                 if opcode == "movement.force":
                     before_movement = _support.deepcopy(self.encounter)

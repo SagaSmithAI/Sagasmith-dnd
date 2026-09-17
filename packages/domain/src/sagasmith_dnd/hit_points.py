@@ -6,7 +6,8 @@ from copy import deepcopy
 from typing import Any
 
 from sagasmith_dnd.conditions import apply_condition_change, condition_ids
-from sagasmith_dnd.editions import DEFAULT_CHARACTER_EDITION, normalize_dnd_edition
+from sagasmith_dnd.edition_policy import edition_policy
+from sagasmith_dnd.editions import DEFAULT_CHARACTER_EDITION
 
 
 def effective_hit_point_maximum_value(
@@ -17,10 +18,7 @@ def effective_hit_point_maximum_value(
 ) -> int:
     """Return the one rules-effective maximum for recorded base HP."""
 
-    maximum = int(base_maximum)
-    if normalize_dnd_edition(edition) == "2014" and int(exhaustion) >= 4:
-        return max(1, maximum // 2)
-    return maximum
+    return edition_policy(edition).hit_point_maximum(int(base_maximum), int(exhaustion))
 
 
 def apply_basic_healing_to_sheet(

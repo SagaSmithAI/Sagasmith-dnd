@@ -12,10 +12,8 @@ from sagasmith_dnd.ability_generation import normalize_ability_generation
 from sagasmith_dnd.activity_identity import is_multiattack_activity
 from sagasmith_dnd.actor_types import NON_PLAYER_CHARACTER_TYPES
 from sagasmith_dnd.conditions import (
-    apply_effect_conditions,
     condition_ids,
     effect_is_suspended_by_petrification,
-    reconcile_ended_effect_conditions,
 )
 from sagasmith_dnd.content_solution import (
     ContentSolutionError,
@@ -5750,9 +5748,12 @@ def add_effect(sheet: dict[str, Any], effect: dict[str, Any]) -> tuple[dict[str,
     entry = _normalize_effect(effect, "effect")
     if any(current["id"] == entry["id"] for current in value["effects"]):
         raise ValueError("effect id already exists")
-    value["effects"].append(entry)
-    apply_effect_conditions(value, entry)
-    return validate_character_sheet(value), entry["id"]
+    from sagasmith_dnd.rule_primitives import apply_sheet_primitive
+
+    settled = apply_sheet_primitive(
+        value, "effect.apply", {"effect": entry, "effect_id": entry["id"]},
+    )
+    return validate_character_sheet(settled["sheet"]), entry["id"]
 
 
 def remove_effect(sheet: dict[str, Any], effect_id: str) -> dict[str, Any]:
@@ -5761,9 +5762,10 @@ def remove_effect(sheet: dict[str, Any], effect_id: str) -> dict[str, Any]:
     effect = next((entry for entry in effects if entry["id"] == effect_id), None)
     if effect is None:
         raise LookupError(effect_id)
-    effects.remove(effect)
-    reconcile_ended_effect_conditions(value, ended_effects=[effect])
-    return validate_character_sheet(value)
+    from sagasmith_dnd.rule_primitives import apply_sheet_primitive
+
+    settled = apply_sheet_primitive(value, "effect.remove", {"effect_id": effect_id})
+    return validate_character_sheet(settled["sheet"])
 
 
 def set_spell_prepared(sheet: dict[str, Any], spell_id: str, prepared: bool) -> dict[str, Any]:

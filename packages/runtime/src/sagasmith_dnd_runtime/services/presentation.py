@@ -532,6 +532,7 @@ class PresentationService:
                 compiled_plan,
                 raw_commitment.get("bindings"),
                 agent_ruling=normalized_ruling,
+                edition=str(encounter.get("ruleset") or "2014"),
             )
         except _support.ResolutionPlanBindingError as error:
             raise _support.CombatEngineError(
