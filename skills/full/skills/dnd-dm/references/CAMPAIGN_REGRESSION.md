@@ -109,7 +109,7 @@ Run every step through one campaign-bound MCP session/exposure at a time.
      "source_refs": ["<exact validated module source reference>"],
      "current": {"module_id": "", "chapter_id": "", "chapter_title": "", "scene_id": "", "scene_title": "", "objective": ""},
      "traversal": {"reachable_scene_ids": [], "visited_scene_ids": [], "excluded_scenes": [], "branch_decisions": []},
-     "party": {"party_size_status": "source_confirmed", "recommended_minimum": "<source integer>", "recommended_maximum": "<source integer>", "selected_size": "<positive Agent selection>", "party_size_review": {}, "use_pregenerated_first": true, "members": [], "replacements": []},
+     "party": {"use_pregenerated_first": true, "members": [], "replacements": []},
      "npcs": [],
      "quests": [],
      "clues": [],
@@ -204,20 +204,12 @@ Run every step through one campaign-bound MCP session/exposure at a time.
     positive initial party choice; only then build the
    remaining legal seats from active content catalog ids. A present applicable
    pregen may not be skipped for a generated optimization. Preserve each pregen's
-   source reference and document checksum. If extraction cannot find a party-size
-   range, search the complete normalized document, expand every plausible hit, and
-   visually inspect the introduction and character-creation pages. A semantic
-   search miss or unrelated numeral hit is not a source range. If the module is
-   genuinely silent, stop the source-confirmed gate and have the SagaSmith Agent
-   acting as DM record an explicit review before building any PC. The review
-   must retain the reviewed module
-   pages, search terms, exact fallback rule reference and checksum, selected
-   count, and `represented_as_module_recommendation=false`. A completed review
-   may use an exact enabled-Core design baseline, but it must not relabel that
-   number as the module's recommendation; never silently default to four. Use a
-   manifest `party_size_review` with `default_resolver="agent"` and
-   `ruling_kind="source_or_scene_fact"` for this Agent-owned review; image/source
-   evidence that still cannot be inspected remains an explicit external gate.
+    source reference and document checksum. Party size is an advisory choice,
+    not a source-review gate. A missing printed range requires no exhaustive
+    search, visual inspection, rule fallback, or `party_size_review`. Choose and
+    label a positive simulated party size under the regression authorization;
+    never represent that choice as a module recommendation. Runtime membership
+    may change and needs only at least one active PC.
    Use a
    level appropriate to the adventure segment. Exhaust advancement follow-ups,
    prepared spells, features, derived-state re-reads, and a verified snapshot

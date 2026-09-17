@@ -131,7 +131,11 @@ def test_public_ingest_repairs_invalid_stimulus_for_both_protocol_eras(
     tmp_path: Path, mode: str
 ) -> None:
     async def exercise() -> None:
-        server = create_server(_config(tmp_path / mode.replace("-", "_")))
+        from dataclasses import replace
+
+        server = create_server(replace(
+            _config(tmp_path / mode.replace("-", "_")), legacy_exposure=mode == "legacy",
+        ))
         campaign, npc, pc = await _campaign_with_actors(server)
         async with Client(server, mode=mode) as client:
             if mode == "legacy":
@@ -222,6 +226,16 @@ def test_open_errors_explain_the_single_participant_array(tmp_path: Path) -> Non
     async def exercise() -> None:
         server = create_server(_config(tmp_path))
         campaign, _npc, pc = await _campaign_with_actors(server)
+        with pytest.raises(
+            Exception, match="payload.event.*payload.expected_conversation_revision",
+        ):
+            await _call(
+                server, "npc_conversation",
+                {"campaign_id": campaign["id"], "action": "ingest", "payload": {
+                    "conversation_id": "missing", "idempotency_key": "missing-fields",
+                    "audience_facts": {},
+                }},
+            )
         with pytest.raises(Exception, match="every PC and NPC campaign runtime id"):
             await _call(
                 server,

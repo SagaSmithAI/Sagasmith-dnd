@@ -21,13 +21,13 @@ ordered import stages, canonical citation fields, and play/combat settlement too
 | Snapshot | `snapshot_create`, `snapshot_query(list/verify/lineage/recap/core)`, `snapshot_restore`, `branch_query(list/compare)`, `branch_change(create/checkout/create_core_upgrade)` |
 | Audit | `state_revision(history/receipt/undo/redo)` |
 
-Do not call retired names or emulate aliases client-side. Pack authoring and
-inspection are exposed only in Lobby through `rulebook_draft`, `module_draft`,
-and `content_pack`; finalized Pack reads do not bypass that phase boundary. The
+Do not call retired names or emulate aliases client-side. Pack authoring stays
+in Lobby through `rulebook_draft`, `module_draft`, and `content_pack` mutations.
+Owner/DM `content_pack(list|get)` reads are available during Play and Combat. The
 consolidated calls include:
 
 - `chase(action="start" | "query" | "take_turn" | "end")`;
-- `character_check(action="check" | "group" | "contest" | "reroll")`;
+- `character_check(action="check" | "group" | "contest" | "reroll" | "scene_save" | "source_feature")`;
 - `campaign_rules(action="core_relock")`;
 - `rulebook_draft(action="evidence" | "edit")`;
 - `module_draft(action="evidence" | "edit")`;
@@ -60,8 +60,12 @@ or archive contents. Its complete action set is
 `list|get|import|export|activate|deactivate|remove`. The
 published action-payload contract is the single exact-field whitelist; handlers
 add domain checks but do not maintain a second allowed/required field table.
-all `rulebook_draft`, `module_draft`, and `content_pack` actions are Lobby-only
-and DM-only. Chase, contests, and Heroic
+All `rulebook_draft` and `module_draft` actions, and `content_pack` mutations,
+are Lobby-only and DM-only. Content Pack list/get remain DM-only in every phase;
+`module_expand` remains available in combat for source verification.
+`snapshot_restore` is available in all phases, with the same owner, revision,
+branch, snapshot integrity, runtime compatibility and conversation guards.
+Chase, contests, and Heroic
 Inspiration rerolls are Play-only. On-hit rulings are
 Combat-only. Loading a facade through a lower-risk group does not authorize its
 other actions outside those action-level boundaries. `playthrough_manifest` and
@@ -564,16 +568,11 @@ first and preserve its exact source reference/checksum. Build a generated PC onl
 when no suitable active PC exists or an explicit player choice calls for one;
 never build seats merely to reach a printed recommendation or initial plan. This
 precedence is a provenance quality gate, not a fixed party count.
-If complete text search plus visual review proves that the module states no
-party-size range, record that absence and any Agent-selected positive initial
-plan, but do not block party construction or play on completing the recommendation
-review. Never silently present four, or a semantically unrelated search hit, as
-the module's recommendation.
-The manifest preserves this as `party_size_review` with
-`default_resolver="agent"` and `ruling_kind="source_or_scene_fact"` while the
-Agent performs the DM review. Missing recommendation evidence is diagnostic, not
-an external play boundary; mechanically indispensable actor data remains subject
-to its ordinary validation.
+Party size is a player/DM choice with at least one active PC. Record a printed
+recommendation only when known; missing counts require no exhaustive search,
+visual inspection, rule fallback, or `party_size_review`. Never present a chosen
+count as a module recommendation. Mechanically indispensable actor data still
+requires its ordinary validation.
 
 For a dead, missing, or departed PC, prefer an applicable unused module
 pregenerated character and otherwise create one new legal character through the

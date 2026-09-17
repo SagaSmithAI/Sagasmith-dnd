@@ -551,6 +551,9 @@ def test_skill_catalog_supports_bounded_outline_section_and_search(tmp_path: Pat
         max_chars=512,
     )
     assert section["content"] == "## Startup\n\nOpen an exposure.\n"
+    assert catalog.section(
+        kind="skill", identifier="dnd.root", heading="`Startup`", max_chars=512,
+    )["content"] == section["content"]
     search = catalog.search(
         kind="skill",
         identifier="dnd.root",
@@ -661,7 +664,7 @@ def test_character_writes_store_raw_sheet_and_return_derived_view(tmp_path: Path
 
 
 def test_campaign_resume_bundle_reloads_branch_scene_and_continuity(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = McpConfig(
         home=tmp_path / "home",
@@ -698,6 +701,33 @@ def test_campaign_resume_bundle_reloads_branch_scene_and_continuity(
             "reuse_bound_exposure_after_restore": True,
             "refresh_tools_after_phase_or_checkout_change": True,
         }
+        from sagasmith_dnd_runtime.services.campaigns import CampaignsService
+
+        original_get = CampaignsService.campaign_get
+
+        def large_get(self, campaign_id, principal_id="system:local"):
+            value = original_get(self, campaign_id, principal_id)
+            value["state"] = {**value["state"], "historical_log": "x" * 100_000}
+            return value
+
+        monkeypatch.setattr(CampaignsService, "campaign_get", large_get)
+        close_server(server)
+        server = create_server(config)
+        for view in ("get", "resume"):
+            _, summary = await server.call_tool("campaign_query", {
+                "view": view, "payload": {"campaign_id": created["id"], "detail": "summary"},
+            })
+            brief = summary["result"]
+            campaign_brief = brief["campaign"] if view == "resume" else brief
+            assert campaign_brief["id"] == created["id"]
+            assert campaign_brief["revision"] == result["campaign"]["revision"]
+            assert "state" not in campaign_brief
+            assert "campaign.state" in brief["omitted_detail"]
+            assert len(json.dumps(summary)) < 20_000
+        _, full = await server.call_tool("campaign_query", {
+            "view": "get", "payload": {"campaign_id": created["id"]},
+        })
+        assert len(full["result"]["state"]["historical_log"]) == 100_000
 
     asyncio.run(exercise_server())
 
@@ -728,6 +758,8 @@ def test_server_exposes_static_skill_overview_resource(tmp_path: Path) -> None:
         ]
         bootstrap = await server.read_resource("sagasmith://bootstrap")
         assert "zero-knowledge bootstrap" in bootstrap[0].content
+        assert "exposure(action=" not in bootstrap[0].content
+        assert "latest receipt" in bootstrap[0].content
         content = await server.read_resource("sagasmith://skills/overview")
         assert "dnd.root" in content[0].content
         assert "skill_query" in content[0].content
@@ -741,7 +773,10 @@ def test_server_exposes_static_skill_overview_resource(tmp_path: Path) -> None:
     asyncio.run(inspect_resources())
 
 
-def test_server_advertises_legacy_tools_list_changed(tmp_path: Path) -> None:
+@pytest.mark.parametrize("legacy_exposure", [False, True])
+def test_server_advertises_tools_list_changed_only_for_explicit_adapter(
+    tmp_path: Path, legacy_exposure: bool,
+) -> None:
     config = McpConfig(
         home=tmp_path / "home",
         database_url=None,
@@ -749,6 +784,7 @@ def test_server_advertises_legacy_tools_list_changed(tmp_path: Path) -> None:
         chroma_path_override=None,
         dnd_skills_dir=tmp_path / "dnd",
         modulegen_skills_dir=tmp_path / "modulegen",
+        legacy_exposure=legacy_exposure,
     )
     server = create_server(config)
 
@@ -756,7 +792,7 @@ def test_server_advertises_legacy_tools_list_changed(tmp_path: Path) -> None:
         exclude_none=True, by_alias=True
     )
 
-    assert capabilities["tools"]["listChanged"] is True
+    assert capabilities["tools"].get("listChanged", False) is legacy_exposure
 
 
 def test_server_tools_keep_domain_context_metadata_without_host_profiles(tmp_path: Path) -> None:

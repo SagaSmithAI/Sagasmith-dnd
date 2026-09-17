@@ -1366,7 +1366,16 @@ class InventoryService:
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Change one character or party inventory while preserving owner-specific validation."""
+        """Change owned inventory using the owner's current revision and a request key.
+
+        Character payloads: add={item}, update={item_id, patch},
+        remove={item_id, quantity?}, equip={item_id, slot},
+        recharge={item_id, trigger}, consume_ammunition={weapon_id, quantity?}.
+        item_id is the owned sheet.inventory.items[].id from the latest receipt,
+        not a catalog artifact_id. Party supports only add/remove. Apply catalog
+        equipment with character_content_apply first, then equip its returned
+        owned item ID; change quantity through update rather than applying twice.
+        """
         data = self.facade_payload(payload)
         if owner == "party" and action not in {"add", "remove"}:
             raise ValueError("party inventory supports only add and remove")
@@ -1539,7 +1548,15 @@ class InventoryService:
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Adjust a wallet or transfer money through the party with all affected revisions."""
+        """Adjust a wallet or transfer money through the party with all affected revisions.
+
+        owner=party means owner_id is the campaign UUID, never the string party;
+        owner=character means owner_id is the character UUID. adjust requires
+        top-level expected_revision of that owner and idempotency_key. Use
+        campaign_query(get/resume) or character_query(get) for a missing revision.
+        Module-authored loot parcels use campaign_change(action="loot_acquire")
+        with their exact source evidence rather than separate manual credits.
+        """
         data = self.facade_payload(payload)
         if action == "adjust":
             result = (

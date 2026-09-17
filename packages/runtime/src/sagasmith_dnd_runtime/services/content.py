@@ -11169,7 +11169,16 @@ class ContentService:
         limit: Annotated[int, _support.Field(ge=1, le=100)] = 50,
         cursor: Annotated[str | None, _support.Field(max_length=1024)] = None,
     ) -> dict[str, Any]:
-        """Inspect and manage finalized core-rules, addon, module, and preset Packs."""
+        """Inspect and manage finalized core_rules, addon, module, or preset Packs.
+
+        Every action needs payload={campaign_id, kind, ...}. Import uses exactly
+        one source_path or artifact. Module get/activate uses the local module_id
+        returned by import/list, not the archive pack_id. Mutations require Lobby,
+        the current campaign expected_revision and a stable idempotency_key.
+        Preset Packs are usable immediately after import; do not activate them.
+        Preset list/get also require payload.edition; for an exact stored preset,
+        get uses pack_id and version returned by list. Versions are not interchangeable.
+        """
 
         data = self.facade_payload(payload)
         campaign_id = str(self.required(data, "campaign_id"))
@@ -11593,7 +11602,16 @@ class ContentService:
         branch_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Read and change the base campaign rule profile; Pack changes use content_pack."""
+        """Read or change the base rule profile; use content_pack for Pack changes.
+
+        get_profile needs no payload. set_profile uses {edition, locale?,
+        publications?, options?}. core_relock uses {expected_core_fingerprint,
+        expected_head_snapshot_id, reason}: read the exact old fingerprint from
+        get_profile, create/verify a current checkpoint, and pass its head ID,
+        current branch and campaign revision. Only relock after reviewing an
+        actual runtime upgrade; it is not required to equip items or use presets.
+        explain accepts {event?}; receipts accepts {mechanic_id?, limit?}.
+        """
         data = self.facade_payload(payload)
         if action == "get_profile":
             result = self.campaign_rule_profile_get(campaign_id, principal_id)
@@ -11612,12 +11630,12 @@ class ContentService:
             data = self.facade_payload(payload)
             result = self.campaign_core_relock(
                 campaign_id,
-                data["expected_core_fingerprint"],
-                data["reason"],
+                self.required(data, "expected_core_fingerprint"),
+                self.required(data, "reason"),
                 principal_id,
                 branch_id,
                 expected_revision,
-                data["expected_head_snapshot_id"],
+                self.required(data, "expected_head_snapshot_id"),
                 idempotency_key,
             )
         elif action == "explain":
@@ -12315,7 +12333,13 @@ class ContentService:
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Apply a selection-ready class, background, feat, spell, or feature artifact."""
+        """Apply an exact active class/species/background/item/spell/feature artifact.
+
+        Requires the actor's expected_revision and idempotency_key. Read the
+        artifact's selection_contract and pass choices in selection. Omit grant
+        in Lobby: grant is Play authorization, not an item quantity. For item
+        quantity/equipment choices follow the returned catalog selection schema.
+        """
         return self.facade_result(
             "apply",
             self.character_content_apply_impl(

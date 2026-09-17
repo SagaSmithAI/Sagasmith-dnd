@@ -1814,7 +1814,7 @@
     }
   },
   {
-    "description": "Update campaign state, advancement, clock, or structured campaign-space effects.",
+    "description": "Update campaign state, advancement, clock, or campaign-space effects.\n\nparty_rest payload: {members:[{character_id, expected_revision}],\nrest_type:\"long_rest\"|\"short_rest\", duration_minutes}. Each member uses\nits actor revision; top-level expected_revision is the campaign revision.\nOptional member rest choices are documented in runtime-workflows.md.\nFor live prepared-spell changes, put prepared_spell_ids on that member\nin a legal long_rest; returning to Lobby does not reopen initial setup.\nclock_advance payload={period, count?, expected_elapsed_ticks?}. period is\nminute/hour/day/round/encounter; expected_elapsed_ticks is the resulting\nclock, required for minute/hour/day (10 ticks/minute), not the old clock.",
     "error_envelope": {
       "fields": [
         "code",
@@ -2501,7 +2501,7 @@
     }
   },
   {
-    "description": "Read bounded campaign pages, party state, or one complete resume bundle.",
+    "description": "Read campaign pages, party state, or one complete resume bundle.\n\nview=list needs no campaign id. All other views require payload.campaign_id.\nWith no campaign, list or campaign_create first. Agent startup/resume uses\npayload={campaign_id, detail:\"summary\"} to avoid returning combat logs and\nfull state documents. detail defaults to full for existing UI clients.\nFollow summary read_next for omitted detail; omission never means absent.\nUse resume once when reconnecting/restoring, then reuse write receipts.",
     "error_envelope": {
       "fields": [
         "code",
@@ -2715,7 +2715,7 @@
     "roles": {}
   },
   {
-    "description": "Read and change the base campaign rule profile; Pack changes use content_pack.",
+    "description": "Read or change the base rule profile; use content_pack for Pack changes.\n\nget_profile needs no payload. set_profile uses {edition, locale?,\npublications?, options?}. core_relock uses {expected_core_fingerprint,\nexpected_head_snapshot_id, reason}: read the exact old fingerprint from\nget_profile, create/verify a current checkpoint, and pass its head ID,\ncurrent branch and campaign revision. Only relock after reviewing an\nactual runtime upgrade; it is not required to equip items or use presets.\nexplain accepts {event?}; receipts accepts {mechanic_id?, limit?}.",
     "error_envelope": {
       "fields": [
         "code",
@@ -2996,31 +2996,16 @@
           "type": "string"
         },
         "expected_revision": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
           "description": "Authority revision guard used to reject stale mutations.",
-          "title": "Expected Revision"
+          "title": "Expected Revision",
+          "type": "integer"
         },
         "idempotency_key": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
           "description": "Stable business-operation key reused unchanged across retries.",
           "maxLength": 256,
-          "title": "Idempotency Key"
+          "minLength": 1,
+          "title": "Idempotency Key",
+          "type": "string"
         },
         "method": {
           "description": "Bounded method value accepted by character_ability_apply.",
@@ -3043,6 +3028,8 @@
       },
       "required": [
         "character_id",
+        "expected_revision",
+        "idempotency_key",
         "method"
       ],
       "title": "character_ability_applyInput",
@@ -3381,7 +3368,7 @@
     }
   },
   {
-    "description": "Resolve a check or bounded source feature in the Play phase.",
+    "description": "Resolve a check or bounded source feature in the Play phase.\n\ncheck payload: {actor_id, kind, ability, dc?, bonus?, advantage?,\ndisadvantage?, proficient?, rule_facts?}. For skills use ability=\"stealth\"\n(or another skill name), not ability=\"dexterity\" plus a skill field.\nFor a skill check use kind=\"check\" and ability=\"stealth\" (for example).\nkind is ability/check/save/death_save, never skill. Skill\nproficiency/expertise comes from the actor; do not add it manually.\nRequires campaign revision, branch_id and idempotency_key.\nscene_save resolves a DM-classified module hazard with exact active\nsource_ref/source_excerpt, reason, save_source_kind, save_effect_conditions\nand save_against_poison. source_ref is the complete object returned by\nmodule_expand (including chunk_id, checksum and location fields), not a\nstring. Copy it verbatim; do not guess hashes or rebuild a partial object.\nIt rolls the save only; settle its consequences\nseparately. Spell/card saves must use their paid source executor.",
     "error_envelope": {
       "fields": [
         "code",
@@ -3396,12 +3383,507 @@
     "idempotent": true,
     "input_schema": {
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "scene_save"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "additionalProperties": false,
+                "properties": {
+                  "ability": {
+                    "title": "Ability",
+                    "type": "string"
+                  },
+                  "actor_id": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "title": "Actor Id",
+                    "type": "string"
+                  },
+                  "advantage": {
+                    "default": false,
+                    "title": "Advantage",
+                    "type": "boolean"
+                  },
+                  "bonus": {
+                    "default": 0,
+                    "title": "Bonus",
+                    "type": "integer"
+                  },
+                  "dc": {
+                    "title": "Dc",
+                    "type": "integer"
+                  },
+                  "disadvantage": {
+                    "default": false,
+                    "title": "Disadvantage",
+                    "type": "boolean"
+                  },
+                  "reason": {
+                    "title": "Reason",
+                    "type": "string"
+                  },
+                  "save_against_poison": {
+                    "title": "Save Against Poison",
+                    "type": "boolean"
+                  },
+                  "save_effect_conditions": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Save Effect Conditions",
+                    "type": "array"
+                  },
+                  "save_source_kind": {
+                    "enum": [
+                      "nonmagical_effect",
+                      "magical_effect"
+                    ],
+                    "title": "Save Source Kind",
+                    "type": "string"
+                  },
+                  "source_excerpt": {
+                    "title": "Source Excerpt",
+                    "type": "string"
+                  },
+                  "source_ref": {
+                    "additionalProperties": true,
+                    "title": "Source Ref",
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "actor_id",
+                  "ability",
+                  "dc",
+                  "source_ref",
+                  "source_excerpt",
+                  "reason",
+                  "save_source_kind",
+                  "save_effect_conditions",
+                  "save_against_poison"
+                ],
+                "title": "SceneHazardSave",
+                "type": "object"
+              }
+            },
+            "required": [
+              "payload"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "check"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "additionalProperties": false,
+                "properties": {
+                  "ability": {
+                    "title": "Ability",
+                    "type": "string"
+                  },
+                  "actor_id": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "title": "Actor Id",
+                    "type": "string"
+                  },
+                  "advantage": {
+                    "default": false,
+                    "title": "Advantage",
+                    "type": "boolean"
+                  },
+                  "bonus": {
+                    "default": 0,
+                    "title": "Bonus",
+                    "type": "integer"
+                  },
+                  "dc": {
+                    "default": 0,
+                    "title": "Dc",
+                    "type": "integer"
+                  },
+                  "disadvantage": {
+                    "default": false,
+                    "title": "Disadvantage",
+                    "type": "boolean"
+                  },
+                  "kind": {
+                    "enum": [
+                      "ability",
+                      "check",
+                      "save",
+                      "death_save"
+                    ],
+                    "title": "Kind",
+                    "type": "string"
+                  },
+                  "proficient": {
+                    "default": false,
+                    "title": "Proficient",
+                    "type": "boolean"
+                  },
+                  "rule_facts": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": true,
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Rule Facts"
+                  }
+                },
+                "required": [
+                  "actor_id",
+                  "kind",
+                  "ability"
+                ],
+                "title": "CharacterCheck",
+                "type": "object"
+              }
+            },
+            "required": [
+              "payload"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "group"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "additionalProperties": false,
+                "properties": {
+                  "ability": {
+                    "title": "Ability",
+                    "type": "string"
+                  },
+                  "actor_ids": {
+                    "items": {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "title": "Actor Ids",
+                    "type": "array"
+                  },
+                  "advantage": {
+                    "default": false,
+                    "title": "Advantage",
+                    "type": "boolean"
+                  },
+                  "bonus": {
+                    "default": 0,
+                    "title": "Bonus",
+                    "type": "integer"
+                  },
+                  "dc": {
+                    "title": "Dc",
+                    "type": "integer"
+                  },
+                  "disadvantage": {
+                    "default": false,
+                    "title": "Disadvantage",
+                    "type": "boolean"
+                  },
+                  "proficient": {
+                    "default": false,
+                    "title": "Proficient",
+                    "type": "boolean"
+                  },
+                  "rule_facts": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": true,
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Rule Facts"
+                  }
+                },
+                "required": [
+                  "actor_ids",
+                  "ability",
+                  "dc"
+                ],
+                "title": "CharacterGroupCheck",
+                "type": "object"
+              }
+            },
+            "required": [
+              "payload"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "contest"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "additionalProperties": false,
+                "properties": {
+                  "source_ability": {
+                    "title": "Source Ability",
+                    "type": "string"
+                  },
+                  "source_actor_id": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "title": "Source Actor Id",
+                    "type": "string"
+                  },
+                  "source_advantage": {
+                    "default": false,
+                    "title": "Source Advantage",
+                    "type": "boolean"
+                  },
+                  "source_bonus": {
+                    "default": 0,
+                    "title": "Source Bonus",
+                    "type": "integer"
+                  },
+                  "source_disadvantage": {
+                    "default": false,
+                    "title": "Source Disadvantage",
+                    "type": "boolean"
+                  },
+                  "source_proficient": {
+                    "default": false,
+                    "title": "Source Proficient",
+                    "type": "boolean"
+                  },
+                  "source_rule_facts": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": true,
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Source Rule Facts"
+                  },
+                  "target_ability": {
+                    "title": "Target Ability",
+                    "type": "string"
+                  },
+                  "target_actor_id": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "title": "Target Actor Id",
+                    "type": "string"
+                  },
+                  "target_advantage": {
+                    "default": false,
+                    "title": "Target Advantage",
+                    "type": "boolean"
+                  },
+                  "target_bonus": {
+                    "default": 0,
+                    "title": "Target Bonus",
+                    "type": "integer"
+                  },
+                  "target_disadvantage": {
+                    "default": false,
+                    "title": "Target Disadvantage",
+                    "type": "boolean"
+                  },
+                  "target_proficient": {
+                    "default": false,
+                    "title": "Target Proficient",
+                    "type": "boolean"
+                  },
+                  "target_rule_facts": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": true,
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Target Rule Facts"
+                  }
+                },
+                "required": [
+                  "source_actor_id",
+                  "target_actor_id",
+                  "source_ability",
+                  "target_ability"
+                ],
+                "title": "CharacterContest",
+                "type": "object"
+              }
+            },
+            "required": [
+              "payload"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "reroll"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "additionalProperties": false,
+                "properties": {
+                  "actor_id": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "title": "Actor Id",
+                    "type": "string"
+                  },
+                  "expected_original_roll": {
+                    "title": "Expected Original Roll",
+                    "type": "integer"
+                  },
+                  "resolution_id": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "title": "Resolution Id",
+                    "type": "string"
+                  },
+                  "roll_index": {
+                    "title": "Roll Index",
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "actor_id",
+                  "resolution_id",
+                  "roll_index",
+                  "expected_original_roll"
+                ],
+                "title": "CharacterReroll",
+                "type": "object"
+              }
+            },
+            "required": [
+              "payload"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "source_feature"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "additionalProperties": false,
+                "properties": {
+                  "actor_id": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "title": "Actor Id",
+                    "type": "string"
+                  },
+                  "capability": {
+                    "title": "Capability",
+                    "type": "string"
+                  },
+                  "fact_key": {
+                    "title": "Fact Key",
+                    "type": "string"
+                  },
+                  "feature_id": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "title": "Feature Id",
+                    "type": "string"
+                  },
+                  "settlement_ref": {
+                    "title": "Settlement Ref",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "actor_id",
+                  "feature_id",
+                  "capability",
+                  "settlement_ref",
+                  "fact_key"
+                ],
+                "title": "CharacterSourceFeature",
+                "type": "object"
+              }
+            },
+            "required": [
+              "payload"
+            ]
+          }
+        }
+      ],
       "properties": {
         "action": {
           "default": "check",
           "description": "Exact operation supported by this facade.",
           "enum": [
             "check",
+            "scene_save",
             "group",
             "contest",
             "reroll",
@@ -3628,7 +4110,7 @@
     }
   },
   {
-    "description": "Apply a selection-ready class, background, feat, spell, or feature artifact.",
+    "description": "Apply an exact active class/species/background/item/spell/feature artifact.\n\nRequires the actor's expected_revision and idempotency_key. Read the\nartifact's selection_contract and pass choices in selection. Omit grant\nin Lobby: grant is Play authorization, not an item quantity. For item\nquantity/equipment choices follow the returned catalog selection schema.",
     "error_envelope": {
       "fields": [
         "code",
@@ -3657,17 +4139,9 @@
           "type": "string"
         },
         "expected_revision": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
           "description": "Authority revision guard used to reject stale mutations.",
-          "title": "Expected Revision"
+          "title": "Expected Revision",
+          "type": "integer"
         },
         "grant": {
           "anyOf": [
@@ -3684,18 +4158,11 @@
           "title": "Grant"
         },
         "idempotency_key": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
           "description": "Stable business-operation key reused unchanged across retries.",
           "maxLength": 256,
-          "title": "Idempotency Key"
+          "minLength": 1,
+          "title": "Idempotency Key",
+          "type": "string"
         },
         "principal_id": {
           "default": "system:local",
@@ -3720,8 +4187,10 @@
         }
       },
       "required": [
+        "artifact_id",
         "character_id",
-        "artifact_id"
+        "expected_revision",
+        "idempotency_key"
       ],
       "title": "character_content_applyInput",
       "type": "object"
@@ -3855,7 +4324,7 @@
     }
   },
   {
-    "description": "Create directly, by build/template, or from source-bound module evidence.",
+    "description": "Create a campaign actor from a validated build or source-bound card.\n\nNew PC: mode=build, payload={campaign_id, name, summary}; omit sheet/notes.\nUse result.instance.id, then character_ability_apply and catalog-backed\ncharacter_content_apply. Read CHAR_CREATION.md before building. Never\nguess a full PC sheet for direct mode; it requires a complete valid card.\nFor a preset NPC/monster use mode=content_actor with payload={campaign_id,\nartifact_id, name?}. Copy the exact actor artifact ID from the preset\ncatalog. If resolving a specific archive, also provide source_path or\nartifact (exactly one); never substitute the Pack ID for the actor ID.",
     "error_envelope": {
       "fields": [
         "code",
@@ -4043,7 +4512,7 @@
     }
   },
   {
-    "description": "Update identity and notes metadata; whole-sheet changes remain separate.",
+    "description": "Update name, player_name, summary, or notes (not mechanical fields).\n\nSupply the character's revision as expected_revision and a request key.\nRead and preserve existing notes before sending the updated notes object.",
     "error_envelope": {
       "fields": [
         "code",
@@ -4066,31 +4535,16 @@
           "type": "string"
         },
         "expected_revision": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
           "description": "Authority revision guard used to reject stale mutations.",
-          "title": "Expected Revision"
+          "title": "Expected Revision",
+          "type": "integer"
         },
         "idempotency_key": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
           "description": "Stable business-operation key reused unchanged across retries.",
           "maxLength": 256,
-          "title": "Idempotency Key"
+          "minLength": 1,
+          "title": "Idempotency Key",
+          "type": "string"
         },
         "payload": {
           "additionalProperties": true,
@@ -4108,6 +4562,8 @@
       },
       "required": [
         "character_id",
+        "expected_revision",
+        "idempotency_key",
         "payload"
       ],
       "title": "character_metadata_updateInput",
@@ -4239,7 +4695,7 @@
     }
   },
   {
-    "description": "Read characters with bounded filtering/paging or inspect an allowlisted document.",
+    "description": "Read actors, catalog options, or a rest/advancement preflight.\n\nget payload={character_id}; batch={campaign_id,character_ids:[...]};\nlist={campaign_id}; catalog={campaign_id,kind?,query?,include_context?}.\nrest={character_id,rest_type,duration_minutes,...}; short rests require\nduration_minutes. document reads an allowlisted source_path, not a\ncharacter-sheet section. Reuse write receipts before reloading full cards.",
     "error_envelope": {
       "fields": [
         "code",
@@ -4668,7 +5124,7 @@
     }
   },
   {
-    "description": "Set one prepared spell or replace the validated prepared-spell list.",
+    "description": "Set one prepared spell or replace the validated prepared-spell list.\n\nRequires the character's expected_revision and idempotency_key. Payload\nfor set: {spell_id, prepared}; replace_all: {spell_ids, event?}. Spell ids\nmust be learned on this actor first, not merely listed in the catalog.",
     "error_envelope": {
       "fields": [
         "code",
@@ -4691,31 +5147,16 @@
           "type": "string"
         },
         "expected_revision": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
           "description": "Authority revision guard used to reject stale mutations.",
-          "title": "Expected Revision"
+          "title": "Expected Revision",
+          "type": "integer"
         },
         "idempotency_key": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
           "description": "Stable business-operation key reused unchanged across retries.",
           "maxLength": 256,
-          "title": "Idempotency Key"
+          "minLength": 1,
+          "title": "Idempotency Key",
+          "type": "string"
         },
         "mode": {
           "description": "Bounded mode value accepted by character_spell_prepare.",
@@ -4742,6 +5183,8 @@
       },
       "required": [
         "character_id",
+        "expected_revision",
+        "idempotency_key",
         "mode",
         "payload"
       ],
@@ -5330,7 +5773,7 @@
     }
   },
   {
-    "description": "Pay a combat action and settle source-bound spell workflows atomically.",
+    "description": "Cast the exact spell_id recorded on the caster card, on a legal turn.\n\nRequires current campaign expected_revision and idempotency_key. The card\ndetermines action/slot cost; never spend them separately. target_allocations\nis only for source-bound Magic Missile, not ordinary spell targets.\nFor an Agent-resolved standard spell, omit declaration to obtain the\nagent_ruling_contract, then copy its submission_shape under declaration,\nfilling application_id, decision and reason and preserving source_excerpt.\npayment_required=true means nothing has been paid yet. After payment is\nrecorded, do not cast again to finish the effect or use another attack\naction. Follow the returned resolution/owned choice contract; combat_choice\nneeds an actual choice_id, not an application_id. Agent-ruling commitment\nrecords payment and adjudication, not automatic target HP/condition changes.\nResolve remaining source-grounded consequences through their public tools.",
     "error_envelope": {
       "fields": [
         "code",
@@ -7040,7 +7483,7 @@
     }
   },
   {
-    "description": "Close an encounter atomically while preserving its final audit state.",
+    "description": "Close an encounter atomically while preserving its final audit state.\n\nOptional outcome is {status, summary}; status is defeat, interrupted,\nsurrender, truce, victory, or withdrawal. Requires campaign revision,\ncurrent branch_id and idempotency_key. Settle pending choices first.",
     "error_envelope": {
       "fields": [
         "code",
@@ -7077,31 +7520,16 @@
           "type": "string"
         },
         "expected_revision": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
           "description": "Authority revision guard used to reject stale mutations.",
-          "title": "Expected Revision"
+          "title": "Expected Revision",
+          "type": "integer"
         },
         "idempotency_key": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
           "description": "Stable business-operation key reused unchanged across retries.",
           "maxLength": 256,
-          "title": "Idempotency Key"
+          "minLength": 1,
+          "title": "Idempotency Key",
+          "type": "string"
         },
         "outcome": {
           "anyOf": [
@@ -7126,7 +7554,9 @@
         }
       },
       "required": [
-        "campaign_id"
+        "campaign_id",
+        "expected_revision",
+        "idempotency_key"
       ],
       "title": "combat_endInput",
       "type": "object"
@@ -8483,7 +8913,7 @@
     }
   },
   {
-    "description": "Move or stand, including source-granted Aggressive movement.",
+    "description": "Move or stand using the current campaign revision and a request key.\n\nmove payload={distance, destination?, path?, spatial_facts?}; distance is\nfeet traveled, before difficult-terrain cost. In Agent positioning use\nspatial_facts={decision_id, reason, destination_legal, distance_ft}, with\ndistance_ft equal to distance. Optional difficult_terrain_extra_ft adds\ncost; opportunity_attack_actor_ids lists actual threats. Do not invent\ngrid coordinates when the encounter uses Agent positioning. stand uses {}.",
     "error_envelope": {
       "fields": [
         "code",
@@ -8901,7 +9331,7 @@
     }
   },
   {
-    "description": "Validate an attack and return a non-mutating resolution plan.",
+    "description": "Validate an attack without rolling, paying resources or changing state.\n\naction uses weapon_id from the actor's weapon attacks. In Agent positioning,\nput spatial facts in action.context.spatial_facts; see combat_resolve_attack\nfor required fields. Reuse this action for resolution if state is unchanged.",
     "error_envelope": {
       "fields": [
         "code",
@@ -9126,7 +9556,7 @@
     }
   },
   {
-    "description": "Read combat state, render a safe snapshot, or inspect DM-only transactions.",
+    "description": "Read combat state or DM-only transaction receipts.\n\navailable_actions and reactions require top-level actor_id, not payload.\nstatus needs only campaign_id. transaction_receipt requires\npayload={idempotency_key, branch_id?}; render accepts audience_projection.",
     "error_envelope": {
       "fields": [
         "code",
@@ -10107,7 +10537,7 @@
     }
   },
   {
-    "description": "Resolve an attack and atomically update the attacker, target and encounter.",
+    "description": "Resolve one attack and atomically update actors and encounter.\n\nUse the active actor and campaign revision from the latest receipt, plus\nidempotency_key. action={weapon_id, context?}; use an owned weapon ID.\nAgent positioning requires action.context.spatial_facts={decision_id,\nreason, targetable, in_range, cover_degree, attacker_can_see_target,\ntarget_can_see_attacker}. Flags are booleans; cover_degree is none/half/\nthree_quarters/total. Optional facts: long_range, target_within_5_ft,\nclose_threat_actor_ids, helper_actor_ids, target_adjacent_ally_actor_ids,\ncleave_secondary_eligible. Ground them in the current scene, never invent\ncoordinates to bypass a missing spatial decision. Grid mode uses its map.",
     "error_envelope": {
       "fields": [
         "code",
@@ -10633,7 +11063,7 @@
     }
   },
   {
-    "description": "Start a structured encounter from canonical campaign actors.",
+    "description": "Start one encounter from existing canonical campaign actor IDs.\n\nFor a module encounter, pass its scene_id and source-backed\nparticipant_manifest after module_query(view=\"preflight\"). Omitting\nscene_id creates an ad-hoc encounter and does not validate module progress.\nRead the current scene rather than inventing a replacement encounter.\npositioning_mode=\"agent\" uses explicit DM spatial decisions without a\nfabricated grid; grid mode requires an actual map or declared override.\nparticipant_config supplies encounter facts, not replacement hp/max_hp.\nInitiative ties may require corrected tie_breaker values before startup.\nReuse returned combat state/revisions; execute actors in returned turn order.",
     "error_envelope": {
       "fields": [
         "code",
@@ -11434,7 +11864,7 @@
     }
   },
   {
-    "description": "Inspect and manage finalized core-rules, addon, module, and preset Packs.",
+    "description": "Inspect and manage finalized core_rules, addon, module, or preset Packs.\n\nEvery action needs payload={campaign_id, kind, ...}. Import uses exactly\none source_path or artifact. Module get/activate uses the local module_id\nreturned by import/list, not the archive pack_id. Mutations require Lobby,\nthe current campaign expected_revision and a stable idempotency_key.\nPreset Packs are usable immediately after import; do not activate them.\nPreset list/get also require payload.edition; for an exact stored preset,\nget uses pack_id and version returned by list. Versions are not interchangeable.",
     "error_envelope": {
       "fields": [
         "code",
@@ -11662,7 +12092,9 @@
       "type": "object"
     },
     "phases": [
-      "lobby"
+      "combat",
+      "lobby",
+      "play"
     ],
     "read_only": false,
     "requires_campaign": true,
@@ -11670,7 +12102,15 @@
       "expected_revision"
     ],
     "roles": {
+      "combat": [
+        "dm",
+        "owner"
+      ],
       "lobby": [
+        "dm",
+        "owner"
+      ],
+      "play": [
         "dm",
         "owner"
       ]
@@ -13217,7 +13657,7 @@
     "roles": {}
   },
   {
-    "description": "Change one character or party inventory while preserving owner-specific validation.",
+    "description": "Change owned inventory using the owner's current revision and a request key.\n\nCharacter payloads: add={item}, update={item_id, patch},\nremove={item_id, quantity?}, equip={item_id, slot},\nrecharge={item_id, trigger}, consume_ammunition={weapon_id, quantity?}.\nitem_id is the owned sheet.inventory.items[].id from the latest receipt,\nnot a catalog artifact_id. Party supports only add/remove. Apply catalog\nequipment with character_content_apply first, then equip its returned\nowned item ID; change quantity through update rather than applying twice.",
     "error_envelope": {
       "fields": [
         "code",
@@ -16315,6 +16755,7 @@
       "type": "object"
     },
     "phases": [
+      "combat",
       "lobby",
       "play"
     ],
@@ -16322,6 +16763,10 @@
     "requires_campaign": true,
     "revision_fields": [],
     "roles": {
+      "combat": [
+        "dm",
+        "owner"
+      ],
       "lobby": [
         "dm",
         "owner"
@@ -16330,7 +16775,7 @@
     }
   },
   {
-    "description": "Read module cards, indexes, one scene, or current scoped progress.",
+    "description": "Read installed module state; campaign_id is a top-level argument.\n\npayload by view: list {}; index {module_id?}; current {scope_id?};\nscene {scene_id, scope_id?}; progress {module_id?, scope_id?};\npreflight {scene_id, participant_manifest}; assets/candidates {module_id};\nactors {module_id, scene_id?, binding_kind?}; content {review_id} or\n{module_id, content_kind?, content_key?}. content reads materialization\nreviews, not source prose. For prose, read scene, then module_expand\nwith its returned chunk_id. Copy the complete returned source_ref\nunchanged for source-bound actions; never reconstruct IDs or checksums.\nList results support top-level query, limit and cursor. scope_id defaults\nto party. A missing current scene is not permission to invent module facts.",
     "error_envelope": {
       "fields": [
         "code",
@@ -16768,7 +17213,7 @@
     }
   },
   {
-    "description": "Persist scoped progress or a source-backed visual atlas review.",
+    "description": "Persist scoped progress or a source-backed visual atlas review.\n\nRequires expected_state_version from scene progress (0 for its first\nwrite), not the campaign revision, and idempotency_key. progress is an\ninteger. Record observed play only; a progress write does not resolve an\nencounter, create actors, or prove that a scene objective was achieved.",
     "error_envelope": {
       "fields": [
         "code",
@@ -16817,31 +17262,16 @@
           "title": "Current Room"
         },
         "expected_state_version": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
           "description": "Bounded expected state version value accepted by module_set_progress.",
-          "title": "Expected State Version"
+          "title": "Expected State Version",
+          "type": "integer"
         },
         "idempotency_key": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
           "description": "Stable business-operation key reused unchanged across retries.",
           "maxLength": 256,
-          "title": "Idempotency Key"
+          "minLength": 1,
+          "title": "Idempotency Key",
+          "type": "string"
         },
         "principal_id": {
           "default": "system:local",
@@ -16920,6 +17350,8 @@
       },
       "required": [
         "campaign_id",
+        "expected_state_version",
+        "idempotency_key",
         "scene_id"
       ],
       "title": "module_set_progressInput",
@@ -17055,7 +17487,7 @@
     }
   },
   {
-    "description": "Run the complete public NPC conversation workflow through one facade.\n\nFor ``action='ingest'``, put the public stimulus in ``payload.event``\nwith ``type`` (speech, action, scene_prompt, or resolution),\n``speaker_actor_id``, and ``content`` (not ``text``); optional fields\ninclude ``language``, ``delivery``, and ``declared_target_actor_ids``.\nInclude ``payload.audience_facts`` with ``decision_id``,\n``resolver='agent'``, perceived/understood/response actor id lists,\n``partial_renditions``, ``basis_refs``, and a scene-specific ``reason``.\nUnderstood and response actors must be perceived, and response actors\nmust have NPC runtimes.",
+    "description": "Run the complete public NPC conversation workflow through one facade.\n\nFor ``action='ingest'``, put the public stimulus in ``payload.event``\nwith ``type`` (speech, action, scene_prompt, or resolution),\n``speaker_actor_id``, and ``content`` (not ``text``); optional fields\ninclude ``language``, ``delivery``, and ``declared_target_actor_ids``.\nInclude ``payload.audience_facts`` with ``decision_id``,\n``resolver='agent'``, perceived/understood/response actor id lists,\n``partial_renditions``, ``basis_refs``, and a scene-specific ``reason``.\nUnderstood and response actors must be perceived, and response actors\nmust have NPC runtimes.\nAll writes require payload.idempotency_key. ingest/publish/close/abort\nalso require payload.conversation_id and expected_conversation_revision\nfrom the latest conversation receipt (not the campaign revision).\nopen uses participant_actor_ids and optional scope_id inside payload.\nPending NPC activations require a connected Host worker; close only when\nthey finish. Without that Host, report the missing capability or explicitly\nabort the conversation, never fabricate NPC publications or busy-poll it.",
     "error_envelope": {
       "fields": [
         "code",
@@ -19011,7 +19443,7 @@
     "roles": {}
   },
   {
-    "description": "Discover or read bounded installed workflow guidance.",
+    "description": "Discover or read installed workflow guidance in bounded pages.\n\nStart with kind=skill, action=read, identifier=dnd.full. Search uses a\nshort query; follow page.next_cursor for more matches. Section requires\nan exact Markdown heading from outline, not a JSON key. For tool help,\nsearch generated-operations.md, then read the matching Markdown section.",
     "error_envelope": {
       "fields": [
         "code",
@@ -19103,6 +19535,8 @@
         "max_chars": {
           "default": 12000,
           "description": "Bounded max chars value accepted by skill_query.",
+          "maximum": 20000,
+          "minimum": 256,
           "title": "Max Chars",
           "type": "integer"
         },
@@ -19263,7 +19697,7 @@
     "roles": {}
   },
   {
-    "description": "Commit current D&D state, events, facts, and actor knowledge to this branch.",
+    "description": "Save current authoritative state on the current branch.\n\nRequires campaign expected_revision, idempotency_key, and the exact\nexpected_head_snapshot_id from branch_query(list); use \"\" only for a\nbranch without a head. Returns slot (integer) and id; verify via\nsnapshot_query(view=\"verify\", payload={slot}), not snapshot_id.",
     "error_envelope": {
       "fields": [
         "code",
@@ -19477,7 +19911,7 @@
     }
   },
   {
-    "description": "Read snapshot history, integrity, lineage, or a regenerated recap.",
+    "description": "Read snapshot history, integrity, lineage, or a regenerated recap.\n\nlist needs no payload. verify/core/recap require payload={slot:<integer>}\nfrom snapshot_create/list, not a snapshot UUID. lineage accepts slot.",
     "error_envelope": {
       "fields": [
         "code",
@@ -19705,7 +20139,7 @@
     }
   },
   {
-    "description": "Fork from an earlier save; existing future history remains intact.",
+    "description": "Fork from a saved integer slot, preserving existing future history.\n\nPass current expected_revision, expected_branch_id and idempotency_key.\nAfter restoring, resume once and use the returned branch/revisions;\nsaved revision numbers are not current concurrency tokens.",
     "error_envelope": {
       "fields": [
         "code",
@@ -19901,7 +20335,8 @@
     },
     "phases": [
       "combat",
-      "lobby"
+      "lobby",
+      "play"
     ],
     "read_only": false,
     "requires_campaign": true,
@@ -19916,11 +20351,15 @@
       "lobby": [
         "dm",
         "owner"
+      ],
+      "play": [
+        "dm",
+        "owner"
       ]
     }
   },
   {
-    "description": "Read revision history or perform guarded undo/redo.",
+    "description": "Read revision history, retrieve a known write receipt, or guarded undo/redo.\n\nreceipt requires payload.idempotency_key of the original dispatched write;\nnever generate a new key for a lookup. To read the current campaign revision,\nuse campaign_query(view=\"get\", payload={campaign_id}), not receipt.",
     "error_envelope": {
       "fields": [
         "code",
@@ -20585,7 +21024,7 @@
     }
   },
   {
-    "description": "Adjust a wallet or transfer money through the party with all affected revisions.",
+    "description": "Adjust a wallet or transfer money through the party with all affected revisions.\n\nowner=party means owner_id is the campaign UUID, never the string party;\nowner=character means owner_id is the character UUID. adjust requires\ntop-level expected_revision of that owner and idempotency_key. Use\ncampaign_query(get/resume) or character_query(get) for a missing revision.\nModule-authored loot parcels use campaign_change(action=\"loot_acquire\")\nwith their exact source evidence rather than separate manual credits.",
     "error_envelope": {
       "fields": [
         "code",

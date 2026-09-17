@@ -1584,7 +1584,13 @@ class AuthoringService:
         idempotency_key: str | None = None,
         spatial_review: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Persist scoped progress or a source-backed visual atlas review."""
+        """Persist scoped progress or a source-backed visual atlas review.
+
+        Requires expected_state_version from scene progress (0 for its first
+        write), not the campaign revision, and idempotency_key. progress is an
+        integer. Record observed play only; a progress write does not resolve an
+        encounter, create actors, or prove that a scene objective was achieved.
+        """
         self.access.require_campaign(campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES)
         if expected_state_version is None or not idempotency_key:
             raise ValueError(
@@ -2485,7 +2491,19 @@ class AuthoringService:
         limit: Annotated[int, _support.Field(ge=1, le=100)] = 50,
         cursor: Annotated[str | None, _support.Field(max_length=1024)] = None,
     ) -> dict[str, Any]:
-        """Read module cards, indexes, one scene, or current scoped progress."""
+        """Read installed module state; campaign_id is a top-level argument.
+
+        payload by view: list {}; index {module_id?}; current {scope_id?};
+        scene {scene_id, scope_id?}; progress {module_id?, scope_id?};
+        preflight {scene_id, participant_manifest}; assets/candidates {module_id};
+        actors {module_id, scene_id?, binding_kind?}; content {review_id} or
+        {module_id, content_kind?, content_key?}. content reads materialization
+        reviews, not source prose. For prose, read scene, then module_expand
+        with its returned chunk_id. Copy the complete returned source_ref
+        unchanged for source-bound actions; never reconstruct IDs or checksums.
+        List results support top-level query, limit and cursor. scope_id defaults
+        to party. A missing current scene is not permission to invent module facts.
+        """
         data = self.facade_payload(payload)
         if view == "list":
             result = self.module_list(campaign_id, principal_id)

@@ -923,6 +923,8 @@ class CharactersService:
         expected_revision: int | None = None,
         branch_id: str | None = None,
         idempotency_key: str | None = None,
+        *,
+        scene_save_source: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Resolve and audit a non-combat check using the branch's exact rule-pack lock."""
         self.access.require_campaign(campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES)
@@ -942,6 +944,37 @@ class CharactersService:
         self.require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = self.require_current_branch(campaign_id, branch_id)
         settlement_facts = self.checked_rule_facts(rule_facts)
+        source_review = None
+        if scene_save_source is not None:
+            from sagasmith_dnd.save_context import validated_save_source_facts
+
+            if kind != "save":
+                raise ValueError("scene save classification is valid only for a saving throw")
+            source_review = dict(scene_save_source)
+            if source_review.get("save_source_kind") not in {
+                "nonmagical_effect", "magical_effect",
+            }:
+                raise ValueError(
+                    "scene_save is for scene hazards; use the source executor for spells"
+                )
+            reason = str(source_review.pop("reason", "")).strip()
+            if not reason or len(reason) > 2000:
+                raise ValueError("scene_save reason must contain 1 to 2000 characters")
+            _normalized_ref, source, expanded = self.managed_module_source_ref(
+                campaign_id, source_review.get("source_ref"),
+                require_exact=True, require_active_module=True,
+            )
+            assert expanded is not None
+            self.managed_module_source_excerpt(
+                expanded, source_review.get("source_excerpt"),
+                field="scene_save source_excerpt", minimum_length=10,
+            )
+            source_review["source_ref"] = source
+            source_review["source"] = "module"
+            settlement_facts.update(validated_save_source_facts(
+                source_review, citations=[source_review], source_card_kind="scene_hazard",
+            ))
+            source_review["reason"] = reason
         payload = {
             "actor_id": actor_id,
             "kind": kind,
@@ -954,6 +987,8 @@ class CharactersService:
             "rule_facts": settlement_facts,
             "branch_id": resolved_branch_id,
         }
+        if source_review is not None:
+            payload["scene_save_source"] = source_review
         scope = f"character-check:{campaign_id}:{resolved_branch_id}:{principal_id}"
         replay = self.replay_idempotent(scope, idempotency_key, payload)
         if replay is not None:
@@ -1006,6 +1041,7 @@ class CharactersService:
                 "branch_id": resolved_branch_id,
                 "campaign_revision": campaign.revision + 1,
                 "result": result,
+                **({"scene_save_source": source_review} if source_review is not None else {}),
             },
         ][-100:]
 
@@ -1019,6 +1055,8 @@ class CharactersService:
                 "campaign_revision": campaign.revision + 1,
                 "revisions": [_support.asdict(item) for item in revisions],
             }
+            if source_review is not None:
+                response["scene_save_source"] = _support.deepcopy(source_review)
             stream = _support.active_random_stream()
             if stream is not None and stream.draw_count > 0:
                 response["random_stream_receipt"] = stream.receipt()
@@ -4644,18 +4682,18 @@ class CharactersService:
 1. Read `dnd.full` with `skill_query`, then use `outline`, `section`, and
    `search` for task-specific depth.
 2. Call `storage_status`, `server_capabilities`, and `campaign_query`.
-3. Call `exposure(action="open")`; after campaign creation reopen with the
-   returned `campaign_id`.
-4. Use `exposure(action="search")` and `exposure(action="set")`. The server
-   sends `tools/list_changed`; call each loaded domain tool directly.
-5. Before a write, read the exact current revision and use a stable
+3. With no selected campaign, list or create one first. Resume requires
+   `campaign_query(view="resume", payload={"campaign_id":"<id>","detail":"summary"})`.
+4. Use the stable tools directly. No catalog negotiation is needed. Only a Host
+   explicitly configured for the legacy adapter reads `legacy-adapter.md`.
+5. Before a write, use the current revision from the latest receipt or query and a stable
    `idempotency_key`. Never emulate a successful write.
 6. Search then expand exact module/rule evidence. Standard mechanics are
    engine-owned. Module-specific semantics default to Agent DM reasoning.
    Player-owned choices, owner/permission approvals, and missing or conflicting
    sources remain external.
-7. On resume, read campaign, branch, manifest/current scene, continuity, and
-   actor knowledge again; discard pre-restore context.
+7. On reconnect/restore, get one resume bundle and discard pre-restore context.
+   Follow only missing task-specific state; avoid repeatedly reading unchanged guidance.
 
 Useful bounded guidance:
 
@@ -4743,14 +4781,32 @@ boundary.
     def _character_check_v2(
         self,
         campaign_id: str,
-        action: Literal["check", "group", "contest", "reroll", "source_feature"] = "check",
+        action: Literal[
+            "check", "scene_save", "group", "contest", "reroll", "source_feature",
+        ] = "check",
         payload: dict[str, Any] | None = None,
         principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
         expected_revision: int | None = None,
         branch_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Resolve a check or bounded source feature in the Play phase."""
+        """Resolve a check or bounded source feature in the Play phase.
+
+        check payload: {actor_id, kind, ability, dc?, bonus?, advantage?,
+        disadvantage?, proficient?, rule_facts?}. For skills use ability="stealth"
+        (or another skill name), not ability="dexterity" plus a skill field.
+        For a skill check use kind="check" and ability="stealth" (for example).
+        kind is ability/check/save/death_save, never skill. Skill
+        proficiency/expertise comes from the actor; do not add it manually.
+        Requires campaign revision, branch_id and idempotency_key.
+        scene_save resolves a DM-classified module hazard with exact active
+        source_ref/source_excerpt, reason, save_source_kind, save_effect_conditions
+        and save_against_poison. source_ref is the complete object returned by
+        module_expand (including chunk_id, checksum and location fields), not a
+        string. Copy it verbatim; do not guess hashes or rebuild a partial object.
+        It rolls the save only; settle its consequences
+        separately. Spell/card saves must use their paid source executor.
+        """
         self.require_facade_phase(campaign_id, f"character_check({action})", _support.PROFILE_PLAY)
         resolved_branch_id = self.require_current_branch(campaign_id, branch_id)
         if self.npc_conversations.active_ids(
@@ -4760,6 +4816,20 @@ boundary.
             raise _support.CombatEngineError(
                 "close or abort the active NPC conversation before resolving "
                 "an authoritative character check"
+            )
+        if action == "scene_save":
+            data = self.facade_payload(payload)
+            return self.character_check_impl(
+                campaign_id, data["actor_id"], "save", data["ability"], data["dc"],
+                bonus=data.get("bonus", 0),
+                advantage=self.facade_bool(data, "advantage"),
+                disadvantage=self.facade_bool(data, "disadvantage"),
+                principal_id=principal_id, expected_revision=expected_revision,
+                branch_id=branch_id, idempotency_key=idempotency_key,
+                scene_save_source={key: data[key] for key in (
+                    "source_ref", "source_excerpt", "reason", "save_source_kind",
+                    "save_effect_conditions", "save_against_poison",
+                )},
             )
         if action == "source_feature":
             data = self.facade_payload(payload)
@@ -4883,7 +4953,14 @@ boundary.
         offset: Annotated[int, _support.Field(ge=0, le=100_000)] = 0,
         cursor: Annotated[str | None, _support.Field(max_length=1024)] = None,
     ) -> dict[str, Any]:
-        """Read characters with bounded filtering/paging or inspect an allowlisted document."""
+        """Read actors, catalog options, or a rest/advancement preflight.
+
+        get payload={character_id}; batch={campaign_id,character_ids:[...]};
+        list={campaign_id}; catalog={campaign_id,kind?,query?,include_context?}.
+        rest={character_id,rest_type,duration_minutes,...}; short rests require
+        duration_minutes. document reads an allowlisted source_path, not a
+        character-sheet section. Reuse write receipts before reloading full cards.
+        """
         data = self.facade_payload(payload)
         if view == "catalog":
             campaign_id = str(self.required(data, "campaign_id"))
@@ -5313,7 +5390,17 @@ boundary.
         principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Create directly, by build/template, or from source-bound module evidence."""
+        """Create a campaign actor from a validated build or source-bound card.
+
+        New PC: mode=build, payload={campaign_id, name, summary}; omit sheet/notes.
+        Use result.instance.id, then character_ability_apply and catalog-backed
+        character_content_apply. Read CHAR_CREATION.md before building. Never
+        guess a full PC sheet for direct mode; it requires a complete valid card.
+        For a preset NPC/monster use mode=content_actor with payload={campaign_id,
+        artifact_id, name?}. Copy the exact actor artifact ID from the preset
+        catalog. If resolving a specific archive, also provide source_path or
+        artifact (exactly one); never substitute the Pack ID for the actor ID.
+        """
         data = self.facade_payload(payload)
         scoped_campaign_id = str(data.get("campaign_id") or "").strip()
         if mode == "narrative_npc":
@@ -6350,7 +6437,11 @@ boundary.
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Update identity and notes metadata; whole-sheet changes remain separate."""
+        """Update name, player_name, summary, or notes (not mechanical fields).
+
+        Supply the character's revision as expected_revision and a request key.
+        Read and preserve existing notes before sending the updated notes object.
+        """
         data = self.facade_payload(payload)
         prohibited = {"sheet", "state", "derived"} & set(data)
         if prohibited:

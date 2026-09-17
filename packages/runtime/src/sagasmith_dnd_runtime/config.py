@@ -42,6 +42,7 @@ class McpConfig:
     module_ocr_model: str = "medium"
     bound_principal_id: str | None = None
     auth_context_secret: str | None = None
+    legacy_exposure: bool = False
     document_cache_dir: Path | None = None
     npc_host_token: str | None = None
     http_host: str = "127.0.0.1"
@@ -141,6 +142,7 @@ class McpConfig:
                 else None
             ),
             auth_context_secret=_auth_context_secret(),
+            legacy_exposure=os.environ.get("SAGASMITH_DND_MCP_LEGACY_EXPOSURE", "0") == "1",
             document_cache_dir=(
                 Path(raw_document_cache).expanduser().resolve()
                 if raw_document_cache

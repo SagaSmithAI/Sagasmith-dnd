@@ -1636,7 +1636,13 @@ class CampaignsService:
         expected_head_snapshot_id: str = "",
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Commit current D&D state, events, facts, and actor knowledge to this branch."""
+        """Save current authoritative state on the current branch.
+
+        Requires campaign expected_revision, idempotency_key, and the exact
+        expected_head_snapshot_id from branch_query(list); use "" only for a
+        branch without a head. Returns slot (integer) and id; verify via
+        snapshot_query(view="verify", payload={slot}), not snapshot_id.
+        """
         self.access.require_campaign(campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES)
         if expected_revision is None or not idempotency_key:
             raise ValueError(
@@ -1689,7 +1695,12 @@ class CampaignsService:
         expected_branch_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Fork from an earlier save; existing future history remains intact."""
+        """Fork from a saved integer slot, preserving existing future history.
+
+        Pass current expected_revision, expected_branch_id and idempotency_key.
+        After restoring, resume once and use the returned branch/revisions;
+        saved revision numbers are not current concurrency tokens.
+        """
         self.access.require_campaign(campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES)
         if expected_revision is None or expected_branch_id is None or not idempotency_key:
             raise ValueError(
@@ -3170,6 +3181,8 @@ class CampaignsService:
     ) -> dict[str, Any]:
         """Explicitly adopt the current built-in Core after a checkpointed runtime upgrade."""
 
+        from sagasmith_core.rule_profiles import RuleProfileMaintenance
+
         self.access.require_campaign(campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES)
         self.require_write_contract(expected_revision, idempotency_key)
         if not expected_head_snapshot_id:
@@ -3268,6 +3281,12 @@ class CampaignsService:
                 payload=payload,
                 response=relock_response,
             ),
+            maintenance=RuleProfileMaintenance(
+                lock_id=_support.COMBAT_MUTATION_LOCK_ID,
+                option_keys=frozenset({"_core_rule_pack_lock", "_implementation_identity"}),
+                branch_id=resolved_branch_id,
+                head_snapshot_id=expected_head_snapshot_id,
+            ),
         )
         committed = self.idempotency.lookup(scope, str(idempotency_key), payload)
         assert committed is not None and committed.response is not None
@@ -3283,8 +3302,19 @@ class CampaignsService:
         offset: Annotated[int, _support.Field(ge=0, le=100_000)] = 0,
         cursor: Annotated[str | None, _support.Field(max_length=1024)] = None,
     ) -> dict[str, Any]:
-        """Read bounded campaign pages, party state, or one complete resume bundle."""
+        """Read campaign pages, party state, or one complete resume bundle.
+
+        view=list needs no campaign id. All other views require payload.campaign_id.
+        With no campaign, list or campaign_create first. Agent startup/resume uses
+        payload={campaign_id, detail:"summary"} to avoid returning combat logs and
+        full state documents. detail defaults to full for existing UI clients.
+        Follow summary read_next for omitted detail; omission never means absent.
+        Use resume once when reconnecting/restoring, then reuse write receipts.
+        """
         data = self.facade_payload(payload)
+        detail = data.get("detail", "full")
+        if detail not in {"full", "summary"}:
+            raise ValueError("payload.detail must be full or summary")
         if view == "binding":
             data = self.facade_payload(payload)
             campaign_id = self.required(data, "campaign_id")
@@ -3321,7 +3351,9 @@ class CampaignsService:
                 audience=str(data.get("audience") or "dm"),
                 branch_id=(str(current_branch["id"]) if current_branch is not None else None),
                 limit=int(data.get("limit", 8)),
-                budget_chars=int(data.get("budget_chars", 12_000)),
+                budget_chars=int(data.get(
+                    "budget_chars", 4_000 if detail == "summary" else 12_000,
+                )),
                 related_refs=data.get("related_refs"),
                 principal_id=principal_id,
             )
@@ -3362,6 +3394,61 @@ class CampaignsService:
                 offset=offset or data.get("offset", 0),
             )
             return self.facade_result(view, result, page=page)
+        if detail == "summary" and view in {"get", "resume"}:
+            def identity(record: dict[str, Any]) -> dict[str, Any]:
+                keys = {
+                    "id", "campaign_id", "module_id", "scene_id", "scope_id", "name",
+                    "title", "slug", "system_id", "status", "revision", "state_version",
+                    "effective_game_phase", "base_snapshot_id", "head_snapshot_id",
+                    "is_current", "current_location_key", "progress",
+                }
+                return {
+                    key: value[:512] if isinstance(value, str) else value
+                    for key, value in record.items()
+                    if key in keys and isinstance(value, (str, int, float, bool, type(None)))
+                }
+
+            campaign_value = result["campaign"] if view == "resume" else result
+            brief = identity(campaign_value)
+            state = campaign_value.get("state") or {}
+            combat = state.get("combat") or {}
+            brief["combat"] = {
+                key: combat[key] for key in ("id", "active", "scene_id", "round", "turn_index")
+                if key in combat
+            }
+            brief["detail"] = "summary"
+            if view == "get":
+                result = brief
+            else:
+                result["campaign"] = brief
+                result["branch_count"] = len(result["branches"])
+                result["branches"] = [identity(item) for item in result["branches"][:10]]
+                if isinstance(result.get("manifest"), dict):
+                    result["manifest"] = {"available": True, **identity(result["manifest"])}
+                scene = result.get("current_scene")
+                if isinstance(scene, dict):
+                    result["current_scene"] = {
+                        **identity(scene),
+                        **{key: identity(value) for key, value in scene.items()
+                           if key in {"module", "scene", "progress"} and isinstance(value, dict)},
+                    }
+            result["read_next"] = {
+                "campaign_state": (
+                    "campaign_query(view=get, payload={campaign_id, detail:full}) "
+                    "only when full state is needed"
+                ),
+                "combat": "combat_query(view=status) for an active encounter",
+                "actors": "character_query(view=list/batch) with bounded relevant actor IDs",
+                "scene": (
+                    "module_query(view=current/scene/progress); "
+                    "current is a scope pointer, not a progress search"
+                ),
+                "branches": "branch_query for remaining branches",
+            }
+            result["omitted_detail"] = [
+                "campaign.state", "campaign.settings", "full manifest", "full scene",
+                "branches after first 10",
+            ]
         return self.facade_result(view, result)
 
     def campaign_change(
@@ -3389,7 +3476,18 @@ class CampaignsService:
         branch_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Update campaign state, advancement, clock, or structured campaign-space effects."""
+        """Update campaign state, advancement, clock, or campaign-space effects.
+
+        party_rest payload: {members:[{character_id, expected_revision}],
+        rest_type:"long_rest"|"short_rest", duration_minutes}. Each member uses
+        its actor revision; top-level expected_revision is the campaign revision.
+        Optional member rest choices are documented in runtime-workflows.md.
+        For live prepared-spell changes, put prepared_spell_ids on that member
+        in a legal long_rest; returning to Lobby does not reopen initial setup.
+        clock_advance payload={period, count?, expected_elapsed_ticks?}. period is
+        minute/hour/day/round/encounter; expected_elapsed_ticks is the resulting
+        clock, required for minute/hour/day (10 ticks/minute), not the old clock.
+        """
         action_contracts: dict[str, tuple[set[str], tuple[str, ...]]] = {
             "update": (
                 {"name", "status", "description", "settings", "state"},
@@ -3851,7 +3949,11 @@ class CampaignsService:
         limit: Annotated[int, _support.Field(ge=1, le=100)] = 50,
         cursor: Annotated[str | None, _support.Field(max_length=1024)] = None,
     ) -> dict[str, Any]:
-        """Read snapshot history, integrity, lineage, or a regenerated recap."""
+        """Read snapshot history, integrity, lineage, or a regenerated recap.
+
+        list needs no payload. verify/core/recap require payload={slot:<integer>}
+        from snapshot_create/list, not a snapshot UUID. lineage accepts slot.
+        """
         data = self.facade_payload(payload)
         if view == "list":
             result = self.snapshot_list(campaign_id, principal_id)
@@ -3888,7 +3990,12 @@ class CampaignsService:
         limit: Annotated[int, _support.Field(ge=1, le=100)] = 50,
         cursor: Annotated[str | None, _support.Field(max_length=1024)] = None,
     ) -> dict[str, Any]:
-        """Read revision history or perform guarded undo/redo."""
+        """Read revision history, retrieve a known write receipt, or guarded undo/redo.
+
+        receipt requires payload.idempotency_key of the original dispatched write;
+        never generate a new key for a lookup. To read the current campaign revision,
+        use campaign_query(view="get", payload={campaign_id}), not receipt.
+        """
         data = self.facade_payload(payload)
         if action == "history":
             effective_query = query or str(data.get("query") or "")

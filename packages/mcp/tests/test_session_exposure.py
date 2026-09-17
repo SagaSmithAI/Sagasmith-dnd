@@ -611,7 +611,7 @@ def test_unbound_exposure_only_loads_non_campaign_tools() -> None:
 
 
 def test_tool_policy_separates_phase_and_role_authority() -> None:
-    assert policy_for_tool("content_pack").phases == frozenset({"lobby"})
+    assert policy_for_tool("content_pack").phases == frozenset({"lobby", "play", "combat"})
     assert policy_for_tool("content_pack").roles("lobby") == CAMPAIGN_DM_ROLES
     assert policy_for_tool("module_query").roles("lobby") == CAMPAIGN_DM_ROLES
     assert policy_for_tool("module_query").roles("play") == frozenset()
@@ -843,6 +843,7 @@ def test_stdio_session_mutates_native_tool_list_and_calls_tools_directly(
             {
                 "SAGASMITH_DND_MCP_HOME": str(tmp_path / "home"),
                 "SAGASMITH_DND_MCP_AUTO_SEED": "0",
+                "SAGASMITH_DND_MCP_LEGACY_EXPOSURE": "1",
             }
         )
         params = StdioServerParameters(
@@ -1084,6 +1085,7 @@ def test_stdio_player_loads_only_player_safe_module_and_continuity_projections(
             {
                 "SAGASMITH_DND_MCP_HOME": str(config.home),
                 "SAGASMITH_DND_MCP_AUTO_SEED": "0",
+                "SAGASMITH_DND_MCP_LEGACY_EXPOSURE": "1",
                 "SAGASMITH_DND_MCP_MODULE_IMPORT_ROOTS": str(tmp_path),
                 "SAGASMITH_DND_MCP_BOUND_PRINCIPAL_ID": player_id,
             }
@@ -1257,6 +1259,7 @@ def test_stdio_play_transition_removes_character_creation_and_rejects_stale_call
             {
                 "SAGASMITH_DND_MCP_HOME": str(tmp_path / "home"),
                 "SAGASMITH_DND_MCP_AUTO_SEED": "0",
+                "SAGASMITH_DND_MCP_LEGACY_EXPOSURE": "1",
             }
         )
         params = StdioServerParameters(
@@ -1371,6 +1374,7 @@ def test_stdio_undo_phase_change_immediately_notifies_and_refreshes_tools(
             {
                 "SAGASMITH_DND_MCP_HOME": str(tmp_path / "home"),
                 "SAGASMITH_DND_MCP_AUTO_SEED": "0",
+                "SAGASMITH_DND_MCP_LEGACY_EXPOSURE": "1",
             }
         )
         params = StdioServerParameters(
@@ -1493,7 +1497,7 @@ def test_stdio_undo_phase_change_immediately_notifies_and_refreshes_tools(
     asyncio.run(exercise())
 
 
-def test_stdio_redo_to_lobby_requires_reloading_snapshot_restore(
+def test_stdio_redo_preserves_snapshot_restore_across_play_and_lobby(
     tmp_path: Path,
 ) -> None:
     async def exercise() -> None:
@@ -1511,6 +1515,7 @@ def test_stdio_redo_to_lobby_requires_reloading_snapshot_restore(
             {
                 "SAGASMITH_DND_MCP_HOME": str(tmp_path / "home"),
                 "SAGASMITH_DND_MCP_AUTO_SEED": "0",
+                "SAGASMITH_DND_MCP_LEGACY_EXPOSURE": "1",
             }
         )
         params = StdioServerParameters(
@@ -1650,7 +1655,7 @@ def test_stdio_redo_to_lobby_requires_reloading_snapshot_restore(
                 await settle_notifications()
                 assert "ToolListChangedNotification" in notifications
                 play_tools = {tool.name for tool in (await session.list_tools()).tools}
-                assert "snapshot_restore" not in play_tools
+                assert "snapshot_restore" in play_tools
                 assert "state_revision" in play_tools
                 undone_campaign = await session.call_tool(
                     "campaign_query",
@@ -1693,7 +1698,7 @@ def test_stdio_redo_to_lobby_requires_reloading_snapshot_restore(
                 await settle_notifications()
                 assert "ToolListChangedNotification" in notifications
                 lobby_tools = {tool.name for tool in (await session.list_tools()).tools}
-                assert "snapshot_restore" not in lobby_tools
+                assert "snapshot_restore" in lobby_tools
                 assert "state_revision" in lobby_tools
                 redone_campaign = await session.call_tool(
                     "campaign_query",
@@ -1719,23 +1724,7 @@ def test_stdio_redo_to_lobby_requires_reloading_snapshot_restore(
                 assert [item["tool_id"] for item in search_payload["matches"]] == [
                     "snapshot_restore"
                 ]
-                assert search_payload["matches"][0]["loaded"] is False
-                await settle_notifications()
-                notifications.clear()
-                reloaded = await session.call_tool(
-                    "exposure",
-                    {
-                        "action": "set",
-                        "add_tool_ids": ["snapshot_restore"],
-                        "principal_id": principal_id,
-                    },
-                )
-                assert not reloaded.is_error
-                await settle_notifications()
-                assert "ToolListChangedNotification" in notifications
-                assert "snapshot_restore" in {
-                    tool.name for tool in (await session.list_tools()).tools
-                }
+                assert search_payload["matches"][0]["loaded"] is True
 
                 restored = await session.call_tool(
                     "snapshot_restore",
@@ -1770,6 +1759,7 @@ def test_stdio_process_binding_overwrites_model_authored_principal(tmp_path: Pat
             {
                 "SAGASMITH_DND_MCP_HOME": str(tmp_path / "home"),
                 "SAGASMITH_DND_MCP_AUTO_SEED": "0",
+                "SAGASMITH_DND_MCP_LEGACY_EXPOSURE": "1",
                 "SAGASMITH_DND_MCP_BOUND_PRINCIPAL_ID": "discord:trusted-user",
             }
         )

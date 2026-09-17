@@ -1230,11 +1230,17 @@ class PresentationService:
         source: str | None = None,
         heading: str | None = None,
         query: str | None = None,
-        max_chars: int = 12_000,
-        limit: int = 8,
+        max_chars: Annotated[int, _support.Field(ge=256, le=20_000)] = 12_000,
+        limit: Annotated[int, _support.Field(ge=1, le=100)] = 8,
         cursor: Annotated[str | None, _support.Field(max_length=1024)] = None,
     ) -> dict[str, Any]:
-        """Discover or read bounded installed workflow guidance."""
+        """Discover or read installed workflow guidance in bounded pages.
+
+        Start with kind=skill, action=read, identifier=dnd.full. Search uses a
+        short query; follow page.next_cursor for more matches. Section requires
+        an exact Markdown heading from outline, not a JSON key. For tool help,
+        search generated-operations.md, then read the matching Markdown section.
+        """
         if action == "outline":
             result = self.catalog.outline(
                 kind=kind,
@@ -1252,8 +1258,15 @@ class PresentationService:
                 kind=kind,
                 identifier=identifier,
                 query=self.required({"query": query}, "query"),
-                limit=100,
+                limit=None,
             )
+            matches, page = _support._bounded_page(
+                result["matches"],
+                scope=f"skill-search:{kind}:{identifier or ''}:{_support.json_sha256(query)}",
+                limit=limit, cursor=cursor,
+            )
+            result = {**result, "matches": matches, "truncated": page["has_more"]}
+            return self.facade_result(action, result, page=page)
         elif kind == "skill":
             result = (
                 self.skill_list()

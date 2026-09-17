@@ -6,7 +6,8 @@ Use the three-tool authoring contract:
 - `module_draft`: source-to-finalized Module Pack;
 - `content_pack`: finalized Pack list/get/import/export/activate/deactivate/remove.
 
-All three facades are Lobby-only. `content_pack.kind` is exactly
+Draft operations and Pack mutations are Lobby-only. Finalized `content_pack`
+list/get are also available to the Owner/DM during Play and Combat. `content_pack.kind` is exactly
 `core_rules`, `addon`, `module`, or `preset`; it is never inferred from an id
 or archive.
 

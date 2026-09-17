@@ -52,6 +52,37 @@ def main() -> None:
             f"| `{row['id']}` | {', '.join(row['phases'])} | "
             f"{', '.join(row['revision_fields']) or '—'} | {row['idempotent']} |"
         )
+    for row in contract:
+        schema = row["input_schema"]
+        encoded = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
+        split_actions = len(encoded) > 12_000 and bool(schema.get("allOf"))
+        base = {key: value for key, value in schema.items() if key != "allOf"}
+        action_sections = [
+            (branch["if"]["properties"]["action"]["const"], branch)
+            for branch in schema.get("allOf", [])
+        ] if split_actions else []
+        lines.extend([
+            "", f"## {row['id']}", "", row["description"], "",
+            "Phases: " + (", ".join(row["phases"]) or "Host-private; not a public MCP tool."),
+            "", (
+                "Shared parameters only. Before calling, read the exact action section with "
+                "max_chars=20000: " + ", ".join(
+                    f"`{row['id']} ({action})`" for action, _ in action_sections
+                )
+                if split_actions else "Exact input schema (copy field names and nesting):"
+            ), "", "```json",
+            json.dumps(base, ensure_ascii=False, separators=(",", ":"))
+            if split_actions else encoded,
+            "```",
+        ])
+        for action, branch in action_sections:
+            lines.extend([
+                "", f"## {row['id']} ({action})", "",
+                f"Input schema for action={action}; preserve the shared authority guards.",
+                "", "```json",
+                json.dumps({**base, "allOf": [branch]}, ensure_ascii=False, separators=(",", ":")),
+                "```",
+            ])
     generated = {
         "generated-primitives.json": json.dumps(
             capability_manifest(), ensure_ascii=False, indent=2, sort_keys=True

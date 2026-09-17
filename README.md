@@ -83,13 +83,15 @@ for another audience must not be forwarded to this server.
 | Discovery | `server/discover` | Legacy initialize |
 | HTTP state | Stateless per request; no authoritative `Mcp-Session-Id` | Transport session may support the adapter only |
 | Authorization | Fresh delegation-v2 on every request | Bound principal or explicitly configured legacy auth |
-| Catalog | Stable, deterministic, sorted, private-cacheable | Mutable exposure and `tools/list_changed` adapter |
+| Catalog | Stable, deterministic, sorted, private-cacheable | Stable by default; dynamic exposure only when explicitly enabled |
 | Cross-call state | Explicit campaign/revision or owner-bound expiring handle | Legacy session exposure, never authority |
 | Transports | Same handlers and schemas over stdio and Streamable HTTP | Same domain semantics |
 
-Modern `tools/list` is stable for the same authorization scope and is not
+`tools/list` is stable by default on every supported protocol and is not
 mutated by another tool call. Its metadata advertises a private cache scope and
-a five-minute TTL. The Host connects only the MCP for the active campaign
+a five-minute TTL. Set `SAGASMITH_DND_MCP_LEGACY_EXPOSURE=1` only for a Host that
+explicitly uses the dynamic exposure adapter and refreshes tools after notifications.
+Protocol negotiation alone never enables that adapter. The Host connects only the MCP for the active campaign
 system, then selects a sorted, phase/task/role-appropriate facade subset for the
 model. SagaSmith Hosted currently enforces a maximum of 16 projected tools.
 That limit improves model selection; the MCP still authorizes every call and

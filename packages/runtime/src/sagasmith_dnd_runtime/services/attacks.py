@@ -102,7 +102,9 @@ class AttacksService:
             if unknown or missing or not decision_id or not reason:
                 raise _support.CombatEngineError(
                     "Agent spatial facts require one decision_id, reason, and the attack "
-                    "facts needed to determine targetability"
+                    "facts needed to determine targetability; "
+                    f"missing fields: {', '.join(sorted(missing)) or 'none'}; "
+                    f"unsupported fields: {', '.join(sorted(unknown)) or 'none'}"
                 )
             for field in {
                 "targetable",
@@ -456,7 +458,12 @@ class AttacksService:
         action: dict[str, Any] | None = None,
         principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
     ) -> dict[str, Any]:
-        """Validate an attack and return a non-mutating resolution plan."""
+        """Validate an attack without rolling, paying resources or changing state.
+
+        action uses weapon_id from the actor's weapon attacks. In Agent positioning,
+        put spatial facts in action.context.spatial_facts; see combat_resolve_attack
+        for required fields. Reuse this action for resolution if state is unchanged.
+        """
         self.require_combat_actor_or_steel_defender_owner_control(
             campaign_id, actor_id, principal_id
         )
@@ -566,7 +573,18 @@ class AttacksService:
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Resolve an attack and atomically update the attacker, target and encounter."""
+        """Resolve one attack and atomically update actors and encounter.
+
+        Use the active actor and campaign revision from the latest receipt, plus
+        idempotency_key. action={weapon_id, context?}; use an owned weapon ID.
+        Agent positioning requires action.context.spatial_facts={decision_id,
+        reason, targetable, in_range, cover_degree, attacker_can_see_target,
+        target_can_see_attacker}. Flags are booleans; cover_degree is none/half/
+        three_quarters/total. Optional facts: long_range, target_within_5_ft,
+        close_threat_actor_ids, helper_actor_ids, target_adjacent_ally_actor_ids,
+        cleave_secondary_eligible. Ground them in the current scene, never invent
+        coordinates to bypass a missing spatial decision. Grid mode uses its map.
+        """
         self.require_combat_actor_or_steel_defender_owner_control(
             campaign_id, actor_id, principal_id, branch_id=branch_id
         )

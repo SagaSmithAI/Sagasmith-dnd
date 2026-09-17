@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,6 +9,7 @@ import pytest
 from mcp import Client
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolRequestParams
+from sagasmith_dnd_runtime.skills import SkillCatalog
 
 from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.server import create_server
@@ -45,6 +47,34 @@ def test_every_public_tool_has_model_usable_contract_metadata(tmp_path: Path) ->
             assert tool.annotations.destructive_hint is not None, tool.name
             assert tool.annotations.idempotent_hint is not None, tool.name
             assert tool.annotations.open_world_hint is False, tool.name
+
+        by_name = {tool.name: tool for tool in tools}
+        workspace = Path(__file__).resolve().parents[3]
+        catalog = SkillCatalog(
+            dnd_root=workspace / "skills",
+            modulegen_root=workspace / "skills/dnd-module-generator",
+        )
+        for name in by_name:
+            if name == "exposure":
+                # Transport-owned compatibility guidance is documented separately;
+                # it is intentionally not a Runtime application operation.
+                continue
+            section = catalog.section(
+                kind="asset", identifier="dnd:full/references/generated-operations.md",
+                heading=name, max_chars=20_000,
+            )
+            assert not section["truncated"], name
+            schema = json.loads(section["content"].split("```json\n", 1)[1].split("```", 1)[0])
+            assert schema["properties"].keys() == by_name[name].input_schema["properties"].keys()
+        for name in ("character_content_apply", "character_ability_apply",
+                     "character_metadata_update", "character_spell_prepare", "combat_end",
+                     "module_set_progress"):
+            schema = by_name[name].input_schema
+            revision = (
+                "expected_state_version" if name == "module_set_progress" else "expected_revision"
+            )
+            assert {revision, "idempotency_key"} <= set(schema["required"])
+            assert schema["properties"][revision]["type"] == "integer"
 
     asyncio.run(exercise())
 

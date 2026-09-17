@@ -157,6 +157,7 @@ class RequestScopedMCPServer(MCPServer):
         authorization_fingerprint_lookup: Any,
         bound_principal_id: str | None = None,
         auth_context_secret: str | None = None,
+        legacy_exposure: bool = False,
         **kwargs: Any,
     ) -> None:
         self.exposure_registry = exposure_registry
@@ -169,6 +170,7 @@ class RequestScopedMCPServer(MCPServer):
         self._authorization_fingerprint_lookup = authorization_fingerprint_lookup
         self._bound_principal_id = bound_principal_id.strip() if bound_principal_id else None
         self._auth_context_secret = auth_context_secret
+        self._legacy_exposure = legacy_exposure
         self._auth_context_nonces = AuthContextNonceGuard() if auth_context_secret else None
         self._exposure_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
         self._sessions: WeakValueDictionary[str, Any] = WeakValueDictionary()
@@ -183,7 +185,7 @@ class RequestScopedMCPServer(MCPServer):
             return original_initialization_options(
                 notification_options
                 or NotificationOptions(
-                    tools_changed=True,
+                    tools_changed=legacy_exposure,
                     prompts_changed=False,
                     resources_changed=False,
                 ),
@@ -348,28 +350,44 @@ class RequestScopedMCPServer(MCPServer):
         text = message.strip() or "The tool request was rejected."
         lowered = text.casefold()
         retryable = any(
-            marker in lowered for marker in ("stale", "expired", "timeout", "temporar", "conflict")
+            marker in lowered for marker in (
+                "stale", "expired", "timeout", "temporarily unavailable", "temporary failure",
+                "conflict",
+            )
         )
         code = (
             "stale_revision"
-            if "stale" in lowered and "revision" in lowered
+            if "revision" in lowered and ("stale" in lowered or "conflict" in lowered)
             else "expired_handle"
             if "expired" in lowered and ("handle" in lowered or "exposure" in lowered)
             else "authorization_denied"
-            if any(marker in lowered for marker in ("auth", "principal", "permission", "access"))
+            if any(marker in lowered for marker in (
+                "auth context", "delegation", "principal", "permission denied", "access denied",
+            ))
             else "invalid_request"
         )
+        recovery = {
+            "stale_revision": (
+                "Read the current authoritative state, reconcile the rejected operation, "
+                "then retry with its revision and the original idempotency key."
+            ),
+            "expired_handle": "Obtain a new owner-bound handle, then retry the rejected request.",
+            "authorization_denied": (
+                "Use the authenticated owner/authorized principal or obtain a fresh "
+                "audience-bound delegation."
+            ),
+        }.get(code, (
+            "If dispatch completion is unknown, query or replay the original operation "
+            "with the same idempotency key before issuing another write."
+            if retryable else
+            "Correct the indicated fields using the tool schema or its exact Skill section, "
+            "then retry. Do not repeat unchanged invalid arguments."
+        ))
         error = {
             "code": code,
             "message": text,
             "retryable": retryable,
-            "recovery": (
-                "Refresh the authoritative revision or handle and retry with "
-                "the same idempotency key."
-                if retryable
-                else "Correct the request or obtain a new audience-bound "
-                "delegation before retrying."
-            ),
+            "recovery": recovery,
         }
         return CallToolResult(
             is_error=True,
@@ -686,12 +704,12 @@ class RequestScopedMCPServer(MCPServer):
         ctx: ServerRequestContext,
         params: PaginatedRequestParams | None,
     ) -> ListToolsResult:
-        """Keep the legacy adapter while making modern catalogs stateless."""
+        """Keep catalogs stable unless the dynamic compatibility adapter is enabled."""
 
         tools = await self.list_tools()
         era = "modern" if ctx.protocol_version == "2026-07-28" else "legacy"
         self._metric_counts[("catalog", era, "tools/list", "success")] += 1
-        if ctx.protocol_version != "2026-07-28":
+        if self._legacy_exposure and ctx.protocol_version != "2026-07-28":
             context = Context(
                 request_context=ctx, mcp_server=self, subscriptions=self._subscriptions
             )
@@ -820,7 +838,8 @@ class RequestScopedMCPServer(MCPServer):
             return private_result
         legacy_request = (
             self._request_session(context)
-            if context is not None and context.protocol_version != "2026-07-28"
+            if self._legacy_exposure and context is not None
+            and context.protocol_version != "2026-07-28"
             else None
         )
         legacy_session_key = legacy_request[0] if legacy_request else None
@@ -1179,6 +1198,7 @@ def _create_server(config, *, resources):
         authorization_fingerprint_lookup=access.authorization_fingerprint,
         bound_principal_id=config.bound_principal_id,
         auth_context_secret=config.auth_context_secret,
+        legacy_exposure=config.legacy_exposure,
         cache_hints={"tools/list": CacheHint(ttl_ms=300_000, scope="private")},
         extensions=[tasks_extension],
     )
@@ -1312,7 +1332,7 @@ def _create_server(config, *, resources):
         if config.bound_principal_id is not None:
             principal_id = config.bound_principal_id
         request = mcp._request_session(ctx)
-        modern = ctx.protocol_version == "2026-07-28"
+        modern = not config.legacy_exposure or ctx.protocol_version == "2026-07-28"
         session_key = request[0] if request is not None else f"direct:{principal_id}"
         if modern:
             session_key = f"handle:{uuid4().hex}"
@@ -1346,14 +1366,14 @@ def _create_server(config, *, resources):
             return {
                 **exposures.status(opened),
                 "exposure_handle": opened.id,
-                "native_dynamic_tools": False,
-                "catalog_effect": "guidance_only",
+                "native_dynamic_tools": not modern,
+                "catalog_effect": "guidance_only" if modern else "dynamic_compatibility",
                 "next": "Pass exposure_handle to exposure(get|search|set).",
             }
 
         handle = str(exposure_handle or "").strip()
         if modern and not handle:
-            raise ExposureError("exposure_handle is required on the 2026-07-28 path")
+            raise ExposureError("exposure_handle is required for catalog guidance")
         current = exposures.get(handle) if handle else exposures.active(session_key)
         if current is None:
             raise ExposureError("Unknown or expired exposure_handle. Use action='open'.")

@@ -828,7 +828,21 @@ class SpellsService:
         target_allocations: list[dict[str, Any]] | None = None,
         declaration: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Pay a combat action and settle source-bound spell workflows atomically."""
+        """Cast the exact spell_id recorded on the caster card, on a legal turn.
+
+        Requires current campaign expected_revision and idempotency_key. The card
+        determines action/slot cost; never spend them separately. target_allocations
+        is only for source-bound Magic Missile, not ordinary spell targets.
+        For an Agent-resolved standard spell, omit declaration to obtain the
+        agent_ruling_contract, then copy its submission_shape under declaration,
+        filling application_id, decision and reason and preserving source_excerpt.
+        payment_required=true means nothing has been paid yet. After payment is
+        recorded, do not cast again to finish the effect or use another attack
+        action. Follow the returned resolution/owned choice contract; combat_choice
+        needs an actual choice_id, not an application_id. Agent-ruling commitment
+        records payment and adjudication, not automatic target HP/condition changes.
+        Resolve remaining source-grounded consequences through their public tools.
+        """
         ritual = _support._strict_boolean(ritual, "ritual")
         signature_free_cast = _support._strict_boolean(signature_free_cast, "signature_free_cast")
         self.access.require_actor(campaign_id, actor_id, principal_id, control=True)
@@ -4682,7 +4696,12 @@ class SpellsService:
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Set one prepared spell or replace the validated prepared-spell list."""
+        """Set one prepared spell or replace the validated prepared-spell list.
+
+        Requires the character's expected_revision and idempotency_key. Payload
+        for set: {spell_id, prepared}; replace_all: {spell_ids, event?}. Spell ids
+        must be learned on this actor first, not merely listed in the catalog.
+        """
         data = self.facade_payload(payload)
         if mode == "set":
             result = self.character_spell_prepare_impl(

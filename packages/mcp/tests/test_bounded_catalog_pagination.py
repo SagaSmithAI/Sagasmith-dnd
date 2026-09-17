@@ -164,6 +164,33 @@ def test_cursor_is_bound_to_collection_and_filter_scope() -> None:
         )
 
 
+def test_skill_search_accepts_public_limits_and_paginates_all_matches(tmp_path: Path) -> None:
+    async def exercise():
+        skill = tmp_path / "dnd" / "guide" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text("# Guide\n" + "\n".join(
+            f"## Workflow {i}\nneedle action {i}" for i in range(130)
+        ), encoding="utf-8")
+        server = _server(tmp_path)
+        arguments = {"kind": "skill", "action": "search", "query": "needle", "limit": 100}
+        _, first = await _raw(server, "skill_query", arguments)
+        assert len(first["result"]["matches"]) == 100
+        assert first["result"]["truncated"] is True
+        _, second = await _raw(server, "skill_query", {
+            **arguments, "cursor": first["next_cursor"],
+        })
+        assert len(second["result"]["matches"]) == 30
+        assert second["next_cursor"] is None
+        assert second["result"]["truncated"] is False
+        assert {x["line"] for x in first["result"]["matches"]}.isdisjoint(
+            {x["line"] for x in second["result"]["matches"]}
+        )
+        _, small = await _raw(server, "skill_query", {**arguments, "limit": 1})
+        assert len(small["result"]["matches"]) == 1
+
+    asyncio.run(exercise())
+
+
 def test_event_and_revision_cursors_reach_beyond_first_hundred_records(
     tmp_path: Path,
 ) -> None:

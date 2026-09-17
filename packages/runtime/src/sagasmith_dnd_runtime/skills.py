@@ -219,16 +219,17 @@ class SkillCatalog:
         text = self._text(kind=kind, identifier=identifier)
         lines = text.splitlines()
         candidates: list[tuple[int, int, str]] = []
-        wanted = heading.strip().casefold()
+        wanted = heading.strip().strip("`").casefold()
         for index, line in enumerate(lines):
             match = re.match(r"^(#{1,6})\s+(.+?)\s*$", line)
             if match is None:
                 continue
             title = match.group(2).strip()
-            if title.casefold() == wanted:
+            normalized_title = title.strip("`").casefold()
+            if normalized_title == wanted:
                 candidates = [(index, len(match.group(1)), title)]
                 break
-            if wanted and wanted in title.casefold():
+            if wanted and wanted in normalized_title:
                 candidates.append((index, len(match.group(1)), title))
         if not candidates:
             raise LookupError(f"unknown heading {heading!r} in {kind} document {identifier!r}")
@@ -264,14 +265,14 @@ class SkillCatalog:
         kind: str,
         query: str,
         identifier: str | None = None,
-        limit: int = 8,
+        limit: int | None = 8,
         context_chars: int = 900,
     ) -> dict[str, Any]:
         """Search installed guidance and return bounded, line-addressed excerpts."""
 
         if not query.strip():
             raise ValueError("query is required")
-        if limit < 1 or limit > 20:
+        if limit is not None and (limit < 1 or limit > 20):
             raise ValueError("limit must be between 1 and 20")
         if context_chars < 200 or context_chars > 2_000:
             raise ValueError("context_chars must be between 200 and 2000")
@@ -314,7 +315,7 @@ class SkillCatalog:
             "kind": kind,
             "query": query,
             "matches": matches[:limit],
-            "truncated": len(matches) > limit,
+            "truncated": limit is not None and len(matches) > limit,
         }
 
     def manifest(self) -> list[dict[str, str]]:

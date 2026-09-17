@@ -300,6 +300,7 @@ def _create_application(config: McpConfig | None = None, *, resources) -> DndRun
         "auth_nonce_store": _services.DatabaseNonceStore(_services.storage.database),
         "validate_arguments": _support._validate_contract_arguments,
         "character_campaign": lambda actor_id: _services.characters.get(actor_id).campaign_id,
+        "module_chunk_campaign": lambda chunk_id: _services.modules.expand(chunk_id)["campaign_id"],
         "exposures": _services.exposures,
         "authoritative_phase": _services.authoritative_phase,
         "allowed_tools_for_exposure": _services.allowed_tools_for_exposure,

@@ -1838,7 +1838,18 @@ class CombatService:
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Start a structured encounter from canonical campaign actors."""
+        """Start one encounter from existing canonical campaign actor IDs.
+
+        For a module encounter, pass its scene_id and source-backed
+        participant_manifest after module_query(view="preflight"). Omitting
+        scene_id creates an ad-hoc encounter and does not validate module progress.
+        Read the current scene rather than inventing a replacement encounter.
+        positioning_mode="agent" uses explicit DM spatial decisions without a
+        fabricated grid; grid mode requires an actual map or declared override.
+        participant_config supplies encounter facts, not replacement hp/max_hp.
+        Initiative ties may require corrected tie_breaker values before startup.
+        Reuse returned combat state/revisions; execute actors in returned turn order.
+        """
         self.access.require_campaign(campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES)
         self.require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = self.require_current_branch(campaign_id, branch_id)
@@ -7996,7 +8007,12 @@ class CombatService:
         branch_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Close an encounter atomically while preserving its final audit state."""
+        """Close an encounter atomically while preserving its final audit state.
+
+        Optional outcome is {status, summary}; status is defeat, interrupted,
+        surrender, truce, victory, or withdrawal. Requires campaign revision,
+        current branch_id and idempotency_key. Settle pending choices first.
+        """
         self.access.require_campaign(campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES)
         self.require_write_contract(expected_revision, idempotency_key)
         campaign = self.campaigns.get(campaign_id)
@@ -8229,17 +8245,26 @@ class CombatService:
         limit: Annotated[int, _support.Field(ge=1, le=100)] = 50,
         cursor: Annotated[str | None, _support.Field(max_length=1024)] = None,
     ) -> dict[str, Any]:
-        """Read combat state, render a safe snapshot, or inspect DM-only transactions."""
+        """Read combat state or DM-only transaction receipts.
+
+        available_actions and reactions require top-level actor_id, not payload.
+        status needs only campaign_id. transaction_receipt requires
+        payload={idempotency_key, branch_id?}; render accepts audience_projection.
+        """
         data = self.facade_payload(payload)
         if view == "status":
             result = self.combat_status(campaign_id, principal_id)
         elif view == "available_actions":
+            if not actor_id:
+                raise ValueError("top-level actor_id is required for available_actions")
             result = self.combat_available_actions(
-                campaign_id, self.required({"actor_id": actor_id}, "actor_id"), principal_id
+                campaign_id, actor_id, principal_id
             )
         elif view == "reactions":
+            if not actor_id:
+                raise ValueError("top-level actor_id is required for reactions")
             result = self.combat_reactions(
-                campaign_id, self.required({"actor_id": actor_id}, "actor_id"), principal_id
+                campaign_id, actor_id, principal_id
             )
         elif view == "render":
             audience_projection = str(data.get("audience_projection") or "caller")
@@ -8295,7 +8320,15 @@ class CombatService:
         branch_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Move or stand, including source-granted Aggressive movement."""
+        """Move or stand using the current campaign revision and a request key.
+
+        move payload={distance, destination?, path?, spatial_facts?}; distance is
+        feet traveled, before difficult-terrain cost. In Agent positioning use
+        spatial_facts={decision_id, reason, destination_legal, distance_ft}, with
+        distance_ft equal to distance. Optional difficult_terrain_extra_ft adds
+        cost; opportunity_attack_actor_ids lists actual threats. Do not invent
+        grid coordinates when the encounter uses Agent positioning. stand uses {}.
+        """
         data = self.facade_payload(payload)
         result = (
             self.combat_move(

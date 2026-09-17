@@ -1667,6 +1667,13 @@ class ContinuityService:
         ``partial_renditions``, ``basis_refs``, and a scene-specific ``reason``.
         Understood and response actors must be perceived, and response actors
         must have NPC runtimes.
+        All writes require payload.idempotency_key. ingest/publish/close/abort
+        also require payload.conversation_id and expected_conversation_revision
+        from the latest conversation receipt (not the campaign revision).
+        open uses participant_actor_ids and optional scope_id inside payload.
+        Pending NPC activations require a connected Host worker; close only when
+        they finish. Without that Host, report the missing capability or explicitly
+        abort the conversation, never fabricate NPC publications or busy-poll it.
         """
 
         data = dict(payload or {})
@@ -1708,6 +1715,19 @@ class ContinuityService:
                 "page": page,
                 "next_cursor": page["next_cursor"],
             }
+        required_fields = {"conversation_id"}
+        if action in {"ingest", "publish", "close", "abort"}:
+            required_fields.update({"expected_conversation_revision", "idempotency_key"})
+        if action == "ingest":
+            required_fields.update({"event", "audience_facts"})
+        elif action == "publish":
+            required_fields.update({"publication_id", "audience_facts"})
+        missing = sorted(key for key in required_fields if key not in data or data[key] is None)
+        if missing:
+            raise ValueError(
+                f"npc_conversation({action}) requires "
+                + ", ".join(f"payload.{key}" for key in missing)
+            )
         conversation_id = str(data["conversation_id"])
         if action == "get":
             return self.npc_conversation_status_impl(campaign_id, conversation_id, principal_id)

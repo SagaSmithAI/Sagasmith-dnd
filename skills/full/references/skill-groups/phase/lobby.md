@@ -1,13 +1,13 @@
 # Phase: Lobby
 
 Lobby owns setup outside live play. Establish the campaign rule profile, import
-and review source material, determine module-recommended party size and level
-range, prepare characters, and pass validation/finalization gates before switching to Play.
+and review source material, choose a suitable starting level, prepare characters,
+and pass validation/finalization gates before switching to Play.
 
-Use the maximum reliably extracted recommended player count. Prefer bundled
-pregenerated PCs; fill shortages through legal character creation. Never
-default to four players when the recommendation is unresolved, and never scale
-encounters unless the module supplies an applicable rule.
+Use the player/DM's chosen party with at least one active PC. Printed party counts
+are advisory; do not fill extra seats to reach a recommendation. Missing counts
+need no source-review gate. Prefer applicable bundled pregenerated PCs unless
+players choose otherwise, and never scale encounters without an applicable rule.
 
 Do not start play while source identity, party legality, advancement mode,
 module finalization, or required DM review remains unresolved.

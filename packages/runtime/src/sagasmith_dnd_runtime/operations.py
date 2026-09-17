@@ -174,12 +174,18 @@ class DndRuntime:
         )
         if not campaign_id:
             actor_id = arguments.get("character_id") or arguments.get("actor_id")
+            if name == "character_query" and isinstance(payload, dict) and arguments.get(
+                "view"
+            ) in {"get", "rest", "advancement"}:
+                actor_id = payload.get("character_id") or actor_id
             if arguments.get("owner") == "party":
                 campaign_id = arguments.get("owner_id")
             elif arguments.get("owner") == "character":
                 actor_id = arguments.get("owner_id")
             if actor_id and not campaign_id:
                 campaign_id = self.ports["character_campaign"](actor_id)
+            if name == "module_expand" and arguments.get("chunk_id") and not campaign_id:
+                campaign_id = self.ports["module_chunk_campaign"](arguments["chunk_id"])
         if context.campaign_id and campaign_id and context.campaign_id != campaign_id:
             raise PermissionError("request identity belongs to another campaign")
         campaign_id = campaign_id or context.campaign_id or None

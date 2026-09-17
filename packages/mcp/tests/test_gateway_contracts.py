@@ -14,6 +14,17 @@ from sagasmith_dnd_mcp.gateway import (
 from sagasmith_dnd_mcp.server import RequestScopedMCPServer
 
 
+def test_validation_recovery_does_not_invent_auth_or_temporary_outages():
+    result = RequestScopedMCPServer._structured_tool_error(
+        "active encounter has no temporary battle map"
+    )
+    error = result.structured_content["error"]
+    assert error["retryable"] is False
+    assert "delegation" not in error["recovery"]
+    conflict = RequestScopedMCPServer._structured_tool_error("character revision conflict")
+    assert conflict.structured_content["error"]["code"] == "stale_revision"
+
+
 def test_rejected_tool_preserves_all_recovery_fields() -> None:
     envelope = {"code": "revision_conflict", "retryable": False,
                 "recovery": {"action": "read", "revision": 7}}

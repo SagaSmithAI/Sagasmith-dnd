@@ -8,7 +8,7 @@ version = "0.3.0"
 description = "Protocol-independent D&D application services"
 requires-python = ">=3.11"
 dependencies = [
-    "sagasmith-core>=0.3.0,<0.4.0",
+    "sagasmith-core>=0.3.1,<0.4.0",
     "sagasmith-dnd>=0.3.0,<0.4.0",
     "pydantic>=2.11.0,<3.0.0",
 ]
@@ -17,13 +17,13 @@ dependencies = [
 sagasmith-dnd = "sagasmith_dnd_runtime.cli:main"
 
 [project.optional-dependencies]
-documents = ["sagasmith-core[documents]>=0.3.0,<0.4.0"]
+documents = ["sagasmith-core[documents]>=0.3.1,<0.4.0"]
 images = ["pymupdf>=1.26.0,<2.0.0", "Pillow>=10.0.0,<13.0.0"]
-embedding = ["sagasmith-core[embedding]>=0.3.0,<0.4.0"]
-vector = ["sagasmith-core[vector]>=0.3.0,<0.4.0"]
-dense = ["sagasmith-core[embedding,vector]>=0.3.0,<0.4.0"]
+embedding = ["sagasmith-core[embedding]>=0.3.1,<0.4.0"]
+vector = ["sagasmith-core[vector]>=0.3.1,<0.4.0"]
+dense = ["sagasmith-core[embedding,vector]>=0.3.1,<0.4.0"]
 all = [
-    "sagasmith-core[documents,embedding,vector]>=0.3.0,<0.4.0",
+    "sagasmith-core[documents,embedding,vector]>=0.3.1,<0.4.0",
     "pymupdf>=1.26.0,<2.0.0",
     "Pillow>=10.0.0,<13.0.0",
 ]
