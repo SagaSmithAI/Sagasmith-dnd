@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import inspect
 from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, field
+from functools import wraps
 from types import SimpleNamespace
 from typing import Any, Callable, get_type_hints
 
 from pydantic import ConfigDict, create_model
 
 from .tool_profiles import CORE_TOOLS, PROFILES, policy_for_tool
+
+TRANSITION_COMMANDS = frozenset({"combat_start", "combat_end"})
 
 
 class OperationError(ValueError):
@@ -78,6 +82,7 @@ class DndRuntime:
         self.prompts: list[tuple[dict[str, Any], Callable]] = []
         self.ports: dict[str, Any] = {}
         self._tool_manager = self
+        self._transition = ContextVar(f"dnd_transition_{id(self)}", default=None)
 
     def tool(self, *, annotations: OperationHints | None = None):
         def register(function):
@@ -93,9 +98,20 @@ class DndRuntime:
                 __config__=ConfigDict(extra="forbid"),
                 **fields,
             )
+            implementation = function
+            if function.__name__ in TRANSITION_COMMANDS:
+                @wraps(function)
+                def implementation(*args, **kwargs):
+                    command = self._transition.get()
+                    if command is not None and command["response"] is not None:
+                        return deepcopy(command["response"])
+                    result = function(*args, **kwargs)
+                    if command is not None:
+                        self.ports["remember_transition"](command, result)
+                    return result
             self.operations[function.__name__] = Operation(
                 function.__name__,
-                function,
+                implementation,
                 model,
                 model.model_json_schema(),
                 annotations,
@@ -167,22 +183,39 @@ class DndRuntime:
         if context.campaign_id and campaign_id and context.campaign_id != campaign_id:
             raise PermissionError("request identity belongs to another campaign")
         campaign_id = campaign_id or context.campaign_id or None
+        if campaign_id:
+            self.ports["validate_request_scope"](campaign_id, name, arguments)
         # This facade nests its campaign selector in payload rather than the
         # top-level trusted arguments injected by MCP clients.
         if name == "character_query" and context.campaign_id and arguments.get(
             "view", "list"
         ) in {"list", "batch", "catalog"}:
             arguments["payload"] = {**(payload or {}), "campaign_id": campaign_id}
-        self.ports["authorize_tool_policy"](name, context.principal_id, campaign_id)
-        manager = (
-            self.ports["campaign_random_context"](campaign_id, name, arguments)
-            if campaign_id and name not in CORE_TOOLS
-            else nullcontext(None)
+        transition = (
+            self.ports["transition_scope"](
+                name, dict(operation.input_model.model_validate(arguments)),
+                campaign_id, context.principal_id,
+            ) if campaign_id and name in TRANSITION_COMMANDS else nullcontext(None)
         )
-        with manager as stream:
-            yield arguments, stream
-            if stream is not None and stream.has_unpersisted_draws:
-                raise RuntimeError("application returned without committing random progress")
+        with transition as command:
+            self.ports["authorize_tool_policy"](
+                name, context.principal_id, campaign_id,
+                replay=command is not None and command["response"] is not None,
+            )
+            manager = (
+                self.ports["campaign_random_context"](campaign_id, name, arguments)
+                if campaign_id and name not in CORE_TOOLS else nullcontext(None)
+            )
+            token = self._transition.set(command)
+            try:
+                with manager as stream:
+                    yield arguments, stream
+                    if stream is not None and stream.has_unpersisted_draws:
+                        raise RuntimeError(
+                            "application returned without committing random progress"
+                        )
+            finally:
+                self._transition.reset(token)
 
     def contract(self) -> list[dict[str, Any]]:
         rows = []

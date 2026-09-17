@@ -304,6 +304,10 @@ def _create_application(config: McpConfig | None = None, *, resources) -> DndRun
         "authoritative_phase": _services.authoritative_phase,
         "allowed_tools_for_exposure": _services.allowed_tools_for_exposure,
         "validate_exposure_scope": _services.validate_exposure_scope,
+        "validate_request_scope": _services.validate_request_scope,
+        "transition_scope": _services.transition_scope,
+        "remember_transition": _services.remember_transition,
+        "committed_campaign_revision": _services.committed_campaign_revision,
         "authorize_tool_policy": _services.authorize_tool_policy,
         "campaign_random_context": _services.campaign_random_context,
         "authoritative_host_context_binding": lambda *args, **kwargs: (
@@ -2138,6 +2142,14 @@ def _create_application(config: McpConfig | None = None, *, resources) -> DndRun
             **dict(_services.registered_tool.meta or {}),
             "sagasmith_domain_context": "sagasmith-dnd",
         }
+        if "expected_campaign_revision" in _services.properties:
+            _services.registered_tool.meta["sagasmith_campaign_revision_argument"] = (
+                "expected_campaign_revision"
+            )
+        elif "campaign_id" in _services.properties and "expected_revision" in _services.properties:
+            _services.registered_tool.meta["sagasmith_campaign_revision_argument"] = (
+                "expected_revision"
+            )
         if _services.registered_tool.name == "campaign_query":
             _services.registered_tool.meta["sagasmith_context_sync"] = True
 

@@ -131,7 +131,6 @@ class PresentationService:
                     "bounded_evaluation",
                     "skill_query",
                     "storage_status",
-                    "state_revision",
                 )
             )
             idempotent = read_only or "idempotency_key" in function.__annotations__

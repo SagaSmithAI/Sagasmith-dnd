@@ -20143,7 +20143,7 @@
       "lobby",
       "play"
     ],
-    "read_only": true,
+    "read_only": false,
     "requires_campaign": true,
     "revision_fields": [],
     "roles": {

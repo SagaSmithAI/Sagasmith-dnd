@@ -2,12 +2,46 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Any, Literal, Mapping
 
 from .. import application_support as _support
 
 
 class SharedService:
+    def committed_campaign_revision(self, campaign_id, key):
+        """Read the revision of this write, never a later concurrent write."""
+        if not campaign_id or not key:
+            return None
+        try:
+            receipt = self.idempotency.receipt(campaign_id, key)
+        except (LookupError, RuntimeError):
+            return None
+        for item in reversed(receipt.entity_revisions):
+            if item["entity_type"] == "campaign" and item["entity_id"] == campaign_id:
+                return item["after_revision"]
+        return None
+
+    @contextmanager
+    def transition_scope(self, name, arguments, campaign_id, principal_id):
+        """Atomically retain the public reply across phase and branch changes."""
+        key = arguments.get("idempotency_key")
+        if not key:
+            yield None
+            return
+        scope = f"runtime-transition:{campaign_id}:{principal_id}:{name}"
+        # Separate keys avoid ambiguous domain receipt lookups by original key.
+        receipt_key = f"runtime-transition:{key}"
+        with self.storage.database.transaction(immediate=True):
+            cached = self.idempotency.lookup(scope, receipt_key, arguments)
+            yield {"scope": scope, "key": receipt_key, "payload": arguments,
+                   "campaign_id": campaign_id,
+                   "response": cached.response if cached is not None else None}
+
+    def remember_transition(self, command, result):
+        self.idempotency.remember(command["scope"], command["key"], command["payload"],
+                                  result, campaign_id=command["campaign_id"])
+
     def profile_options_with_core_lock(
         self, edition: str, options: dict[str, Any] | None = None
     ) -> dict[str, Any]:
@@ -462,6 +496,7 @@ class SharedService:
         tool_id: str,
         principal_id: str,
         campaign_id: str | None,
+        *, replay: bool = False,
     ) -> None:
         """Apply one ToolPolicy authorization check at every hosted boundary."""
 
@@ -482,11 +517,12 @@ class SharedService:
             phase = self.authoritative_phase(campaign_id)
         except LookupError as exc:
             raise _support.ExposureError(f"Campaign {campaign_id!r} does not exist.") from exc
-        if phase not in policy.phases:
+        if phase not in policy.phases and not replay:
             raise _support.ExposureError(
                 f"Tool {tool_id!r} is not available during campaign phase {phase!r}."
             )
-        roles = policy.roles(phase)
+        roles = (frozenset().union(*policy.roles_by_phase.values())
+                 if replay else policy.roles(phase))
         if not roles:
             return
         try:
@@ -502,30 +538,39 @@ class SharedService:
         if exposure.campaign_id is None:
             return
 
+        self.validate_request_scope(exposure.campaign_id, tool_id, arguments)
+
+    def validate_request_scope(self, campaign_id: str, tool_id: str,
+                               arguments: dict[str, Any]) -> None:
+        """Validate resource ownership independently of the caller's global permissions."""
+
         campaign_ids: set[str] = set()
         character_ids: set[str] = set()
 
         def collect(value: Any) -> None:
             if isinstance(value, dict):
+                owner_id = value.get("owner_id")
+                if value.get("owner") == "party" and owner_id:
+                    campaign_ids.add(str(owner_id))
+                elif value.get("owner") == "character" and owner_id:
+                    character_ids.add(str(owner_id))
                 for key, item in value.items():
                     if key == "campaign_id" and item:
                         campaign_ids.add(str(item))
-                    elif (key == "character_id" or key.endswith("_character_id")) and item:
+                    elif (key in {"character_id", "actor_id"}
+                          or key.endswith(("_character_id", "_actor_id"))) and item:
                         character_ids.add(str(item))
-                    elif key == "actor_id" and item:
-                        character_ids.add(str(item))
+                    elif isinstance(item, list) and (
+                        key in {"character_ids", "actor_ids", "participant_ids"}
+                        or key.endswith(("_character_ids", "_actor_ids"))
+                    ):
+                        character_ids.update(str(identifier) for identifier in item if identifier)
                     collect(item)
             elif isinstance(value, list):
                 for item in value:
                     collect(item)
 
         collect(arguments)
-        owner = str(arguments.get("owner") or "")
-        owner_id = arguments.get("owner_id")
-        if owner == "party" and owner_id:
-            campaign_ids.add(str(owner_id))
-        elif owner == "character" and owner_id:
-            character_ids.add(str(owner_id))
         if tool_id == "module_expand" and arguments.get("chunk_id"):
             expanded = self.modules.expand(str(arguments["chunk_id"]))
             if expanded.get("campaign_id"):
@@ -539,11 +584,11 @@ class SharedService:
             if character.campaign_id:
                 campaign_ids.add(str(character.campaign_id))
 
-        mismatched = sorted(item for item in campaign_ids if item != exposure.campaign_id)
+        mismatched = sorted(item for item in campaign_ids if item != campaign_id)
         if mismatched:
             raise _support.ExposureError(
                 f"Tool {tool_id!r} targets campaign {mismatched[0]!r}, but this exposure is "
-                f"bound to {exposure.campaign_id!r}. Open a separate exposure for that campaign."
+                f"bound to {campaign_id!r}. Use a separate request for that campaign."
             )
 
     def allowed_tools_for_exposure(self, exposure: _support.Exposure, phase: str) -> set[str]:

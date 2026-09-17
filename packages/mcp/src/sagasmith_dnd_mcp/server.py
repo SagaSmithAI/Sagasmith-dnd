@@ -97,7 +97,9 @@ class _CompatibilityModule(_types.ModuleType):
 _sys.modules[__name__].__class__ = _CompatibilityModule
 
 
-def _attach_auth_receipt(result: Any, context: AuthContext | None, tool: str) -> Any:
+def _attach_auth_receipt(
+    result: Any, context: AuthContext | None, tool: str, campaign_revision: int | None = None,
+) -> Any:
     if context is None:
         return result
     if isinstance(result, CallToolResult):
@@ -107,6 +109,7 @@ def _attach_auth_receipt(result: Any, context: AuthContext | None, tool: str) ->
     else:
         return result
     receipt = context.audit_receipt(tool=tool, revision=_auth_receipt_revision(structured))
+    receipt["campaign_revision"] = campaign_revision
     updated = []
     attached = False
     for item in content:
@@ -596,7 +599,10 @@ class RequestScopedMCPServer(MCPServer):
                 and not (name == "exposure" and arguments.get("action") == "open")
             ):
                 expected_campaign = exposure.campaign_id or ""
-            expected_revision = arguments.get("expected_revision", arguments.get("base_revision"))
+            operation = self.runtime.operations.get(name)
+            revision_field = (operation.meta.get("sagasmith_campaign_revision_argument")
+                              if operation is not None else "base_revision")
+            expected_revision = arguments.get(revision_field) if revision_field else None
             if isinstance(expected_revision, bool) or not isinstance(expected_revision, int):
                 expected_revision = None
             expected_resource_owner = (
@@ -850,7 +856,8 @@ class RequestScopedMCPServer(MCPServer):
                 context=context,
                 exposure=exposure,
             )
-            if auth_context is not None and legacy_session_key is None:
+            if (auth_context is not None and legacy_session_key is None
+                    and name not in self.runtime.operations):
                 policy_campaign_id = self._argument_campaign_id(arguments) or None
                 policy = policy_for_tool(name)
                 if policy_campaign_id is None and policy is not None and policy.requires_campaign:
@@ -905,6 +912,9 @@ class RequestScopedMCPServer(MCPServer):
             if message.startswith("Unknown tool") or "validation error" in message.casefold():
                 raise
             return self._structured_tool_error(message, exc)
+        committed_revision = self.runtime.ports["committed_campaign_revision"](
+            campaign_id, arguments.get("idempotency_key"),
+        ) if auth_context is not None else None
         result = self._ensure_text_fallback(result)
         result = self._attach_random_receipt(result, random_receipt)
         result = self._canonicalize_structured_text(result)
@@ -943,7 +953,7 @@ class RequestScopedMCPServer(MCPServer):
                     current_exposure.revision if current_exposure is not None else 0
                 )
             result = self._attach_host_context_binding(result, binding)
-        result = _attach_auth_receipt(result, auth_context, name)
+        result = _attach_auth_receipt(result, auth_context, name, committed_revision)
         # Preserve the historical direct-Python testing API. Network requests
         # always supply Context and therefore always receive the SDK v2
         # CallToolResult expected by both protocol eras.
