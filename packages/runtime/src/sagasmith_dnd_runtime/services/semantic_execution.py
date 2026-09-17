@@ -126,7 +126,12 @@ class CombatPlanRuntime:
         targets = {identifier: self.context.runtime_services.require_encounter_combatant(
             self.encounter, identifier, role="semantic plan target",
         ) for identifier in arguments["target_ids"]}
-        return _domain.validate_targets(source, targets, arguments)
+        evidence = (self.context.bound_plan.agent_ruling or {}).get("target_facts", {})
+        facts = evidence.get("steps", {}).get(step_id, {}).get("targets", {})
+        return _domain.validate_targets(
+            source, targets, arguments, spatial_facts=facts,
+            positioning_mode=self.encounter.get("positioning_mode", "agent"),
+        )
 
     def _execute_check_save(self, opcode, arguments, *, step_id):
         ability = str(arguments["ability"])
@@ -292,6 +297,14 @@ class CombatPlanRuntime:
         )
         self.set_sheet(attacker_id, dict(updated_attacker["sheet"]))
         self.set_sheet(target_id, dict(updated_target["sheet"]))
+        _support.reconcile_readied_spells(self.encounter, target_id, updated_target["sheet"])
+        damage = result.get("damage")
+        if isinstance(damage, dict):
+            self.context.runtime_services.add_concentration_window(
+                self.encounter, target_id, damage.get("concentration"),
+                next_revision=self.context.campaign.revision + 1,
+            )
+            result["damage"] = {key: value for key, value in damage.items() if key != "sheet"}
         return result
 
     def _execute_damage_apply(self, opcode, arguments, *, step_id):

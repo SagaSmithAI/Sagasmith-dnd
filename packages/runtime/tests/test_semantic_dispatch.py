@@ -95,7 +95,8 @@ def test_new_example_extension_composes_existing_capabilities_atomically(edition
     base = make_runtime(plan).context
     runtime = CombatPlanRuntime(replace(base, runtime_services=SceneServices(), encounter={
         "actors": {
-            key: {"conditions": record.sheet["conditions"]} for key, record in records.items()
+            key: {"conditions": record.sheet["conditions"], "visible_to_actor_ids": ["medic"]}
+            for key, record in records.items()
         },
     }))
     if dead_target:

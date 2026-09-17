@@ -87,6 +87,12 @@
   hide and inject the authenticated principal. A single-user process should set
   `SAGASMITH_DND_MCP_BOUND_PRINCIPAL_ID`; never expose authorization identity as
   a model choice.
+- For semantic `target.validate`, provide reviewed `agent_ruling.target_facts`
+  keyed by step ID, then target actor ID. Bind the encounter ID, scene ID and
+  current campaign revision; each step also binds its source actor ID. A required
+  visibility fact must be explicit, and Agent range needs `distance_ft` without
+  invented coordinates. Reuse the exact paid commitment on settlement. See
+  `docs/extension-authoring.md` in the source repository for the JSON contract.
 - Supply `expected_revision` and an `idempotency_key` on retriable writes. Treat a
   revision conflict as a fresh read/review cycle, not as permission to overwrite.
 - For rule-profile and rule-pack writes, obtain `campaign_revision` from

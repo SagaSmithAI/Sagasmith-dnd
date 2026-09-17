@@ -30,7 +30,7 @@ def select_weighted_value(table: list[dict[str, Any]], rolled: int) -> Any:
     raise AssertionError("validated table roll must select an entry")
 
 
-def validate_targets(source, targets, arguments):
+def validate_targets(source, targets, arguments, *, spatial_facts=None, positioning_mode="grid"):
     """Validate supplied scene facts; never infer positions from narrative text."""
     source_id = str(arguments["source_actor_id"])
     source_conditions = {str(item).strip().casefold() for item in source.get("conditions", [])}
@@ -38,7 +38,8 @@ def validate_targets(source, targets, arguments):
         raise CombatEngineError("a blinded semantic-plan source cannot validate visible targets")
     source_position = dict(source.get("position") or {})
     maximum_range = arguments.get("maximum_range_ft")
-    if maximum_range is not None and set(source_position) != {"x", "y"}:
+    if (maximum_range is not None and positioning_mode == "grid"
+            and set(source_position) != {"x", "y"}):
         raise NeedsRulingError(
             "semantic target range requires the source position",
             missing=(f"semantic_target_position:{source_id}",), ruling_kind="source_or_scene_fact",
@@ -50,32 +51,56 @@ def validate_targets(source, targets, arguments):
         if arguments.get("exclude_self", False) and target_id == source_id:
             raise CombatEngineError("semantic target cannot be the source actor")
         target = targets[target_id]
+        facts = (spatial_facts or {}).get(target_id, {})
         conditions = {str(item).strip().casefold() for item in target.get("conditions", [])}
         if not required.issubset(conditions):
             raise CombatEngineError("semantic target lacks a source-required condition")
         if conditions & forbidden:
             raise CombatEngineError("semantic target has a source-forbidden condition")
+        visible = None
         if arguments.get("require_visible"):
             visible_to = target.get("visible_to_actor_ids")
             if target.get("hidden", False) or "invisible" in conditions or (
                 isinstance(visible_to, list) and source_id not in {str(item) for item in visible_to}
             ):
                 raise CombatEngineError("semantic target must be visible to the source")
+            visible = facts.get("visible")
+            if visible is None and isinstance(visible_to, list):
+                visible = source_id in visible_to
+            if visible is None:
+                raise NeedsRulingError(
+                    "semantic target visibility requires an explicit scene fact",
+                    missing=(f"target_facts:{target_id}:visible",),
+                    ruling_kind="source_or_scene_fact",
+                )
+            if visible is not True:
+                raise CombatEngineError("semantic target must be visible to the source")
         distance = None
         if maximum_range is not None:
             position = dict(target.get("position") or {})
-            if set(position) != {"x", "y"}:
+            if positioning_mode == "agent":
+                distance = facts.get("distance_ft")
+                if distance is None:
+                    raise NeedsRulingError(
+                        "semantic target range requires an explicit distance fact",
+                        missing=(f"target_facts:{target_id}:distance_ft",),
+                        ruling_kind="source_or_scene_fact",
+                    )
+                if isinstance(distance, bool) or not isinstance(distance, int) or distance < 0:
+                    raise CombatEngineError("target distance must be a non-negative integer")
+            elif set(position) != {"x", "y"}:
                 raise NeedsRulingError(
                     "semantic target range requires the target position",
                     missing=(f"semantic_target_position:{target_id}",),
                     ruling_kind="source_or_scene_fact",
                 )
-            distance = max(abs(int(source_position[axis]) - int(position[axis]))
-                           for axis in ("x", "y")) * 5
+            else:
+                distance = max(abs(int(source_position[axis]) - int(position[axis]))
+                               for axis in ("x", "y")) * 5
             if distance > int(maximum_range):
                 raise CombatEngineError("semantic target is outside the source-recorded range")
         result.append({"target_id": target_id, "distance_ft": distance,
-                       "visible": bool(arguments.get("require_visible"))})
+                       "visible": visible})
     return {"targets": result}
 
 

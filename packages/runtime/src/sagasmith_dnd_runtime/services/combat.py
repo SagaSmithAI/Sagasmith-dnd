@@ -6845,6 +6845,7 @@ class CombatService:
             source_card_id=source_card_id,
             source_card_kind=source_card_kind,
             compiled_plan=compiled_plan,
+            allow_paid_revision=True,
         )
         _support.require_harmful_targeting_allowed(
             runtime_services.combat_actor_snapshot(source_actor_id),

@@ -973,10 +973,22 @@ class DndGateway:
             idempotency_key = fields.get("idempotency_key", "").strip()
             if not idempotency_key:
                 raise web.HTTPBadRequest(text="idempotency_key is required")
+            # The MCP request fingerprint includes the artifact name. Keep the same
+            # immutable archive across HTTP retries and after an unknown dispatch.
+            archive_path = temporary_path.with_name(
+                f"gateway-upload-{archive_hash.hexdigest()}.sagasmith-pack"
+            )
+            try:
+                os.link(temporary_path, archive_path)
+            except FileExistsError:
+                with archive_path.open("rb") as existing:
+                    existing_hash = hashlib.file_digest(existing, "sha256").hexdigest()
+                    if existing_hash != archive_hash.hexdigest():
+                        raise ValueError("stored upload archive checksum mismatch") from None
             payload: dict[str, Any] = {
                 "campaign_id": campaign_id,
                 "kind": kind,
-                "artifact": temporary_path.name,
+                "artifact": archive_path.name,
             }
             if fields.get("progress_remaps"):
                 payload["progress_remaps"] = json.loads(fields["progress_remaps"])
@@ -1277,11 +1289,39 @@ def create_app(
     pool = None if mcp_client is not None else DndClientPool(config)
     gateway = DndGateway(config, mcp_client, mcp_config or McpConfig.from_environment())
 
+    async def prepare_cors(request: web.Request, response: web.StreamResponse) -> None:
+        origin = request.headers.get("Origin")
+        if origin and origin in config.allowed_origins:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            response.headers.add("Vary", "Origin")
+            response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+
     @web.middleware
-    async def boundary(request: web.Request, handler: JsonHandler) -> web.StreamResponse:
+    async def cors(request: web.Request, handler: JsonHandler) -> web.StreamResponse:
         origin = request.headers.get("Origin")
         if origin and origin not in config.allowed_origins:
             raise web.HTTPForbidden(text="origin is not allowed")
+        if request.method == "OPTIONS":
+            method = request.headers.get("Access-Control-Request-Method", "GET")
+            headers = {item.strip().lower() for item in request.headers.get(
+                "Access-Control-Request-Headers", ""
+            ).split(",") if item.strip()}
+            if method not in {"GET", "POST", "OPTIONS"} or headers - {
+                "authorization", "content-type",
+            }:
+                raise web.HTTPForbidden(text="preflight is not allowed")
+            response: web.StreamResponse = web.Response(status=204)
+        else:
+            try:
+                response = await handler(request)
+            except web.HTTPException as exc:
+                response = web.Response(status=exc.status, headers=exc.headers, body=exc.body)
+        return response
+
+    @web.middleware
+    async def boundary(request: web.Request, handler: JsonHandler) -> web.StreamResponse:
         if config.bearer_token:
             supplied = request.headers.get("Authorization", "").removeprefix("Bearer ")
             supplied = supplied or request.query.get("token", "")
@@ -1289,72 +1329,63 @@ def create_app(
                 raise web.HTTPUnauthorized(text="invalid gateway token")
         elif request.remote not in {"127.0.0.1", "::1", None}:
             raise web.HTTPForbidden(text="a bearer token is required for non-loopback access")
-        if request.method == "OPTIONS":
-            response: web.StreamResponse = web.Response(status=204)
-        else:
-            context_token = None
-            browser_token = None
-            created = False
-            try:
-                if pool is not None and request.path.startswith("/api/"):
-                    browser_token, client, created = await pool.session(
-                        request.cookies.get(COOKIE_NAME),
-                        request.match_info.get("campaign_id") or None,
-                    )
-                    context_token = _REQUEST_CLIENT.set(client)
-                response = await handler(request)
-            except web.HTTPException:
-                raise
-            except IdempotencyConflictError as exc:
-                response = web.json_response({"error": str(exc)}, status=409)
-            except McpToolRejectedError as exc:
-                response = web.json_response(
-                    {"error": str(exc), "structured_content": exc.structured_content,
-                     "tool_result": exc.result.model_dump(mode="json") if exc.result else None},
-                    status=400,
+        context_token = None
+        browser_token = None
+        created = False
+        try:
+            if pool is not None and request.path.startswith("/api/"):
+                browser_token, client, created = await pool.session(
+                    request.cookies.get(COOKIE_NAME),
+                    request.match_info.get("campaign_id") or None,
                 )
-            except asyncio.QueueFull:
-                response = web.json_response(
-                    {"error": "MCP request queue is full", "code": "backpressure",
-                     "retryable": True}, status=503,
-                )
-            except McpDispatchUnknownError as exc:
-                response = web.json_response(
-                    {"error": str(exc), "code": "dispatch_unknown", "retryable": False,
-                     "recovery": exc.recovery}, status=504,
-                )
-            except TimeoutError as exc:
-                response = web.json_response(
-                    {"error": str(exc), "code": "deadline_before_dispatch", "retryable": True},
-                    status=504,
-                )
-            except PermissionError as exc:
-                response = web.json_response({"error": str(exc)}, status=403)
-            except LookupError as exc:
-                response = web.json_response({"error": str(exc)}, status=404)
-            except (KeyError, TypeError, ValueError) as exc:
-                response = web.json_response({"error": str(exc)}, status=400)
-            except Exception:
-                LOGGER.exception("unhandled D&D gateway request failure")
-                response = web.json_response({"error": "internal gateway error"}, status=500)
-            finally:
-                if context_token is not None:
-                    _REQUEST_CLIENT.reset(context_token)
-            if created and browser_token and not response.prepared:
-                response.set_cookie(
-                    COOKIE_NAME,
-                    browser_token,
-                    httponly=True,
-                    samesite="Strict",
-                    secure=False,
-                    max_age=config.session_ttl_seconds,
-                )
-        if origin and origin in config.allowed_origins:
-            response.headers["Access-Control-Allow-Origin"] = origin
-            response.headers["Access-Control-Allow-Credentials"] = "true"
-            response.headers["Vary"] = "Origin"
-            response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
-            response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+                context_token = _REQUEST_CLIENT.set(client)
+            response = await handler(request)
+        except web.HTTPException:
+            raise
+        except IdempotencyConflictError as exc:
+            response = web.json_response({"error": str(exc)}, status=409)
+        except McpToolRejectedError as exc:
+            response = web.json_response(
+                {"error": str(exc), "structured_content": exc.structured_content,
+                 "tool_result": exc.result.model_dump(mode="json") if exc.result else None},
+                status=400,
+            )
+        except asyncio.QueueFull:
+            response = web.json_response(
+                {"error": "MCP request queue is full", "code": "backpressure",
+                 "retryable": True}, status=503,
+            )
+        except McpDispatchUnknownError as exc:
+            response = web.json_response(
+                {"error": str(exc), "code": "dispatch_unknown", "retryable": False,
+                 "recovery": exc.recovery}, status=504,
+            )
+        except TimeoutError as exc:
+            response = web.json_response(
+                {"error": str(exc), "code": "deadline_before_dispatch", "retryable": True},
+                status=504,
+            )
+        except PermissionError as exc:
+            response = web.json_response({"error": str(exc)}, status=403)
+        except LookupError as exc:
+            response = web.json_response({"error": str(exc)}, status=404)
+        except (KeyError, TypeError, ValueError) as exc:
+            response = web.json_response({"error": str(exc)}, status=400)
+        except Exception:
+            LOGGER.exception("unhandled D&D gateway request failure")
+            response = web.json_response({"error": "internal gateway error"}, status=500)
+        finally:
+            if context_token is not None:
+                _REQUEST_CLIENT.reset(context_token)
+        if created and browser_token and not response.prepared:
+            response.set_cookie(
+                COOKIE_NAME,
+                browser_token,
+                httponly=True,
+                samesite="Strict",
+                secure=False,
+                max_age=config.session_ttl_seconds,
+            )
         return response
 
     async def options(_: web.Request) -> web.Response:
@@ -1379,9 +1410,10 @@ def create_app(
         return await gateway.snapshots(request, "lineage")
 
     app = web.Application(
-        middlewares=[boundary],
+        middlewares=[cors, boundary],
         client_max_size=config.upload_limit_bytes,
     )
+    app.on_response_prepare.append(prepare_cors)
     app[GATEWAY_KEY] = gateway
 
     async def mcp_lifecycle(_: web.Application):

@@ -52,7 +52,8 @@ def test_weighted_selection_consumes_an_explicit_recorded_roll():
 
 def test_target_validation_is_pure_and_missing_positions_need_a_ruling():
     source = {"position": {"x": 0, "y": 0}, "conditions": []}
-    targets = {"b": {"position": {"x": 2, "y": 1}, "conditions": []}}
+    targets = {"b": {"position": {"x": 2, "y": 1}, "conditions": [],
+                     "visible_to_actor_ids": ["a"]}}
     args = {"source_actor_id": "a", "target_ids": ["b"], "maximum_range_ft": 10,
             "require_visible": True}
     before = deepcopy((source, targets))

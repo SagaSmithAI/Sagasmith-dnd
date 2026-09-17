@@ -1977,6 +1977,8 @@ class SharedService:
             "source_excerpt",
         }
         unknown = set(raw_ruling) - allowed
+        if field == "semantic plan commitment":
+            unknown.discard("target_facts")
         application_id = str(raw_ruling.get("application_id") or "").strip()
         decision = " ".join(str(raw_ruling.get("decision") or "").split())
         reason = " ".join(str(raw_ruling.get("reason") or "").split())
@@ -2022,6 +2024,8 @@ class SharedService:
             "reason": reason,
             "source_ref": _support.deepcopy(source_ref),
             "source_excerpt": source_excerpt,
+            **({"target_facts": _support.deepcopy(raw_ruling["target_facts"])}
+               if "target_facts" in raw_ruling else {}),
         }
 
     def source_card_evidence_texts(self, source_card: dict[str, Any]) -> tuple[str, ...]:

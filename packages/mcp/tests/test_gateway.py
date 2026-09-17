@@ -4,7 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from aiohttp import FormData
+from aiohttp import FormData, web
 from aiohttp.test_utils import TestClient, TestServer
 from mcp.types import CallToolResult, ImageContent, TextContent
 from sagasmith_core.content_pack import dumps_content_archive
@@ -61,6 +61,61 @@ def app_for(tmp_path: Path, gateway_config: GatewayConfig | None = None):
         InProcessTestClient(value),
         value,
     )
+
+
+def test_token_cors_preflight_does_not_bypass_actual_request_auth(tmp_path):
+    class Client:
+        async def start(self):
+            pass
+
+        async def stop(self):
+            pass
+
+    async def exercise():
+        origin = "http://localhost:4321"
+        app = create_app(GatewayConfig(bearer_token="test-only", allowed_origins=(origin,)),
+                         Client(), config(tmp_path))
+
+        async def endpoint(request):
+            return web.json_response({"ok": True})
+
+        async def stream_endpoint(request):
+            response = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+            await response.prepare(request)
+            await response.write(b"data: ready\n\n")
+            return response
+
+        app.router.add_get("/cors-probe", endpoint)
+        app.router.add_get("/cors-stream-probe", stream_endpoint)
+        async with TestClient(TestServer(app)) as client:
+            headers = {"Origin": origin, "Access-Control-Request-Method": "POST",
+                       "Access-Control-Request-Headers": "authorization, content-type"}
+            preflight = await client.options("/cors-probe", headers=headers)
+            assert preflight.status == 204
+            assert preflight.headers["Access-Control-Allow-Origin"] == origin
+            denied = await client.get("/cors-probe", headers={"Origin": origin})
+            assert denied.status == 401
+            assert denied.headers["Access-Control-Allow-Origin"] == origin
+            accepted = await client.get("/cors-probe", headers={
+                "Origin": origin, "Authorization": "Bearer test-only",
+            })
+            assert accepted.status == 200
+            streamed = await client.get("/cors-stream-probe", headers={
+                "Origin": origin, "Authorization": "Bearer test-only",
+            })
+            assert streamed.headers["Access-Control-Allow-Origin"] == origin
+            assert await streamed.text() == "data: ready\n\n"
+            forbidden = await client.options("/cors-probe", headers={
+                **headers, "Origin": "https://untrusted.example",
+            })
+            assert forbidden.status == 403
+            assert "Access-Control-Allow-Origin" not in forbidden.headers
+            unsupported = await client.options("/cors-probe", headers={
+                **headers, "Access-Control-Request-Headers": "x-admin",
+            })
+            assert unsupported.status == 403
+
+    asyncio.run(exercise())
 
 
 def test_gateway_pool_is_sticky_and_rotates_only_switching_browser(monkeypatch) -> None:
@@ -430,6 +485,16 @@ def test_gateway_imports_and_projects_finalized_preset_inventory(tmp_path: Path)
             )
             assert imported.status == 200
             import_payload = await imported.json()
+            retry_form = FormData()
+            retry_form.add_field("kind", "preset")
+            retry_form.add_field("idempotency_key", "gateway-import-preset")
+            retry_form.add_field("archive", archive, filename="gateway.sagasmith-pack",
+                                 content_type="application/octet-stream")
+            replayed = await client.post(
+                f"/api/campaigns/{campaign['id']}/content-packs/import", data=retry_form,
+            )
+            assert replayed.status == 200
+            assert (await replayed.json())["data"] == import_payload["data"]
             assert import_payload["data"]["archive"]["sha256"] == hashlib.sha256(
                 archive
             ).hexdigest()

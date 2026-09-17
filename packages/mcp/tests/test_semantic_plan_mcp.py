@@ -29,9 +29,11 @@ async def _raw(server, name: str, arguments: dict):
 
 
 @pytest.mark.parametrize("save_source_kind", [None, "magical_effect", "nonmagical_effect"])
+@pytest.mark.parametrize("positioning_mode", ["grid", "agent"])
 def test_custom_monster_plan_pays_executes_replays_and_rejects_mutation(
     tmp_path: Path,
     save_source_kind: str | None,
+    positioning_mode: str,
 ) -> None:
     module_root = tmp_path / "modules"
     module_root.mkdir()
@@ -379,7 +381,7 @@ def test_custom_monster_plan_pays_executes_replays_and_rejects_mutation(
             server,
             "combat_start",
             {
-                "positioning_mode": "grid",
+                "positioning_mode": positioning_mode,
                 "campaign_id": campaign["id"],
                 "participant_ids": [
                     beast["id"],
@@ -390,24 +392,25 @@ def test_custom_monster_plan_pays_executes_replays_and_rejects_mutation(
                     {
                         "actor_id": beast["id"],
                         "initiative": 20,
-                        "position": {"x": 0, "y": 0},
+                        **({"position": {"x": 0, "y": 0}} if positioning_mode == "grid" else {}),
                         "disposition": "hostile",
                     },
                     {
                         "actor_id": hero_one["id"],
                         "initiative": 10,
-                        "position": {"x": 3, "y": 0},
+                        **({"position": {"x": 3, "y": 0}} if positioning_mode == "grid" else {}),
                         "disposition": "friendly",
                     },
                     {
                         "actor_id": hero_two["id"],
                         "initiative": 5,
-                        "position": {"x": 6, "y": 0},
+                        **({"position": {"x": 6, "y": 0}} if positioning_mode == "grid" else {}),
                         "disposition": "friendly",
                     },
                 ],
                 "scene_id": expanded["scene"]["id"],
-                "battle_map": {"bounds": {"width_cells": 12, "height_cells": 12}},
+                **({"battle_map": {"bounds": {"width_cells": 12, "height_cells": 12}}}
+                   if positioning_mode == "grid" else {}),
                 "ruleset": "2014",
                 "expected_revision": play["campaign_revision"],
                 "idempotency_key": "start",
@@ -433,6 +436,14 @@ def test_custom_monster_plan_pays_executes_replays_and_rejects_mutation(
             "default_resolver": "agent",
             "ruling_kind": "agent_dm_adjudication",
             "decision": "Both heroes occupy the reviewed pulse area in this chamber.",
+            "target_facts": {
+                "encounter_id": started["combat"]["id"],
+                "scene_id": expanded["scene"]["id"],
+                "campaign_revision": started["campaign_revision"],
+                "steps": {"targets": {"source_actor_id": beast["id"],
+                    "targets": {hero_one["id"]: {"visible": True, "distance_ft": 15},
+                                hero_two["id"]: {"visible": True, "distance_ft": 30}}}},
+            },
             "reason": "The active scene and recorded encounter positions include both.",
             "source_ref": deepcopy(expanded["source_ref"]),
             "source_excerpt": encounter_excerpt,
@@ -602,6 +613,11 @@ def test_custom_monster_plan_pays_executes_replays_and_rejects_mutation(
         spell_ruling = {
             **agent_ruling,
             "application_id": "chromatic-spark-round-2",
+            "target_facts": {
+                **agent_ruling["target_facts"], "campaign_revision": revision,
+                "steps": {"target": {"source_actor_id": beast["id"],
+                    "targets": {hero_one["id"]: {"visible": True, "distance_ft": 15}}}},
+            },
             "decision": "Hero One is the one visible target of Chromatic Spark.",
         }
         spell_commitment = {
@@ -1409,6 +1425,13 @@ def test_item_on_hit_plan_uses_the_attack_event_as_payment(
             "default_resolver": "agent",
             "ruling_kind": "source_or_scene_fact",
             "decision": "The reviewed blade hit this adjacent target.",
+            "target_facts": {
+                "encounter_id": started["combat"]["id"],
+                "scene_id": expanded["scene"]["id"],
+                "campaign_revision": attacked["campaign_revision"],
+                "steps": {"targets": {"source_actor_id": wielder["id"],
+                    "targets": {target["id"]: {"visible": True}}}},
+            },
             "reason": (
                 "The server-recorded attack and current positions satisfy the source trigger."
             ),
@@ -1429,6 +1452,9 @@ def test_item_on_hit_plan_uses_the_attack_event_as_payment(
         }
         wrong_target_commitment = deepcopy(commitment)
         wrong_target_commitment["bindings"]["target"] = wielder["id"]
+        wrong_target_commitment["agent_ruling"]["target_facts"]["steps"]["targets"]["targets"] = {
+            wielder["id"]: {"visible": True},
+        }
         with pytest.raises(Exception, match="paid engine event"):
             await _call(
                 server,

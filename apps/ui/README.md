@@ -32,6 +32,16 @@ Browser
 - Writes preserve one end-to-end idempotency key and authority revision. A stale
   revision is a recoverable conflict, not permission to silently retry as a new
   operation.
+- Before dispatch, writes are retained in IndexedDB with their exact payload,
+  uploaded bytes and original key. Network loss or `dispatch_unknown` keeps the
+  request across reloads. **恢复原请求** replays that request; a changed operation
+  on the same endpoint stays blocked until the original outcome is confirmed.
+  IndexedDB must be available; a storage failure prevents dispatch. Unknown
+  requests remain retained even if a recovery attempt is rejected by authentication.
+- Uploaded archives use an immutable SHA-256-based gateway artifact name so an
+  HTTP replay has the same MCP arguments. These archives remain in the configured
+  content-package directory, including after uncertain dispatch; storage retention
+  must preserve archives needed by unresolved requests.
 - Catalog and campaign data are separate caches. Ordinary game writes update
   revisioned projections; they do not refresh the modern deterministic MCP tool
   catalog.

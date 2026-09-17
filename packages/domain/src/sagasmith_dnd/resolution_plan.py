@@ -1204,6 +1204,7 @@ def _normalize_agent_ruling(value: Any) -> dict[str, Any] | None:
         "reason",
         "source_ref",
         "source_excerpt",
+        "target_facts",
     }
     if set(value) - allowed:
         raise ResolutionPlanBindingError("agent_ruling has unsupported fields")
@@ -1236,6 +1237,10 @@ def _normalize_agent_ruling(value: Any) -> dict[str, Any] | None:
         raise ResolutionPlanBindingError(
             "agent_ruling must be a bounded source-bound Agent decision"
         )
+    if "target_facts" in value:
+        if not isinstance(value["target_facts"], dict):
+            raise ResolutionPlanBindingError("target_facts must be an object")
+        normalized["target_facts"] = deepcopy(value["target_facts"])
     return normalized
 
 

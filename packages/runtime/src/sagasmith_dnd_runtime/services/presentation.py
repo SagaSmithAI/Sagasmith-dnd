@@ -478,6 +478,7 @@ class PresentationService:
         source_card_id: str,
         source_card_kind: str,
         compiled_plan: Any,
+        allow_paid_revision: bool = False,
     ) -> tuple[dict[str, Any], _support.BoundResolutionPlan]:
         """Bind an Agent decision only to slots declared by its recorded rule card."""
 
@@ -588,7 +589,84 @@ class PresentationService:
             source_actor_id,
             role="semantic plan source",
         )
+        self.validate_resolution_target_facts(
+            campaign_id, encounter, bound, source_actor_id,
+            allow_paid_revision=allow_paid_revision,
+        )
         return normalized, bound
+
+    def validate_resolution_target_facts(
+        self, campaign_id, encounter, bound, source_actor_id, *, allow_paid_revision=False,
+    ) -> None:
+        evidence = (bound.agent_ruling or {}).get("target_facts")
+        steps = {step["id"]: step for step in bound.steps if step["op"] == "target.validate"}
+        supplied = {}
+        if evidence is not None:
+            revision = self.campaigns.get(campaign_id).revision
+            allowed_revisions = {revision, revision - 1} if allow_paid_revision else {revision}
+            if (not isinstance(evidence, dict) or set(evidence) != {
+                "encounter_id", "scene_id", "campaign_revision", "steps",
+            } or evidence.get("encounter_id") != encounter.get("id")
+                    or evidence.get("scene_id") != encounter.get("scene_id")
+                    or type(evidence.get("campaign_revision")) is not int
+                    or evidence["campaign_revision"] not in allowed_revisions
+                    or not isinstance(evidence.get("steps"), dict)):
+                raise _support.CombatEngineError(
+                    "target_facts must bind the current scene/revision"
+                )
+            supplied = evidence["steps"]
+            if set(supplied) - set(steps):
+                raise _support.CombatEngineError("target_facts names an unknown targeting step")
+            for step_id, facts in supplied.items():
+                if (not isinstance(facts, dict) or set(facts) != {"source_actor_id", "targets"}
+                        or facts.get("source_actor_id") != source_actor_id
+                        or not isinstance(facts.get("targets"), dict)):
+                    raise _support.CombatEngineError("target_facts must bind source and targets")
+                arguments = steps[step_id]["args"]
+                for target_id, value in facts["targets"].items():
+                    if (not isinstance(value, dict) or not value
+                            or set(value) - {"visible", "distance_ft"}
+                            or ("visible" in value and type(value["visible"]) is not bool)
+                            or ("distance_ft" in value and (
+                                type(value["distance_ft"]) is not int or value["distance_ft"] < 0
+                            ))):
+                        raise _support.CombatEngineError("invalid semantic target fact")
+                    targets = arguments.get("target_ids")
+                    if isinstance(targets, list) and all(isinstance(t, str) for t in targets):
+                        if target_id not in targets:
+                            raise _support.CombatEngineError(
+                                "target fact is outside the bound step"
+                            )
+                    self.require_campaign_actor(campaign_id, target_id)
+                    self.require_encounter_combatant(encounter, target_id, role="target fact")
+        # Detect missing evidence before the source activity charges its action/resources.
+        for step_id, step in steps.items():
+            arguments = step["args"]
+            targets = arguments.get("target_ids")
+            if not isinstance(targets, list) or not all(isinstance(t, str) for t in targets):
+                continue  # Result references are checked against actual facts during execution.
+            facts = supplied.get(step_id, {}).get("targets", {})
+            for target_id in targets:
+                combatant = self.require_encounter_combatant(
+                    encounter, target_id, role="semantic targeting evidence",
+                )
+                required = []
+                if arguments.get("require_visible") and not isinstance(
+                    combatant.get("visible_to_actor_ids"), list,
+                ) and "visible" not in facts.get(target_id, {}):
+                    required.append("visible")
+                if (encounter.get("positioning_mode") == "agent"
+                        and arguments.get("maximum_range_ft") is not None
+                        and "distance_ft" not in facts.get(target_id, {})):
+                    required.append("distance_ft")
+                if required:
+                    raise _support.NeedsRulingError(
+                        "semantic targeting requires scene-bound target_facts",
+                        missing=tuple(
+                            f"target_facts:{step_id}:{target_id}:{key}" for key in required
+                        ),
+                        ruling_kind="source_or_scene_fact",
+                    )
 
     def require_agent_resolution_payment(
         self,

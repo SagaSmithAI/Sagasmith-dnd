@@ -41,6 +41,41 @@ must be replaced by the actual reviewed source when authoring real content.
 The actor must own the recorded resource and activity; Runtime requires the normal
 paid action commitment before execution. A later failure rolls back earlier steps.
 
+### Target facts for semantic plans
+
+`target.validate` never assumes visibility when evidence is absent. Grid range
+uses recorded coordinates. Agent positioning uses reviewed distance facts without
+creating coordinates. Bind these facts in the source-bound `agent_ruling` of the
+paid commitment (the IDs below are placeholders):
+
+```json
+{
+  "target_facts": {
+    "encounter_id": "encounter-id",
+    "scene_id": "scene-id",
+    "campaign_revision": 12,
+    "steps": {
+      "validate-target": {
+        "source_actor_id": "caster-id",
+        "targets": {"target-id": {"visible": true, "distance_ft": 15}}
+      }
+    }
+  }
+}
+```
+
+Each step key must name a bound `target.validate` step; targets and source must
+match its actor bindings. Visibility is boolean and distance is a nonnegative
+integer in feet. Runtime validates scene, encounter and revision before payment.
+Settlement accepts that same commitment after the payment's single revision
+increment. Further writes require fresh facts and the normal payment contract;
+do not silently change a paid commitment. Missing facts produce `pending_ruling`.
+Facts are included in the bound-plan fingerprint and cannot alter executable
+steps, bypass known invisibility, or override grid distances.
+
+Semantic `attack.resolve` persists concentration saves in encounter pending
+windows together with damage. A later plan failure rolls back both.
+
 ## 3. Compose packages without global side effects
 
 Use package-qualified rule IDs, effect IDs, counter keys and link kinds, such as
