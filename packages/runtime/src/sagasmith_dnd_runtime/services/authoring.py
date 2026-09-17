@@ -1590,6 +1590,11 @@ class AuthoringService:
         write), not the campaign revision, and idempotency_key. progress is an
         integer. Record observed play only; a progress write does not resolve an
         encounter, create actors, or prove that a scene objective was achieved.
+        Set status="current" when the party actually enters this scene; only
+        that status selects module_query(view="current"). "in_progress" records
+        unfinished work but does not select the current scene. Read progress to
+        recover a known location when no current pointer exists, then select that
+        source scene explicitly. Never invent a scene because current is null.
         """
         self.access.require_campaign(campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES)
         if expected_state_version is None or not idempotency_key:
@@ -2503,6 +2508,9 @@ class AuthoringService:
         unchanged for source-bound actions; never reconstruct IDs or checksums.
         List results support top-level query, limit and cursor. scope_id defaults
         to party. A missing current scene is not permission to invent module facts.
+        current selects only status="current"; progress includes in_progress
+        records. Use module_set_progress(status="current") to select the actual
+        current location. index has no chapter_id filter; follow its scene IDs.
         """
         data = self.facade_payload(payload)
         if view == "list":

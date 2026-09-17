@@ -5,9 +5,11 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
+from jsonschema import validate
 from mcp.server.mcpserver.exceptions import ToolError
 from sagasmith_dnd.character_schema import default_character_sheet
 from sagasmith_dnd_runtime.operations import RequestIdentity
+from sagasmith_dnd_runtime.result_contracts import tool_output_schema
 
 from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.server import close_server, create_server
@@ -106,6 +108,12 @@ def test_scene_hazard_save_validates_evidence_before_draw_and_replays(
             before = await call(server, "campaign_query", {
                 "view": "get", "payload": {"campaign_id": cid},
             })
+            # A player/DM may inspect combat state after returning to Play.
+            # Read-only audit access must not force a new combat to be opened.
+            await call(server, "combat_query", {"campaign_id": cid, "view": "status"})
+            assert await call(server, "campaign_query", {
+                "view": "get", "payload": {"campaign_id": cid},
+            }) == before
             # Read-only source discovery stays available during play; Pack
             # mutations retain their Lobby boundary even with a stable catalog.
             await call(server, "content_pack", {
@@ -132,6 +140,7 @@ def test_scene_hazard_save_validates_evidence_before_draw_and_replays(
                     "view": "get", "payload": {"campaign_id": cid},
                 }) == before
             result = await call(server, "character_check", args)
+            validate(result, tool_output_schema("character_check"))
             assert result["status"] == "committed"
             assert result["random_stream_receipt"]["draw_count"] >= 1
             assert result["scene_save_source"]["save_effect_conditions"] == [condition]

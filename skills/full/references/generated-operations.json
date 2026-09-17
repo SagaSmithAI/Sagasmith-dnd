@@ -3368,7 +3368,7 @@
     }
   },
   {
-    "description": "Resolve a check or bounded source feature in the Play phase.\n\ncheck payload: {actor_id, kind, ability, dc?, bonus?, advantage?,\ndisadvantage?, proficient?, rule_facts?}. For skills use ability=\"stealth\"\n(or another skill name), not ability=\"dexterity\" plus a skill field.\nFor a skill check use kind=\"check\" and ability=\"stealth\" (for example).\nkind is ability/check/save/death_save, never skill. Skill\nproficiency/expertise comes from the actor; do not add it manually.\nRequires campaign revision, branch_id and idempotency_key.\nscene_save resolves a DM-classified module hazard with exact active\nsource_ref/source_excerpt, reason, save_source_kind, save_effect_conditions\nand save_against_poison. source_ref is the complete object returned by\nmodule_expand (including chunk_id, checksum and location fields), not a\nstring. Copy it verbatim; do not guess hashes or rebuild a partial object.\nIt rolls the save only; settle its consequences\nseparately. Spell/card saves must use their paid source executor.",
+    "description": "Resolve a check or bounded source feature in the Play phase.\n\ncheck payload: {actor_id, kind, ability, dc?, bonus?, advantage?,\ndisadvantage?, proficient?, rule_facts?}. For skills use ability=\"stealth\"\n(or another skill name), not ability=\"dexterity\" plus a skill field.\nFor a skill check use kind=\"check\" and ability=\"stealth\" (for example).\nkind is ability/check/save/death_save, never skill. Skill\nproficiency/expertise comes from the actor; do not add it manually.\nRequires campaign revision, branch_id and idempotency_key.\nscene_save resolves a DM-classified module hazard with exact active\nsource_ref/source_excerpt, reason, save_source_kind, save_effect_conditions\nand save_against_poison. source_ref is the complete object returned by\nmodule_expand (including chunk_id, checksum and location fields), not a\nstring. Copy it verbatim; do not guess hashes or rebuild a partial object.\nsource_excerpt must be a contiguous verbatim passage from that chunk;\npreserve OCR spelling and parenthetical text. Use the shortest passage\ncontaining the save clause. save_effect_conditions is a list of D&D\ncondition IDs, e.g. [\"restrained\"] or [], never outcome prose or damage.\nIt rolls the save only; settle its consequences\nseparately. Spell/card saves must use their paid source executor.",
     "error_envelope": {
       "fields": [
         "code",
@@ -3974,8 +3974,8 @@
         {
           "required": [
             "status",
-            "action",
-            "result"
+            "result",
+            "campaign_revision"
           ]
         },
         {
@@ -5315,7 +5315,7 @@
     }
   },
   {
-    "description": "Apply one noncombat character state transition with its D&D-specific validation.",
+    "description": "Apply a noncombat character transition; expected_revision is the actor revision.\n\ndamage payload={parts:[{amount:1,damage_type:\"bludgeoning\"}],\ncritical?:bool,knock_out?:bool,melee?:bool}. Do not use a top-level amount\nfor damage or open combat just to settle a trap/fall. heal uses {amount}.\neffect_add uses {effect}; effect_remove uses {effect_id}; resource_set\nuses {resource,value}; exhaustion_set uses {value}. Keep one stable\nidempotency_key per intended transition and copy its new actor revision.",
     "error_envelope": {
       "fields": [
         "code",
@@ -9776,13 +9776,15 @@
       "type": "object"
     },
     "phases": [
-      "combat"
+      "combat",
+      "play"
     ],
     "read_only": true,
     "requires_campaign": true,
     "revision_fields": [],
     "roles": {
-      "combat": []
+      "combat": [],
+      "play": []
     }
   },
   {
@@ -16775,7 +16777,7 @@
     }
   },
   {
-    "description": "Read installed module state; campaign_id is a top-level argument.\n\npayload by view: list {}; index {module_id?}; current {scope_id?};\nscene {scene_id, scope_id?}; progress {module_id?, scope_id?};\npreflight {scene_id, participant_manifest}; assets/candidates {module_id};\nactors {module_id, scene_id?, binding_kind?}; content {review_id} or\n{module_id, content_kind?, content_key?}. content reads materialization\nreviews, not source prose. For prose, read scene, then module_expand\nwith its returned chunk_id. Copy the complete returned source_ref\nunchanged for source-bound actions; never reconstruct IDs or checksums.\nList results support top-level query, limit and cursor. scope_id defaults\nto party. A missing current scene is not permission to invent module facts.",
+    "description": "Read installed module state; campaign_id is a top-level argument.\n\npayload by view: list {}; index {module_id?}; current {scope_id?};\nscene {scene_id, scope_id?}; progress {module_id?, scope_id?};\npreflight {scene_id, participant_manifest}; assets/candidates {module_id};\nactors {module_id, scene_id?, binding_kind?}; content {review_id} or\n{module_id, content_kind?, content_key?}. content reads materialization\nreviews, not source prose. For prose, read scene, then module_expand\nwith its returned chunk_id. Copy the complete returned source_ref\nunchanged for source-bound actions; never reconstruct IDs or checksums.\nList results support top-level query, limit and cursor. scope_id defaults\nto party. A missing current scene is not permission to invent module facts.\ncurrent selects only status=\"current\"; progress includes in_progress\nrecords. Use module_set_progress(status=\"current\") to select the actual\ncurrent location. index has no chapter_id filter; follow its scene IDs.",
     "error_envelope": {
       "fields": [
         "code",
@@ -17213,7 +17215,7 @@
     }
   },
   {
-    "description": "Persist scoped progress or a source-backed visual atlas review.\n\nRequires expected_state_version from scene progress (0 for its first\nwrite), not the campaign revision, and idempotency_key. progress is an\ninteger. Record observed play only; a progress write does not resolve an\nencounter, create actors, or prove that a scene objective was achieved.",
+    "description": "Persist scoped progress or a source-backed visual atlas review.\n\nRequires expected_state_version from scene progress (0 for its first\nwrite), not the campaign revision, and idempotency_key. progress is an\ninteger. Record observed play only; a progress write does not resolve an\nencounter, create actors, or prove that a scene objective was achieved.\nSet status=\"current\" when the party actually enters this scene; only\nthat status selects module_query(view=\"current\"). \"in_progress\" records\nunfinished work but does not select the current scene. Read progress to\nrecover a known location when no current pointer exists, then select that\nsource scene explicitly. Never invent a scene because current is null.",
     "error_envelope": {
       "fields": [
         "code",

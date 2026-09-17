@@ -43,7 +43,7 @@ idempotency key when recovering an unknown dispatch. Never retry with a new key.
 | `combat_map_patch` | combat | expected_revision | True |
 | `combat_movement` | combat | expected_revision | True |
 | `combat_preflight_attack` | combat | — | False |
-| `combat_query` | combat | — | True |
+| `combat_query` | combat, play | — | True |
 | `combat_reaction_attack` | combat | expected_revision | True |
 | `combat_ready` | combat | expected_revision | True |
 | `combat_resolve_attack` | combat | expected_revision | True |
@@ -312,6 +312,10 @@ source_ref/source_excerpt, reason, save_source_kind, save_effect_conditions
 and save_against_poison. source_ref is the complete object returned by
 module_expand (including chunk_id, checksum and location fields), not a
 string. Copy it verbatim; do not guess hashes or rebuild a partial object.
+source_excerpt must be a contiguous verbatim passage from that chunk;
+preserve OCR spelling and parenthetical text. Use the shortest passage
+containing the save clause. save_effect_conditions is a list of D&D
+condition IDs, e.g. ["restrained"] or [], never outcome prose or damage.
 It rolls the save only; settle its consequences
 separately. Spell/card saves must use their paid source executor.
 
@@ -424,7 +428,14 @@ Exact input schema (copy field names and nesting):
 
 ## character_state_change
 
-Apply one noncombat character state transition with its D&D-specific validation.
+Apply a noncombat character transition; expected_revision is the actor revision.
+
+damage payload={parts:[{amount:1,damage_type:"bludgeoning"}],
+critical?:bool,knock_out?:bool,melee?:bool}. Do not use a top-level amount
+for damage or open combat just to settle a trap/fall. heal uses {amount}.
+effect_add uses {effect}; effect_remove uses {effect_id}; resource_set
+uses {resource,value}; exhaustion_set uses {value}. Keep one stable
+idempotency_key per intended transition and copy its new actor revision.
 
 Phases: lobby, play
 
@@ -626,7 +637,7 @@ available_actions and reactions require top-level actor_id, not payload.
 status needs only campaign_id. transaction_receipt requires
 payload={idempotency_key, branch_id?}; render accepts audience_projection.
 
-Phases: combat
+Phases: combat, play
 
 Exact input schema (copy field names and nesting):
 
@@ -974,6 +985,9 @@ with its returned chunk_id. Copy the complete returned source_ref
 unchanged for source-bound actions; never reconstruct IDs or checksums.
 List results support top-level query, limit and cursor. scope_id defaults
 to party. A missing current scene is not permission to invent module facts.
+current selects only status="current"; progress includes in_progress
+records. Use module_set_progress(status="current") to select the actual
+current location. index has no chapter_id filter; follow its scene IDs.
 
 Phases: combat, lobby, play
 
@@ -1003,6 +1017,11 @@ Requires expected_state_version from scene progress (0 for its first
 write), not the campaign revision, and idempotency_key. progress is an
 integer. Record observed play only; a progress write does not resolve an
 encounter, create actors, or prove that a scene objective was achieved.
+Set status="current" when the party actually enters this scene; only
+that status selects module_query(view="current"). "in_progress" records
+unfinished work but does not select the current scene. Read progress to
+recover a known location when no current pointer exists, then select that
+source scene explicitly. Never invent a scene because current is null.
 
 Phases: lobby, play
 

@@ -34,8 +34,12 @@ def tool_output_schema(tool: str) -> dict[str, Any]:
         },
     }
     required: list[str] = []
-    if tool in {"combat_choice", "combat_ready", "combat_hp_change", "combat_movement",
-                "character_check", "resolution_presentation"}:
+    if tool == "character_check":
+        # All check actions return the resolution directly, not a facade action envelope.
+        properties["result"] = {"type": "object"}
+        required = ["status", "result", "campaign_revision"]
+    elif tool in {"combat_choice", "combat_ready", "combat_hp_change", "combat_movement",
+                  "resolution_presentation"}:
         properties["result"] = {"type": "object"}
         required = ["status", "action", "result"]
     elif tool in {"combat_check", "combat_cast_spell", "combat_resolve_attack"}:
@@ -82,5 +86,16 @@ def tool_output_schema(tool: str) -> dict[str, Any]:
         "additionalProperties": True,
     }
     if required:
-        schema["anyOf"] = [{"required": required}, {"required": ["error"]}]
+        schema["anyOf"] = [
+            {"required": required},
+            {"required": ["error"]},
+            {
+                "required": ["status", "ruling_kind", "default_resolver"],
+                "properties": {
+                    "status": {"const": "pending_ruling"},
+                    "ruling_kind": {"type": "string", "minLength": 1},
+                    "default_resolver": {"enum": ["agent", "external_input"]},
+                },
+            },
+        ]
     return schema

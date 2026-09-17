@@ -4804,6 +4804,10 @@ boundary.
         and save_against_poison. source_ref is the complete object returned by
         module_expand (including chunk_id, checksum and location fields), not a
         string. Copy it verbatim; do not guess hashes or rebuild a partial object.
+        source_excerpt must be a contiguous verbatim passage from that chunk;
+        preserve OCR spelling and parenthetical text. Use the shortest passage
+        containing the save clause. save_effect_conditions is a list of D&D
+        condition IDs, e.g. ["restrained"] or [], never outcome prose or damage.
         It rolls the save only; settle its consequences
         separately. Spell/card saves must use their paid source executor.
         """
@@ -6488,7 +6492,15 @@ boundary.
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Apply one noncombat character state transition with its D&D-specific validation."""
+        """Apply a noncombat character transition; expected_revision is the actor revision.
+
+        damage payload={parts:[{amount:1,damage_type:"bludgeoning"}],
+        critical?:bool,knock_out?:bool,melee?:bool}. Do not use a top-level amount
+        for damage or open combat just to settle a trap/fall. heal uses {amount}.
+        effect_add uses {effect}; effect_remove uses {effect_id}; resource_set
+        uses {resource,value}; exhaustion_set uses {value}. Keep one stable
+        idempotency_key per intended transition and copy its new actor revision.
+        """
         data = self.facade_payload(payload)
         if action == "effect_add":
             result = self.character_effect_add(

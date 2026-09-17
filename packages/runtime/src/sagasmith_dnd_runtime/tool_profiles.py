@@ -75,7 +75,8 @@ PHASE_TOOLS = {
         addon_actor_instantiate bounded_evaluation
         branch_query campaign_change campaign_event campaign_rules character_action
         character_check character_content_apply character_metadata_update
-        character_query character_state_change chase combat_start content_pack content_solution
+        character_query character_state_change chase combat_query combat_start
+        content_pack content_solution
         continuity_context dnd_ability_roll dnd_check dnd_dice_roll inventory_change
         inventory_transfer memory_change memory_query module_expand module_query module_search
         module_set_progress npc_conversation playthrough_manifest rule_expand rule_search

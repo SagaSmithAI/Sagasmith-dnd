@@ -1241,6 +1241,8 @@ class PresentationService:
         an exact Markdown heading from outline, not a JSON key. For tool help,
         search generated-operations.md, then read the matching Markdown section.
         """
+        identifier = identifier.strip() or None if identifier is not None else None
+        source = source.strip() or None if source is not None else None
         if action == "outline":
             result = self.catalog.outline(
                 kind=kind,
