@@ -191,6 +191,13 @@ party_rest payload: {members:[{character_id, expected_revision}],
 rest_type:"long_rest"|"short_rest", duration_minutes}. Each member uses
 its actor revision; top-level expected_revision is the campaign revision.
 Optional member rest choices are documented in runtime-workflows.md.
+In 2014, spend at most one initial Hit Die per member, then inspect its
+roll before deciding on another. short_rest_hit_die payload requires
+{character_id,expected_character_revision,decision:"spend"|"stop",
+rest_completed_elapsed_ticks,hit_die_key?}. Use the completed rest's
+actual elapsed ticks and the actor's exact Hit Die pool key; hit_die_key
+is required for spend and omitted for stop. Top-level expected_revision
+is the current campaign revision. Each new decision gets a new key.
 For live prepared-spell changes, put prepared_spell_ids on that member
 in a legal long_rest; returning to Lobby does not reopen initial setup.
 clock_advance payload={period, count?, expected_elapsed_ticks?}. period is

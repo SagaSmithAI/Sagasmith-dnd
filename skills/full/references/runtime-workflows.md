@@ -2,6 +2,21 @@
 
 ## Invariants
 
+### 2014 short-rest Hit Dice
+
+Spend at most one initial Hit Die per member in `party_rest`. Inspect the actual
+healing roll before choosing another die. Then call
+`campaign_change(action="short_rest_hit_die")` with payload
+`{character_id, expected_character_revision, decision:"spend"|"stop",
+rest_completed_elapsed_ticks, hit_die_key?}`. Copy the completed rest's elapsed
+ticks and the exact actor Hit Die pool key from receipts. Include `hit_die_key`
+for `spend`; omit it for `stop`. The top-level `expected_revision` is the current
+campaign revision. Use one new idempotency key per decision, reusing it only to
+retry that same decision. Do not advance the clock or precommit multiple dice
+between these choices.
+
+### Shared authority
+
 - UI and Agent share the same revision and authority boundary. Refresh state
   after a revision conflict. For a paid semantic plan, refresh only target facts
   and omit the old bound fingerprint; preserve its application, plan, bindings,
