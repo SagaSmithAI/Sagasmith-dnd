@@ -2436,6 +2436,13 @@ def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
         path = change["path"]
         mode = change["mode"]
         change_value = change["value"]
+        if path in {"traits.resistances", "traits.immunities", "traits.vulnerabilities"}:
+            if (
+                mode != "add"
+                or not isinstance(change_value, str)
+                or change_value not in DAMAGE_TYPES
+            ):
+                raise ValueError(f"{field} {path} requires add with a canonical damage type")
         if path in {
             "combat.hp.maximum_multiplier",
             "combat.hp.current_multiplier_on_apply",
@@ -4614,6 +4621,10 @@ def _derive_armor_class(
                     or change["value"] < 0
                 ):
                     unresolved_effects.add(effect["id"])
+                continue
+            if change["path"] in {
+                "traits.resistances", "traits.immunities", "traits.vulnerabilities"
+            }:
                 continue
             if change["path"] not in {"derived.armor_class", "combat.ac"}:
                 unresolved_effects.add(effect["id"])

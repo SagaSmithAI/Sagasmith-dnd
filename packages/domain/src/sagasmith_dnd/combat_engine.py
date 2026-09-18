@@ -5189,6 +5189,19 @@ def _adjust_damage_amount(
         for item_id, values in item_sources[defense].items()
         if normalized in values
     ]
+    # Temporary defenses belong to the effect ledger, not permanent traits.
+    # The lifecycle deactivates expired effects; sets avoid multiplying duplicate
+    # grants while preserving each contributing source in the damage receipt.
+    for effect in sheet.get("effects", []):
+        if not isinstance(effect, dict) or not effect.get("active"):
+            continue
+        for change in effect.get("changes", []):
+            if change.get("mode") != "add" or change.get("value") != normalized:
+                continue
+            for defense, values in defenses.items():
+                if change.get("path") == f"traits.{defense}":
+                    values.add(normalized)
+                    active_sources.append(f"effect:{effect.get('id', '')}")
     if normalized == "poison" and sheet_is_petrified(sheet):
         active_sources.append("condition:petrified")
         return raw, 0, normalized, "immune", active_sources

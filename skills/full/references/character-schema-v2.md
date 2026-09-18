@@ -280,8 +280,14 @@ otherwise armor or `combat.ac.base`; then shield, equipped magic-item AC bonuses
 and supported active effects. `derived.armor_class_breakdown` explains every
 applied source. A supported effect change uses
 `{ "path": "derived.armor_class", "mode": "add|override", "value": <integer> }`.
-Other effect changes remain in `derived.unresolved_rules` for Agent-performed
-DM adjudication.
+Temporary damage defenses use a typed change such as
+`{"path":"traits.vulnerabilities","mode":"add","value":"necrotic"}`.
+The same contract accepts `traits.resistances` and `traits.immunities`, with one
+canonical damage type per change. These affect damage only while the effect is
+active; duplicate grants do not stack. Use the effect's duration for expiry,
+without modifying permanent traits. An event description alone does not apply
+the defense. Unsupported effect changes remain in `derived.unresolved_rules`
+for Agent-performed DM adjudication.
 
 Actor effects remain in `sheet.effects`. Effects attached to a room, object,
 scene, or the campaign instead live in `campaign.state.world_effects` and are
