@@ -1328,6 +1328,34 @@ def test_encounter_positioning_modes_are_explicit_engine_state() -> None:
         )
 
 
+@pytest.mark.parametrize("condition", ["prone", "unconscious", "paralyzed"])
+def test_agent_attack_requires_explicit_condition_distance(condition: str) -> None:
+    attacker = _actor("attacker")
+    target = _actor("target")
+    target["sheet"]["conditions"] = [condition]
+    target["derived"] = derive_character_sheet(target["sheet"])
+    attacker["initiative"] = 20
+    target["initiative"] = 10
+    encounter = start_encounter([attacker, target], positioning_mode="agent")
+    facts = {
+        "decision_id": "condition-distance", "reason": "Target is visible; distance needs ruling.",
+        "targetable": True, "in_range": True, "cover_degree": "none",
+        "attacker_can_see_target": True, "target_can_see_attacker": False,
+    }
+    action = {"weapon_id": "unarmed-strike", "context": {"spatial_facts": facts}}
+    with pytest.raises(NeedsRulingError, match="target_within_5_ft"):
+        preflight_attack(attacker, target, action=action, encounter=encounter)
+    facts["target_within_5_ft"] = True
+    near = preflight_attack(attacker, target, action=action, encounter=encounter)
+    assert near["advantage"] is True
+    assert near["automatic_critical_on_hit"] is (condition != "prone")
+    facts["target_within_5_ft"] = False
+    far = preflight_attack(attacker, target, action=action, encounter=encounter)
+    assert far["automatic_critical_on_hit"] is False
+    if condition in {"prone", "unconscious"}:
+        assert "target_prone_beyond_5_ft" in far["disadvantage_sources"]
+
+
 def test_agent_positioned_attack_requires_and_consumes_structured_spatial_facts() -> None:
     attacker = _actor("attacker")
     target = _actor("target")

@@ -3176,6 +3176,16 @@ def preflight_attack(
             )
         )
     distance = range_result.get("distance_ft")
+    if (
+        spatial_facts is not None
+        and target_conditions & {"prone", "paralyzed", "unconscious"}
+        and not isinstance(spatial_facts.get("target_within_5_ft"), bool)
+    ):
+        raise NeedsRulingError(
+            "target_within_5_ft must be an explicit boolean for this target's conditions",
+            missing=["attack.spatial_facts.target_within_5_ft"],
+            ruling_kind="agent_dm_adjudication",
+        )
     target_within_5_ft = (
         bool(spatial_facts.get("target_within_5_ft"))
         if spatial_facts is not None
