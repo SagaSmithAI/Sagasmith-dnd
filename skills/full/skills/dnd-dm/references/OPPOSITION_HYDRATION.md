@@ -9,9 +9,16 @@ Do not treat that gap alone as proof that the active Pack needs a new review.
 1. Move to `lobby` before authoring or actor creation. Use `rule_search`,
    `rule_seed_status`, `rulebook_draft`, `character_create_from`, and module
    authoring tools from the public catalog only as needed.
-2. Re-read `character_query(view="list")`. Reuse every existing actor whose
-   returned `statblock.source_identity` matches the required printed card, and
-   create only the exact shortfall.
+2. Re-read `character_query(view="list")`. A matching
+   `statblock.source_identity` establishes the mechanical card, not the identity
+   of an individual creature. Reuse an actor only when the encounter record or
+   established campaign events identify that same individual at this location.
+   Otherwise create distinct instances for the source encounter's occupants,
+   reusing the reviewed card rather than the actor ids. Give each instance a
+   location-specific name and retain its actor id in the participant manifest.
+   Never move, heal, resurrect, or duplicate an existing individual merely to
+   fill a new encounter's count. A recurring creature retains its actual wounds
+   and other state; a relocation needs established narrative evidence.
 3. Search the exact printed creature identity first with only `campaign_id`,
    `query`, and optional `top_k`. Campaign binding already scopes the default
    edition, locale, and enabled sources. If a filtered search misses, retry this

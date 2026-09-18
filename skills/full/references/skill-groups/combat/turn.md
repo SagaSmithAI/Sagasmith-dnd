@@ -14,6 +14,13 @@ These groups describe module participants, not a required player count. Supply
 PCs separately in the opening `participant_ids` alongside initial combatants.
 Do not label opening enemies as reinforcements merely to pass validation.
 
+Bind individual occupants, not just matching statblocks. Two rooms containing
+the same creature type normally require different actor instances. Reuse an
+existing actor id only with evidence that this same individual is present here;
+retain its actual wounds and history. Reuse the content review for new instances
+without repeating the card review. Preflight validates the supplied manifest;
+it does not prove an Agent's unstated relocation or individual identity claim.
+
 ```json
 {
   "schema_version": 1,
