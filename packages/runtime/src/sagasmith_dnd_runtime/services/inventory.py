@@ -1598,8 +1598,15 @@ class InventoryService:
         campaign_query(get/resume) or character_query(get) for a missing revision.
         Module-authored loot parcels use campaign_change(action="loot_acquire")
         with their exact source evidence rather than separate manual credits.
+        Prefer payload={detail:"summary"} to retain wallet results and affected
+        entity ids/revisions without full campaign history or character sheets.
+        Omit detail or use "full" for the complete response. Detail changes only
+        response projection; replaying the same idempotency key never pays twice.
         """
         data = self.facade_payload(payload)
+        detail = data.get("detail", "full")
+        if detail not in {"full", "summary"}:
+            raise ValueError("wallet detail must be full or summary")
         if action == "adjust":
             result = (
                 self.character_wallet_adjust(
@@ -1625,4 +1632,12 @@ class InventoryService:
                 self.required(data, "expected_character_revision"),
                 idempotency_key,
             )
+        if detail == "summary":
+            result = dict(result)
+            for key in ("campaign", "character"):
+                entity = result.get(key)
+                if isinstance(entity, dict):
+                    result[key] = {
+                        field: entity[field] for field in ("id", "revision") if field in entity
+                    }
         return self.facade_result(action, result)

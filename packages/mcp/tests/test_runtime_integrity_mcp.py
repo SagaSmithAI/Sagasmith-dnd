@@ -1246,6 +1246,16 @@ def test_party_wallet_transfer_is_one_undoable_and_idempotent(tmp_path: Path) ->
         first = await call(server, "wallet_change", args)
         replay = await call(server, "wallet_change", args)
         assert replay == first
+        compact = await call(server, "wallet_change", {
+            **args, "payload": {**args["payload"], "detail": "summary"},
+        })
+        for key in ("campaign", "character"):
+            if key in first:
+                assert compact[key] == {field: first[key][field] for field in ("id", "revision")}
+        assert {k: v for k, v in compact.items() if k not in {"campaign", "character"}} == {
+            k: v for k, v in first.items() if k not in {"campaign", "character"}
+        }
+        assert await call(server, "wallet_change", args) == first
         history = await call(
             server,
             "state_revision",

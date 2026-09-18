@@ -1351,6 +1351,10 @@ top-level expected_revision of that owner and idempotency_key. Use
 campaign_query(get/resume) or character_query(get) for a missing revision.
 Module-authored loot parcels use campaign_change(action="loot_acquire")
 with their exact source evidence rather than separate manual credits.
+Prefer payload={detail:"summary"} to retain wallet results and affected
+entity ids/revisions without full campaign history or character sheets.
+Omit detail or use "full" for the complete response. Detail changes only
+response projection; replaying the same idempotency key never pays twice.
 
 Phases: lobby, play
 

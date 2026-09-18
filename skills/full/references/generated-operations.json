@@ -21315,7 +21315,7 @@
     }
   },
   {
-    "description": "Adjust a wallet or transfer money through the party with all affected revisions.\n\nowner=party means owner_id is the campaign UUID, never the string party;\nowner=character means owner_id is the character UUID. adjust requires\ntop-level expected_revision of that owner and idempotency_key. Use\ncampaign_query(get/resume) or character_query(get) for a missing revision.\nModule-authored loot parcels use campaign_change(action=\"loot_acquire\")\nwith their exact source evidence rather than separate manual credits.",
+    "description": "Adjust a wallet or transfer money through the party with all affected revisions.\n\nowner=party means owner_id is the campaign UUID, never the string party;\nowner=character means owner_id is the character UUID. adjust requires\ntop-level expected_revision of that owner and idempotency_key. Use\ncampaign_query(get/resume) or character_query(get) for a missing revision.\nModule-authored loot parcels use campaign_change(action=\"loot_acquire\")\nwith their exact source evidence rather than separate manual credits.\nPrefer payload={detail:\"summary\"} to retain wallet results and affected\nentity ids/revisions without full campaign history or character sheets.\nOmit detail or use \"full\" for the complete response. Detail changes only\nresponse projection; replaying the same idempotency key never pays twice.",
     "error_envelope": {
       "fields": [
         "code",
