@@ -30,6 +30,13 @@ Do not label opening enemies as reinforcements merely to pass validation.
 
 ## Current turn
 
+First aid uses `combat_check(kind="stabilize", ability="medicine", target_id=...)`:
+Runtime spends one action, rolls the DC 10 Medicine check, and applies stability
+on success in one transaction. Do not first pay `combat_common_action(stabilize)`
+or use `combat_hp_change` with a generic rules excerpt. In Agent positioning,
+also supply top-level `spatial_facts={decision_id, reason, within_5_ft:true}` based
+on the actual scene; move into reach first if needed. Grid mode uses positions.
+
 Read `combat_query(view="status")` after a turn mismatch; the actor at
 `combatants[turn_index]` is current. Dead actors may already have been skipped by
 the engine. Do not call end-turn on them again or cycle through guessed actor ids.

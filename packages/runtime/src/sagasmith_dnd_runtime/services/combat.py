@@ -6193,12 +6193,20 @@ class CombatService:
         advantage: _support.StrictBool = False,
         disadvantage: _support.StrictBool = False,
         rule_facts: dict[str, Any] | None = None,
+        spatial_facts: dict[str, Any] | None = None,
         principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
         expected_revision: int | None = None,
         branch_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Resolve a check/save/death-save or an atomic Medicine stabilization."""
+        """Resolve a check/save/death-save or an atomic Medicine stabilization.
+
+        kind=stabilize pays the action and rolls DC10 Medicine atomically. In
+        Agent positioning supply spatial_facts={decision_id,reason,within_5_ft:true}.
+        Grid positioning uses recorded positions. Do not prepay common_action.
+        """
+        if spatial_facts is not None and kind != "stabilize":
+            raise _support.CombatEngineError("spatial_facts is accepted only for stabilization")
         proficient = _support._strict_boolean(proficient, "proficient")
         advantage = _support._strict_boolean(advantage, "advantage")
         disadvantage = _support._strict_boolean(disadvantage, "disadvantage")
@@ -6344,6 +6352,7 @@ class CombatService:
             "advantage": advantage,
             "disadvantage": disadvantage,
             "rule_facts": settlement_facts,
+            **({"spatial_facts": spatial_facts} if spatial_facts is not None else {}),
             "branch_id": resolved_branch_id,
         }
         scope = f"combat-check:{campaign_id}:{resolved_branch_id}:{principal_id}"
@@ -6460,31 +6469,54 @@ class CombatService:
             target_combatant = combatants.get(target_id)
             if source_combatant is None or target_combatant is None:
                 raise _support.CombatEngineError("both actors must be present in the encounter")
-            source_position = source_combatant.get("position")
-            target_position = target_combatant.get("position")
-            if not (
-                isinstance(source_position, dict)
-                and isinstance(target_position, dict)
-                and "x" in source_position
-                and "y" in source_position
-                and "x" in target_position
-                and "y" in target_position
-            ):
-                raise _support.CombatEngineError("stabilization requires recorded map positions")
-            cell_ft = int(
-                dict(dict(active.get("battle_map") or {}).get("grid") or {}).get("cell_ft", 5) or 5
-            )
-            distance = int(
-                max(
-                    abs(float(source_position["x"]) - float(target_position["x"])),
-                    abs(float(source_position["y"]) - float(target_position["y"])),
+            if active.get("positioning_mode") == "agent":
+                facts = spatial_facts
+                if (
+                    not isinstance(facts, dict)
+                    or set(facts) != {"decision_id", "reason", "within_5_ft"}
+                    or any(
+                        not isinstance(facts.get(key), str) or not facts[key].strip()
+                        for key in ("decision_id", "reason")
+                    )
+                    or not isinstance(facts.get("within_5_ft"), bool)
+                ):
+                    raise _support.CombatEngineError(
+                        "Agent stabilization spatial_facts require decision_id, reason, "
+                        "and boolean within_5_ft"
+                    )
+                if not facts["within_5_ft"]:
+                    raise _support.CombatEngineError(
+                        "stabilization requires the target to be within 5 feet"
+                    )
+            else:
+                source_position = source_combatant.get("position")
+                target_position = target_combatant.get("position")
+                if not (
+                    isinstance(source_position, dict)
+                    and isinstance(target_position, dict)
+                    and "x" in source_position
+                    and "y" in source_position
+                    and "x" in target_position
+                    and "y" in target_position
+                ):
+                    raise _support.CombatEngineError(
+                        "stabilization requires recorded map positions"
+                    )
+                cell_ft = int(
+                    dict(dict(active.get("battle_map") or {}).get("grid") or {}).get("cell_ft", 5)
+                    or 5
                 )
-                * cell_ft
-            )
-            if distance > 5:
-                raise _support.CombatEngineError(
-                    "stabilization requires the target to be within 5 feet"
+                distance = int(
+                    max(
+                        abs(float(source_position["x"]) - float(target_position["x"])),
+                        abs(float(source_position["y"]) - float(target_position["y"])),
+                    )
+                    * cell_ft
                 )
+                if distance > 5:
+                    raise _support.CombatEngineError(
+                        "stabilization requires the target to be within 5 feet"
+                    )
             stabilize_target = self.combat_actor_snapshot(target_id)
             _support.stabilize_sheet(stabilize_target["sheet"])
         if actor is None:

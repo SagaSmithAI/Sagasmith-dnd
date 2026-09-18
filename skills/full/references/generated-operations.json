@@ -6205,7 +6205,7 @@
     }
   },
   {
-    "description": "Resolve a check/save/death-save or an atomic Medicine stabilization.",
+    "description": "Resolve a check/save/death-save or an atomic Medicine stabilization.\n\nkind=stabilize pays the action and rolls DC10 Medicine atomically. In\nAgent positioning supply spatial_facts={decision_id,reason,within_5_ft:true}.\nGrid positioning uses recorded positions. Do not prepay common_action.",
     "error_envelope": {
       "fields": [
         "code",
@@ -6350,6 +6350,20 @@
           "default": null,
           "description": "Bounded rule facts value accepted by combat_check.",
           "title": "Rule Facts"
+        },
+        "spatial_facts": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Bounded spatial facts value accepted by combat_check.",
+          "title": "Spatial Facts"
         },
         "target_id": {
           "anyOf": [
