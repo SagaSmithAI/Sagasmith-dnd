@@ -6469,6 +6469,19 @@ def test_condition_saving_throw_effects_are_not_left_to_client_modifiers() -> No
     assert save["bonus"] == -4
 
 
+@pytest.mark.parametrize("kind", ["ability", "check", "save", "death_save"])
+def test_dead_actor_cannot_roll_checks(kind: str) -> None:
+    actor = _actor("dead-scout")
+    actor["sheet"]["conditions"] = ["dead", "prone"]
+    actor["sheet"]["combat"]["hp"]["value"] = 0
+    before = deepcopy(actor)
+    with pytest.raises(CombatEngineError, match="dead actors"):
+        resolve_actor_check(
+            actor, kind=kind, ability="dexterity", dc=10, rng=_SequenceRng()
+        )
+    assert actor == before
+
+
 def test_equipped_armor_automatically_imposes_stealth_disadvantage() -> None:
     actor = _actor("armored-scout")
     sheet, armor_id = add_inventory_item(

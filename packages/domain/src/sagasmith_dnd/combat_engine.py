@@ -8017,6 +8017,8 @@ def resolve_actor_check(
     normalized_ruleset = _normalize_ruleset(ruleset or sheet.get("edition"))
     conditions = _condition_set(sheet.get("conditions"))
     exhaustion = int(sheet.get("combat", {}).get("exhaustion", 0) or 0)
+    if "dead" in conditions:
+        raise CombatEngineError("dead actors cannot make checks or saving throws")
     modifier_save_purpose = save_purpose
     if modifier_save_purpose is None and rules is not None:
         modifier_save_purpose = str(dict(rules.facts).get("save_purpose") or "") or None
