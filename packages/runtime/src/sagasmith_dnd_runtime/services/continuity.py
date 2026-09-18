@@ -1672,6 +1672,11 @@ class ContinuityService:
         ``partial_renditions``, ``basis_refs``, and a scene-specific ``reason``.
         Understood and response actors must be perceived, and response actors
         must have NPC runtimes.
+        For ``action='publish'``, payload must include publication_id AND the
+        same complete audience_facts object. Use partial_renditions={} when
+        none. response_actor_ids schedules NPC workers, not the next player
+        speaker: use [] when only PCs will reply. Put listening PCs in
+        perceived_actor_ids and understood_actor_ids instead.
         All writes require payload.idempotency_key. ingest/publish/close/abort
         also require payload.conversation_id and expected_conversation_revision
         from the latest conversation receipt (not the campaign revision).
