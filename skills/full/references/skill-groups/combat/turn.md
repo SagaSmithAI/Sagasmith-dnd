@@ -1,5 +1,35 @@
 # Combat turns and choices
 
+## Source encounter preparation
+
+Before `combat_start`, validate the source encounter with
+`module_query(view="preflight", payload={scene_id, participant_manifest})`.
+The manifest's only top-level fields are `schema_version`, `groups`, and optional
+`notes`. Each group has `key`, optional `label`, `role`, positive integer
+`required_count`, `actor_ids`, `source_scene_id`, and `source_excerpt` (8–4000
+characters copied from that scene). Put evidence inside each group, not at the
+manifest root. `role="combatant"` means present at the start; `reinforcement`
+means a later arrival; `optional` means a source-supported optional group.
+These groups describe module participants, not a required player count. Supply
+PCs separately in the opening `participant_ids` alongside initial combatants.
+Do not label opening enemies as reinforcements merely to pass validation.
+
+```json
+{
+  "schema_version": 1,
+  "groups": [{
+    "key": "guards",
+    "role": "combatant",
+    "required_count": 2,
+    "actor_ids": ["<first prepared actor id>", "<second prepared actor id>"],
+    "source_scene_id": "<encounter scene id>",
+    "source_excerpt": "<exact source sentence requiring these two guards>"
+  }]
+}
+```
+
+## Current turn
+
 Read `combat_query(view="status")` after a turn mismatch; the actor at
 `combatants[turn_index]` is current. Dead actors may already have been skipped by
 the engine. Do not call end-turn on them again or cycle through guessed actor ids.
