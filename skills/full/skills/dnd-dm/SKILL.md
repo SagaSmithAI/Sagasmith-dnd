@@ -42,6 +42,15 @@ idempotency, source validation, and transactions remain authoritative.
 
 Use `skill_query(action="search"|"section")` for these deep references; do not
 load a whole large document by default.
+Use `kind="asset"` for referenced documents; `kind="skill"` searches the Skill
+entry itself. For a tool's documentation, section-read
+`dnd:full/references/generated-operations.md` with `heading` equal to its tool
+name. Combat procedure lives at
+`dnd:full/references/skill-groups/combat/turn.md`.
+Search line numbers refer to the source document, not a Host spill file. A
+spilled JSON envelope can contain that document as one escaped string: do not
+pass source line numbers to `read_file` on the envelope. Request the matching
+section through `skill_query` instead.
 
 ## Keep the adjudication boundary explicit
 
