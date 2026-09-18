@@ -98,7 +98,12 @@ instances and retry only missing ones using their original operation keys.
 1. When the exact creature exists only in the active module, inspect the
    current Pack's immutable content reviews. Use
    `character_create_from(mode="module_statblock")` only with the returned
-   `review_id`, and pass the exact printed card as `payload.source_identity`.
+   `review_id`, and pass the card's exact printed creature name as the string
+   `payload.source_identity` (for example `"Redbrand Ruffian"`), not the card
+   text or a source-reference object. Use `payload.name` for the distinct
+   instance name. A review id is never a source chunk id. The
+   `reviewed_rule_statblock` mode instead requires a rulebook job; it is not
+   the module-review route.
 2. For an already installed module missing a review, use
    `module_query(view="candidates", payload={module_id, query:"<printed name>"})`.
    Read its managed chunks or request the actual page with
