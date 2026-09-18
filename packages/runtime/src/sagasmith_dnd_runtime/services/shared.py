@@ -5112,6 +5112,10 @@ class SharedService:
         ]
         if updated["status"] == "lobby" and not blocking_reviews and active_members:
             updated["status"] = "ready"
+        elif updated["status"] == "ready" and not active_members:
+            # Readiness is a live projection, not an immutable achievement.
+            # A defeated party must remain readable so replacements can be admitted.
+            updated["status"] = "lobby"
         return _support.validate_playthrough_manifest(updated)
 
     def playthrough_path_value(self, document: Any, path: str) -> Any:
