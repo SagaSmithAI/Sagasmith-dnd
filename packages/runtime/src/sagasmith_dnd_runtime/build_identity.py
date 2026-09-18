@@ -2,7 +2,6 @@
 
 import hashlib
 import json
-from functools import lru_cache
 from pathlib import Path
 
 import sagasmith_core
@@ -22,15 +21,19 @@ def source_digest(roots: dict[str, Path]) -> str:
     return digest.hexdigest()
 
 
-@lru_cache(maxsize=1)
+# Capture during Runtime import, before serving any campaign request. A lazy
+# first-call cache can label already-loaded code with later workspace edits.
+_IMPORTED_BUILD_DIGEST = source_digest(
+    {
+        "domain": Path(sagasmith_dnd.__file__).parent,
+        "runtime": Path(__file__).parent,
+        "core": Path(sagasmith_core.__file__).parent,
+    }
+)
+
+
 def runtime_build_digest() -> str:
-    return source_digest(
-        {
-            "domain": Path(sagasmith_dnd.__file__).parent,
-            "runtime": Path(__file__).parent,
-            "core": Path(sagasmith_core.__file__).parent,
-        }
-    )
+    return _IMPORTED_BUILD_DIGEST
 
 
 def implementation_identity() -> dict[str, str | int]:
