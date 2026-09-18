@@ -848,6 +848,18 @@ def test_conversation_facade_private_transport_and_commit(tmp_path: Path, handof
             assert closed["event"]["payload"]["unresolved_resolution_requests"] == []
             assert "Determine whether Aria" not in str(closed["event"])
             assert await _call(server, "npc_conversation", request) == closed
+            assert "skill_manifest" not in closed
+            assert "_sagasmith_skill_manifest" not in closed["event"]["payload"]
+            full = await _call(server, "npc_conversation", {
+                **request, "payload": {**request["payload"], "detail": "full"},
+            })
+            assert full["event"]["id"] == closed["event"]["id"]
+            assert full["skill_manifest"] == full["event"]["payload"]["_sagasmith_skill_manifest"]
+            assert full["mechanic_handoff"] == closed["mechanic_handoff"]
+            assert full["event"]["payload"]["transcript"] == (
+                closed["event"]["payload"]["transcript"]
+            )
+            assert await _call(server, "npc_conversation", request) == closed
             listing = await _call(
                 server,
                 "npc_conversation",

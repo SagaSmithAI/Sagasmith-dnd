@@ -1682,6 +1682,9 @@ class ContinuityService:
         close may return mechanic_handoff with pending requests for the DM.
         Release workers and settle those via ordinary public mechanic tools;
         closing does not resolve them or unlock their dependent memory candidates.
+        close defaults to payload.detail='summary', omitting duplicated skill
+        manifests only; transcript and mechanic_handoff remain intact. Use
+        detail='full' for the complete audit receipt, including on replay.
         """
 
         data = dict(payload or {})
@@ -1762,6 +1765,7 @@ class ContinuityService:
             )
         if action == "close":
             allowed = {
+                "detail",
                 "conversation_id",
                 "expected_conversation_revision",
                 "accepted_candidate_ids",
@@ -1769,10 +1773,13 @@ class ContinuityService:
             }
             if unknown := sorted(set(data) - allowed):
                 raise ValueError(f"npc_conversation close has unknown fields: {unknown}")
+            detail = data.get("detail", "summary")
+            if detail not in {"summary", "full"}:
+                raise ValueError("npc_conversation close detail must be summary or full")
             accepted_candidate_ids = data.get("accepted_candidate_ids") or []
             if not isinstance(accepted_candidate_ids, list):
                 raise ValueError("accepted_candidate_ids must be a list")
-            return self.npc_conversation_close_impl(
+            result = self.npc_conversation_close_impl(
                 campaign_id,
                 conversation_id,
                 int(data["expected_conversation_revision"]),
@@ -1780,6 +1787,15 @@ class ContinuityService:
                 principal_id,
                 str(data["idempotency_key"]),
             )
+            if detail == "full":
+                return result
+            result = _support.deepcopy(result)
+            result.pop("skill_manifest", None)
+            result.get("event", {}).get("payload", {}).pop("_sagasmith_skill_manifest", None)
+            result["omitted_detail"] = [
+                "skill_manifest", "event.payload._sagasmith_skill_manifest"
+            ]
+            return result
         if action == "abort":
             return self.npc_conversation_abort_impl(
                 campaign_id,

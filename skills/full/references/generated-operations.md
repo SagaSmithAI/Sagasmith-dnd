@@ -1105,6 +1105,9 @@ abort the conversation, never fabricate NPC publications or busy-poll it.
 close may return mechanic_handoff with pending requests for the DM.
 Release workers and settle those via ordinary public mechanic tools;
 closing does not resolve them or unlock their dependent memory candidates.
+close defaults to payload.detail='summary', omitting duplicated skill
+manifests only; transcript and mechanic_handoff remain intact. Use
+detail='full' for the complete audit receipt, including on replay.
 
 Phases: play
 
