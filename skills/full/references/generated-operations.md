@@ -1102,6 +1102,9 @@ open uses participant_actor_ids and optional scope_id inside payload.
 Pending NPC activations require a connected Host worker; close only when
 they finish. Without that Host, report the missing capability or explicitly
 abort the conversation, never fabricate NPC publications or busy-poll it.
+close may return mechanic_handoff with pending requests for the DM.
+Release workers and settle those via ordinary public mechanic tools;
+closing does not resolve them or unlock their dependent memory candidates.
 
 Phases: play
 

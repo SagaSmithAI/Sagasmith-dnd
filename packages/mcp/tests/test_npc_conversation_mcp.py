@@ -631,7 +631,8 @@ def test_active_conversation_blocks_combat_and_leaving_play(tmp_path: Path) -> N
     asyncio.run(exercise())
 
 
-def test_conversation_facade_private_transport_and_commit(tmp_path: Path) -> None:
+@pytest.mark.parametrize("handoff", [False, True])
+def test_conversation_facade_private_transport_and_commit(tmp_path: Path, handoff: bool) -> None:
     async def exercise() -> None:
         server = create_server(_config(tmp_path))
         campaign, npc, pc = await _campaign_with_actors(server)
@@ -829,21 +830,33 @@ def test_conversation_facade_private_transport_and_commit(tmp_path: Path) -> Non
             },
         )
         assert published["publication"]["speech"] == "No. I stayed home."
-        with pytest.raises(Exception, match="unresolved mechanic requests"):
-            await _call(
+        if handoff:
+            request = {
+                "campaign_id": campaign["id"], "action": "close",
+                "payload": {
+                    "conversation_id": conversation_id,
+                    "expected_conversation_revision": 4,
+                    "accepted_candidate_ids": [],
+                    "idempotency_key": "close-before-resolution",
+                },
+            }
+            closed = await _call(server, "npc_conversation", request)
+            assert closed["mechanic_handoff"]["status"] == "pending"
+            assert closed["mechanic_handoff"]["requests"][0]["resolution_id"] == (
+                submitted["resolution_requests"][0]["resolution_id"]
+            )
+            assert closed["event"]["payload"]["unresolved_resolution_requests"] == []
+            assert "Determine whether Aria" not in str(closed["event"])
+            assert await _call(server, "npc_conversation", request) == closed
+            listing = await _call(
                 server,
                 "npc_conversation",
                 {
-                    "campaign_id": campaign["id"],
-                    "action": "close",
-                    "payload": {
-                        "conversation_id": conversation_id,
-                        "expected_conversation_revision": 4,
-                        "accepted_candidate_ids": [],
-                        "idempotency_key": "close-before-resolution",
-                    },
+                    "campaign_id": campaign["id"], "action": "list", "payload": {},
                 },
             )
+            assert listing["conversations"] == []
+            return
         resolution_id = submitted["resolution_requests"][0]["resolution_id"]
         resolved = await _call(
             server,

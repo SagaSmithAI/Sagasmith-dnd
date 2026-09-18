@@ -62,6 +62,14 @@ If the Host cannot enforce these guarantees, do not open a conversation.
    ingest the actual result as a new stimulus. Do not carry the prior
    conversation revision or worker context across that write.
 
+`close` returns outstanding requests in the DM-only `mechanic_handoff` receipt.
+Keep that receipt until each request is settled through the ordinary mechanic
+tools. Closing preserves pending status; it does not manufacture a result.
+Candidates dependent on a pending request remain unavailable for acceptance.
+Do not ingest a fictitious resolution or label a deferred check as resolved just
+to close. The actor-visible transcript records only the outstanding count, not
+private request reasons. Release all Host workers before executing the handoff.
+
 Every write requires `expected_conversation_revision` and `idempotency_key`.
 Replay an identical request with the same key; on
 `CONVERSATION_REVISION_CONFLICT`, call `action="get"` and review current state.

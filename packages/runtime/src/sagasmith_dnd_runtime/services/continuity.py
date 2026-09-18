@@ -1459,10 +1459,10 @@ class ContinuityService:
             item.get("status") == "pending_audience" for item in session.get("publications") or []
         ):
             raise ValueError("conversation has unpublished NPC output")
-        if any(
-            item.get("status") == "pending" for item in session.get("pending_resolutions") or []
-        ):
-            raise ValueError("conversation has unresolved mechanic requests")
+        pending_requests = _support.deepcopy([
+            item for item in session.get("pending_resolutions") or []
+            if item.get("status") == "pending"
+        ])
         candidate_ids = list(accepted_candidate_ids or [])
         if any(not isinstance(item, str) or not item for item in candidate_ids) or len(
             candidate_ids
@@ -1589,13 +1589,10 @@ class ContinuityService:
                         "scene_id": session["scene_id"],
                         "scope_id": session["scope_id"],
                         "transcript": transcript,
-                        "unresolved_resolution_requests": _support.deepcopy(
-                            [
-                                item
-                                for item in session.get("pending_resolutions") or []
-                                if item.get("status") == "pending"
-                            ]
-                        ),
+                        # Requests can include private NPC motives. Only the DM
+                        # close receipt carries the handoff, never this transcript.
+                        "unresolved_resolution_requests": [],
+                        "unresolved_resolution_count": len(pending_requests),
                     },
                 },
                 "facts": facts_data,
@@ -1609,6 +1606,14 @@ class ContinuityService:
         for runtime in session["actor_runtimes"].values():
             runtime["status"] = "closed"
             runtime["context"] = {}
+        if pending_requests:
+            commit["mechanic_handoff"] = {
+                "status": "pending",
+                "conversation_id": conversation_id,
+                "requests": pending_requests,
+                "next_action": "Release Host workers, resolve via public mechanic tools, "
+                "then open a new conversation with the actual result if needed.",
+            }
         return self.npc_conversations.finish_mutation(session, commit)
 
     def npc_conversation_abort_impl(
@@ -1674,6 +1679,9 @@ class ContinuityService:
         Pending NPC activations require a connected Host worker; close only when
         they finish. Without that Host, report the missing capability or explicitly
         abort the conversation, never fabricate NPC publications or busy-poll it.
+        close may return mechanic_handoff with pending requests for the DM.
+        Release workers and settle those via ordinary public mechanic tools;
+        closing does not resolve them or unlock their dependent memory candidates.
         """
 
         data = dict(payload or {})
