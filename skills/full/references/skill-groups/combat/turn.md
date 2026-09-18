@@ -64,7 +64,14 @@ an `attack_budget` of zero with `main_action` remaining still permits starting a
 Attack action. Inspect living opponents before passing; do not repeat empty
 rounds because an earlier opponent died.
 
-In Agent positioning, structured single-creature spells use
+Spell attacks (for example Guiding Bolt or Scorching Ray) first use
+`combat_cast_spell` without a target declaration. The returned
+`spell_resolution_id` owns the paid cast and remaining attacks. Then call
+`combat_resolve_attack` for each target, passing
+`action={spell_resolution_id, context:{spatial_facts}}` and `target_id`.
+Do not cast again to select a target or finish a paid attack sequence.
+
+In Agent positioning, structured single-creature save/direct-effect spells use
 `declaration={target_id, spatial_facts}`. The DM supplies `spatial_facts` with
 `decision_id`, source-grounded `reason`, boolean `targetable`, `in_range`, and
 `attacker_can_see_target`; optional `cover_degree` and `target_can_see_attacker`.
