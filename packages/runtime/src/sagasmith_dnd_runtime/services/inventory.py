@@ -655,9 +655,16 @@ class InventoryService:
         ):
             raise ValueError("expected character revision must be a non-negative integer")
         resolved_branch = self.require_current_branch(campaign_id, branch_id)
-        allowed = {"ground_id", "slot", "spatial_facts"} if action == "pickup_ground" else set()
-        if action not in {"drop_held", "pickup_ground"} or set(payload) - allowed:
+        allowed = {
+            "pickup_ground": {"ground_id", "slot", "spatial_facts"},
+            "draw_weapon": {"item_id", "slot"},
+            "stow_weapon": {"item_id"},
+            "drop_held": set(),
+        }.get(action)
+        if allowed is None or set(payload) - allowed:
             raise ValueError("unsupported ground inventory action or payload")
+        if action in {"draw_weapon", "stow_weapon"} and not in_combat:
+            raise ValueError("draw/stow settlement requires active combat")
         request = {
             "actor_id": actor_id,
             "action": action,
@@ -706,7 +713,42 @@ class InventoryService:
         sheets = {key: _support.deepcopy(record.sheet) for key, record in records.items()}
         ground = state.get("ground_items", [])
         payment = None
-        if action == "drop_held":
+        if action in {"draw_weapon", "stow_weapon"}:
+            item_id = payload.get("item_id")
+            item = next(
+                (entry for entry in sheets[actor_id]["inventory"]["items"]
+                 if entry["id"] == item_id), None
+            )
+            if item is None or item.get("kind") != "weapon":
+                raise ValueError("draw/stow requires an owned weapon item_id")
+            slots = sheets[actor_id]["inventory"]["equipment_slots"]
+            if action == "draw_weapon":
+                slot = payload.get("slot")
+                if slot not in {"main_hand", "off_hand"}:
+                    raise ValueError("draw requires main_hand or off_hand slot")
+                if item.get("equipped") or slots[slot] is not None:
+                    raise ValueError("draw requires a stowed weapon and an empty hand slot")
+            else:
+                if item.get("equipped_slot") not in {"main_hand", "off_hand"}:
+                    raise ValueError("stow requires a weapon currently held in a hand")
+                slot = None
+            sheets[actor_id] = _support.equip_inventory_item(sheets[actor_id], item_id, slot)
+            payment = (
+                "object_interaction"
+                if acting.get("turn_budget", {}).get("object_interaction", 0) > 0
+                else "main_action"
+                if acting.get("turn_budget", {}).get("main_action", 0) > 0
+                else "extra_action"
+            )
+            state["combat"] = _support.resolve_common_action(
+                encounter, actor_id_value=actor_id,
+                action="interact_object" if payment == "object_interaction" else "use_object",
+                payload={"object_description": item["name"], "interaction": action},
+                payment=payment,
+            )
+            settled = {"sheets": sheets, "ground_items": ground}
+            details = {"item_id": item_id, "slot": slot, "payment": payment}
+        elif action == "drop_held":
             roots = _support.held_item_roots(actor.sheet)
             if not roots:
                 raise ValueError("actor has no held objects to drop")

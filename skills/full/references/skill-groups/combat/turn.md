@@ -30,6 +30,15 @@ Do not label opening enemies as reinforcements merely to pass validation.
 
 ## Current turn
 
+In 2014 combat, draw an owned stowed weapon with
+`combat_common_action(action="draw_weapon", payload={item_id, slot:"main_hand"})`
+(or `off_hand`). Stow a held weapon with `action="stow_weapon", payload={item_id}`.
+These settle the equipment change and object interaction (or an available action
+if that interaction was spent) together. Do not prepay the interaction. Drawing
+requires an empty destination hand; stow separately if needed. Ground weapons
+instead use `pickup_ground` with the actual ground record and reach evidence.
+Do not call the out-of-combat `inventory_change(equip)` or fabricate a ground item.
+
 First aid uses `combat_check(kind="stabilize", ability="medicine", target_id=...)`:
 Runtime spends one action, rolls the DC 10 Medicine check, and applies stability
 on success in one transaction. Do not first pay `combat_common_action(stabilize)`

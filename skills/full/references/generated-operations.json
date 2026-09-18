@@ -7079,7 +7079,7 @@
     }
   },
   {
-    "description": "Settle a common action payment, including a turned creature's escape attempt.",
+    "description": "Settle a common action atomically. In 2014 combat, draw_weapon uses\npayload={item_id, slot: main_hand|off_hand}; stow_weapon uses {item_id}.\nRequires an owned weapon, empty destination hand, and current actor turn.\nPays the free object interaction, otherwise an available action. Do not\nprepay interact_object or use inventory_change(equip) during combat.",
     "error_envelope": {
       "fields": [
         "code",
@@ -7103,6 +7103,8 @@
             "disengage",
             "dodge",
             "drop_held",
+            "draw_weapon",
+            "stow_weapon",
             "emerge_shell",
             "escape",
             "help",

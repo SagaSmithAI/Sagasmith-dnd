@@ -3315,6 +3315,8 @@ class CombatService:
             "disengage",
             "dodge",
             "drop_held",
+            "draw_weapon",
+            "stow_weapon",
             "emerge_shell",
             "escape",
             "help",
@@ -3343,8 +3345,13 @@ class CombatService:
         branch_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Settle a common action payment, including a turned creature's escape attempt."""
-        if action in {"drop_held", "pickup_ground"}:
+        """Settle a common action atomically. In 2014 combat, draw_weapon uses
+        payload={item_id, slot: main_hand|off_hand}; stow_weapon uses {item_id}.
+        Requires an owned weapon, empty destination hand, and current actor turn.
+        Pays the free object interaction, otherwise an available action. Do not
+        prepay interact_object or use inventory_change(equip) during combat.
+        """
+        if action in {"drop_held", "pickup_ground", "draw_weapon", "stow_weapon"}:
             if target_id is not None or trigger is not None:
                 raise ValueError("ground inventory actions use only their exact payload")
             return self.ground_inventory_settlement(
