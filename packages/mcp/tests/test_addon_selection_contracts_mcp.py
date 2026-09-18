@@ -2916,6 +2916,21 @@ def test_reviewed_addon_item_uses_bound_inventory_materializer(tmp_path: Path) -
             queried[0]["runtime_context"]["content_hash"]
             == (applied["content_context"]["content_hash"])
         )
+        top_level_query = await _call(
+            server,
+            "character_query",
+            {
+                "view": "catalog",
+                "query": artifact["id"],
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "kind": "item",
+                    "include_context": True,
+                },
+                "principal_id": "system:local",
+            },
+        )
+        assert top_level_query == queried
 
     import asyncio
 

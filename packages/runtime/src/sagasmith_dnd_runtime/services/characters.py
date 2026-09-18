@@ -5034,7 +5034,7 @@ boundary.
             result = self.content_catalog_list(
                 campaign_id,
                 data.get("kind"),
-                str(data.get("query") or ""),
+                str(data.get("query") or query or ""),
                 principal_id,
                 data.get("branch_id"),
                 include_context=self.facade_bool(data, "include_context"),
