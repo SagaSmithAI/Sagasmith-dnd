@@ -5282,7 +5282,7 @@ class ContentService:
                     "fields": ["source_class", "method"],
                     "level": int(card.get("level", 0) or 0),
                     "eligible_classes": list(card.get("classes") or []),
-                    "methods": [
+                    "methods": ["known"] if int(card.get("level", 0) or 0) == 0 else [
                         "known",
                         "spellbook",
                         "spellbook_copy",

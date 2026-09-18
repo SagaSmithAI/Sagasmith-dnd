@@ -5101,6 +5101,15 @@ def test_reviewed_addon_base_class_uses_bound_level_one_materializer(
                 },
             )
 
+        cantrip_catalog = await _call(
+            server, "character_query", {
+                "view": "catalog", "payload": {
+                    "campaign_id": campaign["id"], "kind": "spell",
+                    "query": "dnd5e.content.srd2014.spell.guidance",
+                },
+            },
+        )
+        assert cantrip_catalog[0]["selection_requirements"]["methods"] == ["known"]
         latest = infused
         for index, slug in enumerate(("light", "mending"), start=1):
             latest = await _call(
