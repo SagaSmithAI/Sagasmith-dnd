@@ -3278,6 +3278,37 @@ class AuthoringService:
         data = self.facade_payload(payload)
         job_id = str(data.get("job_id") or "")
         if (
+            not job_id and data.get("module_id") and action == "evidence"
+            and str(data.get("kind") or ("page" if data.get("page_number") else "chunks")) == "page"
+        ):
+            self.access.require_campaign(
+                campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES
+            )
+            module_id = str(data["module_id"])
+            asset = self.module_pdf_asset(campaign_id, module_id, data.get("source_asset_id"))
+            page_number = self.required(data, "page_number")
+            rendered = _support.render_pdf_page(
+                asset["source_path"], page_number, scale=data.get("scale", 1.5)
+            )
+            transcription = {
+                "text": _support.extract_pdf_page_text(asset["source_path"], page_number),
+                "ocr": self.local_ocr_page_evidence(
+                    asset["source_path"], page_number, scope="module"
+                ) if self.facade_bool(data, "include_ocr_text", default=True)
+                else {"included": False},
+            }
+            return self.facade_render_result([
+                {
+                    "campaign_id": campaign_id, "module_id": module_id,
+                    "media_purpose": "source_evidence",
+                    "source_asset_id": asset["id"], "source_checksum": rendered.source_checksum,
+                    "page_number": rendered.page_number, "page_count": rendered.page_count,
+                    "width": rendered.width, "height": rendered.height, "scale": rendered.scale,
+                    "image_checksum": rendered.checksum, "transcription": transcription,
+                },
+                _support.Image(data=rendered.content, format="png"),
+            ])
+        if (
             not job_id
             and data.get("module_id")
             and action == "edit"
@@ -3388,6 +3419,7 @@ class AuthoringService:
                         "job_id": job.id,
                         "artifact": job.artifact,
                         "source_checksum": rendered.source_checksum,
+                        "media_purpose": "source_evidence",
                         "page_number": rendered.page_number,
                         "page_count": rendered.page_count,
                         "width": rendered.width,

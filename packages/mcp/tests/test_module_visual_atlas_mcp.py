@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 import pytest
+from mcp import Client
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ImageContent, TextContent
 from pypdf import PdfReader, PdfWriter
@@ -597,5 +598,28 @@ def test_module_statblock_ocr_recovery_supports_text_only_agent(
             "campaign_id": campaign["id"], "action": "get",
         })
         assert len(jobs["jobs"]) == 1
+        # Source-review failures must stay actionable over the real MCP boundary,
+        # rather than collapsing into "Error executing tool module_draft".
+        async with Client(server, mode="2026-07-28") as client:
+            page = await client.call_tool("module_draft", {
+                "campaign_id": campaign["id"], "action": "evidence",
+                "payload": {"module_id": installed_id, "kind": "page",
+                            "page_number": 1, "include_ocr_text": False},
+            })
+            assert not page.is_error
+            assert any(isinstance(item, ImageContent) for item in page.content)
+            metadata = json.loads(next(
+                item.text for item in page.content if isinstance(item, TextContent)
+            ))
+            assert metadata["module_id"] == installed_id
+            assert metadata["page_number"] == 1
+            assert metadata["source_checksum"]
+            failure = await client.call_tool("module_draft", {
+                **installed_arguments,
+                "payload": {**installed_arguments["payload"], "name": "Absent Creature"},
+                "idempotency_key": "absent-source-card",
+            })
+            assert failure.is_error
+            assert "structurally unambiguous target statblock" in str(failure.content)
 
     asyncio.run(exercise())

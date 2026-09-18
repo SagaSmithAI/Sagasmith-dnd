@@ -11,6 +11,13 @@ For an already imported module, use its existing `module_id` directly with
 do not require `action="start"` or a new draft job. Do not re-import the managed
 PDF or rebuild the module to review one creature. Reuse an existing immutable
 review when it already covers the exact source card and campaign edition.
+`module_draft(action="evidence", payload={"module_id": ..., "kind": "page",
+"page_number": ..., "include_ocr_text": false})` also renders the managed PDF
+directly, without a draft. Supply `source_asset_id` if the module has multiple PDFs.
+Automatic structural recovery expects English statblock labels. For translated
+or unsupported layouts, route the rendered page to an image-capable reviewer
+rather than repeatedly rerunning OCR. The reviewer translates only visible facts
+into the canonical statblock format and retains the original asset/page evidence.
 
 First call `module_query(view="candidates")` for the exact module. Route by the
 returned `execution_state`:

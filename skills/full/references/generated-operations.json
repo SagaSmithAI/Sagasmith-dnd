@@ -15051,6 +15051,10 @@
                   "scene_id": {
                     "maxLength": 256,
                     "type": "string"
+                  },
+                  "source_asset_id": {
+                    "minLength": 1,
+                    "type": "string"
                   }
                 },
                 "type": "object"
@@ -15085,7 +15089,11 @@
                     "payload": {
                       "properties": {
                         "operation": {
-                          "const": "advance"
+                          "enum": [
+                            "advance",
+                            "content",
+                            "statblock"
+                          ]
                         }
                       },
                       "required": [
