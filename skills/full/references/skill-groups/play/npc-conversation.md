@@ -4,6 +4,34 @@ Use `npc_conversation` as the only Director-visible MCP facade and read
 `../../host-integration-npc-conversation.md` before the first connected
 multi-turn dialogue.
 
+## Prepare source-bound NPC context
+
+Before the first `open`, read the NPC's encounter and portrayal text as well as
+its statblock. A statblock import supplies mechanics; it does not give an isolated
+worker the Director's source reads. Scene ids in `audience_facts.basis_refs` do
+not copy that source text into the worker's knowledge.
+
+Persist only what this NPC knows through `actor_knowledge_change(action="add")`:
+put `campaign_id`, `actor_id`, `knowledge_key`, `proposition`, and optional
+`subject_ref`, `source_event_id`, `cause`, `disclosure_scope`, `branch_id` inside
+`payload`. Use `subject_ref` for the source reference and `disclosure_scope="dm"`
+for private preparation; `source_ref` and `visibility` are not fields of this
+operation. Keep exact source-defined prices, deadlines, limits and known secrets
+in bounded propositions. Do not grant the NPC unrelated DM secrets, other actors'
+private thoughts, or knowledge of future events. Characterization guidance and
+mechanical rulings are not automatically things the NPC knows or may say.
+
+Check the successful receipts before opening. Reuse existing knowledge keys and
+revise existing records rather than duplicating them on every turn. If source
+preparation changes after opening, close or abort and release the old workers,
+then open with fresh context. Do not patch an already issued private capsule.
+
+Before publishing a consequential quote, compare it with the prepared source
+constraints. Missing context is a preparation defect, not permission to invent
+terms. If an unsupported quote was already published, preserve its history,
+record an explicit correction, and obtain a fresh native worker clarification
+before any transaction. The Director must not write the replacement NPC speech.
+
 1. `open` with every PC and NPC runtime id together in the one
    `payload.participant_actor_ids` array. At least one listed actor must be a
    campaign-bound NPC or monster. Put `idempotency_key` inside the payload along
