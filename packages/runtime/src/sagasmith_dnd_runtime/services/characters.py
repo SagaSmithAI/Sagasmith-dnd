@@ -25,22 +25,31 @@ class CharactersService:
             ),
         )
 
-    def default_preset_actor_card(self, artifact_id: str) -> dict[str, Any]:
-        """Resolve one installed bundled preset without requiring campaign activation."""
+    def default_preset_actor_card(
+        self, artifact_id: str, campaign_id: str | None = None, branch_id: str | None = None
+    ) -> dict[str, Any]:
+        """Resolve the same preset versions exposed by the campaign catalog."""
 
         identifier = str(artifact_id).strip()
         matches: list[dict[str, Any]] = []
-        for pack in self.rule_packs.list_versions():
-            if pack.status != "installed":
+        if campaign_id is not None:
+            artifacts = [
+                artifact for _, _, artifact in self.available_content_artifacts(
+                    campaign_id, kind="actor_card", branch_id=branch_id
+                )
+            ]
+        else:
+            artifacts = [
+                artifact for pack in self.rule_packs.list_versions()
+                if pack.status == "installed" for artifact in pack.artifacts
+            ]
+        for artifact in artifacts:
+            if str(artifact.get("id") or "") != identifier:
                 continue
-            for artifact in pack.artifacts:
-                if str(artifact.get("id") or "") != identifier:
-                    continue
-                card = dict(artifact.get("card") or {})
-                content_actor = dict(card.get("content_actor") or {})
-                if content_actor:
-                    matches.append(content_actor)
-                    continue
+            card = dict(artifact.get("card") or {})
+            content_actor = dict(card.get("content_actor") or {})
+            if content_actor:
+                matches.append(content_actor)
         if len(matches) != 1:
             raise ValueError("artifact_id must resolve to exactly one installed actor preset")
         return _support.validate_dnd_content_actor(matches[0])
@@ -5583,7 +5592,14 @@ boundary.
             if not package_sources:
                 if not artifact_id:
                     raise ValueError("provide artifact_id or one content package archive")
-                card = self.default_preset_actor_card(artifact_id)
+                preset_campaign_id = str(data["campaign_id"]) if data.get("campaign_id") else None
+                preset_branch_id = (
+                    self.readable_branch(preset_campaign_id, None, principal_id)
+                    if preset_campaign_id else None
+                )
+                card = self.default_preset_actor_card(
+                    artifact_id, preset_campaign_id, preset_branch_id
+                )
             else:
                 if len(package_sources) != 1 or not artifact_id:
                     raise ValueError(
