@@ -464,6 +464,10 @@ Cast the exact spell_id recorded on the caster card, on a legal turn.
 Requires current campaign expected_revision and idempotency_key. The card
 determines action/slot cost; never spend them separately. target_allocations
 is only for source-bound Magic Missile, not ordinary spell targets.
+In Agent positioning, native single-target spells use declaration
+{target_id, spatial_facts:{decision_id,reason,targetable,in_range,
+attacker_can_see_target}}. Magic Missile uses target_allocations plus
+declaration={target_spatial_facts:{target_id: facts}}. Grid uses positions.
 For an Agent-resolved standard spell, omit declaration to obtain the
 agent_ruling_contract, then copy its submission_shape under declaration,
 filling application_id, decision and reason and preserving source_excerpt.

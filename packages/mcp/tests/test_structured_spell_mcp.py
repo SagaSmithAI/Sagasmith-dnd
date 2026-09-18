@@ -247,6 +247,7 @@ async def _campaign_with_combat(
     sheets: list[tuple[str, dict]],
     *,
     positions: list[tuple[int, int]] | None = None,
+    positioning_mode: str = "grid",
 ) -> tuple[str, int, list[dict]]:
     campaign = await _call(
         server,
@@ -288,15 +289,17 @@ async def _campaign_with_combat(
         server,
         "combat_start",
         {
-            "positioning_mode": "grid",
-            "battle_map": {"width_cells": 40, "height_cells": 40},
+            "positioning_mode": positioning_mode,
+            **({"battle_map": {"width_cells": 40, "height_cells": 40}}
+               if positioning_mode == "grid" else {}),
             "campaign_id": campaign["id"],
             "participant_ids": [item["id"] for item in actors],
             "participant_config": [
                 {
                     "actor_id": item["id"],
                     "initiative": 20 - index,
-                    "position": {"x": positions[index][0], "y": positions[index][1]},
+                    **({"position": {"x": positions[index][0], "y": positions[index][1]}}
+                       if positioning_mode == "grid" else {}),
                     "disposition": "friendly" if index == 0 else "hostile",
                 }
                 for index, item in enumerate(actors)
@@ -2345,7 +2348,10 @@ def test_hypnotic_pattern_hard_settles_cube_saves_and_every_end_condition(
     asyncio.run(exercise())
 
 
-def test_sacred_flame_direct_save_needs_no_manual_damage_step(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("positioning_mode", ["grid", "agent"])
+def test_sacred_flame_direct_save_needs_no_manual_damage_step(
+    tmp_path: Path, monkeypatch, positioning_mode: str,
+) -> None:
     _deterministic_rolls(monkeypatch)
 
     async def exercise() -> None:
@@ -2358,7 +2364,8 @@ def test_sacred_flame_direct_save_needs_no_manual_damage_step(tmp_path: Path, mo
         target = default_character_sheet()
         target["combat"]["hp"] = {"value": 30, "max": 30, "temp": 0}
         campaign_id, revision, actors = await _campaign_with_combat(
-            server, [("Cleric", caster), ("Target", target)], positions=[(0, 0), (2, 0)]
+            server, [("Cleric", caster), ("Target", target)], positions=[(0, 0), (2, 0)],
+            positioning_mode=positioning_mode,
         )
 
         result = await _raw(
@@ -2369,7 +2376,13 @@ def test_sacred_flame_direct_save_needs_no_manual_damage_step(tmp_path: Path, mo
                 "actor_id": actors[0]["id"],
                 "spell_id": sacred_flame["id"],
                 "cast_level": 0,
-                "declaration": {"target_id": actors[1]["id"]},
+                "declaration": {
+                    "target_id": actors[1]["id"],
+                    **({"spatial_facts": {
+                        "decision_id": "visible-target", "reason": "Clear line of sight in room",
+                        "targetable": True, "in_range": True, "attacker_can_see_target": True,
+                    }} if positioning_mode == "agent" else {}),
+                },
                 "expected_revision": revision,
                 "idempotency_key": "sacred-flame",
             },

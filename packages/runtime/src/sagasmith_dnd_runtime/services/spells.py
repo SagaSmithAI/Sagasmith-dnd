@@ -8,6 +8,30 @@ from .. import application_support as _support
 
 
 class SpellsService:
+    def validate_spell_spatial_facts(self, facts: Any) -> dict[str, Any]:
+        """Validate an explicit DM targeting decision without inventing coordinates."""
+        required = {"decision_id", "reason", "targetable", "in_range", "attacker_can_see_target"}
+        optional = {"cover_degree", "target_can_see_attacker"}
+        if not isinstance(facts, dict) or required - set(facts) or set(facts) - required - optional:
+            raise _support.CombatEngineError(
+                "Agent spell spatial_facts require decision_id, reason, targetable, "
+                "in_range, attacker_can_see_target; optional cover_degree, target_can_see_attacker"
+            )
+        value = _support.deepcopy(facts)
+        for key in ("decision_id", "reason"):
+            if not isinstance(value[key], str) or not value[key].strip():
+                raise _support.CombatEngineError(f"spell spatial fact {key} must be non-empty text")
+        for key in ("targetable", "in_range", "attacker_can_see_target", "target_can_see_attacker"):
+            if key in value and not isinstance(value[key], bool):
+                raise _support.CombatEngineError(f"spell spatial fact {key} must be boolean")
+        if value.get("cover_degree", "none") not in {"none", "half", "three_quarters", "total"}:
+            raise _support.CombatEngineError("invalid spell spatial cover_degree")
+        if not value["targetable"] or value.get("cover_degree") == "total":
+            raise _support.CombatEngineError("spell target is not targetable")
+        if not value["in_range"]:
+            raise _support.CombatEngineError("spell target is outside range")
+        return value
+
     def persisted_standard_spell_ruling_requirement(
         self,
         source_card: dict[str, Any],
@@ -285,6 +309,7 @@ class SpellsService:
         target_id: str,
         spell: dict[str, Any],
         resolution: dict[str, Any],
+        spatial_facts: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         combatants = {
             str(item.get("actor_id") or ""): item for item in encounter.get("combatants", [])
@@ -298,8 +323,13 @@ class SpellsService:
         target_conditions = {str(item).casefold() for item in target.get("conditions", [])}
         if "dead" in target_conditions:
             raise _support.CombatEngineError("a dead combatant is not a creature target")
-        distance = self.combat_distance(caster.get("position"), target.get("position"))
-        if distance is None:
+        agent_mode = encounter.get("positioning_mode") == "agent"
+        spatial = self.validate_spell_spatial_facts(spatial_facts) if agent_mode else None
+        distance = (
+            None if agent_mode
+            else self.combat_distance(caster.get("position"), target.get("position"))
+        )
+        if distance is None and not agent_mode:
             raise _support.CombatEngineError("spell targeting requires recorded map positions")
         spell_range = dict(dict(spell.get("definition") or {}).get("range") or {})
         range_kind = str(spell_range.get("kind") or "special")
@@ -311,10 +341,14 @@ class SpellsService:
             raise _support.CombatEngineError("self-range spell must target its caster")
         if range_kind not in {"self", "touch"} and maximum <= 0:
             raise _support.CombatEngineError("spell has no executable target range")
-        if range_kind != "self" and distance > maximum:
+        if range_kind != "self" and distance is not None and distance > maximum:
             raise _support.CombatEngineError("spell target is outside range")
         targeting = dict(resolution.get("targeting") or {})
-        if targeting.get("requires_sight") and not _support.can_see(caster, target):
+        visible = (
+            spatial["attacker_can_see_target"] if spatial is not None
+            else _support.can_see(caster, target)
+        )
+        if targeting.get("requires_sight") and not visible:
             raise _support.CombatEngineError("spell requires a target the caster can see")
         creature_type = str(
             self.characters.get(target_id).sheet.get("progression", {}).get("species") or ""
@@ -324,7 +358,10 @@ class SpellsService:
                 raise _support.CombatEngineError(
                     f"spell has no effect on the target creature type: {excluded}"
                 )
-        return {"target_id": target_id, "distance_ft": distance}
+        return {
+            "target_id": target_id, "distance_ft": distance,
+            **({"spatial_facts": spatial} if spatial is not None else {}),
+        }
 
     def advance_spell_attack_resolution(
         self,
@@ -374,6 +411,7 @@ class SpellsService:
         caster_id: str,
         allocations: list[dict[str, Any]],
         cast_level: int,
+        target_spatial_facts: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Validate source-rule targeting against current map and visibility facts."""
         normalized = _support.validate_magic_missile_allocations(allocations, cast_level=cast_level)
@@ -384,8 +422,17 @@ class SpellsService:
         if caster is None:
             raise _support.CombatEngineError("Magic Missile caster is not in this encounter")
 
+        agent_mode = encounter.get("positioning_mode") == "agent"
+        if agent_mode and (
+            not isinstance(target_spatial_facts, dict)
+            or set(target_spatial_facts) != {str(item["target_id"]) for item in normalized}
+        ):
+            raise _support.CombatEngineError(
+                "Magic Missile declaration requires target_spatial_facts "
+                "keyed by every allocated target_id"
+            )
         caster_position = self.combat_coordinates(caster.get("position"))
-        if caster_position is None:
+        if caster_position is None and not agent_mode:
             raise _support.CombatEngineError(
                 "Magic Missile range requires the caster's map position"
             )
@@ -399,6 +446,15 @@ class SpellsService:
             conditions = {str(item).casefold() for item in target.get("conditions", [])}
             if "dead" in conditions:
                 raise _support.CombatEngineError("Magic Missile cannot target a dead creature")
+            if agent_mode:
+                spatial = self.validate_spell_spatial_facts(target_spatial_facts[target_id])
+                if not spatial["attacker_can_see_target"]:
+                    raise _support.CombatEngineError(
+                        "Magic Missile requires a target the caster can see"
+                    )
+                allocation["spatial_facts"] = spatial
+                allocation["distance_ft"] = None
+                continue
             target_position = self.combat_coordinates(target.get("position"))
             if target_position is None:
                 raise _support.CombatEngineError(
@@ -833,6 +889,10 @@ class SpellsService:
         Requires current campaign expected_revision and idempotency_key. The card
         determines action/slot cost; never spend them separately. target_allocations
         is only for source-bound Magic Missile, not ordinary spell targets.
+        In Agent positioning, native single-target spells use declaration
+        {target_id, spatial_facts:{decision_id,reason,targetable,in_range,
+        attacker_can_see_target}}. Magic Missile uses target_allocations plus
+        declaration={target_spatial_facts:{target_id: facts}}. Grid uses positions.
         For an Agent-resolved standard spell, omit declaration to obtain the
         agent_ruling_contract, then copy its submission_shape under declaration,
         filling application_id, decision and reason and preserving source_excerpt.
@@ -959,7 +1019,16 @@ class SpellsService:
             raise _support.CombatEngineError(
                 "target_allocations are currently executable only for source-bound Magic Missile"
             )
-        if magic_missile and declaration:
+        agent_positioning = encounter.get("positioning_mode") == "agent"
+        if agent_positioning and (
+            magic_missile or "spatial_facts" in dict(declaration or {})
+        ):
+            self.access.require_campaign(
+                campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES
+            )
+        if magic_missile and declaration and not (
+            agent_positioning and set(declaration) == {"target_spatial_facts"}
+        ):
             raise _support.CombatEngineError(
                 "Magic Missile uses target_allocations, not declaration"
             )
@@ -1492,6 +1561,7 @@ class SpellsService:
                 caster_id=actor_id,
                 allocations=list(target_allocations or []),
                 cast_level=int(applied.get("cast_level", cast_level or 1) or 1),
+                target_spatial_facts=dict(declaration or {}).get("target_spatial_facts"),
             )
 
         spell_level = int(spell_entry.get("level", 0) or 0)

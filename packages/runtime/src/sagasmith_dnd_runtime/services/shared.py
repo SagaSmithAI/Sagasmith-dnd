@@ -2452,9 +2452,13 @@ class SharedService:
         cover_required: bool = False,
     ) -> dict[str, Any]:
         value = dict(declaration or {})
-        if set(value) != {"target_id"} and set(value) != {"target_id", "cover"}:
+        allowed = {"target_id", "cover"}
+        if encounter.get("positioning_mode") == "agent":
+            allowed.add("spatial_facts")
+        if "target_id" not in value or set(value) - allowed:
             raise _support.CombatEngineError(
-                "spell declaration requires target_id and optional cover"
+                "spell declaration requires target_id, optional cover, "
+                "and spatial_facts in Agent mode"
             )
         target_id = str(value.get("target_id") or "")
         if not target_id:
@@ -2465,6 +2469,7 @@ class SharedService:
             target_id=target_id,
             spell=spell,
             resolution=resolution,
+            spatial_facts=value.get("spatial_facts"),
         )
         cover = str(value.get("cover") or "").strip().casefold().replace("-", "_")
         if cover_required and cover not in {"none", "half", "three_quarters"}:
