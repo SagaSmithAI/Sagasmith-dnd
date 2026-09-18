@@ -289,7 +289,17 @@ Exact input schema (copy field names and nesting):
 
 ## character_action
 
-Commit one noncombat spell cast or activity activation through the rules engine.
+Commit one noncombat spell cast, activity, or source-defined object attack.
+
+attack_source_object payload requires weapon_id, reason, source_ref,
+expected_campaign_revision, and object={id,name,scene_id,armor_class,
+hit_points,damage_immunities?}. Supply expected_revision for the actor.
+source_ref must identify an exact managed module chunk and its checksum;
+object statistics must follow that source. Reuse the same object id and
+original maximum hit_points for later attacks; Runtime tracks remaining
+HP. Each actual attack needs its own idempotency key; retries reuse it.
+Optional advantage/disadvantage require actual circumstances. Do not
+probe write operations with invented objects or placeholder source refs.
 
 Phases: lobby, play
 
