@@ -84,6 +84,15 @@ Do not treat that gap alone as proof that the active Pack needs a new review.
 6. Re-read every created actor and require `statblock.source_identity` to match
    the intended source card.
 
+For repeated occupants, first create and verify one instance from the selected
+card. Only after that succeeds, create the exact remaining shortfall. Do not
+fan out an unverified transcription or parser path into many identical failures.
+A shared source failure applies to all copies; repair that source path once.
+Keep the campaign in `lobby` until all required creation calls and preflight
+finish successfully. Switching to `play` depends on those results and must not
+run concurrently with actor creation. After a partial failure, list existing
+instances and retry only missing ones using their original operation keys.
+
 ## Hydrate module-only opposition
 
 1. When the exact creature exists only in the active module, inspect the
