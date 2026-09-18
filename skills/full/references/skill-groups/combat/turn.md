@@ -46,7 +46,10 @@ or use `combat_hp_change` with a generic rules excerpt. In Agent positioning,
 also supply top-level `spatial_facts={decision_id, reason, within_5_ft:true}` based
 on the actual scene; move into reach first if needed. Grid mode uses positions.
 
-Read `combat_query(view="status")` after a turn mismatch; the actor at
+Read `combat_query(view="status", payload={detail:"summary"})` after a turn
+mismatch; this omits accumulated historical logs but retains current tactical
+state. Use `detail:"full"` only when historical encounter events are needed.
+The actor at
 `combatants[turn_index]` is current. Dead actors may already have been skipped by
 the engine. Do not call end-turn on them again or cycle through guessed actor ids.
 `available_actions` lists categories and a budget, not a completed tactical turn:

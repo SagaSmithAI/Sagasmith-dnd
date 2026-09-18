@@ -64,6 +64,14 @@ def test_draw_stow_atomic_payment_and_replay(tmp_path: Path, mode: str):
             budget = after[0]["state"]["combat"]["combatants"][0]["turn_budget"]
             assert budget["object_interaction"] == 0
             assert budget["main_action"] == 0
+            full = await _call(server, "combat_query", {
+                "campaign_id": campaign["id"], "view": "status"})
+            summary = await _call(server, "combat_query", {
+                "campaign_id": campaign["id"], "view": "status",
+                "payload": {"detail": "summary"}})
+            assert full["log"]
+            assert summary == {key: value for key, value in full.items() if key != "log"}
+            assert await _snapshot(server, campaign["id"], [actors[0]["id"]]) == after
             with pytest.raises(ToolError):
                 await _call(server, "combat_common_action", await args(
                     "draw_weapon", {"item_id": weapon_id, "slot": "main_hand"}, "exhausted"))

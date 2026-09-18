@@ -646,7 +646,10 @@ Exact input schema (copy field names and nesting):
 Read combat state or DM-only transaction receipts.
 
 available_actions and reactions require top-level actor_id, not payload.
-status needs only campaign_id. transaction_receipt requires
+status needs only campaign_id; payload={detail:"summary"} omits the
+accumulated encounter log while retaining all current tactical fields.
+Omit detail or use "full" to include historical log entries.
+transaction_receipt requires
 payload={idempotency_key, branch_id?}; render accepts audience_projection.
 
 Phases: combat, play
