@@ -83,6 +83,16 @@ Do not treat that gap alone as proof that the active Pack needs a new review.
    into Pack data or use a generic sheet patch.
 6. Re-read every created actor and require `statblock.source_identity` to match
    the intended source card.
+   Also compare the instance against every explicit encounter override. For
+   example, `variant.damage_resistances` and `variant.darkvision_ft` carry
+   printed resistance and vision changes; the base creature does not supply
+   them automatically. Setting `variant.current_hit_points=0` alone does not
+   establish stable/unconscious conditions. Use the public condition/recovery
+   operations to represent the exact sourced state, then verify it before
+   actions or conversation. Do not manufacture damage to obtain that state.
+   An unconscious captive cannot provide clues merely because the DM has read
+   the source: establish recovery and an actual published native NPC response
+   before recording their testimony as party knowledge.
 
 For repeated occupants, first create and verify one instance from the selected
 card. Only after that succeeds, create the exact remaining shortfall. Do not
