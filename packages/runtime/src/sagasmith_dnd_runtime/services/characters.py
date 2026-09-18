@@ -7186,9 +7186,28 @@ boundary.
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Add or revise actor knowledge without crossing actor-knowledge boundaries."""
+        """Add or revise actor knowledge without crossing actor-knowledge boundaries.
+
+        For add, payload requires campaign_id, actor_id, knowledge_key and
+        proposition. Optional subject_ref identifies the subject/source;
+        source_event_id links an existing event and disclosure_scope controls
+        visibility. source_ref and visibility are not supported aliases.
+        """
         data = self.facade_payload(payload)
         if action == "add":
+            allowed = {
+                "campaign_id", "actor_id", "knowledge_key", "proposition",
+                "subject_ref", "epistemic_status", "confidence", "source_event_id",
+                "cause", "disclosure_scope", "branch_id",
+            }
+            unknown = sorted(set(data) - allowed)
+            if unknown:
+                raise ValueError(
+                    f"actor_knowledge_change add has unexpected payload fields: {unknown}. "
+                    "Use subject_ref for the subject/source reference, source_event_id "
+                    "for an existing event, and disclosure_scope for visibility. "
+                    f"Allowed fields: {sorted(allowed)}"
+                )
             result = self.actor_knowledge_add(
                 self.required(data, "campaign_id"),
                 self.required(data, "actor_id"),

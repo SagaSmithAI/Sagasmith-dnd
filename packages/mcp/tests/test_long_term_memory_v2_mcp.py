@@ -290,6 +290,41 @@ def test_memory_facade_retract_forget_preserve_history_and_guard_revision(tmp_pa
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize("unknown", ["source_ref", "visibility"])
+def test_actor_knowledge_add_rejects_dropped_metadata(tmp_path: Path, unknown: str) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        campaign = await _call(
+            server, "campaign_create", {"name": "Knowledge metadata", "idempotency_key": "c"}
+        )
+        actor = await _call(server, "character_create_from", {
+            "mode": "direct",
+            "payload": {"campaign_id": campaign["id"], "name": "Lender", "character_type": "npc"},
+            "idempotency_key": "a",
+        })
+        payload = {
+            "campaign_id": campaign["id"], "actor_id": actor["id"],
+            "knowledge_key": "loan-terms", "proposition": "Repayment in ten days.",
+            unknown: "private-source",
+        }
+        with pytest.raises(ToolError, match="unexpected payload fields"):
+            await _call(server, "actor_knowledge_change", {
+                "action": "add", "payload": payload, "idempotency_key": "terms",
+            })
+        assert await _call(server, "actor_knowledge_query", {
+            "campaign_id": campaign["id"], "actor_id": actor["id"], "view": "list",
+        }) == []
+        del payload[unknown]
+        payload.update(subject_ref="module-scene:loan", disclosure_scope="dm")
+        request = {"action": "add", "payload": payload, "idempotency_key": "terms"}
+        result = await _call(server, "actor_knowledge_change", request)
+        assert result["subject_ref"] == "module-scene:loan"
+        assert result["disclosure_scope"] == "dm"
+        assert await _call(server, "actor_knowledge_change", request) == result
+
+    asyncio.run(exercise())
+
+
 def test_actor_knowledge_revise_preserves_omitted_fields_and_can_clear_source(
     tmp_path: Path,
 ) -> None:

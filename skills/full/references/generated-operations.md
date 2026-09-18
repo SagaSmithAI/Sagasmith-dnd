@@ -115,6 +115,11 @@ Exact input schema (copy field names and nesting):
 
 Add or revise actor knowledge without crossing actor-knowledge boundaries.
 
+For add, payload requires campaign_id, actor_id, knowledge_key and
+proposition. Optional subject_ref identifies the subject/source;
+source_event_id links an existing event and disclosure_scope controls
+visibility. source_ref and visibility are not supported aliases.
+
 Phases: lobby, play
 
 Exact input schema (copy field names and nesting):

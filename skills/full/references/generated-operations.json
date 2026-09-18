@@ -394,7 +394,7 @@
     }
   },
   {
-    "description": "Add or revise actor knowledge without crossing actor-knowledge boundaries.",
+    "description": "Add or revise actor knowledge without crossing actor-knowledge boundaries.\n\nFor add, payload requires campaign_id, actor_id, knowledge_key and\nproposition. Optional subject_ref identifies the subject/source;\nsource_event_id links an existing event and disclosure_scope controls\nvisibility. source_ref and visibility are not supported aliases.",
     "error_envelope": {
       "fields": [
         "code",
