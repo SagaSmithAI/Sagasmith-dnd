@@ -83,8 +83,21 @@ Do not treat that gap alone as proof that the active Pack needs a new review.
    current Pack's immutable content reviews. Use
    `character_create_from(mode="module_statblock")` only with the returned
    `review_id`, and pass the exact printed card as `payload.source_identity`.
-2. If a finalized Pack lacks the required review, create an explicit new
-   draft/version from the same managed source. Select an explicit version greater
+2. For an already installed module missing a review, use
+   `module_query(view="candidates", payload={module_id, query:"<printed name>"})`.
+   Read its managed chunks or request the actual page with
+   `module_draft(action="evidence", payload={module_id, kind:"page", page_number:N})`.
+   Submit `module_draft(action="edit", payload={module_id, operation:"content", ...})`
+   using the returned review contract and evidence-bound transcription. Installed
+   module content/statblock review accepts `module_id` directly without a draft
+   job. Read back `module_query(view="content")`, then materialize its `review_id`.
+   Do not create a draft or search for an editable handle solely for this review.
+   `evidence(kind="chunks")` is a draft route; installed source chunks are read
+   through `module_expand` using the candidate's exact chunk ids.
+
+   If the source itself needs revision or a new distributable Pack is required,
+   create an explicit new draft/version from the same managed source. Select an
+   explicit version greater
    than the active Pack; never reuse its version or rely on the first-release
    default. Add only the evidence-backed
    missing review, re-read it, finalize it, import the new artifact, and
@@ -140,7 +153,7 @@ Do not treat that gap alone as proof that the active Pack needs a new review.
    resolution plan or later ruling boundary when that separate mechanism is
    actually exercised. An `img_*` id returned by page rendering identifies a
    delivered media artifact, not a managed `source_asset_id`; omit it from the
-   content review. Call `module_query(view="assets")` for the draft module and
+   content review. Call `module_query(view="assets")` for the module being reviewed and
    select the PDF asset whose checksum exactly matches the managed source; its
    returned `id` is the valid `source_asset_id`. Bind an image-only review with
    that asset id plus the exact managed page. Use source chunks as additional
