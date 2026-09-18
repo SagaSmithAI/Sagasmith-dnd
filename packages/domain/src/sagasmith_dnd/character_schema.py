@@ -4544,6 +4544,23 @@ def _derive_armor_class(
                     "bonus": ability_bonus,
                 }
 
+    # The 2014 class selection is a passive bonus, not a replacement AC formula.
+    # A shield alone is not worn armor; repeated selections never stack.
+    defense_styles = {
+        f"dnd5e.content.srd2014.feature.{class_name}-{feature}"
+        for class_name, feature in (
+            ("fighter", "fighting-style"), ("paladin", "fighting-style"),
+            ("ranger", "fighting-style"), ("fighter", "additional-fighting-style"),
+        )
+    }
+    if value["edition"] == "2014" and armor_id and any(
+        feature["id"] in defense_styles
+        and str(feature.get("choices", {}).get("option", "")).casefold() == "defense"
+        for feature in value["content"]["features"]
+    ):
+        total += 1
+        breakdown["defense_fighting_style"] = 1
+
     # A statblock AC override is the creature's printed AC calculation. Explicit
     # equipped magic-item bonuses still modify that calculation, just as active
     # effects do below. Keeping these bonuses outside the override branch lets a

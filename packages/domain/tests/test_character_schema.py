@@ -1278,6 +1278,37 @@ def test_party_state_validates_structured_world_effect_targets() -> None:
         )
 
 
+@pytest.mark.parametrize("class_name", ["fighter", "paladin", "ranger"])
+def test_defense_style_requires_worn_armor_and_does_not_stack(class_name: str) -> None:
+    feature = {
+        "id": f"dnd5e.content.srd2014.feature.{class_name}-fighting-style",
+        "name": "Fighting Style", "source_key": class_name.title(),
+        "choices": {"option": "Defense"},
+    }
+    sheet = validate_character_sheet({"edition": "2014", "content": {"features": [feature]}})
+    sheet, shield_id = add_inventory_item(sheet, {
+        "id": "shield", "name": "Shield", "kind": "shield",
+        "mechanics": {"ac_bonus": 2},
+    })
+    sheet = equip_inventory_item(sheet, shield_id, "shield")
+    assert derive_character_sheet(sheet)["armor_class"] == 12
+    sheet, armor_id = add_inventory_item(sheet, {
+        "id": "chain", "name": "Chain mail", "kind": "armor",
+        "mechanics": {"base_ac": 16, "dexterity_mode": "none"},
+    })
+    sheet = equip_inventory_item(sheet, armor_id, "armor")
+    derived = derive_character_sheet(sheet)
+    assert derived["armor_class"] == 19
+    assert derived["armor_class_breakdown"]["defense_fighting_style"] == 1
+    sheet["content"]["features"].append({
+        **feature, "id": "dnd5e.content.srd2014.feature.fighter-additional-fighting-style",
+    })
+    assert derive_character_sheet(sheet)["armor_class"] == 19
+    for item in sheet["content"]["features"]:
+        item["choices"]["option"] = "Archery"
+    assert derive_character_sheet(sheet)["armor_class"] == 18
+
+
 def test_equipment_slots_and_ac_derive_from_armor_shield_magic_and_effects() -> None:
     sheet = validate_character_sheet(
         {
