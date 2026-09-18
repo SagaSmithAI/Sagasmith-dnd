@@ -21,6 +21,13 @@ retain its actual wounds and history. Reuse the content review for new instances
 without repeating the card review. Preflight validates the supplied manifest;
 it does not prove an Agent's unstated relocation or individual identity claim.
 
+Apply source-specific starting conditions before initiative. Presence in the
+manifest does not imply consciousness, hostility, or willingness to fight.
+For a fainted occupant, retain the source's actual waking trigger and duration;
+intrusion that causes fainting cannot also prove awakening. A wake action must
+be performed and paid by the actual acting creature, not the unconscious target.
+An unsuccessful tool call or a narrative description is not a wake receipt.
+
 ```json
 {
   "schema_version": 1,
@@ -63,6 +70,14 @@ the engine. Do not call end-turn on them again or cycle through guessed actor id
 an `attack_budget` of zero with `main_action` remaining still permits starting an
 Attack action. Inspect living opponents before passing; do not repeat empty
 rounds because an earlier opponent died.
+
+A rejected out-of-turn attack has not spent an action or dealt damage. Finish
+the actual current actor's turn, then resolve the intended attack when its actor
+becomes current. Do not use successive `combat_end_turn` calls to skip living
+opponents while repairing turn order. Passing is a tactical decision requiring
+an actual reason, not error recovery. If a turn was already skipped incorrectly,
+retain the receipt and record the defect; do not replay earlier rounds or invent
+an attack result to repair history.
 
 Spell attacks (for example Guiding Bolt or Scorching Ray) first use
 `combat_cast_spell` without a target declaration. The returned
