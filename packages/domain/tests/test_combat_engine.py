@@ -6501,6 +6501,22 @@ def test_equipped_armor_automatically_imposes_stealth_disadvantage() -> None:
     assert result["roll_mode"] == "disadvantage"
     assert result["disadvantage_applied"] is True
     assert result["success"] is False
+    assert result["armor_stealth_disadvantage"] is True
+
+    cancelled = resolve_actor_check(
+        actor,
+        kind="ability",
+        ability="stealth",
+        dc=10,
+        advantage=True,
+        rng=_SequenceRng(18),
+    )
+    assert cancelled["rolls"] == [18]
+    assert cancelled["roll_mode"] == "normal"
+    assert cancelled["armor_stealth_disadvantage"] is True
+    assert cancelled["equipment_disadvantage"] is False
+    assert cancelled["advantage_applied"] is False
+    assert cancelled["disadvantage_applied"] is False
 
 
 def test_death_save_persists_nat20_recovery() -> None:

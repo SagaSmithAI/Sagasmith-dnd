@@ -8279,6 +8279,7 @@ def resolve_actor_check(
     def with_rule_receipts(result: dict[str, Any]) -> dict[str, Any]:
         result["effect_roll_bonus"] = effect_roll_bonus
         result["equipment_disadvantage"] = equipment_disadvantage
+        result["armor_stealth_disadvantage"] = armor_stealth_disadvantage
         if helped_by:
             result["helped_by"] = helped_by
             result["advantage_source"] = "help"
