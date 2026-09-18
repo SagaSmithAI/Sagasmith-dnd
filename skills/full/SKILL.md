@@ -49,6 +49,10 @@ description: "Run D&D 5e 2014/2024 campaigns using SagaSmith's authoritative Run
 - For catalog equipment, apply once with its declared selection (usually `{}`),
   then equip using the returned owned inventory item ID. Preset Packs need import,
   not activation. Read exact per-action payloads before the first unfamiliar write.
+- Search `character_query(view="catalog")` by name with `include_context=false`.
+  Set `include_context=true` only when `query` is an exact returned artifact id;
+  it is a detail lookup, not a broader search. An absent catalog option does not
+  require rebuilding the module: use the source-bound actor preparation route below.
 - Asset identifiers use `dnd:full/...`; skill identifiers use `dnd.full...`.
   On an unknown identifier, search/list once and copy the returned id rather than guessing.
 
@@ -72,6 +76,7 @@ description: "Run D&D 5e 2014/2024 campaigns using SagaSmith's authoritative Run
 | --- | --- |
 | Play, combat, investigation, NPC portrayal | `references/skill-groups/`, then `skills/dnd-dm/SKILL.md` sections |
 | Characters, continuity, saves and branches | `skills/dnd-campaign-manager/SKILL.md`; `references/memory-ownership.md` |
+| Prepare a newly encountered source NPC or monster | `references/module-image-content-review.md`; reuse existing actors/reviews, prepare only the next encounter in `lobby`, then return to play |
 | Source-bound Pack authoring | `../dnd-module-generator/SKILL.md`; `references/parsing-agent-edit-loop.md` |
 | Detailed mutation and recovery procedures | `references/runtime-workflows.md` |
 | Tool parameters, phases and revision fields | `references/generated-operations.md`; exact schemas in `references/generated-operations.json` |

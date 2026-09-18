@@ -3086,6 +3086,53 @@ class AuthoringService:
             },
         )
 
+    def review_existing_module_content(
+        self,
+        campaign_id: str,
+        module_id: str,
+        operation: str,
+        value: dict[str, Any],
+        principal_id: str,
+        idempotency_key: str | None,
+    ) -> dict[str, Any]:
+        """Append evidence-bound reviews without modifying an immutable Pack."""
+        if operation == "content":
+            result = self.module_content_review(
+                campaign_id,
+                module_id,
+                str(self.required(value, "scene_id")),
+                str(self.required(value, "content_key")),
+                self.required(value, "normalized_content"),
+                self.required(value, "observation"),
+                value.get("source_asset_id"),
+                value.get("page_number"),
+                value.get("source_chunk_ids"),
+                value.get(
+                    "content_kind",
+                    self.statblock_content_kind(self.campaign_rules_edition(campaign_id)),
+                ),
+                value.get("metadata"),
+                principal_id,
+                idempotency_key,
+                value.get("agent_fill"),
+            )
+        elif operation == "statblock":
+            result = self.module_statblock_ocr_recover(
+                campaign_id,
+                module_id,
+                str(self.required(value, "scene_id")),
+                str(self.required(value, "content_key")),
+                str(self.required(value, "name")),
+                int(self.required(value, "page_number")),
+                value.get("source_asset_id"),
+                principal_id,
+                idempotency_key,
+                value.get("agent_fill"),
+            )
+        else:
+            raise ValueError("module content review operation must be content or statblock")
+        return result
+
     def module_draft(
         self,
         campaign_id: Annotated[str, _support.Field(title="Campaign")],
@@ -3105,6 +3152,8 @@ class AuthoringService:
         The public input schema exposes each action's payload shape. Reuse server-issued
         job/module ids, pass the latest import-job revision on guarded edits, and copy only
         real module_draft(evidence) source_ref receipts into play-profile decisions.
+        For an installed Pack, edit(content/statblock) accepts module_id directly;
+        it appends an immutable source review and does not require a draft job.
         """
 
         self.require_facade_phase(campaign_id, f"module_draft({action})", _support.PROFILE_LOBBY)
@@ -3228,6 +3277,19 @@ class AuthoringService:
 
         data = self.facade_payload(payload)
         job_id = str(data.get("job_id") or "")
+        if (
+            not job_id
+            and data.get("module_id")
+            and action == "edit"
+            and data.get("operation") in {"content", "statblock"}
+        ):
+            return self.facade_result(
+                action,
+                self.review_existing_module_content(
+                    campaign_id, str(data["module_id"]), str(data["operation"]),
+                    data, principal_id, idempotency_key,
+                ),
+            )
         if not job_id and data.get("module_id"):
             matching_jobs = [
                 item
@@ -3366,38 +3428,11 @@ class AuthoringService:
                     expected_revision,
                     idempotency_key,
                 )
-            elif operation == "content":
-                result = self.module_content_review(
+            elif operation in {"content", "statblock"}:
+                result = self.review_existing_module_content(
                     campaign_id,
                     str(job.module_id or self.required(value, "module_id")),
-                    str(self.required(value, "scene_id")),
-                    str(self.required(value, "content_key")),
-                    self.required(value, "normalized_content"),
-                    self.required(value, "observation"),
-                    value.get("source_asset_id"),
-                    value.get("page_number"),
-                    value.get("source_chunk_ids"),
-                    value.get(
-                        "content_kind",
-                        self.statblock_content_kind(self.campaign_rules_edition(campaign_id)),
-                    ),
-                    value.get("metadata"),
-                    principal_id,
-                    idempotency_key,
-                    value.get("agent_fill"),
-                )
-            elif operation == "statblock":
-                result = self.module_statblock_ocr_recover(
-                    campaign_id,
-                    str(job.module_id or self.required(value, "module_id")),
-                    str(self.required(value, "scene_id")),
-                    str(self.required(value, "content_key")),
-                    str(self.required(value, "name")),
-                    int(self.required(value, "page_number")),
-                    value.get("source_asset_id"),
-                    principal_id,
-                    idempotency_key,
-                    value.get("agent_fill"),
+                    operation, value, principal_id, idempotency_key,
                 )
             elif operation == "asset":
                 result = self.module_asset_attach(

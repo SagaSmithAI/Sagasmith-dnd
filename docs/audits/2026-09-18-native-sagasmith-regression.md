@@ -67,3 +67,26 @@ Remaining: complete both source-supported campaigns, audit new failures and
 unsupported narrative claims, measure native wait/error rates, and check NPC
 lease recovery after interruption. A claimed activation can remain leased after
 a hard process stop; that behavior is not yet declared repaired.
+
+## Continued-run repairs
+
+- Installed Module Packs have no authoring import job. The facade previously
+  required one even for additive content/statblock reviews, causing the Avernus
+  run to retry an impossible route. Those two operations now accept the installed
+  module ID directly and use the existing authorized, evidence-bound review
+  services. Pack source editing and finalization still require an authoring job.
+- The integration regression finalizes and installs a Pack, reviews its managed
+  PDF without a new job, replays the original request, and rejects a scene from
+  another module. Module authoring/visual integration: 4 passed; the added
+  cross-module rejection check also passed in the focused rerun.
+- The private runner now preserves `read_file` for workspace tool-result spills
+  and repeats the authorized unattended test-PC role on continuation turns.
+  Previously Luna repeatedly waited for human action despite the test mandate,
+  and DeepSeek could not read spilled manifest/continuity outputs.
+- After restart, both native resume preflights passed. Luna relocked the updated
+  implementation from a checkpoint and produced successful attack/end-turn
+  receipts. DeepSeek entered the repaired OCR review path; its resulting source
+  review still requires live verification.
+
+Neither campaign is complete. Repeated blocked summaries and model calls are
+not additional gameplay coverage.

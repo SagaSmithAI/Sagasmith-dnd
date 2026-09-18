@@ -910,6 +910,8 @@ Build a D&D Module Pack via start, get, evidence, edit, and finalize.
 The public input schema exposes each action's payload shape. Reuse server-issued
 job/module ids, pass the latest import-job revision on guarded edits, and copy only
 real module_draft(evidence) source_ref receipts into play-profile decisions.
+For an installed Pack, edit(content/statblock) accepts module_id directly;
+it appends an immutable source review and does not require a draft job.
 
 Phases: lobby
 

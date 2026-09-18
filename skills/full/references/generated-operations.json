@@ -3982,6 +3982,28 @@
           "required": [
             "error"
           ]
+        },
+        {
+          "properties": {
+            "default_resolver": {
+              "enum": [
+                "agent",
+                "external_input"
+              ]
+            },
+            "ruling_kind": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "status": {
+              "const": "pending_ruling"
+            }
+          },
+          "required": [
+            "status",
+            "ruling_kind",
+            "default_resolver"
+          ]
         }
       ],
       "description": "Structured authoritative result for character_check.",
@@ -5989,6 +6011,28 @@
           "required": [
             "error"
           ]
+        },
+        {
+          "properties": {
+            "default_resolver": {
+              "enum": [
+                "agent",
+                "external_input"
+              ]
+            },
+            "ruling_kind": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "status": {
+              "const": "pending_ruling"
+            }
+          },
+          "required": [
+            "status",
+            "ruling_kind",
+            "default_resolver"
+          ]
         }
       ],
       "description": "Structured authoritative result for combat_cast_spell.",
@@ -6343,6 +6387,28 @@
         {
           "required": [
             "error"
+          ]
+        },
+        {
+          "properties": {
+            "default_resolver": {
+              "enum": [
+                "agent",
+                "external_input"
+              ]
+            },
+            "ruling_kind": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "status": {
+              "const": "pending_ruling"
+            }
+          },
+          "required": [
+            "status",
+            "ruling_kind",
+            "default_resolver"
           ]
         }
       ],
@@ -6848,6 +6914,28 @@
         {
           "required": [
             "error"
+          ]
+        },
+        {
+          "properties": {
+            "default_resolver": {
+              "enum": [
+                "agent",
+                "external_input"
+              ]
+            },
+            "ruling_kind": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "status": {
+              "const": "pending_ruling"
+            }
+          },
+          "required": [
+            "status",
+            "ruling_kind",
+            "default_resolver"
           ]
         }
       ],
@@ -8345,6 +8433,28 @@
           "required": [
             "error"
           ]
+        },
+        {
+          "properties": {
+            "default_resolver": {
+              "enum": [
+                "agent",
+                "external_input"
+              ]
+            },
+            "ruling_kind": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "status": {
+              "const": "pending_ruling"
+            }
+          },
+          "required": [
+            "status",
+            "ruling_kind",
+            "default_resolver"
+          ]
         }
       ],
       "description": "Structured authoritative result for combat_hp_change.",
@@ -9203,6 +9313,28 @@
           "required": [
             "error"
           ]
+        },
+        {
+          "properties": {
+            "default_resolver": {
+              "enum": [
+                "agent",
+                "external_input"
+              ]
+            },
+            "ruling_kind": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "status": {
+              "const": "pending_ruling"
+            }
+          },
+          "required": [
+            "status",
+            "ruling_kind",
+            "default_resolver"
+          ]
         }
       ],
       "description": "Structured authoritative result for combat_movement.",
@@ -9410,6 +9542,28 @@
         {
           "required": [
             "error"
+          ]
+        },
+        {
+          "properties": {
+            "default_resolver": {
+              "enum": [
+                "agent",
+                "external_input"
+              ]
+            },
+            "ruling_kind": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "status": {
+              "const": "pending_ruling"
+            }
+          },
+          "required": [
+            "status",
+            "ruling_kind",
+            "default_resolver"
           ]
         }
       ],
@@ -10411,6 +10565,28 @@
           "required": [
             "error"
           ]
+        },
+        {
+          "properties": {
+            "default_resolver": {
+              "enum": [
+                "agent",
+                "external_input"
+              ]
+            },
+            "ruling_kind": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "status": {
+              "const": "pending_ruling"
+            }
+          },
+          "required": [
+            "status",
+            "ruling_kind",
+            "default_resolver"
+          ]
         }
       ],
       "description": "Structured authoritative result for combat_ready.",
@@ -10658,6 +10834,28 @@
         {
           "required": [
             "error"
+          ]
+        },
+        {
+          "properties": {
+            "default_resolver": {
+              "enum": [
+                "agent",
+                "external_input"
+              ]
+            },
+            "ruling_kind": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "status": {
+              "const": "pending_ruling"
+            }
+          },
+          "required": [
+            "status",
+            "ruling_kind",
+            "default_resolver"
           ]
         }
       ],
@@ -13050,6 +13248,28 @@
           "required": [
             "error"
           ]
+        },
+        {
+          "properties": {
+            "default_resolver": {
+              "enum": [
+                "agent",
+                "external_input"
+              ]
+            },
+            "ruling_kind": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "status": {
+              "const": "pending_ruling"
+            }
+          },
+          "required": [
+            "status",
+            "ruling_kind",
+            "default_resolver"
+          ]
         }
       ],
       "description": "Structured authoritative result for dnd_check.",
@@ -13289,6 +13509,28 @@
         {
           "required": [
             "error"
+          ]
+        },
+        {
+          "properties": {
+            "default_resolver": {
+              "enum": [
+                "agent",
+                "external_input"
+              ]
+            },
+            "ruling_kind": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "status": {
+              "const": "pending_ruling"
+            }
+          },
+          "required": [
+            "status",
+            "ruling_kind",
+            "default_resolver"
           ]
         }
       ],
@@ -14588,7 +14830,7 @@
     }
   },
   {
-    "description": "Build a D&D Module Pack via start, get, evidence, edit, and finalize.\n\nThe public input schema exposes each action's payload shape. Reuse server-issued\njob/module ids, pass the latest import-job revision on guarded edits, and copy only\nreal module_draft(evidence) source_ref receipts into play-profile decisions.",
+    "description": "Build a D&D Module Pack via start, get, evidence, edit, and finalize.\n\nThe public input schema exposes each action's payload shape. Reuse server-issued\njob/module ids, pass the latest import-job revision on guarded edits, and copy only\nreal module_draft(evidence) source_ref receipts into play-profile decisions.\nFor an installed Pack, edit(content/statblock) accepts module_id directly;\nit appends an immutable source review and does not require a draft job.",
     "error_envelope": {
       "fields": [
         "code",
@@ -18196,6 +18438,28 @@
         {
           "required": [
             "error"
+          ]
+        },
+        {
+          "properties": {
+            "default_resolver": {
+              "enum": [
+                "agent",
+                "external_input"
+              ]
+            },
+            "ruling_kind": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "status": {
+              "const": "pending_ruling"
+            }
+          },
+          "required": [
+            "status",
+            "ruling_kind",
+            "default_resolver"
           ]
         }
       ],
