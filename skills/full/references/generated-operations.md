@@ -465,6 +465,9 @@ for damage or open combat just to settle a trap/fall. heal uses {amount}.
 effect_add uses {effect}; effect_remove uses {effect_id}; resource_set
 uses {resource,value}; exhaustion_set uses {value}. Keep one stable
 idempotency_key per intended transition and copy its new actor revision.
+level_advance requires {class_name,hp_method,reason,source_ref,target_level}.
+target_level is the intended TOTAL character level, exactly current + 1.
+Read progression before advancing; never repeat a completed milestone.
 source_traits is DM-only, outside combat, for existing non-PC actors:
 {source_ref,reason,traits:{damage_resistances?:["fire"],darkvision_ft?:60,
 languages?:["Common"],damage_immunities?:[],damage_vulnerabilities?:[],

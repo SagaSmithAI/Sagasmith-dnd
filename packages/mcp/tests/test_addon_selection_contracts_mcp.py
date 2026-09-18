@@ -1564,6 +1564,7 @@ def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
                     "character_id": owner["id"],
                     "action": "level_advance",
                     "payload": {
+                        "target_level": 4,
                         "class_name": "Artificer",
                         "hp_method": "fixed",
                         "reason": "Steel Defender owner scaling regression",
@@ -1588,6 +1589,7 @@ def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
                 "character_id": owner["id"],
                 "action": "level_advance",
                 "payload": {
+                    "target_level": 5,
                     "class_name": "Artificer",
                     "hp_method": "fixed",
                     "reason": "Steel Defender owner scaling regression",
@@ -3642,6 +3644,7 @@ def test_reviewed_addon_background_materializes_embedded_equipment(tmp_path: Pat
                 "character_id": marked_character["id"],
                 "action": "level_advance",
                 "payload": {
+                    "target_level": 4,
                     "class_name": "Wizard",
                     "hp_method": "fixed",
                     "reason": "unlock the reviewed level-four species feature",

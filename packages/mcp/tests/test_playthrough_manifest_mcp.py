@@ -457,6 +457,7 @@ def test_manifest_syncs_canonical_state_and_verifies_source_defined_ending(
                     "character_id": actor["id"],
                     "action": "level_advance",
                     "payload": {
+                        "target_level": 2,
                         "class_name": "Fighter",
                         "hp_method": "fixed",
                         "reason": "A weak citation must not pass a full playthrough.",

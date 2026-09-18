@@ -737,7 +737,9 @@ dice, and healing calls.
 `character_state_change(action="level_advance")` is DM-authorized and valid only
 in `lobby`, outside active combat. It requires the current actor revision, a fresh
 idempotency key, the exact existing `class_name`, `hp_method` (`fixed` or
-`rolled`; never provide `hp_roll`), and nonempty `reason` and `source_ref`. In XP
+`rolled`; never provide `hp_roll`), integer `target_level` (current total level + 1),
+and nonempty `reason` and `source_ref`. An already reached target is rejected
+even with a new key; replay the original key/payload after an uncertain result. In XP
 mode it requires the actor's current cumulative XP to meet the next-level
 threshold; milestone mode relies on the cited trigger. It currently advances a
 2014 or 2024 single-class actor exactly one level; multiclass advancement remains

@@ -1428,6 +1428,7 @@ def test_locked_scag_and_tortle_activate_exact_dependency_closure_apply_and_rest
                 "character_id": character["id"],
                 "action": "level_advance",
                 "payload": {
+                    "target_level": 2,
                     "class_name": "Fighter",
                     "hp_method": "fixed",
                     "reason": "Official background must preserve ordinary level advancement",

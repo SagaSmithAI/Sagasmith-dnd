@@ -491,6 +491,7 @@ def test_locked_artificer_build_creates_and_commands_defender(tmp_path: Path) ->
             for level in (2, 3):
                 advanced = await _call(server, "character_state_change", {
                     "character_id": owner["id"], "action": "level_advance", "payload": {
+                        "target_level": level,
                         "class_name": "Artificer", "hp_method": "fixed",
                         "reason": "Actual official build test",
                         "source_ref": "bundled:srd2014/03_Characterization/Beyond_1st_Level.md",
@@ -929,6 +930,7 @@ def test_locked_artificer_spell_choices_scaling_and_transactional_guards(tmp_pat
                 request = {
                     "character_id": owner["id"], "action": "level_advance",
                     "payload": {
+                        "target_level": level,
                         "class_name": "Artificer", "hp_method": "fixed",
                         "reason": f"Acceptance level {level}",
                         "source_ref": "bundled:srd2014/03_Characterization/Beyond_1st_Level.md",
@@ -981,6 +983,7 @@ def test_locked_artificer_spell_choices_scaling_and_transactional_guards(tmp_pat
                 ("character_state_change", levels[2], {
                     "character_id": final_owner["id"], "action": "level_advance",
                     "payload": {
+                        "target_level": 2,
                         "class_name": "Artificer", "hp_method": "fixed",
                         "reason": "Acceptance level 2",
                         "source_ref": "bundled:srd2014/03_Characterization/Beyond_1st_Level.md",

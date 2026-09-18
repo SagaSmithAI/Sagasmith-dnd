@@ -459,7 +459,10 @@ selection must not leak private state or capabilities across principals.
    `eligible` status. Add a campaign event with the same exact source reference.
 2. Settle the trigger before entering a later sourced scene. End combat, switch
    to `lobby`, re-read the actor revision, and call
-   `character_state_change(action="level_advance")`. This advances an exact
+   `character_state_change(action="level_advance")` with `payload.target_level`
+   set to the intended total level. Compare it with the current sheet first:
+   an already reached milestone must not advance again under a new key.
+   Reuse the original key and payload for an uncertain prior result. This advances an exact
    2014 or 2024 single-class actor by one level; multiclass remains a stop
    condition. Use the fixed HP value unless
    the table selected rolled HP; the engine owns that roll, so never supply a roll

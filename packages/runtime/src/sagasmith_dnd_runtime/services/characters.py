@@ -2445,6 +2445,7 @@ class CharactersService:
         principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
+        target_level: int | None = None,
     ) -> dict[str, Any]:
         """Advance one existing 2014 class level during the lobby phase."""
         current = self.characters.get(character_id)
@@ -2479,6 +2480,8 @@ class CharactersService:
             "reason": normalized_reason,
             "source_ref": normalized_source_ref,
         }
+        if target_level is not None:
+            mutation_payload["target_level"] = target_level
         request_payload = {
             "operation": "character.level.advance",
             "character_id": character_id,
@@ -2491,6 +2494,13 @@ class CharactersService:
         if current.revision != expected_revision:
             raise ValueError(f"character revision conflict: {character_id}")
         old_level = int(current.sheet.get("progression", {}).get("level", 0) or 0)
+        if type(target_level) is not int or not 2 <= target_level <= 20:
+            raise ValueError("level_advance requires integer target_level between 2 and 20")
+        if target_level != old_level + 1:
+            raise ValueError(
+                f"target_level must be current level + 1: current={old_level}, "
+                f"target={target_level}; do not repeat an already completed milestone"
+            )
         experience_before = _support.experience_status(current.sheet)
         if advancement_mode == "xp" and not experience_before["eligible"]:
             raise _support.CombatEngineError(
@@ -6580,6 +6590,9 @@ boundary.
         effect_add uses {effect}; effect_remove uses {effect_id}; resource_set
         uses {resource,value}; exhaustion_set uses {value}. Keep one stable
         idempotency_key per intended transition and copy its new actor revision.
+        level_advance requires {class_name,hp_method,reason,source_ref,target_level}.
+        target_level is the intended TOTAL character level, exactly current + 1.
+        Read progression before advancing; never repeat a completed milestone.
         source_traits is DM-only, outside combat, for existing non-PC actors:
         {source_ref,reason,traits:{damage_resistances?:["fire"],darkvision_ft?:60,
         languages?:["Common"],damage_immunities?:[],damage_vulnerabilities?:[],
@@ -6701,11 +6714,13 @@ boundary.
                 idempotency_key=idempotency_key,
             )
         elif action == "level_advance":
-            unexpected = set(data) - {"class_name", "hp_method", "reason", "source_ref"}
+            unexpected = set(data) - {
+                "class_name", "hp_method", "reason", "source_ref", "target_level"
+            }
             if unexpected:
                 raise ValueError(
                     "level_advance payload accepts only class_name, hp_method, reason, "
-                    f"and source_ref; unexpected fields: {sorted(unexpected)}"
+                    f"source_ref, and target_level; unexpected fields: {sorted(unexpected)}"
                 )
             result = self.character_level_advance(
                 character_id,
@@ -6716,6 +6731,7 @@ boundary.
                 principal_id,
                 expected_revision,
                 idempotency_key,
+                target_level=data.get("target_level"),
             )
         elif action == "resource_sync":
             unexpected = set(data) - {"reason"}

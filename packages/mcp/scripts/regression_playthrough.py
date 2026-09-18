@@ -11824,6 +11824,7 @@ async def _advance_level(
                 "character_id": actor_id,
                 "action": "level_advance",
                 "payload": {
+                    "target_level": target_level,
                     "class_name": normalized_class,
                     "hp_method": hp_method,
                     "reason": normalized_reason,

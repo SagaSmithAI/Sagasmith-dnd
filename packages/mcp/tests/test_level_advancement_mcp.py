@@ -2210,6 +2210,7 @@ def test_land_druid_bonus_cantrip_and_non_list_circle_spells_are_materialized(
                 "character_id": actor["id"],
                 "action": "level_advance",
                 "payload": {
+                    "target_level": 3,
                     "class_name": "Druid",
                     "hp_method": "fixed",
                     "reason": "milestone",
@@ -2273,6 +2274,7 @@ def test_ability_score_improvement_is_applied_and_repeats_at_later_unlocks(
                 "character_id": actor["id"],
                 "action": "level_advance",
                 "payload": {
+                    "target_level": 4,
                     "class_name": "Fighter",
                     "hp_method": "fixed",
                     "reason": "milestone",
@@ -2320,6 +2322,7 @@ def test_ability_score_improvement_is_applied_and_repeats_at_later_unlocks(
                     "character_id": actor["id"],
                     "action": "level_advance",
                     "payload": {
+                        "target_level": level,
                         "class_name": "Fighter",
                         "hp_method": "fixed",
                         "reason": "milestone",
@@ -2437,6 +2440,7 @@ def test_prepared_spell_limit_tracks_spellcasting_ability_score_improvement(
                 "character_id": actor["id"],
                 "action": "level_advance",
                 "payload": {
+                    "target_level": 4,
                     "class_name": "Cleric",
                     "hp_method": "fixed",
                     "reason": "milestone",
@@ -2556,6 +2560,7 @@ def test_lobby_level_advance_is_source_bound_and_reports_catalog_follow_up(
             "character_id": actor["id"],
             "action": "level_advance",
             "payload": {
+                "target_level": 2,
                 "class_name": "Cleric",
                 "hp_method": "fixed",
                 "reason": "survived the opening encounter",
@@ -2565,10 +2570,31 @@ def test_lobby_level_advance_is_source_bound_and_reports_catalog_follow_up(
             "idempotency_key": "level-2",
         }
 
+        for invalid_target in (None, True, "2", 3):
+            with pytest.raises(Exception, match="target_level"):
+                await _call(server, "character_state_change", {
+                    **arguments,
+                    "payload": {**arguments["payload"], "target_level": invalid_target},
+                })
+        untouched = await _call(server, "character_query", {
+            "view": "get", "payload": {"character_id": actor["id"]},
+        })
+        assert untouched["revision"] == actor["revision"]
         advanced = await _call(server, "character_state_change", arguments)
         replay = await _call(server, "character_state_change", arguments)
 
         assert replay == advanced
+        with pytest.raises(Exception, match="already completed milestone"):
+            await _call(server, "character_state_change", {
+                **arguments,
+                "expected_revision": advanced["character"]["revision"],
+                "idempotency_key": "repeat-milestone-new-key",
+            })
+        unchanged_level = await _call(server, "character_query", {
+            "view": "get", "payload": {"character_id": actor["id"]},
+        })
+        assert unchanged_level["revision"] == advanced["character"]["revision"]
+        assert unchanged_level["sheet"] == advanced["character"]["sheet"]
         assert advanced["status"] == "committed"
         sheet = advanced["character"]["sheet"]
         assert sheet["progression"]["level"] == 2
@@ -2705,6 +2731,7 @@ def test_lobby_level_advance_is_source_bound_and_reports_catalog_follow_up(
                         "character_id": actor["id"],
                         "action": "level_advance",
                         "payload": {
+                            "target_level": level,
                             "class_name": "Cleric",
                             "hp_method": "fixed",
                             "reason": f"resource scaling regression level {level}",
@@ -2750,6 +2777,7 @@ def test_lobby_level_advance_is_source_bound_and_reports_catalog_follow_up(
                     "character_id": unresolvable["id"],
                     "action": "level_advance",
                     "payload": {
+                        "target_level": 2,
                         "class_name": "Cleric",
                         "hp_method": "fixed",
                         "reason": "milestone",
@@ -2907,6 +2935,7 @@ def test_level_advance_materializes_new_always_prepared_domain_spells(
                 "character_id": actor["id"],
                 "action": "level_advance",
                 "payload": {
+                    "target_level": 2,
                     "class_name": "Cleric",
                     "hp_method": "fixed",
                     "reason": "module milestone",
@@ -2923,6 +2952,7 @@ def test_level_advance_materializes_new_always_prepared_domain_spells(
                 "character_id": actor["id"],
                 "action": "level_advance",
                 "payload": {
+                    "target_level": 3,
                     "class_name": "Cleric",
                     "hp_method": "fixed",
                     "reason": "module milestone",
@@ -3001,6 +3031,7 @@ def test_rolled_level_hp_is_engine_owned_idempotent_and_revision_safe(
             "character_id": actor["id"],
             "action": "level_advance",
             "payload": {
+                "target_level": 2,
                 "class_name": "Cleric",
                 "hp_method": "rolled",
                 "reason": "milestone",
@@ -3112,6 +3143,7 @@ def test_level_advance_is_rejected_outside_lobby(tmp_path: Path) -> None:
                     "character_id": actor["id"],
                     "action": "level_advance",
                     "payload": {
+                        "target_level": 2,
                         "class_name": "Cleric",
                         "hp_method": "fixed",
                         "reason": "milestone",
@@ -3197,6 +3229,7 @@ def test_xp_mode_awards_atomically_and_enforces_level_threshold(tmp_path: Path) 
                     "character_id": actor["id"],
                     "action": "level_advance",
                     "payload": {
+                        "target_level": 2,
                         "class_name": "Cleric",
                         "hp_method": "fixed",
                         "reason": "premature",
@@ -3240,6 +3273,7 @@ def test_xp_mode_awards_atomically_and_enforces_level_threshold(tmp_path: Path) 
                 "character_id": actor["id"],
                 "action": "level_advance",
                 "payload": {
+                    "target_level": 2,
                     "class_name": "Cleric",
                     "hp_method": "fixed",
                     "reason": "reached 300 XP",
