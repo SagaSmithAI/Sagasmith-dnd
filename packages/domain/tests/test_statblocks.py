@@ -3048,6 +3048,29 @@ def test_agent_review_can_keep_custom_multiattack_as_agent_ruling() -> None:
     assert filled["fill"]["multiattack_options"][0]["resolution"] == "agent_ruling"
 
 
+def test_reviewed_multiattack_mismatch_exposes_exact_repair_without_accepting_it() -> None:
+    parsed = parse_2014_statblock(BANDIT_CAPTAIN, source_key="module-review:repair-excerpt")
+    activity = next(
+        item for item in parsed.sheet["content"]["activities"] if item["name"] == "Multiattack"
+    )
+    declaration = {
+        "activity_id": activity["id"],
+        "source_excerpt": "***Multiattack.*** " + activity["description"],
+        "reason": "Retain the source procedure for Agent resolution.",
+        "resolution": "agent_ruling",
+    }
+    with pytest.raises(StatblockImportError) as error:
+        apply_reviewed_statblock_fill(parsed.sheet, {"multiattack_options": [declaration]})
+    expected = " ".join(activity["description"].split())
+    assert f"activity_id={activity['id']!r}" in str(error.value)
+    assert f"expected source_excerpt={expected!r}" in str(error.value)
+    declaration["source_excerpt"] = expected
+    repaired = apply_reviewed_statblock_fill(
+        parsed.sheet, {"multiattack_options": [declaration]}
+    )
+    assert repaired["fill"]["multiattack_options"][0]["source_excerpt"] == expected
+
+
 def test_agent_ruling_multiattack_rejects_structured_options() -> None:
     parsed = parse_2014_statblock(
         BANDIT_CAPTAIN,

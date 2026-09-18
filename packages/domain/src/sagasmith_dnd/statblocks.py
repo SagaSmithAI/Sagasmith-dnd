@@ -3294,7 +3294,9 @@ def apply_reviewed_statblock_fill(
         source_description = " ".join(str(activity.get("description") or "").split())
         if not source_excerpt or source_excerpt != source_description:
             raise StatblockImportError(
-                "reviewed multiattack source_excerpt must exactly match the source activity"
+                "reviewed multiattack source_excerpt must exactly match the source activity; "
+                f"activity_id={activity_id!r}, expected source_excerpt={source_description!r}. "
+                "Use the parsed description without the activity heading or Markdown emphasis."
             )
         reason = " ".join(str(declaration.get("reason") or "").split())
         if not reason or len(reason) > 500:
