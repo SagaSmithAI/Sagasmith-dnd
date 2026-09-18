@@ -1,6 +1,25 @@
 # Module drafts and packs
 
-Call `module_draft(start)` with a managed module book. Core+D&D stage, inspect,
+## Already installed module: review a missing creature
+
+Use this route when the active module exists and only a mechanical card is
+missing. It does not require a draft job or `start`. Read
+`references/module-image-content-review.md`; query existing content reviews
+before creating another. Submit `module_draft(action="edit")` with payload
+`{module_id,operation:"content",scene_id,content_key,content_kind,
+normalized_content,observation,source_asset_id,page_number}` for page evidence.
+`observation` is a concise evidence note of 1–500 characters. Use the exact
+returned module scene and asset ids; `normalized_content` is the complete
+source-backed card text. For text evidence replace the asset/page pair with
+`source_chunk_ids`. Do not pass `review_id` or `source_excerpt` to this edit.
+Read the resulting review through `module_query(view="content")`, then use
+`character_create_from(mode="module_statblock")` with that returned review id.
+An installed `evidence(kind="page")` accepts module_id; installed chunks are
+read with `module_expand`, not draft `evidence(kind="chunks")`.
+
+## New import or explicit Pack revision
+
+For a new import or explicit Pack revision, call `module_draft(start)` with a managed module book. Core+D&D stage, inspect,
 validate, and mechanically import an inactive editable module workspace in one
 operation. A failed validation remains a draft; inspect its page with
 `module_draft(evidence)`, submit a checksum-bound
