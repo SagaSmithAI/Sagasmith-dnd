@@ -3373,6 +3373,18 @@ def test_spell_attack_preflight_uses_source_card_and_spellcasting_override() -> 
     assert plan["attack_bonus"] == 6
     assert plan["damage_expression"] == "2d6"
     assert plan["range"]["normal_ft"] == 60
+    assert plan["magical"] is True
+    target["sheet"]["traits"]["damage_defenses"] = [{
+        "kind": "resistance",
+        "damage_types": ["fire"],
+        "predicates": ["nonmagical_attack"],
+        "source_key": "test:nonmagical-fire-resistance",
+    }]
+    damage = apply_damage_to_sheet(
+        target["sheet"], amount=8, damage_type="fire",
+        attack_facts={"magical": plan["magical"], "materials": []},
+    )
+    assert damage["applied_amount"] == 8
 
 
 def test_preserve_life_enforces_pool_half_hp_and_creature_type() -> None:

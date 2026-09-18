@@ -3471,6 +3471,7 @@ def preflight_spell_attack(
     synthetic_id = f"spell-attack:{spell_id}"
     synthetic = {
         "item_id": synthetic_id,
+        "magical": True,
         "name": str(spell.get("name") or spell_id),
         "attack_type": attack_mode,
         "attack_ability": "spell",
