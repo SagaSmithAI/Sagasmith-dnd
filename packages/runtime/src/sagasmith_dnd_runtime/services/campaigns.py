@@ -3809,9 +3809,25 @@ class CampaignsService:
         When actor knowledge is included, a DM-only event may only create
         DM-scoped knowledge.  Owner, party, player, and public knowledge must
         cite a party/player/public/actor-visible event.
+
+        For add, put event details in payload.payload and visibility in
+        payload.audience_scope; campaign_id belongs at the top level.
         """
         data = self.facade_payload(payload)
         if action == "add":
+            allowed = {
+                "summary", "event_type", "payload", "audience_scope", "branch_id",
+                "known_by_actor_ids", "knowledge_key", "knowledge_proposition",
+                "knowledge_disclosure_scope",
+            }
+            unknown = sorted(set(data) - allowed)
+            if unknown:
+                raise ValueError(
+                    f"campaign_event add has unexpected payload fields: {unknown}. "
+                    "Use audience_scope for visibility, payload for event details, "
+                    "event_type for type, and top-level campaign_id. "
+                    f"Allowed fields: {sorted(allowed)}"
+                )
             result = self.event_add(
                 campaign_id,
                 self.required(data, "summary"),

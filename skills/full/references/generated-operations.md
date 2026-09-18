@@ -225,6 +225,9 @@ When actor knowledge is included, a DM-only event may only create
 DM-scoped knowledge.  Owner, party, player, and public knowledge must
 cite a party/player/public/actor-visible event.
 
+For add, put event details in payload.payload and visibility in
+payload.audience_scope; campaign_id belongs at the top level.
+
 Phases: lobby, play
 
 Exact input schema (copy field names and nesting):

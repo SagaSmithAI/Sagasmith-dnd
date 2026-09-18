@@ -2266,7 +2266,7 @@
     }
   },
   {
-    "description": "Append an auditable campaign event or retrieve its branch-visible event log.\n\nWhen actor knowledge is included, a DM-only event may only create\nDM-scoped knowledge.  Owner, party, player, and public knowledge must\ncite a party/player/public/actor-visible event.",
+    "description": "Append an auditable campaign event or retrieve its branch-visible event log.\n\nWhen actor knowledge is included, a DM-only event may only create\nDM-scoped knowledge.  Owner, party, player, and public knowledge must\ncite a party/player/public/actor-visible event.\n\nFor add, put event details in payload.payload and visibility in\npayload.audience_scope; campaign_id belongs at the top level.",
     "error_envelope": {
       "fields": [
         "code",
