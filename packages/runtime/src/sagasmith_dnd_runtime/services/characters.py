@@ -2291,6 +2291,65 @@ class CharactersService:
             },
         )
 
+    def character_source_traits_apply(
+        self,
+        character_id: str,
+        traits: dict[str, Any],
+        source_ref: str,
+        reason: str,
+        principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Repair source-authored NPC traits without replacing encounter state."""
+        current = self.characters.get(character_id)
+        self.require_character_control(current, principal_id)
+        self.require_outside_active_combat(current, "source-authored trait repair")
+        if current.campaign_id is None or current.character_type == "pc":
+            raise ValueError("source traits require a campaign-bound non-PC actor")
+        self.access.require_campaign(
+            current.campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES
+        )
+        allowed = {
+            "darkvision_ft",
+            "languages",
+            "damage_resistances",
+            "damage_immunities",
+            "damage_vulnerabilities",
+            "condition_immunities",
+        }
+        if not isinstance(traits, dict) or not traits or set(traits) - allowed:
+            raise ValueError(
+                f"source traits require a non-empty object containing only {sorted(allowed)}"
+            )
+        normalized_reason = str(reason).strip()
+        if not normalized_reason or len(normalized_reason) > 1000:
+            raise ValueError("source traits reason must contain 1 to 1000 characters")
+        normalized_ref = str(source_ref).strip()
+        try:
+            evidence = self.statblock_variant_evidence(
+                current.campaign_id, {"source_ref": normalized_ref}
+            )
+        except (LookupError, _support.NoResultFound) as exc:
+            raise ValueError("source traits source_ref must identify managed sources") from exc
+        sheet = _support.apply_statblock_variant(
+            current.sheet, {**traits, "source_ref": normalized_ref}
+        )
+        return self.update_sheet(
+            character_id,
+            sheet,
+            operation="character.source_traits.apply",
+            principal_id=principal_id,
+            expected_revision=expected_revision,
+            idempotency_key=idempotency_key,
+            payload={"traits": traits, "source_ref": normalized_ref, "reason": normalized_reason},
+            response_extra={
+                "source_ref": normalized_ref,
+                "source_evidence": evidence,
+                "reason": normalized_reason,
+            },
+        )
+
     def character_stand(
         self,
         character_id: str,
@@ -6483,6 +6542,7 @@ boundary.
             "level_advance",
             "resource_sync",
             "source_state",
+            "source_traits",
             "stand",
             "knock_prone",
             "breathing_transition",
@@ -6500,6 +6560,11 @@ boundary.
         effect_add uses {effect}; effect_remove uses {effect_id}; resource_set
         uses {resource,value}; exhaustion_set uses {value}. Keep one stable
         idempotency_key per intended transition and copy its new actor revision.
+        source_traits is DM-only, outside combat, for existing non-PC actors:
+        {source_ref,reason,traits:{damage_resistances?:["fire"],darkvision_ft?:60,
+        languages?:["Common"],damage_immunities?:[],damage_vulnerabilities?:[],
+        condition_immunities?:[]}}. Each supplied trait replaces that trait only;
+        copy the full source-supported list. It preserves HP, conditions and resources.
         """
         data = self.facade_payload(payload)
         if action == "effect_add":
@@ -6641,6 +6706,19 @@ boundary.
                 )
             result = self.character_class_resources_synchronize(
                 character_id,
+                self.required(data, "reason"),
+                principal_id,
+                expected_revision,
+                idempotency_key,
+            )
+        elif action == "source_traits":
+            unexpected = set(data) - {"traits", "source_ref", "reason"}
+            if unexpected:
+                raise ValueError(f"unexpected source traits fields: {sorted(unexpected)}")
+            result = self.character_source_traits_apply(
+                character_id,
+                self.required(data, "traits"),
+                self.required(data, "source_ref"),
                 self.required(data, "reason"),
                 principal_id,
                 expected_revision,

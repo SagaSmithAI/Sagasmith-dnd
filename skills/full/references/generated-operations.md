@@ -456,13 +456,18 @@ for damage or open combat just to settle a trap/fall. heal uses {amount}.
 effect_add uses {effect}; effect_remove uses {effect_id}; resource_set
 uses {resource,value}; exhaustion_set uses {value}. Keep one stable
 idempotency_key per intended transition and copy its new actor revision.
+source_traits is DM-only, outside combat, for existing non-PC actors:
+{source_ref,reason,traits:{damage_resistances?:["fire"],darkvision_ft?:60,
+languages?:["Common"],damage_immunities?:[],damage_vulnerabilities?:[],
+condition_immunities?:[]}}. Each supplied trait replaces that trait only;
+copy the full source-supported list. It preserves HP, conditions and resources.
 
 Phases: lobby, play
 
 Exact input schema (copy field names and nesting):
 
 ```json
-{"additionalProperties":false,"properties":{"character_id":{"title":"Character Id","type":"string","description":"Authoritative player character or NPC identifier.","maxLength":256},"action":{"enum":["effect_add","effect_remove","resource_set","exhaustion_set","damage","heal","death_save","stabilize","revive","level_advance","resource_sync","source_state","stand","knock_prone","breathing_transition"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["character_id","action"],"title":"character_state_changeInput","type":"object"}
+{"additionalProperties":false,"properties":{"character_id":{"title":"Character Id","type":"string","description":"Authoritative player character or NPC identifier.","maxLength":256},"action":{"enum":["effect_add","effect_remove","resource_set","exhaustion_set","damage","heal","death_save","stabilize","revive","level_advance","resource_sync","source_state","source_traits","stand","knock_prone","breathing_transition"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["character_id","action"],"title":"character_state_changeInput","type":"object"}
 ```
 
 ## chase
