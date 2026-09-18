@@ -5020,6 +5020,10 @@ boundary.
 
         get payload={character_id}; batch={campaign_id,character_ids:[...]};
         list={campaign_id}; catalog={campaign_id,kind?,query?,include_context?}.
+        For NPC/monster catalog cards use kind="actor_card", not "actor";
+        omit kind to search across categories. Catalog cards are not existing actors:
+        list/get reads campaign instances. For installed module statblock reviews,
+        use module_query content with content_kind="dnd5e_2014_statblock".
         rest={character_id,rest_type,duration_minutes,...}; short rests require
         duration_minutes. document reads an allowlisted source_path, not a
         character-sheet section. Reuse write receipts before reloading full cards.

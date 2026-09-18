@@ -4717,7 +4717,7 @@
     }
   },
   {
-    "description": "Read actors, catalog options, or a rest/advancement preflight.\n\nget payload={character_id}; batch={campaign_id,character_ids:[...]};\nlist={campaign_id}; catalog={campaign_id,kind?,query?,include_context?}.\nrest={character_id,rest_type,duration_minutes,...}; short rests require\nduration_minutes. document reads an allowlisted source_path, not a\ncharacter-sheet section. Reuse write receipts before reloading full cards.",
+    "description": "Read actors, catalog options, or a rest/advancement preflight.\n\nget payload={character_id}; batch={campaign_id,character_ids:[...]};\nlist={campaign_id}; catalog={campaign_id,kind?,query?,include_context?}.\nFor NPC/monster catalog cards use kind=\"actor_card\", not \"actor\";\nomit kind to search across categories. Catalog cards are not existing actors:\nlist/get reads campaign instances. For installed module statblock reviews,\nuse module_query content with content_kind=\"dnd5e_2014_statblock\".\nrest={character_id,rest_type,duration_minutes,...}; short rests require\nduration_minutes. document reads an allowlisted source_path, not a\ncharacter-sheet section. Reuse write receipts before reloading full cards.",
     "error_envelope": {
       "fields": [
         "code",
