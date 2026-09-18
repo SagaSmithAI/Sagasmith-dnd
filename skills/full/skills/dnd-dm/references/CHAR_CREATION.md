@@ -1,5 +1,13 @@
 # Character Creation and Advancement
 
+For a standard catalog background, submit only its required choices. Do not add
+`custom_name`, custom `skills`, or `equipment_mode` unless intentionally using
+the custom-background route. Duplicate proficiencies do not require a custom
+background: `skill_replacements` is an object mapping each duplicate skill to a
+valid unowned replacement, for example `{"insight":"history"}`, not an array.
+`pending_choice` or `pending_ruling` is not a completed application; resolve its
+bounded requirement, then read back the background and awarded inventory.
+
 Apply ability scores only through `character_ability_apply`; never write the six
 ability fields or their derived modifiers directly. The supported creation paths
 have distinct provenance:
