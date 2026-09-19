@@ -96,6 +96,12 @@ state. Use `detail:"full"` only when historical encounter events are needed.
 `current_turn` directly identifies the current actor and its visible tactical
 state; it is null when combat is inactive or that actor is hidden from the caller.
 The actor at `combatants[turn_index]` is current when the index is present.
+An attack or other action does not end that actor's turn. Use the returned
+`current_turn.actor_id` until `combat_end_turn` successfully commits. An empty
+`available_actions` list for another actor does not prove that actor is dead or
+incapacitated: it may simply not be that actor's turn. If a large response is
+saved to a file, read its `current_turn` near the beginning rather than selecting
+a later name or actor id from the participant list.
 Dead actors may already have been skipped by
 the engine. Do not call end-turn on them again or cycle through guessed actor ids.
 `available_actions` lists categories and a budget, not a completed tactical turn:
