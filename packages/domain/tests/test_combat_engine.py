@@ -6632,6 +6632,14 @@ def test_movement_and_choice_window_are_explicit() -> None:
     assert not resolved["pending"]
 
 
+@pytest.mark.parametrize("action", ["influence", "study", "utilize"])
+def test_2024_only_actions_report_edition_instead_of_missing_payment(action) -> None:
+    encounter = start_encounter([_actor("a"), _actor("b")], rng=random.Random(1))
+    current = encounter["combatants"][encounter["turn_index"]]["actor_id"]
+    with pytest.raises(CombatEngineError, match="requires the 2024 ruleset"):
+        resolve_common_action(encounter, actor_id_value=current, action=action)
+
+
 def test_common_actions_pay_action_and_keep_tactical_state_explicit() -> None:
     encounter = start_encounter([_actor("a"), _actor("b")], rng=random.Random(1))
     current = encounter["combatants"][encounter["turn_index"]]["actor_id"]

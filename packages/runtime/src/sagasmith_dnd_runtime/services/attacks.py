@@ -160,7 +160,6 @@ class AttacksService:
                 "reason": reason,
                 "cover_degree": cover_degree,
                 "long_range": bool(raw_spatial_facts.get("long_range", False)),
-                "target_within_5_ft": bool(raw_spatial_facts.get("target_within_5_ft", False)),
                 "cleave_secondary_eligible": bool(
                     raw_spatial_facts.get("cleave_secondary_eligible", False)
                 ),

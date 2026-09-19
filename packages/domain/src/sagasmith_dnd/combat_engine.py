@@ -6368,6 +6368,10 @@ def resolve_common_action(
         raise CombatEngineError(f"unsupported common action: {action}")
     if action == "shake_sleep" and _normalize_ruleset(value.get("ruleset")) != "2014":
         raise CombatEngineError("shake_sleep requires the 2014 Sleep mechanic")
+    if action in {"influence", "study", "utilize"} and _normalize_ruleset(
+        value.get("ruleset")
+    ) != "2024":
+        raise CombatEngineError(f"{action} requires the 2024 ruleset")
     current = current_combatant(value)
     combatant = next(
         (item for item in value.get("combatants", []) if item.get("actor_id") == actor_id_value),
