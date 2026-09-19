@@ -2762,6 +2762,7 @@ def validate_character_sheet(
             "speed",
             "hit_dice",
             "hp_progression",
+            "preclass_constitution_hp_adjustment",
             "death_saves",
             "last_death_save_elapsed_tick",
             "exhaustion",
@@ -3774,6 +3775,18 @@ def validate_character_sheet(
             },
             "hit_dice": normalized_hit_dice,
             "hp_progression": hp_progression,
+            **(
+                {
+                    "preclass_constitution_hp_adjustment": _integer(
+                        combat["preclass_constitution_hp_adjustment"],
+                        "sheet.combat.preclass_constitution_hp_adjustment",
+                        minimum=-30,
+                        maximum=30,
+                    )
+                }
+                if "preclass_constitution_hp_adjustment" in combat
+                else {}
+            ),
             "death_saves": {
                 "successes": _integer(
                     death_saves["successes"],

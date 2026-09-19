@@ -517,6 +517,7 @@ class CharactersService:
                 self.require_engine_owned_character_state(
                     sheet,
                     current_sheet=before.sheet,
+                    allow_preclass_hp_change=operation == "character.content.apply",
                 )
                 _support._require_authoritative_background_state(
                     sheet,
@@ -559,6 +560,7 @@ class CharactersService:
             self.require_engine_owned_character_state(
                 sheet,
                 current_sheet=before.sheet,
+                allow_preclass_hp_change=operation == "character.content.apply",
             )
             _support._require_authoritative_background_state(
                 sheet,
@@ -864,6 +866,7 @@ class CharactersService:
         candidate_sheet: Mapping[str, Any],
         *,
         current_sheet: Mapping[str, Any] | None = None,
+        allow_preclass_hp_change: bool = False,
     ) -> None:
         """Preserve runtime-owned rest capabilities and external inventory references."""
 
@@ -884,6 +887,15 @@ class CharactersService:
         candidate_combat = dict(candidate_sheet.get("combat") or {})
         candidate_has_window = "short_rest_hit_dice" in candidate_combat
         current_combat = dict(current_sheet.get("combat") or {}) if current_sheet else {}
+        pending_hp = "preclass_constitution_hp_adjustment"
+        if not allow_preclass_hp_change and (
+            (pending_hp in candidate_combat) != (pending_hp in current_combat)
+            or candidate_combat.get(pending_hp) != current_combat.get(pending_hp)
+        ):
+            raise ValueError(
+                "sheet.combat.preclass_constitution_hp_adjustment is engine-owned "
+                "and may only be changed by source-bound content application"
+            )
         current_has_window = "short_rest_hit_dice" in current_combat
         if current_sheet is None:
             changed = candidate_has_window
