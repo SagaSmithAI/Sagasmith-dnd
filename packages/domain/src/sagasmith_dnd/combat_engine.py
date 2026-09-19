@@ -2789,6 +2789,16 @@ def preflight_attack(
     attack_mode = str(action.get("attack_mode") or weapon.get("attack_type") or "melee").lower()
     if attack_mode not in {"melee", "ranged"}:
         raise CombatEngineError("attack_mode must be melee or ranged")
+    if (
+        spatial_facts is not None
+        and attack_mode == "melee"
+        and int(5 if weapon.get("reach_ft") is None else weapon["reach_ft"]) <= 5
+        and spatial_facts.get("target_within_5_ft") is False
+    ):
+        raise CombatEngineError(
+            "spatial facts contradict weapon reach: this melee attack cannot reach "
+            "a target beyond 5 feet; move into reach or use a recorded ranged attack"
+        )
     weapon_attack_type = str(weapon.get("attack_type") or "melee").lower()
     if weapon_attack_type == "ranged" and attack_mode != "ranged":
         raise CombatEngineError("a ranged weapon cannot make a melee weapon attack")

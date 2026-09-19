@@ -1331,6 +1331,10 @@ def test_encounter_positioning_modes_are_explicit_engine_state() -> None:
 @pytest.mark.parametrize("condition", ["prone", "unconscious", "paralyzed"])
 def test_agent_attack_requires_explicit_condition_distance(condition: str) -> None:
     attacker = _actor("attacker")
+    attacker["derived"]["inventory"]["weapon_attacks"] = [{
+        "item_id": "reach-weapon", "attack_type": "melee", "reach_ft": 10,
+        "attack_bonus": 5, "damage_expression": "1d10 + 3", "damage_type": "slashing",
+    }]
     target = _actor("target")
     target["sheet"]["conditions"] = [condition]
     target["derived"] = derive_character_sheet(target["sheet"])
@@ -1342,7 +1346,7 @@ def test_agent_attack_requires_explicit_condition_distance(condition: str) -> No
         "targetable": True, "in_range": True, "cover_degree": "none",
         "attacker_can_see_target": True, "target_can_see_attacker": False,
     }
-    action = {"weapon_id": "unarmed-strike", "context": {"spatial_facts": facts}}
+    action = {"weapon_id": "reach-weapon", "context": {"spatial_facts": facts}}
     with pytest.raises(NeedsRulingError, match="target_within_5_ft"):
         preflight_attack(attacker, target, action=action, encounter=encounter)
     facts["target_within_5_ft"] = True
@@ -1401,6 +1405,15 @@ def test_agent_positioned_attack_requires_and_consumes_structured_spatial_facts(
     assert plan["status"] == "ready"
     assert plan["range"]["source"] == "agent_spatial_facts"
     assert plan["spatial_ruling"]["decision_id"] == "spatial:test-attack"
+
+    spatial_facts["target_within_5_ft"] = False
+    with pytest.raises(CombatEngineError, match="spatial facts contradict weapon reach"):
+        preflight_attack(
+            attacker,
+            target,
+            action={"weapon_id": "unarmed-strike", "context": {"spatial_facts": spatial_facts}},
+            encounter=encounter,
+        )
 
 
 def test_agent_positioned_movement_consumes_distance_and_opportunity_facts() -> None:
