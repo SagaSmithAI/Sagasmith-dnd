@@ -21,6 +21,17 @@ retain its actual wounds and history. Reuse the content review for new instances
 without repeating the card review. Preflight validates the supplied manifest;
 it does not prove an Agent's unstated relocation or individual identity claim.
 
+Before binding an existing named NPC, compare its actual mechanical source card
+and maximum HP with the encounter's printed creature and explicit overrides.
+A matching display name does not establish that match: a renamed Hobgoblin is
+not a Bugbear. Use the card's source provenance, not a summary or name alone.
+Distinguish maximum HP from wounds; never heal an existing individual to match
+printed starting HP. If a historical encounter used the wrong card, retain its
+receipts and deaths, record the source mismatch once, and exclude that encounter
+from faithful-source verification. Do not invent an impostor explanation or
+recreate the dead NPC to conceal the defect. Resolve any needed card correction
+through the public source-backed workflow before that actor acts again.
+
 Apply source-specific starting conditions before initiative. Presence in the
 manifest does not imply consciousness, hostility, or willingness to fight.
 For a fainted occupant, retain the source's actual waking trigger and duration;
