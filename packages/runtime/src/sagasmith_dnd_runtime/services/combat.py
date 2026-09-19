@@ -808,6 +808,26 @@ class CombatService:
                 principal_id,
                 dict(encounter) if isinstance(encounter, dict) else None,
             )
+            # Bound the presentation after audience filtering, never the stored
+            # encounter or idempotency receipt. Keep recent events for the UI.
+            projected = value["combat"]
+            if isinstance(projected, dict) and isinstance(projected.get("log"), list):
+                log = projected["log"]
+                if len(log) > 10:
+                    value["combat"] = {
+                        **projected,
+                        "log": log[-10:],
+                        "log_window": {
+                            "total": len(log),
+                            "returned": 10,
+                            "omitted": len(log) - 10,
+                            "read_next": {
+                                "tool": "combat_query",
+                                "view": "status",
+                                "payload": {"detail": "full"},
+                            },
+                        },
+                    }
         if self.is_dm(campaign_id, principal_id):
             return value
         result = value.get("result")

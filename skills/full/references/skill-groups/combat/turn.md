@@ -44,6 +44,13 @@ An unsuccessful tool call or a narrative description is not a wake receipt.
 
 ## Current turn
 
+Combat write replies retain current tactical state and the latest ten visible
+log entries. `combat.log_window` reports any omitted history; use
+`combat_query(view="status", payload={"detail":"full"})` only when that history
+is needed. Use the returned state and campaign revision for the next action;
+do not automatically query status again after every successful write. Stored
+transaction receipts retain the full original encounter log.
+
 In 2014 combat, draw an owned stowed weapon with
 `combat_common_action(action="draw_weapon", payload={item_id, slot:"main_hand"})`
 (or `off_hand`). Stow a held weapon with `action="stow_weapon", payload={item_id}`.
