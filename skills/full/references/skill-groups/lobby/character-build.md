@@ -58,6 +58,14 @@ transferred or changed award blocks this conversion rather than deleting other
 property. Do not manually edit award receipts or delete inventory to bypass it.
 Use the normal equipment tools after the build choices are settled.
 
+When a character reply is spilled to a file, distinguish the current
+`result.sheet.inventory` from embedded historical `before` snapshots and the
+derived inventory summary. Locate the actual JSON property line and read its
+bounded section for item IDs and equipment slots. A broad substring search for
+`inventory` can return historical data first; do not use that data as current
+state or repeatedly reread the start of the file. After an equipment write,
+use the new receipt's revision and inventory instead of an older spill.
+
 Unsupported equipment/wealth fields are rejected, not silently applied or
 discarded. If the activated source has no executable starting-equipment
 contract, its class receipt does not grant equipment: retain that build
