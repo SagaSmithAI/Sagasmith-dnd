@@ -18,6 +18,13 @@ does not make the ruling for you, and an empty search does not erase recorded
 facts. If evidence is genuinely insufficient, resolve that uncertainty before
 committing the dependent action.
 
+Every agent-positioned movement must explicitly provide
+`spatial_facts.opportunity_attack_actor_ids`: the eligible current combatant IDs,
+or `[]` after determining none apply. Omission means unassessed, not safe passage.
+The Runtime returns `pending_ruling` without spending movement when it is missing;
+complete the facts and retry with the current revision. The engine still checks
+reaction eligibility and owns the resulting reaction windows.
+
 Do not use `combat_end_turn`, combat restart, or an enemy's inaction to recover
 from a tool/schema error or unfinished content compilation. Keep the current
 turn while repairing the request; if implementation work is needed, preserve it

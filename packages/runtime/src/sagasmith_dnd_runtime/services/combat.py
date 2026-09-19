@@ -1008,6 +1008,13 @@ class CombatService:
                 "Agent movement spatial facts require decision_id, reason, destination_legal, "
                 "and distance_ft"
             )
+        if "opportunity_attack_actor_ids" not in spatial_facts:
+            raise _support.NeedsRulingError(
+                "agent-positioned movement requires an explicit opportunity attack "
+                "assessment; supply eligible actor IDs or [] when none apply",
+                missing=("movement.spatial_facts.opportunity_attack_actor_ids",),
+                ruling_kind="agent_dm_adjudication",
+            )
         decision_id = str(spatial_facts.get("decision_id") or "").strip()
         reason = " ".join(str(spatial_facts.get("reason") or "").split())
         if not decision_id or not reason:
@@ -1033,7 +1040,7 @@ class CombatService:
         participant_ids = {
             str(item.get("actor_id") or "") for item in encounter.get("combatants", [])
         }
-        threat_ids = spatial_facts.get("opportunity_attack_actor_ids", [])
+        threat_ids = spatial_facts["opportunity_attack_actor_ids"]
         if (
             not isinstance(threat_ids, list)
             or any(not isinstance(item, str) for item in threat_ids)
