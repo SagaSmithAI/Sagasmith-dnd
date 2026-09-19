@@ -19734,7 +19734,7 @@
     "roles": {}
   },
   {
-    "description": "Discover or read installed workflow guidance in bounded pages.\n\nStart with kind=skill, action=read, identifier=dnd.full. Search uses a\nshort query; follow page.next_cursor for more matches. Section requires\nan exact Markdown heading from outline, not a JSON key. For tool help,\nsearch generated-operations.md, then read the matching Markdown section.",
+    "description": "Discover or read installed workflow guidance in bounded pages.\n\nStart with kind=skill, action=read, identifier=dnd.full. kind=skill searches\nentry documents only. For referenced workflows and tool help, search\nkind=asset with identifier omitted, then reuse the returned asset identifier.\nSearch uses a short query; follow page.next_cursor for more matches. Section requires\nan exact Markdown heading from outline, not a JSON key. For tool help,\nsearch generated-operations.md, then read the matching Markdown section.",
     "error_envelope": {
       "fields": [
         "code",

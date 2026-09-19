@@ -1245,8 +1245,10 @@ Exact input schema (copy field names and nesting):
 
 Discover or read installed workflow guidance in bounded pages.
 
-Start with kind=skill, action=read, identifier=dnd.full. Search uses a
-short query; follow page.next_cursor for more matches. Section requires
+Start with kind=skill, action=read, identifier=dnd.full. kind=skill searches
+entry documents only. For referenced workflows and tool help, search
+kind=asset with identifier omitted, then reuse the returned asset identifier.
+Search uses a short query; follow page.next_cursor for more matches. Section requires
 an exact Markdown heading from outline, not a JSON key. For tool help,
 search generated-operations.md, then read the matching Markdown section.
 
