@@ -911,6 +911,10 @@ item_id is the owned sheet.inventory.items[].id from the latest receipt,
 not a catalog artifact_id. Party supports only add/remove. Apply catalog
 equipment with character_content_apply first, then equip its returned
 owned item ID; change quantity through update rather than applying twice.
+update.patch.mechanics merges mechanic fields; omitted fields are preserved.
+Bind ammunition with patch={mechanics:{ammunition_item_id:<owned ammo id>}}.
+Explicit null clears a nullable field; nested records and lists replace
+their whole field value. Revision and idempotency_key are top-level inputs.
 
 Phases: lobby, play
 

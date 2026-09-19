@@ -5518,7 +5518,16 @@ def update_inventory_item(
     item = next((entry for entry in value["inventory"]["items"] if entry["id"] == item_id), None)
     if item is None:
         raise LookupError(item_id)
-    replacement = {**item, **_object(patch, "item patch"), "id": item_id}
+    changes = _object(patch, "item patch")
+    replacement = {**item, **changes, "id": item_id}
+    if "mechanics" in changes:
+        # Binding ammunition must not reset damage, range, or other mechanics.
+        # Explicit field values (including null and empty lists) still replace
+        # their previous values; nested mechanic records remain whole values.
+        replacement["mechanics"] = {
+            **item["mechanics"],
+            **_object(changes["mechanics"], "item.mechanics"),
+        }
     replacement = _normalize_item(replacement, "item", generate_id=False)
     index = value["inventory"]["items"].index(item)
     value["inventory"]["items"][index] = replacement
