@@ -21,7 +21,14 @@ retain its actual wounds and history. Reuse the content review for new instances
 without repeating the card review. Preflight validates the supplied manifest;
 it does not prove an Agent's unstated relocation or individual identity claim.
 
-Before binding an existing named NPC, compare its actual mechanical source card
+Derive each enemy group's count from the actual occupancy passage, including
+rooms that respond to an alarm. A sentence saying reinforcements arrive does
+not by itself establish their number. Do not set `required_count` to the number
+of cards already created: a missing instance remains preparation work unless
+recorded events explain its absence. `ready=true` validates the submitted
+manifest and cards; it does not independently verify the source interpretation.
+
+Before binding any NPC, including a newly created instance, compare its actual mechanical source card
 and maximum HP with the encounter's printed creature and explicit overrides.
 A matching display name does not establish that match: a renamed Hobgoblin is
 not a Bugbear. Use the card's source provenance, not a summary or name alone.
