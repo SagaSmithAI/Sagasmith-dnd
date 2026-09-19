@@ -58,6 +58,16 @@ transferred or changed award blocks this conversion rather than deleting other
 property. Do not manually edit award receipts or delete inventory to bypass it.
 Use the normal equipment tools after the build choices are settled.
 
+Finish initial equipment before switching back to play. If setup was left
+unfinished, return to the lobby and continue the same character's legitimate
+build choices; changing phase does not itself authorize an item award. Do not
+rename starting equipment as `training`, `story_reward`, or `module_reward`
+to satisfy a play-time grant validator. An equipment rules entry establishes
+an item's mechanics, not an earned reward or purchase. Use an actual starting
+award receipt or a supported purchase with funds and transaction evidence.
+Inspect current inventory before retrying, and retain any unsupported award
+as an audit issue instead of duplicating or silently rewriting it.
+
 When a character reply is spilled to a file, distinguish the current
 `result.sheet.inventory` from embedded historical `before` snapshots and the
 derived inventory summary. Locate the actual JSON property line and read its
