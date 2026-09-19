@@ -411,6 +411,8 @@ Read actors, catalog options, or a rest/advancement preflight.
 
 get payload={character_id}; batch={campaign_id,character_ids:[...]};
 list={campaign_id}; catalog={campaign_id,kind?,query?,include_context?}.
+Search names with include_context=false (default); then use the returned
+full artifact id as query with include_context=true for runtime details.
 For NPC/monster catalog cards use kind="actor_card", not "actor";
 omit kind to search across categories. Catalog cards are not existing actors:
 list/get reads campaign instances. For installed module statblock reviews,

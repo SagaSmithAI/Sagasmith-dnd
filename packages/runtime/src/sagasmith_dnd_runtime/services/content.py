@@ -5607,7 +5607,11 @@ class ContentService:
                 )
             result.append(entry)
         if include_context and len(result) != 1:
-            raise LookupError("exact content artifact is not available for this campaign")
+            raise LookupError(
+                "exact content artifact is not available for this campaign; "
+                "include_context=true requires query to be a full artifact id. "
+                "Search the name with include_context=false first, then reuse a returned id."
+            )
         return sorted(
             result,
             key=lambda item: (str(item["kind"]), str(item["name"]), str(item["id"])),

@@ -44,6 +44,12 @@ Do not treat that gap alone as proof that the active Pack needs a new review.
 
 ## Hydrate from a canonical rule source
 
+For catalog discovery, use `character_query(view="catalog")` with
+`kind="actor_card"`, the creature name as `query`, and `include_context=false`
+(the default). Only request `include_context=true` after copying a full artifact
+id from the search result. That option is an exact-id lookup, not a name search;
+an exact-id miss does not establish that the canonical rule source is absent.
+
 1. Treat every returned `source_id` and `chunk_id` as an opaque exact value.
    Copy complete ids character-for-character from one latest successful
    `rule_search` result. Never retype, normalize, splice, or reconstruct them.
