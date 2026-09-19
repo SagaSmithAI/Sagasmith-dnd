@@ -12,3 +12,13 @@ per-character rest mutations.
 Timed effects, spell preparation models, consumables, currency, equipment, XP,
 milestones, death, resurrection, departure, and replacement must survive
 Snapshot save and restore.
+
+Before advancing a level, check the campaign's progression mode, the exact
+reward trigger, and the character's prior advancement receipts. A source saying
+characters are likely to reach a level is not a level award. XP rewards require
+their stated outcome and party division; a milestone requires an established
+milestone policy and a completed trigger. Changing `target_level`, wording, or
+the idempotency key does not make the same earned reward available again.
+One source passage can describe several rewards, so distinguish actual earned
+events rather than deduplicating solely by page or chunk. Record unsupported
+past awards as corrections without silently rewriting sheets or undoing rolls.
