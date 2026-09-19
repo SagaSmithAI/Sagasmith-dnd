@@ -79,9 +79,17 @@ use the new receipt's revision and inventory instead of an older spill.
 Unsupported equipment/wealth fields are rejected, not silently applied or
 discarded. If the activated source has no executable starting-equipment
 contract, its class receipt does not grant equipment: retain that build
-requirement as unresolved. Do not manufacture a successful choice or duplicate
-inventory. Generic equipment support does not certify any unrepaired source
-package or the complete character build.
+requirement as unresolved until separately settled. Inspect the exact class
+source and its ruling policy: an explicitly permitted source-bound Agent
+ruling can establish the printed choices and fixed quantities even when the
+structured contract is absent. Record the source, choices, existing inventory,
+and resulting public-operation receipts; use reviewed item mechanics and grant
+only missing quantities. This does not retroactively turn an earlier training
+grant into a valid starting-award receipt. Preserve that discrepancy and
+correct duplicates through public operations. If the source or ruling policy
+does not support settlement, keep the requirement unresolved. Never manufacture
+a successful structured choice. Generic equipment support does not certify any
+unrepaired source package or the complete character build.
 
 A dead, missing, or departed character remains stored with independent
 knowledge. A replacement follows normal creation and joining; only knowledge
