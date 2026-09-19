@@ -240,8 +240,9 @@ Equipment slots are `armor`, `shield`, `main_hand`, `off_hand`, `head`, `neck`,
 `cloak`, `gloves`, `boots`, `ring_1`, `ring_2`, `shoulders`, `back`, `chest`,
 `wrists`, `waist`, and `legs`. The slot map and each item's
 `equipped` / `equipped_slot` fields must agree. Use
-`inventory_change(action="equip"|"unequip")`; never set those fields through an
-inventory patch.
+`inventory_change(action="equip", payload={item_id, slot})`; an explicit
+`slot: null` unequips the item. There is no `unequip` action. Never set those
+fields through an inventory patch.
 
 Armor and shields have strict mechanics:
 
