@@ -4225,11 +4225,15 @@ def _weapon_is_proficient(item: dict[str, Any], proficiencies: list[str]) -> boo
     if bool(mechanics.get("proficient", False)):
         return True
     keys = _proficiency_keys(proficiencies)
-    name = str(item.get("name") or "").strip().casefold()
+    name = str(item.get("name") or "").strip().casefold().replace("-", " ").replace("_", " ")
     category = str(mechanics.get("category") or "").strip().casefold()
     return bool(
         name in keys
+        # Source grants name weapon types in the plural (e.g. "shortswords").
+        # Match the complete name, never a substring of another weapon type.
+        or (name and f"{name}s" in keys)
         or f"{name} weapon" in keys
+        or f"{name} weapons" in keys
         or (category and f"{category} weapons" in keys)
         or "all weapons" in keys
     )
