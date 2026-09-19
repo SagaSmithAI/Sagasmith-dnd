@@ -28,7 +28,7 @@ from sagasmith_dnd.character_schema import (
     validate_world_time,
 )
 from sagasmith_dnd.chase_engine import start_chase
-from sagasmith_dnd.combat_engine import start_encounter
+from sagasmith_dnd.combat_engine import apply_damage_to_sheet, start_encounter
 from sagasmith_dnd.content_solution import build_content_solution
 from sagasmith_dnd.resolution_plan import compile_resolution_plan
 from sagasmith_dnd.rule_engine import ResolutionContext, resolution_context
@@ -232,7 +232,14 @@ def test_weapon_attacks_derive_actor_proficiency_and_finesse_ability() -> None:
     assert finesse_attack["damage_expression"] == "1d4 + 3"
 
 
-def test_2014_battle_ready_uses_intelligence_for_active_magic_weapons_only() -> None:
+@pytest.mark.parametrize("extra", [
+    {"on_hit_effect": "DC 11 Strength save or fall prone."},
+    {"additional_damage": [{"damage_formula": "1d6", "damage_type": "poison"}]},
+    {"versatile_additional_damage": [{"damage_formula": "1d6", "damage_type": "poison"}]},
+])
+def test_2014_battle_ready_uses_intelligence_for_active_magic_weapons_only(
+    extra: dict[str, Any],
+) -> None:
     sheet = default_character_sheet()
     sheet["abilities"]["strength"]["score"] = 8
     sheet["abilities"]["dexterity"]["score"] = 10
@@ -276,6 +283,7 @@ def test_2014_battle_ready_uses_intelligence_for_active_magic_weapons_only() -> 
                 "attack_ability": "strength",
                 "damage_formula": "1d4",
                 "damage_type": "piercing",
+                **extra,
             },
         },
     )
@@ -291,6 +299,21 @@ def test_2014_battle_ready_uses_intelligence_for_active_magic_weapons_only() -> 
     assert magic_attack["attack_bonus"] == 6
     assert magic_attack["damage_bonus"] == 4
     assert attacks[mundane_id]["attack_ability"] == "strength"
+    assert attacks[mundane_id]["magical"] is False
+    assert magic_attack["magical"] is True
+    target = default_character_sheet()
+    target["combat"]["hp"].update(value=20, max=20)
+    target["traits"]["damage_defenses"] = [{
+        "kind": "resistance",
+        "damage_types": ["piercing"],
+        "predicates": ["nonmagical_attack"],
+        "source_key": "test:nonmagical-resistance",
+    }]
+    damage = apply_damage_to_sheet(
+        target, amount=8, damage_type="piercing",
+        attack_facts={"magical": attacks[mundane_id]["magical"], "materials": []},
+    )
+    assert damage["applied_amount"] == 4
 
 
 @pytest.mark.parametrize(

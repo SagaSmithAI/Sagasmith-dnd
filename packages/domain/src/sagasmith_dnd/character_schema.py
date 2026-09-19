@@ -4784,9 +4784,6 @@ def _weapon_attacks(
         magic_weapon = magic_properties_active and (
             mechanics["magical"]
             or mechanics["magic_bonus"] != 0
-            or bool(mechanics["additional_damage"])
-            or bool(mechanics["versatile_additional_damage"])
-            or bool(mechanics["on_hit_effect"])
         )
         if battle_ready and magic_weapon and ability in {"strength", "dexterity"}:
             ability = "intelligence"
