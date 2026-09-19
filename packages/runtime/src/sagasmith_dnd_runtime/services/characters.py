@@ -6308,6 +6308,29 @@ boundary.
             source_statblock_name = str(data.get("source_statblock_name") or "").strip()
             if source_statblock_name and not 2 <= len(source_statblock_name) <= 200:
                 raise ValueError("payload.source_statblock_name must contain 2 to 200 characters")
+            if source_statblock_name and selected_value is not None:
+                # A core/header chunk can parse successfully without its Actions
+                # children. Require the indexed subtree instead of silently
+                # creating a mechanically incomplete named creature.
+                requested_heading = source_statblock_name.casefold()
+                card_paths = set()
+                for chunk in selected_chunks:
+                    path = tuple(str(value).strip() for value in chunk.get("heading_path", []))
+                    for index, heading in enumerate(path):
+                        if heading.casefold() == requested_heading:
+                            card_paths.add(path[:index + 1])
+                omitted = []
+                for chunk in available_chunks:
+                    path = tuple(str(value).strip() for value in chunk.get("heading_path", []))
+                    if str(chunk["id"]) not in selected_chunk_ids and any(
+                        path[:len(prefix)] == prefix for prefix in card_paths
+                    ):
+                        omitted.append(str(chunk["id"]))
+                if omitted:
+                    raise ValueError(
+                        "incomplete statblock evidence: include all indexed chunks under "
+                        f"{source_statblock_name!r}; missing chunk_ids: {', '.join(omitted)}"
+                    )
             text_layout_recovery: dict[str, Any] | None = None
             recovered_candidate: dict[str, Any] | None = None
             parsed = None

@@ -761,6 +761,31 @@ def test_rule_statblock_recovers_split_text_layout_without_images(tmp_path: Path
             },
         )
 
+        guard_chunks = [
+            item for item in chunks if "GUARD" in item["heading_path"]
+        ]
+        omitted_action = next(item for item in guard_chunks if "Spear." in item["content"])
+        with pytest.raises(ToolError, match="incomplete statblock evidence") as failure:
+            await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "statblock",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "source_id": ingested["source_id"],
+                        "chunk_ids": [
+                            item["id"] for item in guard_chunks
+                            if item["id"] != omitted_action["id"]
+                        ],
+                        "source_statblock_name": "Guard",
+                        "name": "Incomplete Guard",
+                    },
+                    "idempotency_key": "reject-missing-action",
+                },
+            )
+        assert omitted_action["id"] in str(failure.value)
+
         recovery = created["source"]["text_layout_recovery"]
         assert recovery["profile"] == "deterministic-text-layout-v1"
         assert recovery["source_statblock_name"] == "Guard"

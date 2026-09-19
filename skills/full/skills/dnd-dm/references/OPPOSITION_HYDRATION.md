@@ -51,6 +51,13 @@ Do not treat that gap alone as proof that the active Pack needs a new review.
    selected evidence in `payload.chunk_ids`, and the exact printed identity in
    `payload.source_statblock_name`. There is no `exact_chunks` field. Give
    repeated instances distinct `payload.name` values.
+   Include the complete same-creature source subtree, including Actions,
+   reactions, and other subordinate sections; a search hit containing only
+   attributes and passive traits is not a complete card. If creation reports
+   missing chunk ids, read and include those exact same-source chunks before
+   retrying. After creation, compare the printed attacks and activities with
+   the returned mechanics. A valid actor with no weapon attacks is not proof
+   that the source creature has no attacks.
 3. If creation reports a source/chunk mismatch, search again and compare the
    submitted JSON to one result. A one-character mismatch is Agent input error,
    not missing evidence and not grounds to weaken validation.
