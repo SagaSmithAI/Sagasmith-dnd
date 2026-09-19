@@ -110,6 +110,25 @@ finish successfully. Switching to `play` depends on those results and must not
 run concurrently with actor creation. After a partial failure, list existing
 instances and retry only missing ones using their original operation keys.
 
+## Repair an existing incomplete rule-source card
+
+For an already created actor whose rule-source import omitted a printed section,
+use `character_create_from(mode="statblock")` with the complete same-creature
+`chunk_ids`, `source_id`, and `source_statblock_name`, plus
+`payload.replace_character_id` and the latest actor `payload.expected_revision`.
+Keep its exact `name` and `character_type`; omit `summary` and `notes` to retain
+existing metadata. Use one new repair idempotency key and verify the returned
+actor id is unchanged. Do not create another instance of the same individual.
+
+This route rebuilds the sheet. First read current HP, conditions, resources,
+inventory, and source variants; retain every established state change and
+explicit source override. Do not use it as a rest, resurrection, or combat reset.
+An untouched fresh import can be repaired with the same source variant. If the
+public replacement cannot preserve a changed actor's state, resolve that repair
+gap before applying it. `content_solution` resolves an existing recorded source
+card; it cannot restore an attack that was never imported. A missing card error
+requires import repair, not repeated guesses at card ids or kinds.
+
 ## Hydrate module-only opposition
 
 1. When the exact creature exists only in the active module, inspect the
