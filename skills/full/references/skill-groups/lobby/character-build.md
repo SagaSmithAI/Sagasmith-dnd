@@ -11,6 +11,16 @@ spells, spellbook, and advancement state. Party composition should cover
 distinct combat, exploration, healing, control, and social capabilities rather
 than duplicate optimization.
 
+`character_create_from(mode="build")` can create an unfinished character shell.
+A successful creation receipt is not a completed build: check the returned
+ability-generation record, applied class/species/background, HP, equipment and
+spell requirements. A descriptive summary such as "human fighter" does not
+apply those rules. Continue configuring the same returned character ID; do not
+create another copy just because setup remains incomplete. Before returning to
+play, finish the living replacement party's setup and record its entry and
+transmitted knowledge. Sequence phase changes and phase-dependent calls; do not
+run them in parallel or query combat-only tools while in the lobby.
+
 After selecting a class or subclass, follow the current-level `follow_up`
 returned by `character_content_apply`. Re-read it after a restart or later
 selection with `character_query(view="advancement", payload={"character_id":
