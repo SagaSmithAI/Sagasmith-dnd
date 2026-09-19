@@ -40,5 +40,24 @@ def test_sheet_replacement_cannot_bypass_hand_capacity(tmp_path: Path):
         })
         assert after["revision"] == actor["revision"]
         assert after["sheet"] == actor["sheet"]
+        equipped = await _call(server, "inventory_change", {
+            "owner": "character", "owner_id": actor["id"], "action": "equip",
+            "payload": {"item_id": "sword", "slot": "main_hand"},
+            "expected_revision": after["revision"], "idempotency_key": "equip",
+        })
+        with pytest.raises(Exception, match="payload.slot is required"):
+            await _call(server, "inventory_change", {
+                "owner": "character", "owner_id": actor["id"], "action": "equip",
+                "payload": {"item_id": "sword"},
+                "expected_revision": equipped["revision"], "idempotency_key": "missing-slot",
+            })
+        stowed = await _call(server, "inventory_change", {
+            "owner": "character", "owner_id": actor["id"], "action": "equip",
+            "payload": {"item_id": "sword", "slot": None},
+            "expected_revision": equipped["revision"], "idempotency_key": "stow",
+        })
+        assert stowed["sheet"]["inventory"]["equipment_slots"]["main_hand"] is None
+        sword = next(i for i in stowed["sheet"]["inventory"]["items"] if i["id"] == "sword")
+        assert not sword["equipped"]
 
     asyncio.run(exercise())

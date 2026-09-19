@@ -13918,7 +13918,7 @@
     "roles": {}
   },
   {
-    "description": "Change owned inventory using the owner's current revision and a request key.\n\nCharacter payloads: add={item}, update={item_id, patch},\nremove={item_id, quantity?}, equip={item_id, slot},\nrecharge={item_id, trigger}, consume_ammunition={weapon_id, quantity?}.\nitem_id is the owned sheet.inventory.items[].id from the latest receipt,\nnot a catalog artifact_id. Party supports only add/remove. Apply catalog\nequipment with character_content_apply first, then equip its returned\nowned item ID; change quantity through update rather than applying twice.",
+    "description": "Change owned inventory using the owner's current revision and a request key.\n\nCharacter payloads: add={item}, update={item_id, patch},\nremove={item_id, quantity?}, equip={item_id, slot},\nwhere an explicit slot=null unequips the item; do not patch equipped flags.\nrecharge={item_id, trigger}, consume_ammunition={weapon_id, quantity?}.\nitem_id is the owned sheet.inventory.items[].id from the latest receipt,\nnot a catalog artifact_id. Party supports only add/remove. Apply catalog\nequipment with character_content_apply first, then equip its returned\nowned item ID; change quantity through update rather than applying twice.",
     "error_envelope": {
       "fields": [
         "code",

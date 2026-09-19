@@ -1412,6 +1412,7 @@ class InventoryService:
 
         Character payloads: add={item}, update={item_id, patch},
         remove={item_id, quantity?}, equip={item_id, slot},
+        where an explicit slot=null unequips the item; do not patch equipped flags.
         recharge={item_id, trigger}, consume_ammunition={weapon_id, quantity?}.
         item_id is the owned sheet.inventory.items[].id from the latest receipt,
         not a catalog artifact_id. Party supports only add/remove. Apply catalog
@@ -1463,10 +1464,12 @@ class InventoryService:
                     idempotency_key,
                 )
             elif action == "equip":
+                if "slot" not in data:
+                    raise ValueError("payload.slot is required; use null to unequip")
                 result = self.character_inventory_equip(
                     owner_id,
                     self.required(data, "item_id"),
-                    self.required(data, "slot"),
+                    data["slot"],
                     principal_id,
                     expected_revision,
                     idempotency_key,

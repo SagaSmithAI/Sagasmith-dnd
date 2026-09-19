@@ -899,6 +899,7 @@ Change owned inventory using the owner's current revision and a request key.
 
 Character payloads: add={item}, update={item_id, patch},
 remove={item_id, quantity?}, equip={item_id, slot},
+where an explicit slot=null unequips the item; do not patch equipped flags.
 recharge={item_id, trigger}, consume_ammunition={weapon_id, quantity?}.
 item_id is the owned sheet.inventory.items[].id from the latest receipt,
 not a catalog artifact_id. Party supports only add/remove. Apply catalog
