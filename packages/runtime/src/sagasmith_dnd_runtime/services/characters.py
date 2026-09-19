@@ -2687,7 +2687,10 @@ class CharactersService:
         if scope == "next_level" and not self.is_dm(current.campaign_id, principal_id):
             raise PermissionError("level advancement planning requires the campaign DM")
         campaign = self.campaigns.get(current.campaign_id)
-        if self.authoritative_phase(current.campaign_id) != _support.PROFILE_LOBBY:
+        if (
+            scope == "next_level"
+            and self.authoritative_phase(current.campaign_id) != _support.PROFILE_LOBBY
+        ):
             raise _support.CombatEngineError("switch to lobby before planning a character level")
         branch_id = self.require_current_branch(current.campaign_id, None)
         if scope == "current_level":
