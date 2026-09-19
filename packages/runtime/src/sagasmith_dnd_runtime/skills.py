@@ -289,6 +289,21 @@ class SkillCatalog:
         matches: list[dict[str, Any]] = []
         for document_id, text in documents:
             lines = text.splitlines()
+            # References often name an asset rather than repeat its filename in
+            # its body. Return that asset ahead of incidental body mentions.
+            if all(term in document_id.casefold() for term in terms):
+                matches.append(
+                    {
+                        "identifier": document_id,
+                        "heading": next(
+                            (line.lstrip("# ") for line in lines if line.startswith("# ")),
+                            "",
+                        ),
+                        "line": 1,
+                        "score": len(terms) + 1,
+                        "excerpt": text[:context_chars],
+                    }
+                )
             current_heading = ""
             for line_number, line in enumerate(lines, start=1):
                 heading_match = re.match(r"^#{1,6}\s+(.+?)\s*$", line)

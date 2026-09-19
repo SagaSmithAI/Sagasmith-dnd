@@ -563,6 +563,25 @@ def test_skill_catalog_supports_bounded_outline_section_and_search(tmp_path: Pat
     assert "exact module evidence" in search["matches"][0]["excerpt"]
 
 
+def test_asset_filename_search_returns_readable_target_before_cross_reference(
+    tmp_path: Path,
+) -> None:
+    dnd = tmp_path / "dnd"
+    dnd.mkdir()
+    content = "# Source-backed opposition\n\nUse canonical evidence.\n"
+    (dnd / "OPPOSITION_HYDRATION.md").write_text(content, encoding="utf-8")
+    (dnd / "aaa.md").write_text("Read OPPOSITION_HYDRATION.md first.\n", encoding="utf-8")
+    catalog = SkillCatalog(dnd_root=dnd, modulegen_root=tmp_path / "absent")
+
+    for query in ("opposition_hydration", "OPPOSITION_HYDRATION.md", "dnd:OPPOSITION_HYDRATION.md"):
+        result = catalog.search(kind="asset", query=query, limit=1)
+        match = result["matches"][0]
+        assert match["identifier"] == "dnd:OPPOSITION_HYDRATION.md"
+        assert match["line"] == 1
+        assert catalog.read_asset(match["identifier"]) == content
+    assert catalog.search(kind="asset", query="nonexistent")["matches"] == []
+
+
 def test_skill_catalog_reuses_indexes_until_an_explicit_refresh(
     tmp_path: Path,
 ) -> None:
