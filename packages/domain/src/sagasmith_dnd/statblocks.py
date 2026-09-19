@@ -1853,6 +1853,12 @@ def _parse_srd_statblock(
         *weapons,
     ]
     sheet["inventory"]["equipment_slots"].update(armor_slots)
+    # A monster is proficient with the equipment printed in its statblock.
+    # Grant only the explicitly recovered pieces, not every armor category.
+    sheet["traits"]["proficiencies"]["armor"] = list(dict.fromkeys([
+        *sheet["traits"]["proficiencies"]["armor"],
+        *(item["name"] for item in armor_items),
+    ]))
 
     refs = list(dict.fromkeys(str(item) for item in rule_refs if str(item)))
     if spellcasting is not None:

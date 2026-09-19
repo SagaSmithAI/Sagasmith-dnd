@@ -3158,6 +3158,10 @@ def test_statblock_explicit_heavy_armor_preserves_non_ac_mechanics_with_override
     assert parsed.sheet["inventory"]["equipment_slots"]["armor"] == "statblock-chain-mail"
     assert parsed.sheet["inventory"]["equipment_slots"]["shield"] == "statblock-shield"
     assert derived["stealth_disadvantage"] is True
+    assert derived["armor_proficiency"]["proficient"] is True
+    assert derived["armor_proficiency"]["disadvantage_abilities"] == []
+    assert derived["armor_proficiency"]["blocks_spellcasting"] is False
+    assert set(parsed.sheet["traits"]["proficiencies"]["armor"]) == {"Chain Mail", "Shield"}
 
 
 def test_numeric_statblock_spell_attack_is_executable() -> None:
