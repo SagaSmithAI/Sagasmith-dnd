@@ -26,6 +26,15 @@ revise existing records rather than duplicating them on every turn. If source
 preparation changes after opening, close or abort and release the old workers,
 then open with fresh context. Do not patch an already issued private capsule.
 
+To revise, use `actor_knowledge_change(action="revise", payload={knowledge_id,
+proposition, expected_revision_id}, idempotency_key=...)`. Copy `knowledge_id`
+from the knowledge record's `id` and `expected_revision_id` from its
+`revision_id`; this is a string, distinct from the optional top-level numeric
+campaign `expected_revision`. Omitted source and disclosure fields are retained.
+Keep encounter thresholds and numeric rules in the Director's source evidence;
+give the NPC only the corresponding source-supported personal knowledge or
+intent, rather than a rulebook instruction it could repeat as dialogue.
+
 Before publishing a consequential quote, compare it with the prepared source
 constraints. Missing context is a preparation defect, not permission to invent
 terms. If an unsupported quote was already published, preserve its history,
