@@ -86,6 +86,14 @@ before any transaction. The Director must not write the replacement NPC speech.
    when necessary), call `publish` with the returned `publication_id`, current
    conversation revision, a new idempotency key, and the same complete
    `audience_facts` shape, then show only MCP `publication`.
+   Use the revision returned by `npc_conversation_worker`, not the earlier
+   activation descriptor: checkout and submission advance the conversation.
+   A refusal, offer, or threat does not itself require a roll. Choosing whether
+   a PC retreats, negotiates, or advances remains that PC's choice. In an
+   authorized automated regression, the Director may choose for its test PCs;
+   do not create a dice roll merely to answer that choice. If a worker already
+   emitted such a request, preserve it and close the conversation through the
+   normal handoff, then make the permitted choice without inventing a mechanic.
 5. If a proposal requests a mechanic, stop publication work, select the
    actor-owned and listener candidates that are already valid, and atomically
    `close` the conversation (or `abort` it when no draft should persist). Release
