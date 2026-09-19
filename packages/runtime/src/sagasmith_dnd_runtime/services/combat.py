@@ -7,6 +7,36 @@ from typing import Annotated, Any, Literal
 from .. import application_support as _support
 
 
+def _without_repeated_preflight_cards(encounter: dict[str, Any]) -> dict[str, Any]:
+    """Keep the source manifest but fetch its preparation-time cards on demand."""
+    manifest = encounter.get("participant_manifest")
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("groups"), list):
+        return encounter
+    groups = []
+    omitted = 0
+    for group in manifest["groups"]:
+        if not isinstance(group, dict):
+            groups.append(group)
+            continue
+        actors = group.get("actors")
+        if not isinstance(actors, list):
+            groups.append(group)
+            continue
+        omitted += sum(isinstance(actor, dict) and "combat_card" in actor for actor in actors)
+        groups.append({**group, "actors": [
+            {key: value for key, value in actor.items() if key != "combat_card"}
+            if isinstance(actor, dict) else actor for actor in actors
+        ]})
+    if not omitted:
+        return encounter
+    return {**encounter, "participant_manifest": {**manifest, "groups": groups},
+            "preflight_cards_window": {
+                "omitted": omitted, "cards_are_preparation_snapshots": True,
+                "read_next": {"tool": "combat_query", "view": "status",
+                              "payload": {"detail": "full"}},
+            }}
+
+
 class CombatService:
     def npc_turn_latest_event_sequence(self, campaign_id: str, branch_id: str | None) -> int:
         values = self.events.list(campaign_id, limit=1, branch_id=branch_id)
@@ -811,6 +841,9 @@ class CombatService:
             # Bound the presentation after audience filtering, never the stored
             # encounter or idempotency receipt. Keep recent events for the UI.
             projected = value["combat"]
+            if isinstance(projected, dict):
+                projected = _without_repeated_preflight_cards(projected)
+                value["combat"] = projected
             if isinstance(projected, dict) and isinstance(projected.get("log"), list):
                 log = projected["log"]
                 if len(log) > 3:
@@ -8308,7 +8341,8 @@ class CombatService:
 
         available_actions and reactions require top-level actor_id, not payload.
         status needs only campaign_id; payload={detail:"summary"} omits the
-        accumulated encounter log while retaining all current tactical fields.
+        accumulated encounter log and repeated preflight cards while retaining
+        all current tactical fields and the source manifest's evidence and counts.
         Omit detail or use "full" to include historical log entries.
         transaction_receipt requires
         payload={idempotency_key, branch_id?}; render accepts audience_projection.
@@ -8321,6 +8355,7 @@ class CombatService:
             result = self.combat_status(campaign_id, principal_id)
             if detail == "summary" and result is not None:
                 result = {key: value for key, value in result.items() if key != "log"}
+                result = _without_repeated_preflight_cards(result)
         elif view == "available_actions":
             if not actor_id:
                 raise ValueError("top-level actor_id is required for available_actions")

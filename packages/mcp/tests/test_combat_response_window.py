@@ -46,3 +46,30 @@ def test_window_counts_only_audience_visible_events():
     result = CombatService.combat_response(service, "campaign", "player", receipt)
     assert result["combat"] == {"log": [{"public": True}]}
     assert len(receipt["combat"]["log"]) == 100
+
+
+def test_write_omits_only_repeated_preflight_cards_after_audience_filtering():
+    manifest = {"checksum": "source-checksum", "ready": True, "groups": [{
+        "key": "guards", "required_count": 2, "actor_ids": ["a", "b"],
+        "source_excerpt": "Two guards occupy this room.",
+        "actors": [{"id": "a", "name": "Guard A", "combat_card": {"hit_points": 11}},
+                   {"id": "b", "name": "Guard B", "combat_card": {"hit_points": 11}}],
+    }]}
+    receipt = {"combat": {"participant_manifest": manifest,
+                          "combatants": [{"actor_id": "a", "hit_points": 2}], "log": []}}
+    before = deepcopy(receipt)
+    service = SimpleNamespace(combat_audience_view=lambda *args: args[-1], is_dm=lambda *args: True)
+    result = CombatService.combat_response(service, "campaign", "dm", receipt)
+    assert receipt == before
+    assert result["combat"]["combatants"] == before["combat"]["combatants"]
+    group = result["combat"]["participant_manifest"]["groups"][0]
+    assert group["actors"] == [{"id": "a", "name": "Guard A"}, {"id": "b", "name": "Guard B"}]
+    assert group["required_count"] == 2
+    assert group["source_excerpt"] == manifest["groups"][0]["source_excerpt"]
+    window = result["combat"]["preflight_cards_window"]
+    assert window["omitted"] == 2
+    assert window["read_next"]["payload"] == {"detail": "full"}
+    service.combat_audience_view = lambda *args: {"combatants": []}
+    assert CombatService.combat_response(service, "campaign", "player", receipt)["combat"] == {
+        "combatants": []
+    }

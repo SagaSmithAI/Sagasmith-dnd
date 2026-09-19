@@ -68,6 +68,11 @@ log entries. `combat.log_window` reports any omitted history; use
 is needed. Use the returned state and campaign revision for the next action;
 do not automatically query status again after every successful write. Stored
 transaction receipts retain the full original encounter log.
+Write replies and summary status omit repeated preparation-time `combat_card`
+objects inside the participant manifest. They retain the actors, source excerpts,
+counts and current tactical state; `preflight_cards_window` links to full status
+when those original preparation snapshots are needed. Do not mistake a stored
+preflight card for the actor's current wounds or equipment.
 
 In 2014 combat, draw an owned stowed weapon with
 `combat_common_action(action="draw_weapon", payload={item_id, slot:"main_hand"})`

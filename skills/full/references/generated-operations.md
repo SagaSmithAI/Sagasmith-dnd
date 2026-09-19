@@ -689,7 +689,8 @@ Read combat state or DM-only transaction receipts.
 
 available_actions and reactions require top-level actor_id, not payload.
 status needs only campaign_id; payload={detail:"summary"} omits the
-accumulated encounter log while retaining all current tactical fields.
+accumulated encounter log and repeated preflight cards while retaining
+all current tactical fields and the source manifest's evidence and counts.
 Omit detail or use "full" to include historical log entries.
 transaction_receipt requires
 payload={idempotency_key, branch_id?}; render accepts audience_projection.

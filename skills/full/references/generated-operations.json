@@ -9730,7 +9730,7 @@
     }
   },
   {
-    "description": "Read combat state or DM-only transaction receipts.\n\navailable_actions and reactions require top-level actor_id, not payload.\nstatus needs only campaign_id; payload={detail:\"summary\"} omits the\naccumulated encounter log while retaining all current tactical fields.\nOmit detail or use \"full\" to include historical log entries.\ntransaction_receipt requires\npayload={idempotency_key, branch_id?}; render accepts audience_projection.",
+    "description": "Read combat state or DM-only transaction receipts.\n\navailable_actions and reactions require top-level actor_id, not payload.\nstatus needs only campaign_id; payload={detail:\"summary\"} omits the\naccumulated encounter log and repeated preflight cards while retaining\nall current tactical fields and the source manifest's evidence and counts.\nOmit detail or use \"full\" to include historical log entries.\ntransaction_receipt requires\npayload={idempotency_key, branch_id?}; render accepts audience_projection.",
     "error_envelope": {
       "fields": [
         "code",
