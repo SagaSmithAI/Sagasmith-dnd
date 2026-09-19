@@ -37,7 +37,7 @@ these deep references only when needed:
 
 - actor creation or advancement: `references/CHAR_CREATION.md`
 - actor, items, wallet, spells, effects, or resources:
-  `../../references/character-schema-v2.md`
+  `dnd:full/references/character-schema-v2.md` via `skill_query(kind="asset", action="read", identifier=...)`
 - module preparation or scene transitions: `references/MODULE_INDEX.md` and
   `references/MODULE_ARC.md`
 - real campaign rehearsal or corpus regression:

@@ -194,7 +194,8 @@ identifier inside ordinary prose or a different scene is not the room source.
 | Ability generation | `dnd_ability_roll`, `character_ability_apply` |
 
 All live actors use `sheet v2` and `notes v2`. Read
-`../../references/character-schema-v2.md` before creation or mutation. Do not
+`dnd:full/references/character-schema-v2.md` via `skill_query(kind="asset", action="read", identifier=...)`
+before creation or mutation. Do not
 persist an unconfirmed draft. Build mode requires one stable
 `idempotency_key`; an exact retry must return the original template and campaign
 instance rather than creating another pair.

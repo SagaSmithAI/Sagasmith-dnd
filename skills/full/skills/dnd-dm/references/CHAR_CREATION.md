@@ -177,7 +177,9 @@ new card passes its full audit, return to `play` and use a source-cited joining
 event at the current Scene Atlas location to grant only facts the living
 participants explicitly tell the replacement.
 
-Before creating any actor, read `character-schema-v2.md`. All PCs, NPCs, and
+Before creating any actor, read
+`skill_query(kind="asset", action="read", identifier="dnd:full/references/character-schema-v2.md")`.
+All PCs, NPCs, and
 monsters require complete structured cards; NPCs and monsters require
 `notes.profile.summary`. Do not persist an unconfirmed draft. After every creation
 or advancement, call `character_query(view="get")`. Use returned `derived`
