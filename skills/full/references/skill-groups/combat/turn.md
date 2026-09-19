@@ -116,6 +116,21 @@ Spell attacks (for example Guiding Bolt or Scorching Ray) first use
 `action={spell_resolution_id, context:{spatial_facts}}` and `target_id`.
 Do not cast again to select a target or finish a paid attack sequence.
 
+For weapon attacks in Agent positioning, supply
+`action={weapon_id, context:{spatial_facts:{decision_id, reason, targetable,
+in_range, cover_degree, attacker_can_see_target, target_can_see_attacker,
+target_within_5_ft}}}`. The DM derives these facts from actual room layout,
+obstacles, recorded positions and completed movement. Being in the same encounter
+does not establish melee reach. A reason saying the creature advanced does not
+pay movement: resolve legal movement first, including opportunity windows.
+An archer behind an arrow slit needs a recorded ranged weapon and valid target;
+a scimitar is not a ranged equivalent. `in_range=true` must agree with the chosen
+weapon's actual reach/range and the other distance facts. A reach weapon may hit
+beyond 5 feet; that does not make `target_within_5_ft` true for condition effects.
+`continuity_context` can retrieve evidence but does not generate a spatial
+decision for the DM. Once the facts are established, call `combat_resolve_attack`
+directly; a separate preflight is useful for uncertainty, not required every turn.
+
 In Agent positioning, structured single-creature save/direct-effect spells use
 `declaration={target_id, spatial_facts}`. The DM supplies `spatial_facts` with
 `decision_id`, source-grounded `reason`, boolean `targetable`, `in_range`, and
