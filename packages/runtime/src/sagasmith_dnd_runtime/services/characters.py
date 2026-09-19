@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal, Mapping
 
+from sagasmith_dnd.character_schema import validate_equipment_hand_capacity
+
 from .. import application_support as _support
 
 
@@ -510,6 +512,7 @@ class CharactersService:
             _support._require_preserved_battle_ready_provenance(before.sheet, sheet)
         if before.campaign_id is None:
             if sheet is not None:
+                validate_equipment_hand_capacity(_support.validate_character_sheet(sheet))
                 self.require_engine_owned_character_state(
                     sheet,
                     current_sheet=before.sheet,
@@ -576,6 +579,8 @@ class CharactersService:
             # a full-sheet update that tries to forge the next revision.
             candidate_window["expected_character_revision"] = before.revision
         normalized_sheet = _support.validate_character_sheet(candidate_sheet)
+        if sheet is not None:
+            validate_equipment_hand_capacity(normalized_sheet)
         if normalized_sheet.get("edition") == "2014":
             _support.end_concentration_for_incapacitating_conditions(normalized_sheet)
         normalized_notes = (
@@ -1810,6 +1815,7 @@ class CharactersService:
                 actor=principal_id,
             )
             return self.character_view(created.character)
+        validate_equipment_hand_capacity(normalized_sheet)
         return self.character_view(
             self.characters.create_idempotent(
                 system_id=_support.DND5E.id,

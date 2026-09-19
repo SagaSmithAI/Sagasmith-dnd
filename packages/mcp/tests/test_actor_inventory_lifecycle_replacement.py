@@ -212,7 +212,8 @@ def test_replacement_perishes_old_actor_in_same_ambient_transaction(tmp_path: Pa
         database.dispose()
 
 
-def test_replacement_super_failure_rolls_back_perished_sheet(tmp_path: Path) -> None:
+@pytest.mark.parametrize("failure", ["duplicate_name", "hand_capacity"])
+def test_replacement_super_failure_rolls_back_perished_sheet(tmp_path: Path, failure: str) -> None:
     database, campaign, owner, old, current_state = _service_fixture(tmp_path)
     try:
         args = _create_args(
@@ -220,9 +221,25 @@ def test_replacement_super_failure_rolls_back_perished_sheet(tmp_path: Path) -> 
             "new-defender",
             old.id,
             _replacement_state(current_state, campaign.id, owner.id, old.id, "new-defender"),
-            name="Artificer",
+            name="Artificer" if failure == "duplicate_name" else "New Defender",
         )
-        with pytest.raises(Exception):
+        if failure == "hand_capacity":
+            sheet = args["sheet"]
+            for item_id, slot, kind in (
+                ("sword", "main_hand", "weapon"),
+                ("spear", "off_hand", "weapon"),
+                ("shield", "shield", "shield"),
+            ):
+                sheet, _ = add_inventory_item(sheet, {
+                    "id": item_id, "name": item_id, "kind": kind,
+                    "mechanics": {"ac_bonus": 2} if kind == "shield" else {},
+                })
+                item = next(item for item in sheet["inventory"]["items"] if item["id"] == item_id)
+                item.update(equipped=True, equipped_slot=slot)
+                sheet["inventory"]["equipment_slots"][slot] = item_id
+            args["sheet"] = sheet
+        expected_error = "functional hands" if failure == "hand_capacity" else None
+        with pytest.raises(Exception, match=expected_error):
             InventoryActorLifecycleService(database, ground_context=_ground_context).create(
                 campaign.id, **args
             )

@@ -5745,6 +5745,18 @@ def adjust_wallet(sheet: dict[str, Any], denomination: str, amount: int) -> dict
     return validate_character_sheet(value)
 
 
+def validate_equipment_hand_capacity(sheet: dict[str, Any]) -> None:
+    """Check a normalized loadout without preventing reads of legacy sheets."""
+    occupied = sum(
+        sheet["inventory"]["equipment_slots"][slot] is not None
+        for slot in ("main_hand", "off_hand", "shield")
+    )
+    if occupied > sheet["traits"]["anatomy"]["functional_hands"]:
+        raise ValueError(
+            "equipped weapons and shield exceed functional hands; stow an item first"
+        )
+
+
 def equip_inventory_item(sheet: dict[str, Any], item_id: str, slot: str | None) -> dict[str, Any]:
     value = validate_character_sheet(sheet)
     item = next((entry for entry in value["inventory"]["items"] if entry["id"] == item_id), None)
@@ -5768,6 +5780,8 @@ def equip_inventory_item(sheet: dict[str, Any], item_id: str, slot: str | None) 
             previous["equipped"] = False
             previous["equipped_slot"] = None
         value["inventory"]["equipment_slots"][slot] = item_id
+    if slot in {"main_hand", "off_hand", "shield"}:
+        validate_equipment_hand_capacity(value)
     return validate_character_sheet(value)
 
 
