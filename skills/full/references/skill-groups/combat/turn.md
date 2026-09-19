@@ -93,8 +93,10 @@ on the actual scene; move into reach first if needed. Grid mode uses positions.
 Read `combat_query(view="status", payload={detail:"summary"})` after a turn
 mismatch; this omits accumulated historical logs but retains current tactical
 state. Use `detail:"full"` only when historical encounter events are needed.
-The actor at
-`combatants[turn_index]` is current. Dead actors may already have been skipped by
+`current_turn` directly identifies the current actor and its visible tactical
+state; it is null when combat is inactive or that actor is hidden from the caller.
+The actor at `combatants[turn_index]` is current when the index is present.
+Dead actors may already have been skipped by
 the engine. Do not call end-turn on them again or cycle through guessed actor ids.
 `available_actions` lists categories and a budget, not a completed tactical turn:
 an `attack_budget` of zero with `main_action` remaining still permits starting an

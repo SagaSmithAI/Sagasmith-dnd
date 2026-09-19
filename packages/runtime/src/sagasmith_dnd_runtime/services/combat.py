@@ -37,6 +37,21 @@ def _without_repeated_preflight_cards(encounter: dict[str, Any]) -> dict[str, An
             }}
 
 
+def _with_current_turn(encounter: dict[str, Any]) -> dict[str, Any]:
+    """Summarize only the already audience-filtered current combatant."""
+    index = encounter.get("turn_index")
+    actors = encounter.get("combatants")
+    current = None
+    if (encounter.get("active") is True and type(index) is int
+            and isinstance(actors, list) and 0 <= index < len(actors)
+            and isinstance(actors[index], dict)):
+        current = {key: actors[index][key] for key in (
+            "actor_id", "name", "hit_points", "conditions", "turn_budget"
+        ) if key in actors[index]}
+    return {"current_turn": current,
+            **{key: value for key, value in encounter.items() if key != "current_turn"}}
+
+
 class CombatService:
     def npc_turn_latest_event_sequence(self, campaign_id: str, branch_id: str | None) -> int:
         values = self.events.list(campaign_id, limit=1, branch_id=branch_id)
@@ -842,7 +857,7 @@ class CombatService:
             # encounter or idempotency receipt. Keep recent events for the UI.
             projected = value["combat"]
             if isinstance(projected, dict):
-                projected = _without_repeated_preflight_cards(projected)
+                projected = _with_current_turn(_without_repeated_preflight_cards(projected))
                 value["combat"] = projected
             if isinstance(projected, dict) and isinstance(projected.get("log"), list):
                 log = projected["log"]
@@ -2692,7 +2707,8 @@ class CombatService:
         principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
     ) -> dict[str, Any] | None:
         """Read an audience-filtered structured encounter."""
-        return self.combat_view(campaign_id, principal_id)
+        result = self.combat_view(campaign_id, principal_id)
+        return _with_current_turn(result) if result is not None else None
 
     def combat_available_actions(
         self,
