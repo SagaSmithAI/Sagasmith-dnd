@@ -4938,7 +4938,7 @@
     }
   },
   {
-    "description": "Validate and replace a complete D&D v2 sheet, deriving combat and inventory fields.",
+    "description": "Update a lobby sheet using exactly one of sheet or patch.\n\nsheet replaces the complete sheet. For bounded corrections prefer patch,\ne.g. {combat:{hp:{max:12,value:12}}}. Objects merge recursively; omitted\nfields remain unchanged, lists replace whole lists, and null is a value,\nnot a deletion instruction. Existing schema, source and engine-owned\nstate checks apply equally to both forms. Never reconstruct signed content\nto edit an unrelated field. Omit notes to preserve existing notes.",
     "error_envelope": {
       "fields": [
         "code",
@@ -5001,6 +5001,20 @@
           "description": "Bounded notes value accepted by character_sheet_replace.",
           "title": "Notes"
         },
+        "patch": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Bounded patch value accepted by character_sheet_replace.",
+          "title": "Patch"
+        },
         "principal_id": {
           "default": "system:local",
           "description": "Caller hint overwritten by process binding or signed Host delegation.",
@@ -5009,15 +5023,22 @@
           "type": "string"
         },
         "sheet": {
-          "additionalProperties": true,
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
           "description": "Bounded sheet value accepted by character_sheet_replace.",
-          "title": "Sheet",
-          "type": "object"
+          "title": "Sheet"
         }
       },
       "required": [
-        "character_id",
-        "sheet"
+        "character_id"
       ],
       "title": "character_sheet_replaceInput",
       "type": "object"

@@ -2122,21 +2122,47 @@ class CharactersService:
     def character_sheet_replace(
         self,
         character_id: str,
-        sheet: dict[str, Any],
+        sheet: dict[str, Any] | None = None,
         notes: dict[str, Any] | None = None,
         principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
+        patch: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Validate and replace a complete D&D v2 sheet, deriving combat and inventory fields."""
+        """Update a lobby sheet using exactly one of sheet or patch.
+
+        sheet replaces the complete sheet. For bounded corrections prefer patch,
+        e.g. {combat:{hp:{max:12,value:12}}}. Objects merge recursively; omitted
+        fields remain unchanged, lists replace whole lists, and null is a value,
+        not a deletion instruction. Existing schema, source and engine-owned
+        state checks apply equally to both forms. Never reconstruct signed content
+        to edit an unrelated field. Omit notes to preserve existing notes.
+        """
         current = self.characters.get(character_id)
         self.require_character_control(current, principal_id)
         self.require_outside_active_combat(current, "character sheet replacement")
+        if (sheet is None) == (patch is None):
+            raise ValueError("provide exactly one of sheet or patch")
         request_payload = {
             "sheet": _support.deepcopy(sheet),
             "notes": _support.deepcopy(notes),
         }
-        sheet_value = _support.deepcopy(sheet)
+        if patch is not None:
+            if not isinstance(patch, dict) or not patch:
+                raise ValueError("patch must be a non-empty object")
+            request_payload = {"patch": _support.deepcopy(patch), "notes": _support.deepcopy(notes)}
+            sheet_value = _support.deepcopy(current.sheet)
+
+            def merge(target: dict[str, Any], changes: dict[str, Any]) -> None:
+                for key, item in changes.items():
+                    if isinstance(item, dict) and isinstance(target.get(key), dict):
+                        merge(target[key], item)
+                    else:
+                        target[key] = _support.deepcopy(item)
+
+            merge(sheet_value, patch)
+        else:
+            sheet_value = _support.deepcopy(sheet)
         if current.campaign_id is not None:
             ruleset = self.campaign_rules_edition(current.campaign_id)
             sheet_value["edition"] = ruleset

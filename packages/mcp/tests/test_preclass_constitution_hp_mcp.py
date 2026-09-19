@@ -111,6 +111,37 @@ def test_preclass_hp_order_and_engine_owned_accounting(tmp_path):
                             )
             assert actor["sheet"]["combat"]["hp"] == {"max": 14, "value": 14, "temp": 0}
             assert "preclass_constitution_hp_adjustment" not in actor["sheet"]["combat"]
+            before_patch = deepcopy(actor)
+            patch_arguments = {
+                "character_id": actor["id"],
+                "patch": {"combat": {"hp": {"max": 13, "value": 13}}},
+                "expected_revision": actor["revision"],
+                "idempotency_key": f"{key}-hp-patch",
+            }
+            patched = await _call(server, "character_sheet_replace", patch_arguments)
+            assert await _call(server, "character_sheet_replace", patch_arguments) == patched
+            expected_sheet = deepcopy(before_patch["sheet"])
+            expected_sheet["combat"]["hp"].update(max=13, value=13)
+            assert patched["sheet"] == expected_sheet
+            assert patched["notes"] == before_patch["notes"]
+            for index, invalid in enumerate((
+                {"patch": {}},
+                {"sheet": patched["sheet"], "patch": {"combat": {"hp": {"max": 12}}}},
+                {"patch": {"combat": {"preclass_constitution_hp_adjustment": 5}}},
+                {"patch": {"content": {"selections": []}}},
+                {"patch": {"combat": {"hp": {"unknown": 1}}}},
+            )):
+                with pytest.raises(Exception):
+                    await _call(server, "character_sheet_replace", {
+                        "character_id": actor["id"], **invalid,
+                        "expected_revision": patched["revision"],
+                        "idempotency_key": f"{key}-invalid-patch-{index}",
+                    })
+            unchanged = await _call(server, "character_query", {
+                "view": "get", "payload": {"character_id": actor["id"]},
+            })
+            assert unchanged["sheet"] == patched["sheet"]
+            assert unchanged["revision"] == patched["revision"]
         forged = default_character_sheet()
         forged["combat"]["preclass_constitution_hp_adjustment"] = 1
         with pytest.raises(Exception, match="engine-owned"):

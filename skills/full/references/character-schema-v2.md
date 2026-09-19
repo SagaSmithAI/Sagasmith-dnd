@@ -348,8 +348,15 @@ dialogue as memory.
 `notes.profile.backstory` holds the longer character history; it complements, but
 does not replace, the compact public `summary` and `appearance`.
 
-Use `character_sheet_replace` only for a reviewed complete draft or a
-deliberate full-sheet change. Never hand-edit one inventory entry, wallet balance,
+Use `character_sheet_replace` in lobby for a reviewed draft or an explicit
+source-backed correction. Supply exactly one of `sheet` (complete replacement)
+or `patch` (bounded change). For example, `patch={"combat":{"hp":{"max":12,
+"value":12}}}` preserves all other sheet fields, including signed content.
+Objects merge recursively; lists replace whole lists; null is a literal value,
+not deletion. Omit `notes` to preserve them. Both forms retain schema, authority,
+actor revision and idempotency checks. Never reconstruct a large signed sheet
+for a small correction, or use a correction as a reward, reroll or healing.
+Never hand-edit one inventory entry, wallet balance,
 prepared spell or effect through a raw sheet replacement during play. Persist
 accepted subjective entries with `actor_knowledge_change` or the
 `actor_knowledge` member of `memory_change(action="commit")`.

@@ -431,14 +431,21 @@ Exact input schema (copy field names and nesting):
 
 ## character_sheet_replace
 
-Validate and replace a complete D&D v2 sheet, deriving combat and inventory fields.
+Update a lobby sheet using exactly one of sheet or patch.
+
+sheet replaces the complete sheet. For bounded corrections prefer patch,
+e.g. {combat:{hp:{max:12,value:12}}}. Objects merge recursively; omitted
+fields remain unchanged, lists replace whole lists, and null is a value,
+not a deletion instruction. Existing schema, source and engine-owned
+state checks apply equally to both forms. Never reconstruct signed content
+to edit an unrelated field. Omit notes to preserve existing notes.
 
 Phases: lobby
 
 Exact input schema (copy field names and nesting):
 
 ```json
-{"additionalProperties":false,"properties":{"character_id":{"title":"Character Id","type":"string","description":"Authoritative player character or NPC identifier.","maxLength":256},"sheet":{"additionalProperties":true,"title":"Sheet","type":"object","description":"Bounded sheet value accepted by character_sheet_replace."},"notes":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Notes","description":"Bounded notes value accepted by character_sheet_replace."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["character_id","sheet"],"title":"character_sheet_replaceInput","type":"object"}
+{"additionalProperties":false,"properties":{"character_id":{"title":"Character Id","type":"string","description":"Authoritative player character or NPC identifier.","maxLength":256},"sheet":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Sheet","description":"Bounded sheet value accepted by character_sheet_replace."},"notes":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Notes","description":"Bounded notes value accepted by character_sheet_replace."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256},"patch":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Patch","description":"Bounded patch value accepted by character_sheet_replace."}},"required":["character_id"],"title":"character_sheet_replaceInput","type":"object"}
 ```
 
 ## character_spell_prepare
