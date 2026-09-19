@@ -69,3 +69,21 @@ literal `source_excerpt` from that source. A guessed locator, a scene ID alone,
 or invented prose does not establish the card's rule. Compile with the actor's
 revision; after compilation, reuse the returned plan identity and payment
 application. A successful compile itself spends no action and applies no damage.
+
+### Locate rule evidence without rereading the actor
+
+An actor card's `source_key` identifies its origin; it is not the compiler's
+`source_ref`. For an indexed rule effect, use
+`rule_search(campaign_id, query=<distinctive effect text>)`, then
+`rule_expand(campaign_id, chunk_id=<returned chunk_id>)`. Read `chunk.content`
+to verify that the exact card effect is present. The expanded section's broader
+`content` can include text outside that particular chunk and is not sufficient.
+
+Build the citation with `source="rule-source:" + expanded.source.key`,
+`source_ref={"chunk_id": expanded.chunk_id}`, and a literal effect excerpt from
+`expanded.chunk.content`. These fields come from the returned rule evidence;
+do not substitute an artifact ID, stable chunk key, file path, or invented UUID.
+For module evidence, retain the exact managed module `source_ref` returned by
+its expansion instead. If the effect is missing from the indexed evidence,
+report that precise source boundary rather than repeatedly fetching the same
+full actor sheet or citing an unrelated scene.
