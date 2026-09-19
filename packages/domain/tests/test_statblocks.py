@@ -3164,6 +3164,28 @@ def test_statblock_explicit_heavy_armor_preserves_non_ac_mechanics_with_override
     assert set(parsed.sheet["traits"]["proficiencies"]["armor"]) == {"Chain Mail", "Shield"}
 
 
+def test_legacy_statblock_armor_sync_rejects_unrecorded_or_modified_equipment():
+    from copy import deepcopy
+
+    from sagasmith_dnd.statblocks import synchronize_statblock_armor_proficiencies
+
+    sheet = parse_2014_statblock(BANDIT_CAPTAIN, source_key="module-review:legacy-armor").sheet
+    sheet["traits"]["proficiencies"]["armor"] = []
+    before = deepcopy(sheet)
+    repaired, evidence = synchronize_statblock_armor_proficiencies(sheet)
+    assert sheet == before
+    assert repaired["traits"]["proficiencies"]["armor"] == ["Studded Leather"]
+    assert evidence[0]["source_key"] == "module-review:legacy-armor"
+    assert synchronize_statblock_armor_proficiencies(repaired)[0] == repaired
+    for field, value in [("source_key", ""), ("description", "Bought at a shop"),
+                         ("name", "Plate"), ("id", "new-armor")]:
+        altered = deepcopy(before)
+        armor = next(item for item in altered["inventory"]["items"] if item["kind"] == "armor")
+        armor[field] = value
+        with pytest.raises(ValueError, match="no unchanged source-recorded"):
+            synchronize_statblock_armor_proficiencies(altered)
+
+
 def test_numeric_statblock_spell_attack_is_executable() -> None:
     parsed = parse_2014_statblock(
         """# Necromite of Myrkul

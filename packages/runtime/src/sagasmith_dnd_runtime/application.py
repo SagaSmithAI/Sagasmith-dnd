@@ -1306,6 +1306,9 @@ def _create_application(config: McpConfig | None = None, *, resources) -> DndRun
     _services.character_source_traits_apply = _services.bind(
         "character_source_traits_apply", "character_source_traits_apply"
     )
+    _services.character_statblock_proficiency_sync = _services.bind(
+        "character_statblock_proficiency_sync", "character_statblock_proficiency_sync"
+    )
 
     _services.campaign_stable_recovery = _support._agent_ruling_boundary(
         _services.bind("campaign_stable_recovery", "campaign_stable_recovery")

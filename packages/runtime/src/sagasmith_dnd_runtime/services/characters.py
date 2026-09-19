@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Annotated, Any, Literal, Mapping
 
 from sagasmith_dnd.character_schema import validate_equipment_hand_capacity
+from sagasmith_dnd.statblocks import synchronize_statblock_armor_proficiencies
 
 from .. import application_support as _support
 
@@ -2304,6 +2305,31 @@ class CharactersService:
                 "source_evidence": evidence,
                 "reason": normalized_reason,
             },
+        )
+
+    def character_statblock_proficiency_sync(
+        self, character_id: str, reason: str,
+        principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None, idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Repair imported armor training without replacing live encounter state."""
+        current = self.characters.get(character_id)
+        if current.campaign_id is None or current.character_type == "pc":
+            raise ValueError("statblock proficiency sync requires a campaign-bound non-PC actor")
+        self.access.require_campaign(
+            current.campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES
+        )
+        if current.sheet.get("edition") != "2014":
+            raise ValueError("statblock proficiency sync currently supports 2014 imports only")
+        reason = str(reason).strip()
+        if not reason or len(reason) > 1000:
+            raise ValueError("reason must contain 1 to 1000 characters")
+        sheet, evidence = synchronize_statblock_armor_proficiencies(current.sheet)
+        return self.update_character(
+            current, operation="character.statblock_proficiency.sync", sheet=sheet,
+            principal_id=principal_id, expected_revision=expected_revision,
+            idempotency_key=idempotency_key, payload={"reason": reason},
+            response_extra={"source_equipment": evidence},
         )
 
     def character_source_traits_apply(
@@ -6604,6 +6630,7 @@ boundary.
             "resource_sync",
             "source_state",
             "source_traits",
+            "statblock_proficiency_sync",
             "stand",
             "knock_prone",
             "breathing_transition",
@@ -6613,7 +6640,7 @@ boundary.
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Apply a noncombat character transition; expected_revision is the actor revision.
+        """Apply a character transition; expected_revision is the actor revision.
 
         damage payload={parts:[{amount:1,damage_type:"bludgeoning"}],
         critical?:bool,knock_out?:bool,melee?:bool}. Do not use a top-level amount
@@ -6629,7 +6656,17 @@ boundary.
         languages?:["Common"],damage_immunities?:[],damage_vulnerabilities?:[],
         condition_immunities?:[]}}. Each supplied trait replaces that trait only;
         copy the full source-supported list. It preserves HP, conditions and resources.
+        statblock_proficiency_sync is DM-only for legacy 2014 non-PC imports:
+        payload={reason}. It derives armor training from unchanged recorded source gear,
+        accepts no supplied proficiencies, and preserves active combat and all actor state.
         """
+        current = self.characters.get(character_id)
+        if (current.campaign_id is not None
+                and self.authoritative_phase(current.campaign_id) == "combat"
+                and action != "statblock_proficiency_sync"):
+            raise _support.ExposureError(
+                "during combat character_state_change supports only statblock_proficiency_sync"
+            )
         data = self.facade_payload(payload)
         if action == "effect_add":
             result = self.character_effect_add(
@@ -6777,6 +6814,13 @@ boundary.
                 principal_id,
                 expected_revision,
                 idempotency_key,
+            )
+        elif action == "statblock_proficiency_sync":
+            if set(data) - {"reason"}:
+                raise ValueError("statblock proficiency sync accepts only reason")
+            result = self.character_statblock_proficiency_sync(
+                character_id, self.required(data, "reason"), principal_id,
+                expected_revision, idempotency_key,
             )
         elif action == "source_traits":
             unexpected = set(data) - {"traits", "source_ref", "reason"}

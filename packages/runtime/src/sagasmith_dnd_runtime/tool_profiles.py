@@ -87,7 +87,8 @@ PHASE_TOOLS = {
         """
         access_grant access_revoke actor_knowledge_query addon_actor_instantiate bounded_evaluation
         branch_change branch_query
-        campaign_rules character_query combat_cast_spell combat_check combat_choice
+        campaign_rules character_query character_state_change
+        combat_cast_spell combat_check combat_choice
         combat_common_action combat_concentration_check combat_end combat_end_turn combat_hp_change
         combat_join combat_map_patch combat_movement combat_preflight_attack combat_query
         combat_reaction_attack combat_ready combat_resolve_attack combat_resolve_hide

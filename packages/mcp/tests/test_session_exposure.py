@@ -1135,7 +1135,9 @@ def test_stdio_player_loads_only_player_safe_module_and_continuity_projections(
                         )
                         assert not searched.is_error
                         matches = response_payload(searched)["matches"]
-                        assert [(item["tool_id"], item["roles"]) for item in matches] == [
+                        # Search also matches descriptions that reference another tool.
+                        assert [(item["tool_id"], item["roles"]) for item in matches
+                                if item["tool_id"] == tool_id] == [
                             (tool_id, [])
                         ]
 

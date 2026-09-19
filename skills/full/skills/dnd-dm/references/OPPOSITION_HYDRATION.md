@@ -227,6 +227,14 @@ requires import repair, not repeated guesses at card ids or kinds.
 
 ## Verify and return to play
 
+For a legacy 2014 NPC import incorrectly penalized for its printed armor or
+shield, use `character_state_change(action="statblock_proficiency_sync",
+payload={reason})` with the current actor revision and a stable request key.
+The Runtime derives only the unchanged source-recorded equipment's proficiency;
+do not supply a proficiency list or replace the full sheet. This repair is
+available during combat and preserves wounds, resources, initiative and random
+state. Preserve earlier erroneous rolls as audit evidence; do not replay them.
+
 Run `module_query(view="preflight")`. Its `ready`, `card_valid`,
 `hard_blockers`, and `disabled_capabilities` fields are the combat gate. A
 usable attack card is not wholly blocked merely because unrelated source-backed
