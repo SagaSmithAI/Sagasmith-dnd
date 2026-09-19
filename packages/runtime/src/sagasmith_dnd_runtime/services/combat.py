@@ -813,14 +813,14 @@ class CombatService:
             projected = value["combat"]
             if isinstance(projected, dict) and isinstance(projected.get("log"), list):
                 log = projected["log"]
-                if len(log) > 10:
+                if len(log) > 3:
                     value["combat"] = {
                         **projected,
-                        "log": log[-10:],
+                        "log": log[-3:],
                         "log_window": {
                             "total": len(log),
-                            "returned": 10,
-                            "omitted": len(log) - 10,
+                            "returned": 3,
+                            "omitted": len(log) - 3,
                             "read_next": {
                                 "tool": "combat_query",
                                 "view": "status",

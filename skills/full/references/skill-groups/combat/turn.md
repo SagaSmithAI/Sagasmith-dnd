@@ -44,7 +44,7 @@ An unsuccessful tool call or a narrative description is not a wake receipt.
 
 ## Current turn
 
-Combat write replies retain current tactical state and the latest ten visible
+Combat write replies retain current tactical state and the latest three visible
 log entries. `combat.log_window` reports any omitted history; use
 `combat_query(view="status", payload={"detail":"full"})` only when that history
 is needed. Use the returned state and campaign revision for the next action;

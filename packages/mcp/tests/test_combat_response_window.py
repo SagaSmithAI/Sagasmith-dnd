@@ -6,7 +6,7 @@ from sagasmith_dnd_runtime.services.combat import CombatService
 
 
 @pytest.mark.parametrize("dm", [True, False])
-@pytest.mark.parametrize("count", [0, 10, 11, 1000])
+@pytest.mark.parametrize("count", [0, 3, 4, 1000])
 def test_write_window_preserves_receipt_and_tactical_state(dm, count):
     receipt = {
         "status": "committed",
@@ -27,11 +27,11 @@ def test_write_window_preserves_receipt_and_tactical_state(dm, count):
     result = CombatService.combat_response(service, "campaign", "principal", receipt)
     assert receipt == before
     assert result == CombatService.combat_response(service, "campaign", "principal", receipt)
-    assert result["combat"]["log"] == before["combat"]["log"][-10:]
+    assert result["combat"]["log"] == before["combat"]["log"][-3:]
     for field in ("round", "turn_index", "combatants", "pending"):
         assert result["combat"][field] == before["combat"][field]
-    if count > 10:
-        assert result["combat"]["log_window"]["omitted"] == count - 10
+    if count > 3:
+        assert result["combat"]["log_window"]["omitted"] == count - 3
         assert result["combat"]["log_window"]["read_next"]["payload"] == {"detail": "full"}
     else:
         assert "log_window" not in result["combat"]
