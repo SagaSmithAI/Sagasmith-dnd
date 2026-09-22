@@ -663,3 +663,15 @@ def test_source_bound_compiler_requires_canonical_core_document_evidence() -> No
     invalid["citations"][0]["source_checksum"] = "not-a-checksum"
     with pytest.raises(RuleCompilationError, match="SHA-256"):
         validate_source_bound_mechanics([invalid], source_id="source-1")
+
+
+@pytest.mark.parametrize("edition", ["2014", "2024"])
+def test_pack_runner_reports_edition_and_requires_behavior_assertions(edition: str) -> None:
+    report = run_mechanic_tests([], [{"event": "rest.before"}], edition=edition)
+    assert report["edition"] == edition
+    assert report["passed"] is False
+    assert "must assert" in report["cases"][0]["errors"][0]
+    verified = run_mechanic_tests(
+        [], [{"event": "rest.before", "expected_status": "committed"}], edition=edition,
+    )
+    assert verified["passed"] is True

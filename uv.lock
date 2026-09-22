@@ -16,6 +16,7 @@ resolution-markers = [
 members = [
     "sagasmith-dnd",
     "sagasmith-dnd-mcp",
+    "sagasmith-dnd-runtime",
     "sagasmith-dnd-workspace",
 ]
 
@@ -937,6 +938,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/9d/a4/e44218c2b394e31a6dd0d6b095c4e1f32d0be54c2a4b250032d717647bab/durationpy-0.10.tar.gz", hash = "sha256:1fa6893409a6e739c9c72334fc65cca1f355dbdd93405d30f726deb5bde42fba", size = 3335, upload-time = "2025-05-17T13:52:37.26Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b0/0d/9feae160378a3553fa9a339b0e9c1a048e147a4127210e286ef18b730f03/durationpy-0.10-py3-none-any.whl", hash = "sha256:3b41e1b601234296b4fb368338fdcd3e13e0b4fb5b67345948f4f2bf9868b286", size = 3922, upload-time = "2025-05-17T13:52:36.463Z" },
+]
+
+[[package]]
+name = "execnet"
+version = "2.1.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/bf/89/780e11f9588d9e7128a3f87788354c7946a9cbb1401ad38a48c4db9a4f07/execnet-2.1.2.tar.gz", hash = "sha256:63d83bfdd9a23e35b9c6a3261412324f964c2ec8dcd8d3c6916ee9373e0befcd", size = 166622, upload-time = "2025-11-12T09:56:37.75Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ab/84/02fc1827e8cdded4aa65baef11296a9bbe595c474f0d6d758af082d849fd/execnet-2.1.2-py3-none-any.whl", hash = "sha256:67fba928dd5a544b783f6056f449e5e3931a5c378b128bc18501f7ea79e296ec", size = 40708, upload-time = "2025-11-12T09:56:36.333Z" },
 ]
 
 [[package]]
@@ -2913,11 +2923,11 @@ wheels = [
 
 [[package]]
 name = "pypdf"
-version = "6.16.1"
+version = "6.18.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/b6/5a/df92d1c1ef8806ca28f20f978ee059894868d93de797a7e2edebe7fe1a43/pypdf-6.16.1.tar.gz", hash = "sha256:c4d1b43ddae921387321cf63936cd16a7743b91d2da92f165c149a195c972ba9", size = 7003737, upload-time = "2026-08-14T12:24:04.531Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/4f/c2/e537e78a8282b51ed47031566be118debbc34c04782a9afd8739672eb07d/pypdf-6.18.1.tar.gz", hash = "sha256:2441fc839053745638d9b9ddb38ed66beed8d611f47a3036c9838fc4e3074dea", size = 7027577, upload-time = "2026-09-11T10:10:07.616Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/33/a1/724b18d6757ab7253a8fecd3a430eb8d980ed26872ba16651e7b5ddfc63f/pypdf-6.16.1-py3-none-any.whl", hash = "sha256:63fec31c4092ae50b6729beedcb469055b60d20c834bde1c402df241f371f644", size = 382924, upload-time = "2026-08-14T12:24:02.854Z" },
+    { url = "https://files.pythonhosted.org/packages/58/13/645df3995075112cb3cce15e8797c205f0f88fb50acc11012b84b071bc22/pypdf-6.18.1-py3-none-any.whl", hash = "sha256:ee93a2665670ecf57ee81d197a4ca548f3dc15f9cefc56e59b8140866aaa3de5", size = 394327, upload-time = "2026-09-11T10:10:06.103Z" },
 ]
 
 [[package]]
@@ -2986,6 +2996,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/30/4c/f883ab8f0daad69f47efdf95f55a66b51a8b939c430dadce0611508d9e99/pytest_cov-6.3.0.tar.gz", hash = "sha256:35c580e7800f87ce892e687461166e1ac2bcb8fb9e13aea79032518d6e503ff2", size = 70398, upload-time = "2025-09-06T15:40:14.361Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/80/b4/bb7263e12aade3842b938bc5c6958cae79c5ee18992f9b9349019579da0f/pytest_cov-6.3.0-py3-none-any.whl", hash = "sha256:440db28156d2468cafc0415b4f8e50856a0d11faefa38f30906048fe490f1749", size = 25115, upload-time = "2025-09-06T15:40:12.44Z" },
+]
+
+[[package]]
+name = "pytest-xdist"
+version = "3.8.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "execnet" },
+    { name = "pytest" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/78/b4/439b179d1ff526791eb921115fca8e44e596a13efeda518b9d845a619450/pytest_xdist-3.8.0.tar.gz", hash = "sha256:7e578125ec9bc6050861aa93f2d59f1d8d085595d6551c2c90b6f4fad8d3a9f1", size = 88069, upload-time = "2025-07-01T13:30:59.346Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ca/31/d4e37e9e550c2b92a9cbc2e4d0b7420a27224968580b5a447f420847c975/pytest_xdist-3.8.0-py3-none-any.whl", hash = "sha256:202ca578cfeb7370784a8c33d6d05bc6e13b4f25b5053c30a152269fd10f0b88", size = 46396, upload-time = "2025-07-01T13:30:56.632Z" },
 ]
 
 [[package]]
@@ -3450,7 +3473,7 @@ wheels = [
 
 [[package]]
 name = "sagasmith-core"
-version = "0.2.3"
+version = "0.3.0"
 source = { editable = "../sagasmith-core" }
 dependencies = [
     { name = "alembic" },
@@ -3489,8 +3512,8 @@ requires-dist = [
     { name = "opencv-python", marker = "extra == 'ocr'", specifier = ">=4.10.0,<5.0.0" },
     { name = "pillow", marker = "extra == 'all'", specifier = ">=10.0.0,<13.0.0" },
     { name = "pillow", marker = "extra == 'documents'", specifier = ">=10.0.0,<13.0.0" },
-    { name = "pypdf", marker = "extra == 'all'", specifier = ">=5.0.0,<7.0.0" },
-    { name = "pypdf", marker = "extra == 'documents'", specifier = ">=5.0.0,<7.0.0" },
+    { name = "pypdf", marker = "extra == 'all'", specifier = ">=6.18.0,<7.0.0" },
+    { name = "pypdf", marker = "extra == 'documents'", specifier = ">=6.18.0,<7.0.0" },
     { name = "pypdfium2", marker = "extra == 'all'", specifier = ">=4.30.0,<5.0.0" },
     { name = "pypdfium2", marker = "extra == 'documents'", specifier = ">=4.30.0,<5.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.0,<10.0.0" },
@@ -3509,7 +3532,7 @@ dev = [{ name = "pytest", specifier = ">=9.1.1" }]
 
 [[package]]
 name = "sagasmith-dnd"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "packages/domain" }
 dependencies = [
     { name = "sagasmith-core" },
@@ -3563,12 +3586,13 @@ provides-extras = ["documents", "images", "embedding", "vector", "dense", "all",
 
 [[package]]
 name = "sagasmith-dnd-mcp"
-version = "0.1.0"
+version = "0.3.0"
 source = { editable = "packages/mcp" }
 dependencies = [
     { name = "mcp" },
     { name = "sagasmith-core" },
     { name = "sagasmith-dnd" },
+    { name = "sagasmith-dnd-runtime" },
 ]
 
 [package.optional-dependencies]
@@ -3582,6 +3606,7 @@ dense = [
 ]
 dev = [
     { name = "pytest" },
+    { name = "pytest-xdist" },
     { name = "ruff" },
 ]
 documents = [
@@ -3611,6 +3636,7 @@ requires-dist = [
     { name = "pillow", marker = "extra == 'all'", specifier = ">=10.0.0,<13.0.0" },
     { name = "pillow", marker = "extra == 'images'", specifier = ">=10.0.0,<13.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.0,<10.0.0" },
+    { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.8.0,<4.0.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
     { name = "sagasmith-core", editable = "../sagasmith-core" },
     { name = "sagasmith-core", extras = ["documents"], marker = "extra == 'documents'", editable = "../sagasmith-core" },
@@ -3622,8 +3648,24 @@ requires-dist = [
     { name = "sagasmith-dnd", editable = "packages/domain" },
     { name = "sagasmith-dnd", extras = ["images"], marker = "extra == 'all'", editable = "packages/domain" },
     { name = "sagasmith-dnd", extras = ["images"], marker = "extra == 'images'", editable = "packages/domain" },
+    { name = "sagasmith-dnd-runtime", editable = "packages/runtime" },
 ]
 provides-extras = ["documents", "images", "ocr", "embedding", "vector", "dense", "all", "gateway", "dev"]
+
+[[package]]
+name = "sagasmith-dnd-runtime"
+version = "0.3.0"
+source = { editable = "packages/runtime" }
+dependencies = [
+    { name = "sagasmith-core" },
+    { name = "sagasmith-dnd" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "sagasmith-core", editable = "../sagasmith-core" },
+    { name = "sagasmith-dnd", editable = "packages/domain" },
+]
 
 [[package]]
 name = "sagasmith-dnd-workspace"

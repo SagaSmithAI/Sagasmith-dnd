@@ -18,7 +18,7 @@ jobs:
         include:
           - profile: locked-py311
             python-version: "3.11"
-            core-ref: 37058d3bc772058a969517de2fc5d6a7f17a52c6
+            core-ref: e6a3c2c648f4957e12bf2b635e3bd7d4fea0e4bd
             sync-args: --frozen
           - profile: compatibility-py312
             python-version: "3.12"
@@ -42,9 +42,11 @@ jobs:
           enable-cache: true
           prune-cache: true
       - run: uv sync ${{ matrix.sync-args }} --all-packages --all-extras
-      - run: uv run --no-sync ruff check packages/domain packages/mcp
+      - run: uv run --no-sync ruff check packages/domain packages/runtime packages/mcp
       - run: uv run --no-sync pytest packages/domain/tests
-      - run: uv run --no-sync pytest packages/mcp/tests
+      - run: uv run --no-sync pytest packages/mcp/tests -n 2 --dist loadfile
+      - run: uv run --no-sync pytest packages/runtime/tests
+      - run: uv run --no-sync python -m sagasmith_dnd_runtime.publish --check
 
   skills:
     runs-on: ubuntu-latest

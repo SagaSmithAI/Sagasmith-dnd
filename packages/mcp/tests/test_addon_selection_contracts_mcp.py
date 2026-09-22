@@ -4224,6 +4224,28 @@ def test_preupgrade_forged_tortle_addon_cannot_replay_activation(
             {"view": "get", "payload": {"campaign_id": campaign["id"]}},
         )
         original_official_validator = server_module._validate_reserved_official_package_identity
+        # This is a synthetic reserved-identity fixture, not the archived official
+        # dependency. Pin the actual local catalog before deliberately bypassing
+        # only the outer identity guard; archived rebind checksums are unrelated.
+        from sagasmith_core.database import Database, sqlite_database_url
+        from sagasmith_core.rule_packs import RulePackService
+
+        fixture_database = Database(sqlite_database_url(config.database_path))
+        try:
+            fixture_dependency = RulePackService(fixture_database).get_version(
+                tortle_rebind["dependency_id"], tortle_rebind["runtime_version"]
+            )
+        finally:
+            fixture_database.dispose()
+        tortle_rebind = {
+            **tortle_rebind,
+            "dependency_version": tortle_rebind["runtime_version"],
+            "source_checksum": fixture_dependency.checksum,
+        }
+        monkeypatch.setattr(
+            server_module, "matching_official_expansion_dependency_rebinds",
+            lambda *_args, **_kwargs: (),
+        )
 
         def trust_synthetic_fixture(package: dict[str, object]) -> None:
             with pytest.raises(ValueError, match="reserved official identity"):

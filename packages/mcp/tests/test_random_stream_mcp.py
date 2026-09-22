@@ -365,6 +365,7 @@ def test_stdio_character_roll_persists_and_replays_its_stream_receipt(tmp_path: 
                     "idempotency_key": "ability-roll",
                 }
                 rolled = await session.call_tool("character_ability_apply", arguments)
+                assert not rolled.is_error, rolled.content
                 payload = json.loads(rolled.content[0].text)
                 receipt = payload["random_stream_receipt"]
                 assert receipt["position_before"] == 0

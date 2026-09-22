@@ -9,12 +9,13 @@
 [Platform overview](https://github.com/SagaSmithAI/.github/blob/main/profile/README.md)
 
 SagaSmith D&D is the active vertical monorepo for the D&D 5e 2014/2024 product
-line. It versions four independently deployable components together:
+line. It versions five components together:
 
 - `packages/domain`: deterministic rules, schemas, content compilation, and the
   `sagasmith-dnd` CLI;
-- `packages/mcp`: authoritative campaign state, authorization, revisions,
-  idempotency, random streams, tasks, media results, and MCP transports;
+- `packages/runtime`: authoritative campaign state, authorization, revisions,
+  idempotency, random streams, settlement, and durable continuations;
+- `packages/mcp`: protocol authentication, tasks, media adaptation, and MCP transports;
 - `skills`: Agent workflows and bounded host-integration guidance;
 - `apps/ui`: the local D&D Workbench, which uses the MCP-backed gateway and never
   reads authoritative storage directly.
@@ -39,16 +40,19 @@ SagaSmith Web + SagaSmith Agent (Host)
         | standard MCP CallToolResult + per-request delegation
         v
 SagaSmith D&D MCP
+  - protocol authentication, tasks, media, stdio / Streamable HTTP
+        |
+        v
+SagaSmith D&D Runtime
   - campaign, actor, role, phase, combat, random, revision, idempotency
   - authoritative writes and audience-safe reads
-  - stdio / Streamable HTTP parity
         |
         v
 sagasmith-dnd + sagasmith-core
   - deterministic mechanics and persisted domain state
 ```
 
-The Host owns the model and orchestration; the domain MCP owns D&D authority.
+The Host owns the model and orchestration; the Runtime owns D&D authority.
 Prompts, model arguments, browser fields, cached projections, connection identity,
 and tool annotations are never authorization boundaries.
 
@@ -268,8 +272,10 @@ From the repository root:
 ```bash
 uv sync --all-packages --all-extras
 uv run --package sagasmith-dnd pytest packages/domain/tests
+uv run --package sagasmith-dnd-mcp pytest packages/runtime/tests
 uv run --package sagasmith-dnd-mcp pytest packages/mcp/tests
-uv run ruff check packages/domain packages/mcp
+uv run ruff check packages/domain packages/runtime packages/mcp
+uv run python -m sagasmith_dnd_runtime.publish --check
 ```
 
 UI checks are independent:
@@ -326,6 +332,8 @@ deployment environment's change-management, backup, secret, and rollback policy.
 - [Domain package and CLI (中文)](packages/domain/README.md)
 - [Domain package and CLI (English)](packages/domain/README-en.md)
 - [MCP server, gateway, protocol, and operations](packages/mcp/README.md)
+- [Independent Runtime and immutable workflow publication](packages/runtime/README.md)
+- [Design refactor acceptance](docs/design-refactor-status.md)
 - [Host integration contract](skills/HOST-INTEGRATION.md)
 - [Agent Skills](skills/README.md)
 - [D&D Workbench](apps/ui/README.md)

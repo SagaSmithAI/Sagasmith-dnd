@@ -14,6 +14,8 @@ from dataclasses import asdict, dataclass
 from typing import Any, Iterable, Mapping
 from uuid import uuid4
 
+from sagasmith_dnd import native_registry as _native
+from sagasmith_dnd import native_stances as _stances
 from sagasmith_dnd import steel_defender as _steel_defender
 from sagasmith_dnd.activity_identity import is_multiattack_activity
 from sagasmith_dnd.breathing import breathing_blocks_recovery
@@ -22,12 +24,10 @@ from sagasmith_dnd.character_schema import (
     active_concentration_save_bonus,
     active_effect_roll_advantage,
     active_effect_roll_bonus,
-    add_effect,
     derive_character_sheet,
     effective_ability_scores,
     effective_hit_point_maximum,
     effective_size,
-    remove_effect,
     validate_character_sheet,
 )
 from sagasmith_dnd.conditions import (
@@ -81,19 +81,9 @@ from sagasmith_dnd.spell_resolution import (
     scaled_roll_expression,
 )
 from sagasmith_dnd.standard_feature_ids import (
-    CORE_ORC_AGGRESSIVE_MECHANIC_ID,
     CORE_RELENTLESS_ENDURANCE_MECHANIC_ID,
-    CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID,
     CORE_UNCANNY_DODGE_MECHANIC_ID,
     ORC_AGGRESSIVE_ACTIVITY_ID,
-    TORTLE_SHELL_DEFENSE_ARTIFACT_ID,
-    TORTLE_SHELL_DEFENSE_CURRENT_PACK_VERSION,
-    TORTLE_SHELL_DEFENSE_CURRENT_SELECTION_MECHANIC_REFS,
-    TORTLE_SHELL_DEFENSE_EFFECT_ID,
-    TORTLE_SHELL_DEFENSE_FEATURE_ID,
-    TORTLE_SHELL_DEFENSE_LEGACY_PACK_ID,
-    TORTLE_SHELL_DEFENSE_LEGACY_PACK_VERSIONS,
-    TORTLE_SHELL_DEFENSE_SOURCE_RULE_REF_PREFIX,
 )
 from sagasmith_dnd.standard_spell_ids import (
     CORE_BLADE_WARD_MECHANIC_ID,
@@ -119,12 +109,6 @@ _DEPENDENT_TURN_FIELDS = frozenset(
         "source_pack_version",
         "reviewed_expression_hash",
     }
-)
-_TORTLE_SHELL_DEFENSE_FLAG = "tortle_shell_defense"
-_TORTLE_SHELL_DEFENSE_DESCRIPTION = (
-    "Withdrawn into the shell: AC +4; Strength and Constitution save advantage; "
-    "prone; speed 0 and cannot increase; Dexterity save disadvantage; no reactions; "
-    "only a bonus action to emerge."
 )
 
 
@@ -328,9 +312,7 @@ def source_spell_resolution(sheet: dict[str, Any], spell_id: str) -> dict[str, A
     resolution = spell.get("resolution")
     if not isinstance(resolution, dict):
         raise CombatEngineError("spell does not have a reviewed structured resolution")
-    if SPELL_RESOLUTION_MECHANIC_ID not in {
-        str(item) for item in spell.get("mechanic_refs", [])
-    }:
+    if SPELL_RESOLUTION_MECHANIC_ID not in {str(item) for item in spell.get("mechanic_refs", [])}:
         raise CombatEngineError("spell resolution is not bound to the Core executor")
     return deepcopy(resolution)
 
@@ -361,8 +343,7 @@ def newly_ended_witch_bolt_tethers(
             and not item.get("active", True)
             and item.get("mechanic_id") == CORE_WITCH_BOLT_MECHANIC_ID
             and (
-                source_actor_id is None
-                or str(item.get("source_actor_id") or "") == source_actor_id
+                source_actor_id is None or str(item.get("source_actor_id") or "") == source_actor_id
             )
         )
     ]
@@ -511,9 +492,7 @@ def active_condition_source_effects(sheet: dict[str, Any], condition: str) -> li
 
 
 CHARMED_ATTACK_ERROR = "a charmed creature cannot attack its charmer"
-CHARMED_HARMFUL_TARGET_ERROR = (
-    "a charmed creature cannot target its charmer with a harmful effect"
-)
+CHARMED_HARMFUL_TARGET_ERROR = "a charmed creature cannot target its charmer with a harmful effect"
 
 
 def charmed_source_actor_ids(
@@ -541,9 +520,11 @@ def charmed_source_actor_ids(
         if known_actor_ids is not None
         else None
     )
-    unresolved = not sources or any(
-        not str(effect.get("source") or "").strip() for effect in effects
-    ) or (known is not None and bool(sources - known))
+    unresolved = (
+        not sources
+        or any(not str(effect.get("source") or "").strip() for effect in effects)
+        or (known is not None and bool(sources - known))
+    )
     return sources, unresolved
 
 
@@ -598,9 +579,7 @@ def charmed_social_check_advantage(
     """
 
     target_sheet = actor_sheet(target)
-    target_conditions = _condition_set(
-        target.get("conditions") or target_sheet.get("conditions")
-    )
+    target_conditions = _condition_set(target.get("conditions") or target_sheet.get("conditions"))
     if "charmed" not in target_conditions:
         return False
     sources, unresolved = charmed_source_actor_ids(
@@ -654,263 +633,6 @@ def source_speed_multiplier(sheet: dict[str, Any]) -> float:
             ):
                 multiplier *= float(change["value"])
     return multiplier
-
-
-def _tortle_shell_defense_rule_refs(value: Any) -> bool:
-    return (
-        isinstance(value, list)
-        and bool(value)
-        and all(
-            isinstance(item, str) and item.startswith(TORTLE_SHELL_DEFENSE_SOURCE_RULE_REF_PREFIX)
-            for item in value
-        )
-    )
-
-
-def _tortle_shell_defense_mechanic_refs(
-    value: Any, *, pack_version: Any, feature: bool = False
-) -> bool:
-    refs = {str(item) for item in value or []}
-    if pack_version in TORTLE_SHELL_DEFENSE_LEGACY_PACK_VERSIONS:
-        return refs == set()
-    if pack_version != TORTLE_SHELL_DEFENSE_CURRENT_PACK_VERSION:
-        return False
-    if feature:
-        return refs == {CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID}
-    return refs == set(TORTLE_SHELL_DEFENSE_CURRENT_SELECTION_MECHANIC_REFS)
-
-
-def tortle_shell_defense_available(sheet: dict[str, Any]) -> bool:
-    """Return whether an actor has the exact finalized 2014 Tortle trait."""
-
-    if sheet.get("edition") != "2014":
-        return False
-    selections = [
-        item
-        for item in dict(sheet.get("content") or {}).get("selections", [])
-        if isinstance(item, dict)
-        and item.get("kind") == "species"
-        and item.get("pack_id") == TORTLE_SHELL_DEFENSE_LEGACY_PACK_ID
-        and item.get("pack_version") in {
-            *TORTLE_SHELL_DEFENSE_LEGACY_PACK_VERSIONS,
-            TORTLE_SHELL_DEFENSE_CURRENT_PACK_VERSION,
-        }
-        and item.get("artifact_id") == TORTLE_SHELL_DEFENSE_ARTIFACT_ID
-        and _tortle_shell_defense_mechanic_refs(
-            item.get("mechanic_refs"), pack_version=item.get("pack_version")
-        )
-        and _tortle_shell_defense_rule_refs(item.get("rule_refs"))
-    ]
-    features = [
-        item
-        for item in dict(sheet.get("content") or {}).get("features", [])
-        if isinstance(item, dict)
-        and item.get("id") == TORTLE_SHELL_DEFENSE_FEATURE_ID
-        and item.get("name") == "Shell Defense"
-        and item.get("source_key") == "Tortle"
-        and item.get("pack_id") == TORTLE_SHELL_DEFENSE_LEGACY_PACK_ID
-        and item.get("pack_version") in {
-            *TORTLE_SHELL_DEFENSE_LEGACY_PACK_VERSIONS,
-            TORTLE_SHELL_DEFENSE_CURRENT_PACK_VERSION,
-        }
-        and _tortle_shell_defense_mechanic_refs(
-            item.get("mechanic_refs"), pack_version=item.get("pack_version"), feature=True
-        )
-        and _tortle_shell_defense_rule_refs(item.get("rule_refs"))
-        and item.get("description")
-        == (
-            "Source-bound action: withdraw or emerge and apply the cited AC, save, speed, "
-            "prone, reaction, and action restrictions."
-        )
-    ]
-    if len(selections) > 1 or len(features) > 1:
-        raise CombatEngineError("actor card has duplicate Tortle Shell Defense provenance")
-    return (
-        len(selections) == 1
-        and len(features) == 1
-        and selections[0]["pack_version"] == features[0]["pack_version"]
-    )
-
-
-def _tortle_shell_defense_effect_changes(*, adds_prone: bool) -> list[dict[str, Any]]:
-    changes: list[dict[str, Any]] = [
-        {"path": "derived.armor_class", "mode": "add", "value": 4},
-        {"path": "combat.speed.multiplier", "mode": "multiply", "value": 0},
-    ]
-    if adds_prone:
-        changes.append({"path": "conditions", "mode": "add", "value": "prone"})
-    return changes
-
-
-def tortle_shell_defense_active_effect(sheet: dict[str, Any]) -> dict[str, Any] | None:
-    """Return the one exact engine-owned Shell Defense effect, if active."""
-
-    matches = [
-        item
-        for item in sheet.get("effects", [])
-        if isinstance(item, dict) and item.get("id") == TORTLE_SHELL_DEFENSE_EFFECT_ID
-    ]
-    if len(matches) > 1:
-        raise CombatEngineError("actor card has duplicate Tortle Shell Defense effects")
-    if not matches:
-        return None
-    effect = matches[0]
-    changes = list(effect.get("changes") or [])
-    valid_changes = changes == _tortle_shell_defense_effect_changes(
-        adds_prone=False
-    ) or changes == _tortle_shell_defense_effect_changes(adds_prone=True)
-    if not (
-        effect.get("name") == "Shell Defense"
-        and effect.get("kind") == "timed_conditions"
-        and effect.get("source") == TORTLE_SHELL_DEFENSE_ARTIFACT_ID
-        and effect.get("source_spell_id") == ""
-        and effect.get("active") is True
-        and effect.get("concentration") is False
-        and dict(effect.get("duration") or {}).get("period") == "manual"
-        and effect.get("description") == _TORTLE_SHELL_DEFENSE_DESCRIPTION
-        and valid_changes
-    ):
-        raise CombatEngineError("the persisted Tortle Shell Defense effect is malformed")
-    return deepcopy(effect)
-
-
-def enter_tortle_shell_defense(sheet: dict[str, Any]) -> dict[str, Any]:
-    """Persist the exact indefinite Shell Defense effect on a source-bound Tortle."""
-
-    value = validate_character_sheet(sheet)
-    if not tortle_shell_defense_available(value):
-        raise CombatEngineError("actor does not have source-bound 2014 Tortle Shell Defense")
-    if tortle_shell_defense_active_effect(value) is not None:
-        raise CombatEngineError("actor is already withdrawn into its shell")
-    adds_prone = "prone" not in condition_ids(value.get("conditions"))
-    value, effect_id = add_effect(
-        value,
-        {
-            "id": TORTLE_SHELL_DEFENSE_EFFECT_ID,
-            "name": "Shell Defense",
-            "kind": "timed_conditions",
-            "source": TORTLE_SHELL_DEFENSE_ARTIFACT_ID,
-            "active": True,
-            "concentration": False,
-            "duration": {"period": "manual", "remaining": 0},
-            "changes": _tortle_shell_defense_effect_changes(adds_prone=adds_prone),
-            "description": _TORTLE_SHELL_DEFENSE_DESCRIPTION,
-        },
-    )
-    assert effect_id == TORTLE_SHELL_DEFENSE_EFFECT_ID
-    return value
-
-
-def emerge_tortle_shell_defense(sheet: dict[str, Any]) -> dict[str, Any]:
-    """End only the engine-owned Shell Defense effect and its owned prone state."""
-
-    value = validate_character_sheet(sheet)
-    if not tortle_shell_defense_available(value):
-        raise CombatEngineError("actor does not have source-bound 2014 Tortle Shell Defense")
-    if tortle_shell_defense_active_effect(value) is None:
-        raise CombatEngineError("actor is not withdrawn into its shell")
-    return remove_effect(value, TORTLE_SHELL_DEFENSE_EFFECT_ID)
-
-
-def _tortle_shell_defense_flag(
-    effect: dict[str, Any],
-    *,
-    other_speed_multiplier: float,
-    reaction_on_emerge: int,
-) -> dict[str, Any]:
-    return {
-        "mechanic_id": CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID,
-        "source_artifact_id": TORTLE_SHELL_DEFENSE_ARTIFACT_ID,
-        "effect_id": TORTLE_SHELL_DEFENSE_EFFECT_ID,
-        "other_speed_multiplier": float(other_speed_multiplier),
-        "reaction_on_emerge": max(0, int(reaction_on_emerge)),
-        "added_prone": any(
-            item.get("path") == "conditions"
-            and item.get("mode") == "add"
-            and item.get("value") == "prone"
-            for item in effect.get("changes", [])
-            if isinstance(item, dict)
-        ),
-    }
-
-
-def reconcile_tortle_shell_defense_projection(
-    combatant: dict[str, Any],
-    sheet: dict[str, Any],
-) -> None:
-    """Synchronize encounter capability/state from the authoritative actor card."""
-
-    capabilities = {str(item) for item in combatant.get("source_capabilities", []) if str(item)}
-    available = tortle_shell_defense_available(sheet)
-    if available:
-        capabilities.add(CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID)
-    else:
-        capabilities.discard(CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID)
-    combatant["source_capabilities"] = sorted(capabilities)
-    flags = dict(combatant.get("turn_flags") or {})
-    effect = tortle_shell_defense_active_effect(sheet)
-    if effect is not None and not available:
-        raise CombatEngineError(
-            "active Tortle Shell Defense lacks its exact source provenance"
-        )
-    if effect is None:
-        flags.pop(_TORTLE_SHELL_DEFENSE_FLAG, None)
-    else:
-        other_effects = [
-            item
-            for item in sheet.get("effects", [])
-            if not isinstance(item, dict) or item.get("id") != TORTLE_SHELL_DEFENSE_EFFECT_ID
-        ]
-        other_speed_multiplier = source_speed_multiplier({**sheet, "effects": other_effects})
-        existing_flag = dict(flags.get(_TORTLE_SHELL_DEFENSE_FLAG) or {})
-        reaction_on_emerge = int(
-            existing_flag.get(
-                "reaction_on_emerge",
-                dict(combatant.get("turn_budget") or {}).get("reaction", 1),
-            )
-            or 0
-        )
-        flags[_TORTLE_SHELL_DEFENSE_FLAG] = _tortle_shell_defense_flag(
-            effect,
-            other_speed_multiplier=other_speed_multiplier,
-            reaction_on_emerge=reaction_on_emerge,
-        )
-        combatant.setdefault("turn_budget", {})["reaction"] = 0
-    if flags:
-        combatant["turn_flags"] = flags
-    else:
-        combatant.pop("turn_flags", None)
-
-
-def encounter_tortle_shell_defense_save_modifiers(
-    encounter: dict[str, Any] | None,
-    actor_id_value: str,
-    *,
-    ability: str,
-) -> tuple[bool, bool]:
-    """Return Shell Defense advantage/disadvantage from authoritative combat state."""
-
-    if encounter is None or _normalize_ruleset(encounter.get("ruleset")) != "2014":
-        return False, False
-    combatant = next(
-        (
-            item
-            for item in encounter.get("combatants", [])
-            if str(item.get("actor_id") or "") == str(actor_id_value)
-        ),
-        None,
-    )
-    flag = dict(
-        dict((combatant or {}).get("turn_flags") or {}).get(_TORTLE_SHELL_DEFENSE_FLAG) or {}
-    )
-    if (
-        flag.get("mechanic_id") != CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID
-        or flag.get("source_artifact_id") != TORTLE_SHELL_DEFENSE_ARTIFACT_ID
-        or flag.get("effect_id") != TORTLE_SHELL_DEFENSE_EFFECT_ID
-    ):
-        return False, False
-    normalized = _long_ability_name(ability)
-    return normalized in {"strength", "constitution"}, normalized == "dexterity"
 
 
 def _active_attack_roll_effect_flags(sheet: dict[str, Any]) -> tuple[bool, bool, list[str]]:
@@ -1199,29 +921,10 @@ def _jack_of_all_trades_bonus(sheet: dict[str, Any]) -> int:
     return proficiency_bonus(level) // 2
 
 
-def _dependent_turn_contract(
-    actor: dict[str, Any],
-    *,
-    participant_ids: set[str],
-    ruleset: str,
-) -> dict[str, Any] | None:
-    raw = actor.get("dependent_turn")
-    if raw is None:
-        return None
-    if not isinstance(raw, dict) or set(raw) != _DEPENDENT_TURN_FIELDS:
-        raise CombatEngineError("dependent turn authority has invalid fields")
-    contract = {key: str(raw.get(key) or "").strip() for key in _DEPENDENT_TURN_FIELDS}
-    if any(not value for value in contract.values()):
-        raise CombatEngineError("dependent turn authority contains an empty field")
-    if contract["kind"] != STEEL_DEFENDER_TURN_KIND or ruleset != "2014":
-        raise CombatEngineError("dependent turn authority is incompatible with this ruleset")
-    owner_id = contract["owner_actor_id"]
-    dependent_id = actor_id(actor)
-    if owner_id == dependent_id or owner_id not in participant_ids:
-        raise CombatEngineError("a Steel Defender requires its owner in the encounter")
-    if re.fullmatch(r"[0-9a-f]{64}", contract["reviewed_expression_hash"]) is None:
-        raise CombatEngineError("dependent turn authority has an invalid reviewed hash")
-    return contract
+def _dependent_turn_contract(actor: dict[str, Any], *, participant_ids: set[str], ruleset: str):
+    return _native.dispatch(
+        "dependent.validate", actor, participant_ids=participant_ids, ruleset=ruleset
+    )
 
 
 def _initiative_root_id(combatant: dict[str, Any]) -> str:
@@ -1248,81 +951,12 @@ def _sort_combatants(combatants: list[dict[str, Any]]) -> None:
     combatants.sort(key=key)
 
 
-def _controlled_dependent(
-    encounter: dict[str, Any],
-    owner_actor_id: str,
-    dependent_actor_id: str,
-) -> dict[str, Any]:
-    dependent = next(
-        (
-            item
-            for item in encounter.get("combatants", [])
-            if str(item.get("actor_id") or "") == dependent_actor_id
-        ),
-        None,
-    )
-    contract = dict((dependent or {}).get("dependent_turn") or {})
-    if (
-        dependent is None
-        or contract.get("kind") != STEEL_DEFENDER_TURN_KIND
-        or contract.get("owner_actor_id") != owner_actor_id
-    ):
-        raise CombatEngineError("target is not this actor's active Steel Defender")
-    if "dead" in _condition_set(dependent.get("conditions")):
-        raise CombatEngineError("a dead Steel Defender cannot be commanded")
-    return dependent
+def _controlled_dependent(encounter: dict[str, Any], owner_actor_id: str, dependent_actor_id: str):
+    return _native.dispatch("dependent.control", encounter, owner_actor_id, dependent_actor_id)
 
 
-def _begin_dependent_turn(encounter: dict[str, Any], dependent: dict[str, Any]) -> None:
-    contract = dict(dependent.get("dependent_turn") or {})
-    if contract.get("kind") != STEEL_DEFENDER_TURN_KIND:
-        return
-    owner_id = str(contract.get("owner_actor_id") or "")
-    owner = next(
-        (
-            item
-            for item in encounter.get("combatants", [])
-            if str(item.get("actor_id") or "") == owner_id
-        ),
-        None,
-    )
-    if owner is None:
-        raise CombatEngineError("Steel Defender combat authority lost its owner")
-    flags = dict(dependent.get("turn_flags") or {})
-    pending = dict(flags.pop("owner_command_pending", None) or {})
-    owner_incapacitated = bool(
-        _condition_set(owner.get("conditions")) & INCAPACITATING_STATE_IDS
-    )
-    commanded = (
-        not owner_incapacitated
-        and pending.get("owner_actor_id") == owner_id
-        and int(pending.get("owner_turns_completed", -1))
-        == int(owner.get("turns_completed", 0) or 0)
-    )
-    if owner_incapacitated:
-        flags["dependent_owner_incapacitated"] = True
-        event = "steel_defender_owner_incapacitated"
-    elif commanded:
-        flags["dependent_command_active"] = True
-        event = "steel_defender_command_activated"
-    else:
-        budget = dict(dependent.get("turn_budget") or {})
-        if int(budget.get("main_action", 0) or 0) > 0:
-            budget["main_action"] = int(budget["main_action"]) - 1
-            dependent["turn_budget"] = budget
-        flags["dodging"] = True
-        flags["dependent_default_dodge"] = True
-        event = "steel_defender_default_dodge"
-    dependent["turn_flags"] = flags
-    encounter["log"] = [
-        *list(encounter.get("log") or []),
-        {
-            "type": event,
-            "actor_id": str(dependent.get("actor_id") or ""),
-            "owner_actor_id": owner_id,
-            "round": int(encounter.get("round", 1) or 1),
-        },
-    ][-100:]
+def _begin_dependent_turn(encounter: dict[str, Any], dependent: dict[str, Any]):
+    return _native.dispatch("dependent.begin_turn", encounter, dependent)
 
 
 def start_encounter(
@@ -1343,9 +977,9 @@ def start_encounter(
     """
     if not participants:
         raise CombatEngineError("combat requires at least one participant")
-    normalized_positioning_mode = str(
-        positioning_mode or ("grid" if battle_map is not None else "agent")
-    ).strip().casefold()
+    normalized_positioning_mode = (
+        str(positioning_mode or ("grid" if battle_map is not None else "agent")).strip().casefold()
+    )
     if normalized_positioning_mode not in {"grid", "agent"}:
         raise CombatEngineError("positioning_mode must be grid or agent")
     if normalized_positioning_mode == "grid":
@@ -1430,7 +1064,13 @@ def start_encounter(
     frightened_initiative: dict[str, bool] = {}
     initiative_check_modifiers: dict[str, tuple[int, bool, bool]] = {}
     for (
-        _index, actor, identifier, derived, sheet, conditions, _exhaustion
+        _index,
+        actor,
+        identifier,
+        derived,
+        sheet,
+        conditions,
+        _exhaustion,
     ) in validated_participants:
         if (
             normalized_ruleset == "2014"
@@ -1663,7 +1303,7 @@ def start_encounter(
                 ),
             }
         )
-        reconcile_tortle_shell_defense_projection(combatants[-1], sheet)
+        _stances.reconcile(combatants[-1], sheet)
         if combatants[-1]["surprised"] and normalized_ruleset == "2014":
             combatants[-1]["turn_budget"].update(
                 main_action=0,
@@ -1702,12 +1342,10 @@ def start_encounter(
         selected_ties = player_owned_ties or unresolved_ties
         ruling_kind = "player_owned_choice" if player_owned_ties else "agent_dm_adjudication"
         tied_actor_groups = "; ".join(
-            ", ".join(str(item["actor_id"]) for item in items)
-            for items in selected_ties
+            ", ".join(str(item["actor_id"]) for item in items) for items in selected_ties
         )
         raise NeedsRulingError(
-            "initiative ties need explicit unique tie_breaker choices for "
-            f"{tied_actor_groups}",
+            f"initiative ties need explicit unique tie_breaker choices for {tied_actor_groups}",
             missing=("tie_breaker",),
             ruling_kind=ruling_kind,
         )
@@ -1780,7 +1418,8 @@ def queue_combatant(
     generated_actor.pop("dependent_turn", None)
     if contract is not None:
         owner = next(
-            item for item in existing
+            item
+            for item in existing
             if str(item.get("actor_id") or "") == contract["owner_actor_id"]
         )
         generated_actor["initiative"] = int(owner.get("initiative", 0) or 0)
@@ -1790,9 +1429,7 @@ def queue_combatant(
     generated_encounter = start_encounter(
         [generated_actor],
         ruleset=value.get("ruleset"),
-        battle_map=(
-            value.get("battle_map") if value.get("positioning_mode") == "grid" else None
-        ),
+        battle_map=(value.get("battle_map") if value.get("positioning_mode") == "grid" else None),
         positioning_mode=str(value.get("positioning_mode") or "agent"),
         rng=rng,
         # A future-round entry does not establish present line of sight.
@@ -1829,8 +1466,10 @@ def queue_combatant(
         int(item.get("tie_breaker", 0) or 0) == int(generated["tie_breaker"])
         for item in same_initiative
     )
-    if contract is None and same_initiative and (
-        "tie_breaker" not in actor or supplied_tie_breaker_conflicts
+    if (
+        contract is None
+        and same_initiative
+        and ("tie_breaker" not in actor or supplied_tie_breaker_conflicts)
     ):
         ruling_kind = (
             "player_owned_choice"
@@ -1939,9 +1578,8 @@ def _verified_official_item_for_attack(
     recorded_binding_hash = str(
         dict(selection.get("selection") or {}).get("materialized_item_hash") or ""
     )
-    if (
-        not recorded_binding_hash
-        or recorded_binding_hash != str(weapon.get("materialized_item_hash") or "")
+    if not recorded_binding_hash or recorded_binding_hash != str(
+        weapon.get("materialized_item_hash") or ""
     ):
         return {}
     return contract
@@ -2150,7 +1788,7 @@ def pay_witch_bolt_sustain_action(
     current = current_combatant(value)
     if current is None or str(current.get("actor_id") or "") != actor_id_value:
         raise CombatEngineError("Witch Bolt can be sustained only on the caster's turn")
-    _require_tortle_shell_emergence_only(current)
+    _stances.require_action_allowed(current)
     budget = dict(current.get("turn_budget") or {})
     payment = (
         "main_action"
@@ -2198,18 +1836,14 @@ def _travel_speed_modes(combatant: dict[str, Any]) -> dict[str, int]:
     budget = dict(combatant.get("turn_budget") or {})
     recorded = combatant.get("speed_modes", budget.get("speed_modes"))
     if isinstance(recorded, dict):
-        return {
-            mode: max(0, int(recorded.get(mode, 0) or 0))
-            for mode in _TRAVEL_SPEED_MODES
-        }
-    return {"walk": max(0, int(budget.get("speed", 0) or 0)), **{
-        mode: 0 for mode in _TRAVEL_SPEED_MODES - {"walk"}
-    }}
+        return {mode: max(0, int(recorded.get(mode, 0) or 0)) for mode in _TRAVEL_SPEED_MODES}
+    return {
+        "walk": max(0, int(budget.get("speed", 0) or 0)),
+        **{mode: 0 for mode in _TRAVEL_SPEED_MODES - {"walk"}},
+    }
 
 
-def _effective_speed_ft(
-    combatant: dict[str, Any], travel_mode: str | None = None
-) -> int:
+def _effective_speed_ft(combatant: dict[str, Any], travel_mode: str | None = None) -> int:
     if _condition_set(combatant.get("conditions")) & {"grappled", "restrained"}:
         return 0
     budget = dict(combatant.get("turn_budget") or {})
@@ -2221,9 +1855,7 @@ def _effective_speed_ft(
     base_speed = max(0, int(current_speeds.get(mode, 0) or 0))
     # A missing swim/climb speed still permits that movement at double cost;
     # flight and burrowing require an actual corresponding speed.
-    if mode == "walk" or (
-        mode in {"swim", "climb"} and native_speeds.get(mode, 0) <= 0
-    ):
+    if mode == "walk" or (mode in {"swim", "climb"} and native_speeds.get(mode, 0) <= 0):
         base_speed = max(0, int(budget.get("speed", native_speeds.get("walk", 0)) or 0))
     recorded_speed_multiplier = combatant.get("speed_multiplier")
     speed_multiplier = float(
@@ -2331,25 +1963,9 @@ def _movement_accounting(combatant: dict[str, Any]) -> tuple[int, int]:
     return max(0, spent), 0
 
 
-def _remaining_movement_ft(
-    combatant: dict[str, Any], travel_mode: str | None = None
-) -> int:
+def _remaining_movement_ft(combatant: dict[str, Any], travel_mode: str | None = None) -> int:
     spent, extra_granted = _movement_accounting(combatant)
     return max(0, _effective_speed_ft(combatant, travel_mode) + extra_granted - spent)
-
-
-def _tortle_shell_defense_combatant_active(combatant: dict[str, Any]) -> bool:
-    flag = dict(dict(combatant.get("turn_flags") or {}).get(_TORTLE_SHELL_DEFENSE_FLAG) or {})
-    return (
-        flag.get("mechanic_id") == CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID
-        and flag.get("source_artifact_id") == TORTLE_SHELL_DEFENSE_ARTIFACT_ID
-        and flag.get("effect_id") == TORTLE_SHELL_DEFENSE_EFFECT_ID
-    )
-
-
-def _require_tortle_shell_emergence_only(combatant: dict[str, Any]) -> None:
-    if _tortle_shell_defense_combatant_active(combatant):
-        raise CombatEngineError("a withdrawn Tortle can take only the bonus action to emerge")
 
 
 def _update_movement_accounting(
@@ -2371,9 +1987,7 @@ def _update_movement_accounting(
     )
 
 
-def _refresh_weapon_mastery_speed(
-    encounter: dict[str, Any], combatant: dict[str, Any]
-) -> None:
+def _refresh_weapon_mastery_speed(encounter: dict[str, Any], combatant: dict[str, Any]) -> None:
     """Project active Slow effects into the existing movement budget once."""
 
     budget = dict(combatant.get("turn_budget") or {})
@@ -2392,9 +2006,7 @@ def _refresh_weapon_mastery_speed(
     )
     base_speeds = _travel_speed_modes(combatant)
     base_speeds["walk"] = int(combatant.get("base_speed", budget.get("speed", 30)) or 0)
-    budget["speed_modes"] = {
-        mode: max(0, speed - penalty) for mode, speed in base_speeds.items()
-    }
+    budget["speed_modes"] = {mode: max(0, speed - penalty) for mode, speed in base_speeds.items()}
     budget["speed"] = budget["speed_modes"]["walk"]
     budget["movement_spent"] = spent
     budget["extra_movement_granted"] = extra_granted
@@ -2418,9 +2030,7 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
         raise CombatEngineError(f"combatant not found: {actor_id_value}")
     conditions = _condition_set(combatant.get("conditions"))
     budget = dict(combatant.get("turn_budget") or {})
-    has_movement = (
-        _effective_speed_ft(combatant) > 0 and _remaining_movement_ft(combatant) > 0
-    )
+    has_movement = _effective_speed_ft(combatant) > 0 and _remaining_movement_ft(combatant) > 0
     current = current_combatant(encounter)
     if current is None or current.get("actor_id") != actor_id_value:
         return []
@@ -2429,41 +2039,20 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
     if conditions & {"dead", "unconscious", "stunned", "paralyzed", "petrified"}:
         return []
     if "incapacitated" in conditions:
-        actions = (
-            ["move"]
-            if (
-                has_movement
-                and not conditions & {"grappled", "restrained"}
-            )
-            else []
-        )
+        actions = ["move"] if (has_movement and not conditions & {"grappled", "restrained"}) else []
         if budget.get("object_interaction", 0) > 0:
             actions.append("interact_object")
         return actions
-    if _tortle_shell_defense_combatant_active(combatant):
-        return ["emerge_shell"] if int(budget.get("bonus_action", 0) or 0) > 0 else []
+    if _stances.active(combatant):
+        return _stances.exit_actions(combatant, budget)
     if "turned" in conditions:
-        actions = (
-            ["move"]
-            if (
-                has_movement
-                and not conditions & {"grappled", "restrained"}
-            )
-            else []
-        )
+        actions = ["move"] if (has_movement and not conditions & {"grappled", "restrained"}) else []
         if budget.get("main_action", 0) > 0 or budget.get("extra_action", 0) > 0:
             actions.extend(["dash", "dodge"])
             if conditions & {"grappled", "restrained"}:
                 actions.append("escape")
         return actions
-    actions = (
-        ["move"]
-        if (
-            has_movement
-            and not conditions & {"grappled", "restrained"}
-        )
-        else []
-    )
+    actions = ["move"] if (has_movement and not conditions & {"grappled", "restrained"}) else []
     if budget.get("main_action", 0) > 0 or budget.get("extra_action", 0) > 0:
         actions.extend(
             [
@@ -2480,10 +2069,7 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
                 "stabilize",
             ]
         )
-        if CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID in {
-            str(item) for item in combatant.get("source_capabilities", [])
-        }:
-            actions.append("shell_defense")
+        actions.extend(_stances.extra_actions(combatant))
         if _normalize_ruleset(encounter.get("ruleset")) == "2024":
             actions.extend(["influence", "study", "utilize"])
         else:
@@ -2504,8 +2090,7 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
         actions.append("bonus_action")
         if any(
             dict(item.get("dependent_turn") or {}).get("owner_actor_id") == actor_id_value
-            and dict(item.get("dependent_turn") or {}).get("kind")
-            == STEEL_DEFENDER_TURN_KIND
+            and dict(item.get("dependent_turn") or {}).get("kind") == STEEL_DEFENDER_TURN_KIND
             and "dead" not in _condition_set(item.get("conditions"))
             for item in encounter.get("combatants", [])
         ):
@@ -2535,7 +2120,7 @@ def pay_attack_action(
     combatant = next(
         item for item in value.get("combatants", []) if item.get("actor_id") == attacker_id
     )
-    _require_tortle_shell_emergence_only(combatant)
+    _stances.require_action_allowed(combatant)
     budget = dict(combatant.get("turn_budget") or {})
     flags = dict(combatant.get("turn_flags") or {})
     legendary_attack = dict(flags.get("legendary_weapon_attack") or {})
@@ -2589,9 +2174,7 @@ def pay_attack_action(
     if cantrip_replacement:
         attack_count = int(actor_derived(attacker).get("attacks_per_action", 1) or 1)
         if attack_count < 2:
-            raise CombatEngineError(
-                "cantrip replacement requires a source-authorized Extra Attack"
-            )
+            raise CombatEngineError("cantrip replacement requires a source-authorized Extra Attack")
         if (
             mastery_followup
             or normalized_light_payment
@@ -2645,9 +2228,10 @@ def pay_attack_action(
             "target_id": target_id,
         }
     elif normalized_light_payment:
-        if normalized_light_payment == "nick" and _normalize_ruleset(
-            actor_sheet(attacker).get("edition")
-        ) != "2024":
+        if (
+            normalized_light_payment == "nick"
+            and _normalize_ruleset(actor_sheet(attacker).get("edition")) != "2024"
+        ):
             raise CombatEngineError("Nick requires 2024 rules")
         if active_multiattack or multiattack_option_id:
             raise CombatEngineError("the Light extra attack cannot be folded into Multiattack")
@@ -2821,7 +2405,7 @@ def pay_official_item_activation(
     current = current_combatant(value)
     if current is None or str(current.get("actor_id") or "") != actor_id_value:
         raise CombatEngineError("it is not this actor's turn")
-    _require_tortle_shell_emergence_only(current)
+    _stances.require_action_allowed(current)
     normalized = str(activation or "").strip().casefold().replace("-", "_")
     if normalized not in {"action", "bonus_action"}:
         raise CombatEngineError("official item activation must be an action or bonus_action")
@@ -2853,7 +2437,7 @@ def pay_multiattack_activity(
     combatant = next(
         item for item in value.get("combatants", []) if item.get("actor_id") == actor_id_value
     )
-    _require_tortle_shell_emergence_only(combatant)
+    _stances.require_action_allowed(combatant)
     budget = dict(combatant.get("turn_budget") or {})
     flags = dict(combatant.get("turn_flags") or {})
     active_multiattack = dict(flags.get("multiattack") or {})
@@ -3037,15 +2621,13 @@ def preflight_attack(
         not isinstance(raw_attack_ability_options, list)
         or not raw_attack_ability_options
         or any(
-            not isinstance(value, str) or not value.strip()
-            for value in raw_attack_ability_options
+            not isinstance(value, str) or not value.strip() for value in raw_attack_ability_options
         )
     ):
         raise CombatEngineError("attack_ability_options must be a non-empty string list")
     if isinstance(raw_attack_ability_options, list):
         attack_ability_options = [
-            str(value).strip().casefold()
-            for value in raw_attack_ability_options
+            str(value).strip().casefold() for value in raw_attack_ability_options
         ]
     else:
         attack_ability_options = [default_attack_ability]
@@ -3197,12 +2779,8 @@ def preflight_attack(
         if spatial_facts.get("in_range") is not True:
             raise CombatEngineError("target is outside range in the Agent spatial ruling")
         context["cover"] = {"degree": str(spatial_facts.get("cover_degree") or "none")}
-        context["attacker_can_see_target"] = bool(
-            spatial_facts.get("attacker_can_see_target")
-        )
-        context["target_can_see_attacker"] = bool(
-            spatial_facts.get("target_can_see_attacker")
-        )
+        context["attacker_can_see_target"] = bool(spatial_facts.get("attacker_can_see_target"))
+        context["target_can_see_attacker"] = bool(spatial_facts.get("target_can_see_attacker"))
     raw_cover = context.get("cover")
     if raw_cover is not None and not isinstance(raw_cover, dict):
         raise CombatEngineError("cover context must be an object")
@@ -3240,9 +2818,10 @@ def preflight_attack(
     if light_extra_attack not in {"", "bonus_action", "nick"}:
         raise CombatEngineError("light_extra_attack must be bonus_action, nick, or omitted")
     if light_extra_attack:
-        if light_extra_attack == "nick" and _normalize_ruleset(
-            actor_sheet(attacker).get("edition")
-        ) != "2024":
+        if (
+            light_extra_attack == "nick"
+            and _normalize_ruleset(actor_sheet(attacker).get("edition")) != "2024"
+        ):
             raise CombatEngineError("Nick requires 2024 rules")
         if mastery_followup:
             raise CombatEngineError("a Light extra attack cannot also be a Cleave follow-up")
@@ -3392,8 +2971,7 @@ def preflight_attack(
             recorded_reach = weapon.get("reach_ft")
             reach = int(5 if recorded_reach is None else recorded_reach)
             agent_cleave_eligible = bool(
-                spatial_facts is not None
-                and spatial_facts.get("cleave_secondary_eligible") is True
+                spatial_facts is not None and spatial_facts.get("cleave_secondary_eligible") is True
             )
             grid_cleave_eligible = bool(
                 primary_position is not None
@@ -3402,10 +2980,15 @@ def preflight_attack(
                 and _grid_distance(primary_position, secondary_position) <= 5
                 and _grid_distance(attacker_position, secondary_position) <= reach
             )
-            if secondary is None or secondary_target_id in {
-                actor_id(attacker),
-                actor_id(target),
-            } or not (agent_cleave_eligible or grid_cleave_eligible):
+            if (
+                secondary is None
+                or secondary_target_id
+                in {
+                    actor_id(attacker),
+                    actor_id(target),
+                }
+                or not (agent_cleave_eligible or grid_cleave_eligible)
+            ):
                 raise CombatEngineError(
                     "Cleave second target must be another creature within 5 feet of "
                     "the first target and within weapon reach"
@@ -3468,9 +3051,7 @@ def preflight_attack(
         ]
         if close_combat_threat_ids:
             context["disadvantage"] = True
-            context.setdefault("disadvantage_sources", []).append(
-                "hostile_creature_within_5_ft"
-            )
+            context.setdefault("disadvantage_sources", []).append("hostile_creature_within_5_ft")
     elif attack_mode == "ranged" and encounter is not None and attacker_position is not None:
         for candidate in encounter.get("combatants", []):
             candidate_id = str(candidate.get("actor_id") or "")
@@ -3626,10 +3207,7 @@ def preflight_attack(
         else:
             context["disadvantage"] = True
             context.setdefault("disadvantage_sources", []).append("target_prone_beyond_5_ft")
-    if (
-        dodge_benefit_active(target)
-        and target_can_see_attacker
-    ):
+    if dodge_benefit_active(target) and target_can_see_attacker:
         context["disadvantage"] = True
         context.setdefault("disadvantage_sources", []).append("target_dodging")
     helped_by = None
@@ -3647,10 +3225,9 @@ def preflight_attack(
             helping = dict(helper.get("turn_flags") or {}).get("helping")
             helper_position = _position(helper.get("position"))
             helping_kind = str(helping.get("kind") or "") if isinstance(helping, dict) else ""
-            structured_attack_help = (
-                helping_kind == "attack"
-                and str(helping.get("attack_target_id") or "") == actor_id(target)
-            )
+            structured_attack_help = helping_kind == "attack" and str(
+                helping.get("attack_target_id") or ""
+            ) == actor_id(target)
             legacy_help = helping_kind in {"", "legacy"}
             if (
                 isinstance(helping, dict)
@@ -3821,9 +3398,7 @@ def preflight_attack(
         "natural_weapon": weapon.get("natural_weapon") is True,
         "intrinsic_attack": weapon.get("intrinsic") is True,
         "weapon_recharge": deepcopy(weapon.get("recharge") or {}),
-        "weapon_reach_ft": int(
-            5 if weapon.get("reach_ft") is None else weapon["reach_ft"]
-        ),
+        "weapon_reach_ft": int(5 if weapon.get("reach_ft") is None else weapon["reach_ft"]),
         "ammunition_item_id": str(ammunition_item_id or ""),
         "ammunition_slaying": ammunition_slaying,
         "attack_mode": attack_mode,
@@ -4060,8 +3635,7 @@ def available_attack_defenses(
     options: list[dict[str, Any]] = []
     if (
         uncanny_dodge is not None
-        and _normalize_ruleset(plan.get("ruleset") or actor_sheet(target).get("edition"))
-        == "2014"
+        and _normalize_ruleset(plan.get("ruleset") or actor_sheet(target).get("edition")) == "2014"
         and bool(plan.get("target_can_see_attacker"))
     ):
         feature, trait = uncanny_dodge
@@ -4133,8 +3707,7 @@ def available_attack_defenses(
         if (
             not candidate_id
             or candidate_id in known_ids
-            or candidate_kind
-            not in {"armor_class_bonus", "spell_armor_class_bonus"}
+            or candidate_kind not in {"armor_class_bonus", "spell_armor_class_bonus"}
             or bonus <= 0
         ):
             continue
@@ -4236,13 +3809,16 @@ def resolve_attack_damage(
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Resolve damage and after-effects from one already rolled attack."""
     if damage_outcome is not None and damage_reduction_outcome is not None:
-        if str(damage_outcome).strip().casefold() != str(
-            damage_reduction_outcome
-        ).strip().casefold():
+        if (
+            str(damage_outcome).strip().casefold()
+            != str(damage_reduction_outcome).strip().casefold()
+        ):
             raise CombatEngineError("damage outcome arguments disagree")
-    normalized_damage_outcome = str(
-        damage_outcome if damage_outcome is not None else damage_reduction_outcome or "full"
-    ).strip().casefold()
+    normalized_damage_outcome = (
+        str(damage_outcome if damage_outcome is not None else damage_reduction_outcome or "full")
+        .strip()
+        .casefold()
+    )
     # Validate before rolling any damage so malformed reaction selections are
     # rejected without consuming randomness or changing either actor.
     damage_amount_after_reduction(0, normalized_damage_outcome)
@@ -4251,8 +3827,11 @@ def resolve_attack_damage(
     updated_attacker = deepcopy(attacker)
     updated_target = deepcopy(target)
     weapon_for_song = next(
-        (item for item in actor_sheet(updated_attacker).get("inventory", {}).get("items", [])
-         if str(item.get("id") or "") == str(plan.get("weapon_id") or "")),
+        (
+            item
+            for item in actor_sheet(updated_attacker).get("inventory", {}).get("items", [])
+            if str(item.get("id") or "") == str(plan.get("weapon_id") or "")
+        ),
         None,
     )
     weapon_properties = {
@@ -4359,15 +3938,17 @@ def resolve_attack_damage(
         )
         song_victory_feature = any(
             str(item.get("id") or "").endswith(".feature.song-of-victory")
-            and str(item.get("pack_id") or "") == (
-                "dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a"
-            )
+            and str(item.get("pack_id") or "")
+            == ("dnd5e.addon.rulebook.d-d-5e-sword-coast-adventurer-s-guide.16e6a243ef0a")
             for item in attacker_sheet.get("content", {}).get("features", [])
         )
         if song_victory_active and song_victory_feature and plan.get("melee_attack"):
             weapon = next(
-                (item for item in attacker_sheet.get("inventory", {}).get("items", [])
-                 if str(item.get("id") or "") == str(plan.get("weapon_id") or "")),
+                (
+                    item
+                    for item in attacker_sheet.get("inventory", {}).get("items", [])
+                    if str(item.get("id") or "") == str(plan.get("weapon_id") or "")
+                ),
                 None,
             )
             properties = {
@@ -4381,21 +3962,24 @@ def resolve_attack_damage(
                 and "two handed" not in properties
             ):
                 int_mod = int(
-                    dict(derive_character_sheet(attacker_sheet).get("ability_modifiers") or {})
-                    .get("intelligence", 0)
+                    dict(derive_character_sheet(attacker_sheet).get("ability_modifiers") or {}).get(
+                        "intelligence", 0
+                    )
                     or 0
                 )
                 int_mod = max(1, int_mod)
-                rolled_parts.append({
-                    "expression": str(int_mod),
-                    "rolled_expression": str(int_mod),
-                    "rolls": [],
-                    "detail": f"Song of Victory +{int_mod}",
-                    "amount": int_mod,
-                    "damage_type": str(plan.get("damage_type") or ""),
-                    "source": "scag.song_of_victory",
-                    "flat": True,
-                })
+                rolled_parts.append(
+                    {
+                        "expression": str(int_mod),
+                        "rolled_expression": str(int_mod),
+                        "rolls": [],
+                        "detail": f"Song of Victory +{int_mod}",
+                        "amount": int_mod,
+                        "damage_type": str(plan.get("damage_type") or ""),
+                        "source": "scag.song_of_victory",
+                        "flat": True,
+                    }
+                )
         if len(rolled_parts) == 1:
             outcome_total_before = sum(int(part.get("amount", 0) or 0) for part in rolled_parts)
             if normalized_damage_outcome != "full":
@@ -4488,10 +4072,15 @@ def resolve_attack_damage(
                 "default_resolver": "agent",
                 "ruling_kind": "source_or_scene_fact",
             }
-    elif attack["hit"] and plan.get("on_hit_effect") and official_kind not in {
-        "dyrrn_tentacle_whip",
-        "arcane_propulsion_arm",
-    }:
+    elif (
+        attack["hit"]
+        and plan.get("on_hit_effect")
+        and official_kind
+        not in {
+            "dyrrn_tentacle_whip",
+            "arcane_propulsion_arm",
+        }
+    ):
         result["on_hit_ruling"] = {
             "required": True,
             "effect": str(plan["on_hit_effect"]),
@@ -5487,8 +5076,7 @@ def _validated_standard_uncanny_dodge_feature(
     feature, trait = matches[0]
     activation = dict(feature.get("activation") or {})
     if (
-        str(feature.get("id") or "")
-        != "dnd5e.content.srd2014.feature.rogue-uncanny-dodge"
+        str(feature.get("id") or "") != "dnd5e.content.srd2014.feature.rogue-uncanny-dodge"
         or str(feature.get("name") or "").casefold() != "uncanny dodge"
         or str(feature.get("source_key") or "").casefold() != "rogue"
         or str(activation.get("type") or "").casefold() != "reaction"
@@ -5855,9 +5443,7 @@ def spend_movement(
     if movement_mode not in {"voluntary", "aggressive", "forced", "teleport"}:
         raise CombatEngineError("movement_mode must be voluntary, aggressive, forced, or teleport")
     if travel_mode not in _TRAVEL_SPEED_MODES:
-        raise CombatEngineError(
-            "travel_mode must be walk, fly, swim, climb, or burrow"
-        )
+        raise CombatEngineError("travel_mode must be walk, fly, swim, climb, or burrow")
     uses_aggressive_grant = movement_mode == "aggressive"
     willing_movement = movement_mode in {"voluntary", "aggressive"}
     if not willing_movement and crawl:
@@ -5954,9 +5540,7 @@ def spend_movement(
         and not uses_aggressive_grant
         and _remaining_movement_ft(combatant, travel_mode) <= 0
     ):
-        raise CombatEngineError(
-            "actor has no movement remaining at its current speed"
-        )
+        raise CombatEngineError("actor has no movement remaining at its current speed")
     if willing_movement and "prone" in conditions and not crawl:
         raise CombatEngineError("a prone actor must crawl or stand before moving")
     if (
@@ -5967,9 +5551,9 @@ def spend_movement(
         raise CombatEngineError("surprised actor cannot move on its first turn")
     budget = dict(combatant.get("turn_budget") or {})
     available = int(
-            (aggressive_grant or {}).get("remaining", 0)
-            if uses_aggressive_grant
-            else _remaining_movement_ft(combatant, travel_mode)
+        (aggressive_grant or {}).get("remaining", 0)
+        if uses_aggressive_grant
+        else _remaining_movement_ft(combatant, travel_mode)
     )
     origin = _position(combatant.get("position"))
     waypoints: list[tuple[float, float]] = []
@@ -6054,9 +5638,7 @@ def spend_movement(
             if point is not None and f"{int(point[0])},{int(point[1])}" in difficult_cells
         )
     missing_aquatic_or_climb_speed = (
-        willing_movement
-        and travel_mode in {"swim", "climb"}
-        and native_travel_speed <= 0
+        willing_movement and travel_mode in {"swim", "climb"} and native_travel_speed <= 0
     )
     movement_cost = (
         distance
@@ -6239,11 +5821,7 @@ def spend_movement(
                 for segment_index, (start, end) in enumerate(movement_segments):
                     start_distance = _grid_distance(start, threat_position)
                     end_distance = _grid_distance(end, threat_position)
-                    if (
-                        start_distance
-                        <= reach
-                        < end_distance
-                    ):
+                    if start_distance <= reach < end_distance:
                         boundaries.append(
                             (reach, segment_index, start, end, start_distance, end_distance)
                         )
@@ -6293,16 +5871,12 @@ def spend_movement(
                 },
             ]
     if willing_movement and agent_facts is not None and not _disengaged(combatant):
-        combatants = {
-            str(item.get("actor_id") or ""): item for item in value.get("combatants", [])
-        }
+        combatants = {str(item.get("actor_id") or ""): item for item in value.get("combatants", [])}
         for threat_id in agent_facts.get("opportunity_attack_actor_ids", []):
             threat_id = str(threat_id)
             threat = combatants.get(threat_id)
             if threat is None or threat_id == actor_id_value:
-                raise CombatEngineError(
-                    "opportunity_attack_actor_ids contains an unknown threat"
-                )
+                raise CombatEngineError("opportunity_attack_actor_ids contains an unknown threat")
             if not _can_make_opportunity_attack(threat, combatant):
                 raise CombatEngineError(
                     "the Agent selected a threat that cannot make an opportunity attack"
@@ -6677,82 +6251,11 @@ def apply_weapon_mastery_to_encounter(
 
 
 def apply_official_item_effect_to_encounter(
-    encounter: dict[str, Any],
-    result: dict[str, Any],
-    *,
-    attacker_id: str,
-    target_id: str,
-) -> dict[str, Any]:
-    """Commit deterministic encounter effects emitted by official weapons."""
-
-    value = deepcopy(encounter)
-    effect = dict(result.get("official_item_effect") or {})
-    if not effect:
-        return {"encounter": value, "effect": None}
-    kind = str(effect.get("kind") or "")
-    if kind == "dyrrn_natural_20_stun":
-        if str(effect.get("target_id") or "") != target_id or str(
-            effect.get("source_actor_id") or ""
-        ) != attacker_id:
-            raise CombatEngineError("Dyrrn stun effect actor binding is invalid")
-        combatant = next(
-            (
-                item
-                for item in value.get("combatants", [])
-                if str(item.get("actor_id") or "") == target_id
-            ),
-            None,
-        )
-        if combatant is None:
-            raise CombatEngineError("Dyrrn stun target is not a combatant")
-        current = current_combatant(value)
-        target_turns_completed = int(combatant.get("turns_completed", 0) or 0)
-        target_is_current_turn = bool(
-            current is not None and str(current.get("actor_id") or "") == target_id
-        )
-        conditions = _condition_set(combatant.get("conditions"))
-        conditions.add("stunned")
-        combatant["conditions"] = sorted(conditions)
-        committed = {
-            "id": f"official-item-stun-{uuid4().hex}",
-            "kind": "official_item_stun",
-            "mechanic_id": "dnd5e.expansion.eberron.dyrrn_tentacle_whip",
-            "source_actor_id": attacker_id,
-            "target_actor_id": target_id,
-            "condition": "stunned",
-            "expires_on": "target_turn_end",
-            "expires_after_target_turns_completed": target_turns_completed
-            + (2 if target_is_current_turn else 1),
-            "active": True,
-        }
-        value.setdefault("ongoing_effects", []).append(committed)
-        value["log"] = [
-            *list(value.get("log") or []),
-            {
-                "type": "official_item_effect",
-                "effect": deepcopy(committed),
-            },
-        ][-100:]
-        return {"encounter": value, "effect": committed}
-    if kind == "arcane_propulsion_arm_return":
-        if str(effect.get("source_actor_id") or "") != attacker_id or str(
-            effect.get("target_id") or ""
-        ) != target_id:
-            raise CombatEngineError("Arcane Propulsion Arm return effect actor binding is invalid")
-        committed = {
-            "kind": kind,
-            "mechanic_id": "dnd5e.expansion.eberron.arcane_propulsion_arm",
-            "source_actor_id": attacker_id,
-            "target_id": target_id,
-            "item_id": str(effect.get("item_id") or ""),
-            "state": "attached",
-        }
-        value["log"] = [
-            *list(value.get("log") or []),
-            {"type": "official_item_effect", "effect": deepcopy(committed)},
-        ][-100:]
-        return {"encounter": value, "effect": committed}
-    raise CombatEngineError(f"unsupported official item encounter effect: {kind}")
+    encounter: dict[str, Any], result: dict[str, Any], *, attacker_id: str, target_id: str
+):
+    return _native.dispatch(
+        "equipment.apply", encounter, result, attacker_id=attacker_id, target_id=target_id
+    )
 
 
 def consume_weapon_mastery_attack_effects(
@@ -6827,7 +6330,6 @@ def resolve_common_action(
         "dash",
         "disengage",
         "dodge",
-        "emerge_shell",
         "escape",
         "help",
         "hide",
@@ -6835,7 +6337,6 @@ def resolve_common_action(
         "ready",
         "revive_steel_defender",
         "search",
-        "shell_defense",
         "shake_hypnotic_pattern",
         "shake_sleep",
         "influence",
@@ -6845,6 +6346,7 @@ def resolve_common_action(
         "utilize",
         "use_object",
     }
+    supported.update(_stances.supported_actions())
     if action not in supported:
         raise CombatEngineError(f"unsupported common action: {action}")
     if action == "shake_sleep" and _normalize_ruleset(value.get("ruleset")) != "2014":
@@ -6856,8 +6358,8 @@ def resolve_common_action(
     )
     if combatant is None:
         raise CombatEngineError("actor is not a combatant")
-    if action != "emerge_shell":
-        _require_tortle_shell_emergence_only(combatant)
+    if not _stances.is_exit_action(action):
+        _stances.require_action_allowed(combatant)
     commanded_dependent = None
     if action == "command_dependent":
         if not target_id:
@@ -6897,7 +6399,7 @@ def resolve_common_action(
         "object_interaction"
         if action == "interact_object"
         else "bonus_action"
-        if action in {"emerge_shell", "command_dependent"}
+        if (_stances.is_exit_action(action) or action == "command_dependent")
         else "extra_action"
         if budget.get("extra_action", 0) > 0
         else "main_action"
@@ -6928,7 +6430,7 @@ def resolve_common_action(
         payment=payment,
     )
     flags = dict(acting.get("turn_flags") or {})
-    if action != "emerge_shell" and "turned" in _condition_set(acting.get("conditions")):
+    if not _stances.is_exit_action(action) and "turned" in _condition_set(acting.get("conditions")):
         if action not in {"dash", "dodge", "escape"}:
             raise CombatEngineError("a turned creature can use its action only to Dash or escape")
         if action == "dodge" and dict(payload or {}).get("nowhere_to_move") is not True:
@@ -6972,62 +6474,8 @@ def resolve_common_action(
                 "round": int(value.get("round", 1) or 1),
             },
         ][-100:]
-    elif action == "shell_defense":
-        if CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID not in {
-            str(item) for item in acting.get("source_capabilities", [])
-        }:
-            raise CombatEngineError("actor does not have source-bound Tortle Shell Defense")
-        if _tortle_shell_defense_combatant_active(acting):
-            raise CombatEngineError("actor is already withdrawn into its shell")
-        added_prone = "prone" not in _condition_set(acting.get("conditions"))
-        prior_speed_multiplier = float(acting.get("speed_multiplier", 1.0) or 0.0)
-        flags[_TORTLE_SHELL_DEFENSE_FLAG] = {
-            "mechanic_id": CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID,
-            "source_artifact_id": TORTLE_SHELL_DEFENSE_ARTIFACT_ID,
-            "effect_id": TORTLE_SHELL_DEFENSE_EFFECT_ID,
-            "other_speed_multiplier": prior_speed_multiplier,
-            "reaction_on_emerge": max(0, int(budget.get("reaction", 0) or 0)),
-            "added_prone": added_prone,
-        }
-        acting["conditions"] = sorted(_condition_set(acting.get("conditions")) | {"prone"})
-        condition_sources = {
-            str(key): list(items)
-            for key, items in dict(acting.get("condition_sources") or {}).items()
-        }
-        condition_sources["prone"] = list(
-            dict.fromkeys(
-                [
-                    *condition_sources.get("prone", []),
-                    TORTLE_SHELL_DEFENSE_ARTIFACT_ID,
-                ]
-            )
-        )
-        acting["condition_sources"] = condition_sources
-        acting["speed_multiplier"] = 0.0
-        budget["reaction"] = 0
-        _update_movement_accounting(acting, budget)
-    elif action == "emerge_shell":
-        shell_flag = dict(flags.get(_TORTLE_SHELL_DEFENSE_FLAG) or {})
-        if not _tortle_shell_defense_combatant_active(acting):
-            raise CombatEngineError("actor is not withdrawn into its shell")
-        flags.pop(_TORTLE_SHELL_DEFENSE_FLAG, None)
-        acting["speed_multiplier"] = float(shell_flag.get("other_speed_multiplier", 1.0) or 0.0)
-        budget["reaction"] = max(0, int(shell_flag.get("reaction_on_emerge", 0) or 0))
-        condition_sources = {
-            str(key): list(items)
-            for key, items in dict(acting.get("condition_sources") or {}).items()
-        }
-        condition_sources["prone"] = [
-            item
-            for item in condition_sources.get("prone", [])
-            if item != TORTLE_SHELL_DEFENSE_ARTIFACT_ID
-        ]
-        if not condition_sources["prone"]:
-            condition_sources.pop("prone", None)
-        acting["condition_sources"] = condition_sources
-        if shell_flag.get("added_prone") and "prone" not in condition_sources:
-            acting["conditions"] = sorted(_condition_set(acting.get("conditions")) - {"prone"})
-        _update_movement_accounting(acting, budget)
+    elif _stances.apply_action(action, acting, flags, budget):
+        pass
     elif action == "help":
         if not target_id:
             raise CombatEngineError("help requires a target actor")
@@ -7154,7 +6602,7 @@ def resolve_common_action(
     acting["turn_flags"] = flags
     dodge_transition = (
         reconcile_dodge_lifecycle(acting)
-        if action in {"dodge", "shell_defense"}
+        if (action == "dodge" or _stances.affects_dodge(action))
         else {"ended_reason": None, "mechanic_id": DODGE_MECHANIC_ID}
     )
     value["log"] = [
@@ -7400,7 +6848,7 @@ def pay_activity_activation(
     )
     if combatant is None:
         raise CombatEngineError("actor is not a combatant")
-    _require_tortle_shell_emergence_only(combatant)
+    _stances.require_action_allowed(combatant)
     if _condition_set(combatant.get("conditions")) & {
         "dead",
         "unconscious",
@@ -7512,7 +6960,7 @@ def pay_legendary_action(
     )
     if combatant is None:
         raise CombatEngineError("legendary-action actor is not a combatant")
-    _require_tortle_shell_emergence_only(combatant)
+    _stances.require_action_allowed(combatant)
     if _condition_set(combatant.get("conditions")) & INCAPACITATING_STATE_IDS:
         raise CombatEngineError("an incapacitated creature cannot take legendary actions")
     if (
@@ -7581,153 +7029,15 @@ def settle_core_activity_effect(
     activity_id: str,
     declaration: dict[str, Any] | None = None,
     source_card: dict[str, Any] | None = None,
-) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    """Settle narrow engine-owned effects for canonical Core activity cards."""
-    value = deepcopy(encounter)
-    action_surge_ids = {
-        "dnd5e.content.srd2014.feature.fighter-action-surge",
-        "dnd5e.content.srd2024.feature.fighter-action-surge",
-    }
-    cunning_action_ids = {
-        "dnd5e.content.srd2014.feature.rogue-cunning-action",
-        "dnd5e.content.srd2024.feature.rogue-cunning-action",
-    }
-    aggressive_spec = dict(dict(source_card or {}).get("choices") or {}).get("standard_resolution")
-    orc_aggressive = (
-        activity_id == ORC_AGGRESSIVE_ACTIVITY_ID
-        and CORE_ORC_AGGRESSIVE_MECHANIC_ID
-        in {str(item) for item in dict(source_card or {}).get("mechanic_refs") or []}
-        and dict(dict(source_card or {}).get("activation") or {}).get("type") == "bonus_action"
-        and aggressive_spec
-        == {
-            "kind": "aggressive_movement",
-            "maximum": "speed",
-            "target": "one_visible_hostile",
-        }
+):
+    return _native.dispatch(
+        "activity.apply",
+        encounter,
+        actor_id_value=actor_id_value,
+        activity_id=activity_id,
+        declaration=declaration,
+        source_card=source_card,
     )
-    if (
-        activity_id
-        not in {
-            *action_surge_ids,
-            *cunning_action_ids,
-        }
-        and not orc_aggressive
-    ):
-        return value, None
-    current = current_combatant(value)
-    if current is None or current.get("actor_id") != actor_id_value:
-        raise CombatEngineError("this Core activity can be used only on the actor's turn")
-    combatant = next(
-        item for item in value.get("combatants", []) if item.get("actor_id") == actor_id_value
-    )
-    _require_tortle_shell_emergence_only(combatant)
-    if orc_aggressive:
-        declared = dict(declaration or {})
-        if set(declared) != {"target_id"} or not str(declared.get("target_id") or "").strip():
-            raise CombatEngineError("Aggressive declaration requires exactly one target_id")
-        target_id = str(declared["target_id"]).strip()
-        if target_id == actor_id_value:
-            raise CombatEngineError("Aggressive must target another creature")
-        target = next(
-            (
-                item
-                for item in value.get("combatants", [])
-                if str(item.get("actor_id") or "") == target_id
-            ),
-            None,
-        )
-        if target is None or "dead" in _condition_set(target.get("conditions")):
-            raise CombatEngineError("Aggressive target must be a living combatant")
-        if not _are_hostile(combatant, target):
-            raise CombatEngineError("Aggressive target must be hostile")
-        if not can_see(combatant, target):
-            raise CombatEngineError("Aggressive target must be visible to the Orc")
-        flags = dict(combatant.get("turn_flags") or {})
-        if "aggressive_movement" in flags:
-            raise CombatEngineError("Aggressive already granted movement on this turn")
-        granted = _effective_speed_ft(combatant)
-        flags["aggressive_movement"] = {
-            "source_activity_id": activity_id,
-            "target_actor_id": target_id,
-            "granted": granted,
-            "remaining": granted,
-        }
-        combatant["turn_flags"] = flags
-        effect = {
-            "kind": "orc_aggressive",
-            "target_id": target_id,
-            "movement_granted": granted,
-            "movement_remaining": granted,
-            "requires_ruling": False,
-        }
-        value["log"] = [
-            *list(value.get("log") or []),
-            {"type": "orc_aggressive", "actor_id": actor_id_value, "effect": effect},
-        ][-100:]
-        return value, effect
-    if activity_id in cunning_action_ids:
-        selected = str(dict(declaration or {}).get("action") or "")
-        selected = selected.strip().lower().replace("-", "_").replace(" ", "_")
-        if selected not in {"dash", "disengage", "hide"}:
-            raise CombatEngineError(
-                "Cunning Action declaration.action must be dash, disengage, or hide"
-            )
-        budget = dict(combatant.get("turn_budget") or {})
-        flags = dict(combatant.get("turn_flags") or {})
-        if selected == "dash":
-            _update_movement_accounting(
-                combatant,
-                budget,
-                extra_grant_delta=_effective_speed_ft(combatant),
-            )
-        elif selected == "disengage":
-            flags["disengaged"] = True
-            combatant["turn_flags"] = flags
-        else:
-            flags["hide_declared"] = {
-                "source_activity_id": activity_id,
-                "declaration": deepcopy(declaration or {}),
-            }
-            combatant["turn_flags"] = flags
-        effect = {
-            "kind": "cunning_action",
-            "action": selected,
-            "requires_ruling": selected == "hide",
-        }
-        if selected == "hide":
-            effect["ruling_requirement"] = {
-                "default_resolver": "agent",
-                "ruling_kind": "source_or_scene_fact",
-                "reason": (
-                    "Determine from the current cover, visibility, and observer facts "
-                    "whether hiding is possible and resolve the Stealth boundary."
-                ),
-            }
-        value["log"] = [
-            *list(value.get("log") or []),
-            {"type": "cunning_action", "actor_id": actor_id_value, "effect": effect},
-        ][-100:]
-        return value, effect
-    flags = dict(combatant.get("turn_flags") or {})
-    if flags.get("action_surge_used"):
-        raise CombatEngineError("Action Surge can be used only once on the same turn")
-    budget = dict(combatant.get("turn_budget") or {})
-    budget["extra_action"] = int(budget.get("extra_action", 0) or 0) + 1
-    combatant["turn_budget"] = budget
-    flags["action_surge_used"] = True
-    if activity_id.endswith("srd2024.feature.fighter-action-surge"):
-        flags["extra_action_forbidden_actions"] = ["cast"]
-    combatant["turn_flags"] = flags
-    effect = {
-        "kind": "action_surge",
-        "extra_actions_granted": 1,
-        "extra_actions_available": budget["extra_action"],
-    }
-    value["log"] = [
-        *list(value.get("log") or []),
-        {"type": "action_surge", "actor_id": actor_id_value, "effect": effect},
-    ][-100:]
-    return value, effect
 
 
 def settle_hide(
@@ -7753,9 +7063,10 @@ def settle_hide(
     """
 
     value = deepcopy(encounter)
-    if not isinstance(actor, dict) or str(
-        actor.get("id") or actor.get("actor_id") or ""
-    ) != actor_id_value:
+    if (
+        not isinstance(actor, dict)
+        or str(actor.get("id") or actor.get("actor_id") or "") != actor_id_value
+    ):
         raise CombatEngineError("Hide settlement actor snapshot does not match actor_id")
     reason = " ".join(str(ruling_reason or "").split())
     if not reason or len(reason) > 500:
@@ -7790,9 +7101,7 @@ def settle_hide(
     if selected != "hide":
         raise CombatEngineError("pending Cunning Action declaration is not Hide")
 
-    participant_ids = {
-        str(item.get("actor_id") or "") for item in value.get("combatants", [])
-    }
+    participant_ids = {str(item.get("actor_id") or "") for item in value.get("combatants", [])}
     normalized_observers = [str(item or "").strip() for item in observer_ids]
     if any(not item for item in normalized_observers) or len(normalized_observers) != len(
         set(normalized_observers)
@@ -7862,9 +7171,7 @@ def settle_hide(
         }
         for observer_id in normalized_observers
     ]
-    detected_ids = {
-        item["observer_id"] for item in observer_results if item["detected"]
-    }
+    detected_ids = {item["observer_id"] for item in observer_results if item["detected"]}
     visible_ids = {actor_id_value, *detected_ids}
     existing_visibility = combatant.get("visible_to_actor_ids")
     if isinstance(existing_visibility, list):
@@ -8237,12 +7544,16 @@ def resolve_lay_on_hands_to_sheets(
     normalized_mode = str(mode or "").strip().casefold()
     if normalized_mode not in {"heal", "cure"}:
         raise CombatEngineError("Lay on Hands mode must be heal or cure")
-    creature_type = str(
-        target.get("creature_type")
-        or target.get("progression", {}).get("creature_type")
-        or target.get("progression", {}).get("species")
-        or ""
-    ).strip().casefold()
+    creature_type = (
+        str(
+            target.get("creature_type")
+            or target.get("progression", {}).get("creature_type")
+            or target.get("progression", {}).get("species")
+            or ""
+        )
+        .strip()
+        .casefold()
+    )
     if "undead" in creature_type or "construct" in creature_type:
         raise CombatEngineError("Lay on Hands has no effect on Undead or Constructs")
     if normalized_mode == "heal":
@@ -8619,8 +7930,7 @@ def _frightened_ability_check_disadvantage(
         )
     combatants = list((encounter or {}).get("combatants") or [])
     source_combatants = [
-        combatant for combatant in combatants
-        if str(combatant.get("actor_id") or "") in sources
+        combatant for combatant in combatants if str(combatant.get("actor_id") or "") in sources
     ]
     if any(
         sum(str(combatant.get("actor_id") or "") == source for combatant in combatants) != 1
@@ -8635,7 +7945,11 @@ def _frightened_ability_check_disadvantage(
 
 
 def _sheet_check_modifiers(
-    sheet: dict[str, Any], derived: dict[str, Any], *, kind: str, ability: str,
+    sheet: dict[str, Any],
+    derived: dict[str, Any],
+    *,
+    kind: str,
+    ability: str,
     save_purpose: str | None = None,
 ) -> tuple[int, bool, bool]:
     """Nonrolling modifiers shared by ordinary checks and 2014 initiative.
@@ -8758,7 +8072,7 @@ def resolve_actor_check(
         advantage = True
         boundary_ids.append(DODGE_MECHANIC_ID)
     shell_advantage, shell_disadvantage = (
-        encounter_tortle_shell_defense_save_modifiers(
+        _stances.save_modifiers(
             encounter,
             actor_id(actor),
             ability=ability,
@@ -8771,7 +8085,7 @@ def resolve_actor_check(
     if shell_disadvantage:
         disadvantage = True
     if shell_advantage or shell_disadvantage:
-        boundary_ids.append(CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID)
+        boundary_ids.extend(_stances.mechanic_ids())
     rule_facts = dict(rules.facts) if rules is not None else {}
     normalized_save_purpose = (
         str(
@@ -8814,9 +8128,11 @@ def resolve_actor_check(
                 continue
             if conditional_trait_mechanics[trait_kind] not in mechanic_refs:
                 continue
-            if source_trait.get("automatic") is not True or not isinstance(
-                source_trait.get("source_excerpt"), str
-            ) or not source_trait["source_excerpt"].strip():
+            if (
+                source_trait.get("automatic") is not True
+                or not isinstance(source_trait.get("source_excerpt"), str)
+                or not source_trait["source_excerpt"].strip()
+            ):
                 raise CombatEngineError("conditional species save trait metadata is malformed")
             if (
                 trait_kind == "fey_ancestry"
@@ -8826,9 +8142,7 @@ def resolve_actor_check(
             if trait_kind not in conditional_traits:
                 conditional_traits.append(trait_kind)
         conditional_traits = [
-            trait
-            for trait in conditional_trait_mechanics
-            if trait in conditional_traits
+            trait for trait in conditional_trait_mechanics if trait in conditional_traits
         ]
         needs_conditions = any(
             trait in conditional_traits for trait in ("fey_ancestry", "halfling_brave")
@@ -8867,11 +8181,15 @@ def resolve_actor_check(
                     missing=("save_source_kind",),
                     ruling_kind="source_or_scene_fact",
                 )
-        authoritative_source_kind = str(
-            save_source_kind
-            if save_source_kind is not None
-            else rule_facts.get("save_source_kind") or ""
-        ).strip().casefold()
+        authoritative_source_kind = (
+            str(
+                save_source_kind
+                if save_source_kind is not None
+                else rule_facts.get("save_source_kind") or ""
+            )
+            .strip()
+            .casefold()
+        )
         if save_effect_conditions is not None:
             raw_conditions = save_effect_conditions
         elif "save_effect_conditions" in rule_facts:
@@ -8928,10 +8246,8 @@ def resolve_actor_check(
                 "dnd5e.core.armor.proficiency_and_strength",
                 "dnd5e.core.encumbrance",
             )
-            if boundary_id in {
-                str(item.get("mechanic_id") or "")
-                for item in derived.get("rule_receipts", [])
-            }
+            if boundary_id
+            in {str(item.get("mechanic_id") or "") for item in derived.get("rule_receipts", [])}
         )
     if jack_of_all_trades_bonus:
         boundary_ids.append(_JACK_OF_ALL_TRADES_BOUNDARY_ID)
@@ -8986,11 +8302,7 @@ def resolve_actor_check(
             )
     if poisoned:
         disadvantage = True
-    if (
-        normalized_ruleset == "2014"
-        and kind in ABILITY_CHECK_KINDS
-        and "frightened" in conditions
-    ):
+    if normalized_ruleset == "2014" and kind in ABILITY_CHECK_KINDS and "frightened" in conditions:
         if _frightened_ability_check_disadvantage(actor, encounter):
             disadvantage = True
         boundary_ids.append("dnd5e.core.check.frightened")
@@ -9134,9 +8446,8 @@ def resolve_actor_group_check(
     # An unresolved later participant must not consume an earlier participant's RNG.
     for actor in actors:
         sheet = actor_sheet(actor)
-        if (
-            _normalize_ruleset(sheet.get("edition")) == "2014"
-            and "frightened" in _condition_set(sheet.get("conditions"))
+        if _normalize_ruleset(sheet.get("edition")) == "2014" and "frightened" in _condition_set(
+            sheet.get("conditions")
         ):
             _frightened_ability_check_disadvantage(actor, None)
     checks: list[dict[str, Any]] = []
@@ -9383,9 +8694,8 @@ def resolve_actor_contest(
 
     for actor in (source_actor, target_actor):
         sheet = actor_sheet(actor)
-        if (
-            _normalize_ruleset(sheet.get("edition")) == "2014"
-            and "frightened" in _condition_set(sheet.get("conditions"))
+        if _normalize_ruleset(sheet.get("edition")) == "2014" and "frightened" in _condition_set(
+            sheet.get("conditions")
         ):
             _frightened_ability_check_disadvantage(actor, encounter)
 
@@ -9559,7 +8869,7 @@ def end_turn(
     retained_flags = {
         key: deepcopy(item)
         for key, item in current_flags.items()
-        if key in {"dodging", "helping", _TORTLE_SHELL_DEFENSE_FLAG}
+        if key in {"dodging", "helping", *_stances.persistent_flags()}
     }
     if retained_flags:
         current["turn_flags"] = retained_flags
@@ -9692,12 +9002,7 @@ def end_turn(
         )
         if "turned" in _condition_set(next_actor.get("conditions")):
             budget["reaction"] = 0
-        if _tortle_shell_defense_combatant_active(next_actor):
-            next_shell_flag = dict(next_flags.get(_TORTLE_SHELL_DEFENSE_FLAG) or {})
-            next_shell_flag["reaction_on_emerge"] = 1
-            next_flags[_TORTLE_SHELL_DEFENSE_FLAG] = next_shell_flag
-            next_actor["turn_flags"] = next_flags
-            budget["reaction"] = 0
+        _stances.start_turn(next_actor, next_flags, budget)
         next_actor["turn_budget"] = budget
         _refresh_weapon_mastery_speed(value, next_actor)
         budget = next_actor["turn_budget"]
@@ -9847,10 +9152,7 @@ def _inferred_grid_waypoints(
     steps = int(max(abs(delta_x), abs(delta_y)))
     if steps <= 0:
         return [origin, target]
-    if (
-        abs(delta_x - round(delta_x)) > 1e-9
-        or abs(delta_y - round(delta_y)) > 1e-9
-    ):
+    if abs(delta_x - round(delta_x)) > 1e-9 or abs(delta_y - round(delta_y)) > 1e-9:
         return None
     return [
         (
@@ -9941,9 +9243,7 @@ def _normalize_help_declaration(payload: dict[str, Any] | None) -> dict[str, Any
         str(task_action).strip().casefold().replace("-", "_") if task_action is not None else ""
     )
     normalized_ability = (
-        str(task_ability).strip().casefold().replace(" ", "_")
-        if task_ability is not None
-        else ""
+        str(task_ability).strip().casefold().replace(" ", "_") if task_ability is not None else ""
     )
     if not normalized_action and not normalized_ability and not task_text:
         raise CombatEngineError("task Help requires a task, action, or ability")
@@ -9956,9 +9256,7 @@ def _normalize_help_declaration(payload: dict[str, Any] | None) -> dict[str, Any
     }
 
 
-def _task_help_matches(
-    helping: dict[str, Any], *, action: str | None, ability: str
-) -> bool:
+def _task_help_matches(helping: dict[str, Any], *, action: str | None, ability: str) -> bool:
     """Return whether one recorded task Help applies to this check."""
 
     task_action = str(helping.get("action") or "").strip().casefold().replace("-", "_")
@@ -10182,3 +9480,7 @@ def _critical_expression(expression: str) -> str:
         lambda match: f"{int(match.group(1) or 1) * 2}d{match.group(2)}",
         expression,
     )
+
+
+def __getattr__(name):
+    return _stances.legacy_export(name)

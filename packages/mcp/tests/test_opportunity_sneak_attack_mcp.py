@@ -186,7 +186,7 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
                         {
                             "actor_id": ally["id"],
                             "initiative": 10,
-                            "position": {"x": 1, "y": 1},
+                            "position": {"x": 2, "y": 1},
                             "disposition": "friendly",
                         },
                     ],
@@ -223,7 +223,9 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
                 {"campaign_id": campaign["id"], "view": "reactions", "actor_id": rogue["id"]},
             )
             assert reactions and reactions[0]["target_id"] == mover["id"]
-            assert reactions[0]["target_position"] != {"x": 3, "y": 0}
+            # The whip's 10-foot boundary is x=3. The ally is adjacent there,
+            # but not at the mover's final x=4 position.
+            assert reactions[0]["target_position"] == {"x": 3, "y": 0}
             moved_target = next(
                 item for item in moved["combat"]["combatants"] if item["actor_id"] == mover["id"]
             )

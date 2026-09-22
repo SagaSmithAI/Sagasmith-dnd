@@ -15,6 +15,12 @@ from sagasmith_dnd.conditions import (
 )
 from sagasmith_dnd.core_rule_pack import BuiltinCoreRulePack, get_core_rule_pack
 from sagasmith_dnd.hit_points import apply_basic_healing_to_sheet
+from sagasmith_dnd.resolution_ir import (
+    ALIASES,
+    execute_instruction,
+    lower_instruction,
+    resolve_conflicts,
+)
 from sagasmith_dnd.resources import mutate_bounded_resource
 
 ALLOWED_EVENTS = {
@@ -209,6 +215,7 @@ class CompiledMechanic:
     operations: tuple[dict[str, Any], ...]
     citations: tuple[dict[str, Any], ...]
     priority: int = 0
+    after: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -284,6 +291,11 @@ def compile_mechanics(
         priority = value.get("priority", 0)
         if isinstance(priority, bool) or not isinstance(priority, int):
             raise RuleCompilationError(f"{mechanic_id} priority must be an integer")
+        after = value.get("after", [])
+        if not isinstance(after, list) or any(
+            not isinstance(item, str) or not item for item in after
+        ):
+            raise RuleCompilationError("mechanic after must list dependency ids")
         result.append(
             CompiledMechanic(
                 id=mechanic_id,
@@ -292,10 +304,23 @@ def compile_mechanics(
                 operations=operations,
                 citations=citations,
                 priority=priority,
+                after=tuple(after),
             )
         )
         seen.add(mechanic_id)
-    return tuple(sorted(result, key=lambda item: (item.priority, item.id)))
+    pending = {item.id: item for item in result}
+    for item in result:
+        if any(key not in pending or pending[key].event != item.event for key in item.after):
+            raise RuleCompilationError("mechanic dependencies must exist in the same event")
+    ordered = []
+    while pending:
+        ready = [item for item in pending.values() if not set(item.after) & pending.keys()]
+        if not ready:
+            raise RuleCompilationError("mechanic ordering contains a cycle")
+        item = min(ready, key=lambda item: (item.priority, item.id))
+        ordered.append(item)
+        del pending[item.id]
+    return tuple(ordered)
 
 
 def validate_source_bound_mechanics(
@@ -394,11 +419,12 @@ def run_mechanic_tests(
     tests: list[dict[str, Any]] | tuple[dict[str, Any], ...],
     *,
     fingerprint: str = "validation",
+    edition: str = "2014",
 ) -> dict[str, Any]:
     """Run pack-supplied positive/negative examples without executing code."""
     context = ResolutionContext(
         fingerprint,
-        get_core_rule_pack("2014"),
+        get_core_rule_pack(edition),
         compile_mechanics(mechanics),
         {},
         {},
@@ -434,6 +460,17 @@ def run_mechanic_tests(
             result = apply_rule_event(sheet, event, case_context)
             expected_status = str(case.get("expected_status") or "committed")
             errors: list[str] = []
+            if not expectations and not any(
+                field in case
+                for field in ("expected_status", "expected_modifiers", "expected_pending")
+            ):
+                errors.append("test must assert a sheet value or an explicit expected_status")
+            for field, actual in (
+                ("expected_modifiers", list(result.modifiers)),
+                ("expected_pending", list(result.pending)),
+            ):
+                if field in case and case[field] != actual:
+                    errors.append(f"{field} expected {case[field]!r}, got {actual!r}")
             if result.status != expected_status:
                 errors.append(f"expected status {expected_status}, got {result.status}")
             exercised.update(str(item["mechanic_id"]) for item in result.receipts)
@@ -451,6 +488,7 @@ def run_mechanic_tests(
     mechanic_ids = {str(item.get("id") or "") for item in mechanics}
     uncovered = sorted(mechanic_ids - exercised)
     return {
+        "edition": context.core_pack.edition,
         "passed": (bool(cases) and all(case["passed"] for case in cases) and not uncovered),
         "total": len(cases),
         "cases": cases,
@@ -469,11 +507,37 @@ def apply_rule_event(
     receipts: list[dict[str, Any]] = []
     modifiers: list[dict[str, Any]] = []
     pending: list[dict[str, Any]] = []
+    conflict_choices: set[str] | None = None
+    if any("conflict" in op for mechanic in context.mechanics for op in mechanic.operations):
+        candidates = [
+            lower_instruction(
+                step_id=f"{mechanic.id}:{index}",
+                opcode=operation["op"],
+                arguments={key: item for key, item in operation.items() if key != "op"},
+                source_id=mechanic.id,
+                citations=mechanic.citations,
+            )
+            for mechanic in context.mechanics
+            if mechanic.event == event and _matches(mechanic.predicates, context, value)
+            for index, operation in enumerate(mechanic.operations)
+        ]
+        conflict_choices = {item.step_id for item in resolve_conflicts(candidates)}
     for mechanic in context.mechanics:
         if mechanic.event != event or not _matches(mechanic.predicates, context, value):
             continue
         applied: list[dict[str, Any]] = []
-        for operation in mechanic.operations:
+        instruction_receipts: list[dict[str, Any]] = []
+        for operation_index, operation in enumerate(mechanic.operations):
+            instruction = lower_instruction(
+                step_id=f"{mechanic.id}:{operation_index}",
+                opcode=operation["op"],
+                arguments={key: item for key, item in operation.items() if key != "op"},
+                source_id=mechanic.id,
+                citations=mechanic.citations,
+            )
+            if conflict_choices is not None and instruction.step_id not in conflict_choices:
+                continue
+            instruction_receipts.append(instruction.receipt())
             opcode = operation["op"]
             if opcode in {"choice.require", "ruling.require"}:
                 pending_operation = {"mechanic_id": mechanic.id, **deepcopy(operation)}
@@ -496,13 +560,20 @@ def apply_rule_event(
                 modifiers.append({"mechanic_id": mechanic.id, **deepcopy(operation)})
                 applied.append(deepcopy(operation))
                 continue
-            _apply_sheet_operation(value, operation)
+            execute_instruction(
+                instruction,
+                lambda opcode, arguments: _apply_sheet_operation(
+                    value,
+                    {"op": opcode, **arguments},
+                ),
+            )
             applied.append(deepcopy(operation))
         receipts.append(
             {
                 "mechanic_id": mechanic.id,
                 "event": event,
                 "operations": applied,
+                "instructions": instruction_receipts,
                 "citations": [deepcopy(item) for item in mechanic.citations],
                 "ruleset_fingerprint": context.fingerprint,
             }
@@ -650,7 +721,7 @@ def _matches(
 
 
 def _apply_sheet_operation(sheet: dict[str, Any], operation: dict[str, Any]) -> None:
-    opcode = operation["op"]
+    opcode = ALIASES.get(operation["op"], operation["op"])
     amount = int(operation.get("amount", 1) or 0)
     if opcode.startswith("resource."):
         key = operation["path"].split(".", 1)[1]
@@ -665,20 +736,20 @@ def _apply_sheet_operation(sheet: dict[str, Any], operation: dict[str, Any]) -> 
             )
         except ValueError as error:
             raise RuleCompilationError(f"{error}: {key}") from error
-    elif opcode == "hp.heal":
+    elif opcode == "healing.apply":
         healed = apply_basic_healing_to_sheet(sheet, amount=amount)["sheet"]
         sheet.clear()
         sheet.update(healed)
     elif opcode == "hp.temp.set":
         hp = sheet.setdefault("combat", {}).setdefault("hp", {})
         hp["temp"] = max(int(hp.get("temp", 0) or 0), int(operation.get("value", 0) or 0))
-    elif opcode in {"condition.add", "condition.remove"}:
+    elif opcode in {"condition.apply", "condition.remove"}:
         apply_condition_change(
             sheet,
             condition_id=str(operation["id"]),
-            add=opcode == "condition.add",
+            add=opcode == "condition.apply",
         )
-    elif opcode == "effect.add":
+    elif opcode == "effect.apply":
         effect = deepcopy(operation.get("effect") or {})
         effect.setdefault("id", operation["id"])
         effect.setdefault("active", True)

@@ -1794,7 +1794,10 @@ def test_rulebook_import_source_bound_pack_and_noncombat_settlement(tmp_path: Pa
                                     "skill_proficiency_applies": True,
                                     "tool_proficiency_applies": True,
                                 },
-                                "expect": [],
+                                "expected_modifiers": [
+                                    {"mechanic_id": "dnd5e.xgte.tool_synergy.advantage",
+                                     "op": "advantage.add"},
+                                ],
                             }
                         ],
                     },
