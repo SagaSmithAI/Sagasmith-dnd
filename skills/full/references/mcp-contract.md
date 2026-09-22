@@ -1825,6 +1825,63 @@ and the updated actor revision. Object AC/HP/defenses, source excerpts, DM revie
 private character data and full transaction receipts remain DM-only. Every replay
 uses the caller's current role, including when a former DM lost that role.
 
+2014 player Drow Sunlight Sensitivity is an automatic source-bound mechanic.
+The attacker/observer or attacked/perceived subject in direct sunlight causes
+disadvantage on attacks and sight-based Wisdom (Perception). Other senses do not.
+This is the PHB player trait; the SRD monster's self-only wording is a separate
+source contract. Unsupported legacy/source variants require review rather than
+silently receiving the player rule.
+
+For attacks supply `action.context.sunlight`; for source-object attacks use
+`payload.sunlight`. For Perception use `rule_facts.sunlight`, or
+`rule_facts.sunlight_by_actor={actor_id: review, ...}` for a group. A contest
+uses its separate source/target rule facts. The DM review shape is:
+
+```json
+{
+  "subject": {"kind": "actor", "id": "target-id", "scene_id": "source-scene-id"},
+  "actor_in_direct_sunlight": false,
+  "subject_in_direct_sunlight": true,
+  "relies_on_sight": true,
+  "ruling": {
+    "source_ref": {
+      "module_id": "module-id", "chunk_id": "chunk-id", "scene_id": "source-scene-id",
+      "page_start": 1, "page_end": 1, "heading_path": ["Courtyard"],
+      "content_sha256": "copy-the-exact-managed-chunk-checksum"
+    },
+    "source_excerpt": "Exact excerpt from the active module chunk.",
+    "reason": "Explain the current observer and subject locations and the bounded DM ruling."
+  }
+}
+```
+
+`source_ref` is the exact managed module source returned by source lookup.
+`subject.kind` is `actor|object|scene`; a scene subject uses its scene ID as `id`.
+Object Perception requires a recorded scene object. A nonvisual Perception check
+still identifies its subject and sets `relies_on_sight=false`; it may omit the
+two sunlight booleans. Runtime never infers lighting from grid coordinates or
+accepts a caller-computed sunlight modifier. Missing/ambiguous facts return a
+no-write `pending_ruling` before dice, actions or resources are committed.
+
+Local Host supplies `binding={campaign_id,branch_id,campaign_revision,actor_id,
+actor_revision}` before freezing the request journal. Other Hosts supply that
+exact current snapshot binding themselves. Any campaign or observer revision
+change invalidates the review; a move or branch switch requires a fresh ruling.
+DM attack preflight also returns `sunlight_context={receipt: signed_envelope}`,
+which an authorized player may pass unchanged for that same attack snapshot.
+Players cannot self-author illumination and do not receive private review text
+in the attack response. An unknown completed write replays its original key
+and request, including its frozen binding; do not regenerate the metadata.
+
+Ready release keeps the original action/targets/source. For a readied weapon
+attack, refresh only current illumination using
+`combat_ready(action="resolve_action", payload={...,sunlight: review})`.
+For a readied spell attack use `payload.sunlight_contexts=[review, ...]`, one
+entry for each stored ray. Each remaining ray then supplies a fresh
+`action.context.sunlight` with its `spell_resolution_id`. All other stored
+context must still match. Local Host binds these nested reviews; an expired
+review preserves the held spell/reaction and requests a new ruling.
+
 Every combat write should provide `expected_revision` and `idempotency_key`.
 `combat_preflight_attack` never mutates; `combat_resolve_attack`,
 `combat_movement`, `combat_end_turn`, `combat_check`, `combat_use_activity`,

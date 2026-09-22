@@ -5,6 +5,47 @@ requires implementation and applicable validation; pending items remain open.
 Host-managed local execution must preserve Runtime authority, real choices,
 source evidence, CAS, transactions and original-key replay.
 
+## #168 — source-bound player Drow Sunlight Sensitivity
+
+The standard 2014 Drow build grants a passive reviewed mechanic with the PHB
+page 24 source and explicit observer-or-subject scope. This corrects an ambiguity
+in the issue's source summary: the bundled SRD monster wording is self-only and
+must not be broadened into the player trait. Unknown/legacy variants require
+source reconciliation. The reviewed player mechanic is recorded in Core 1.84.0;
+dependent built-in catalogs/presets and immutable lock bindings are versioned.
+
+Weapon, spell, reaction, readied and scene-object attacks derive disadvantage
+from the current authorized observer and target facts. Wisdom (Perception)
+checks identify their subject and sight reliance; nonvisual checks are not
+penalized. Group checks and contests validate every affected observer before
+any dice. Normal advantage/disadvantage cancellation remains shared with other
+conditions, visibility and source-reviewed advantage.
+
+Runtime requires an exact active-module chunk/excerpt plus a bounded DM ruling,
+or an authentic signed review. It rejects invented excerpts, computed modifiers,
+wrong subjects/branches, forged signatures and player-authored illumination.
+Reviews expire when the campaign or observer revision changes. Local Host binds
+these revisions before freezing the operation journal; original-key replay
+preserves the committed result. Observers stay under CAS even when a check has
+no card expenditure; a failed CAS rolls back the check, action and random stream.
+The engine does not infer illumination from coordinates or narrative prose.
+
+Ready release can refresh only current illumination: `sunlight` for a weapon
+attack, `sunlight_contexts` for stored rays, then fresh context on each remaining
+ray. Original targets, source, payment and all other attack context stay fixed.
+Expired facts return `pending_ruling` without spending the held reaction/energy.
+
+Validation: all 1,856 Domain/Runtime tests and 34 focused public Runtime/MCP,
+Ready and payload-contract tests passed. The focused checks include real Drow
+content application, restart, target-only sunlight, object attacks, source
+forgery, movement expiry, nonvisual Perception, CAS rollback, local Host metadata,
+multi-ray release and exact settlement replay excluding Host telemetry.
+The full MCP suite passed 1,582 tests with 30 optional integrations skipped and
+no failures/errors. The final focused Domain suite passed 28 cases, including
+unseen and reviewed Pack Tactics advantage cancellation. Ruff, generated
+references, immutable content lock and whitespace checks passed.
+This evidence does not represent paid-model or live campaign acceptance.
+
 ## Completed
 
 ### #127 — require structured new Help declarations
@@ -74,6 +115,8 @@ replay, local Host lost-response recovery, and attacker CAS with and without
 resource spend.
 All 108 Runtime tests passed again after that projection change.
 Ruff, generated references, official content lock and whitespace checks passed.
+Remote CI run 35735904338 at commit dd6f19ca also passed all four jobs, including
+both Python environments, Skills and UI.
 This is local contract evidence, not a live model campaign acceptance claim.
 
 ## #139 — settle the original paid Ready spell

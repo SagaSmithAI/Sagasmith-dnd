@@ -108,8 +108,14 @@ ACTION_PAYLOADS: dict[str, dict[str, type[Payload]]] = {
         ),
         "trigger_spell": _trigger,
         "trigger_action": _trigger,
-        "resolve_spell": _release,
-        "resolve_action": _release,
+        "resolve_spell": create_model(
+            "ResolveReadiedSpell", __base__=_release,
+            sunlight_contexts=_optional(list[dict[str, Any]]),
+        ),
+        "resolve_action": create_model(
+            "ResolveReadiedAction", __base__=_release,
+            sunlight=_optional(dict[str, Any]),
+        ),
     },
     "combat_hp_change": {
         "damage": _payload(

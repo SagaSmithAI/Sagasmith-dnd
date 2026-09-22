@@ -142,6 +142,10 @@ class LocalSession:
         for key, value in revisions.items():
             if key in properties and args.get(key) is None and value is not None:
                 args[key] = value
+        if campaign_id:
+            from .services.sunlight import bind_local_contexts
+
+            bind_local_contexts(self.services, name, args, campaign_id)
         if (name == "character_action" and args.get("action") == "attack_source_object"
                 and campaign and data.get("expected_campaign_revision") is None):
             data["expected_campaign_revision"] = campaign.revision

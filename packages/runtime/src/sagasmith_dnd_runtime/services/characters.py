@@ -8,6 +8,7 @@ from sagasmith_dnd.character_schema import validate_equipment_hand_capacity
 from sagasmith_dnd.statblocks import synchronize_statblock_armor_proficiencies
 
 from .. import application_support as _support
+from .sunlight import check_updates, prepare_check_facts
 
 
 class CharactersService:
@@ -1040,7 +1041,10 @@ class CharactersService:
             rules=self.effective_rule_context(
                 campaign_id,
                 facts={
-                    **settlement_facts,
+                    **prepare_check_facts(
+                        self, settlement_facts, campaign_id=campaign_id, actor_id=actor_id,
+                        principal_id=principal_id,
+                    ),
                     "actor_id": actor_id,
                     "kind": kind,
                     "ability": ability,
@@ -1094,6 +1098,7 @@ class CharactersService:
             campaign_state=_support.validate_party_state(next_state),
             expected_campaign_revision=campaign.revision,
             operation=f"character.{kind}",
+            character_updates=check_updates([actor_snapshot], settlement_facts),
             actor=principal_id,
             branch_id=resolved_branch_id,
             idempotency_key=idempotency_key,
@@ -1519,7 +1524,10 @@ class CharactersService:
             actor_id_value: self.effective_rule_context(
                 campaign_id,
                 facts={
-                    **settlement_facts,
+                    **prepare_check_facts(
+                        self, settlement_facts, campaign_id=campaign_id, actor_id=actor_id_value,
+                        principal_id=principal_id,
+                    ),
                     "actor_id": actor_id_value,
                     "kind": "ability",
                     "ability": ability,
@@ -1567,6 +1575,7 @@ class CharactersService:
             campaign_state=_support.validate_party_state(next_state),
             expected_campaign_revision=campaign.revision,
             operation="character.ability_group_check",
+            character_updates=check_updates(snapshots, settlement_facts),
             actor=principal_id,
             branch_id=resolved_branch_id,
             idempotency_key=idempotency_key,
@@ -1695,7 +1704,10 @@ class CharactersService:
             source_rules=self.effective_rule_context(
                 campaign_id,
                 facts={
-                    **source_facts,
+                    **prepare_check_facts(
+                        self, source_facts, campaign_id=campaign_id, actor_id=source_actor_id,
+                        principal_id=principal_id,
+                    ),
                     "actor_id": source_actor_id,
                     "contest_side": "source",
                     "ability": source_ability,
@@ -1705,7 +1717,10 @@ class CharactersService:
             target_rules=self.effective_rule_context(
                 campaign_id,
                 facts={
-                    **target_facts,
+                    **prepare_check_facts(
+                        self, target_facts, campaign_id=campaign_id, actor_id=target_actor_id,
+                        principal_id=principal_id,
+                    ),
                     "actor_id": target_actor_id,
                     "contest_side": "target",
                     "ability": target_ability,
@@ -1745,6 +1760,9 @@ class CharactersService:
             campaign_state=_support.validate_party_state(next_state),
             expected_campaign_revision=campaign.revision,
             operation="character.contest",
+            character_updates=check_updates(
+                [source_snapshot, target_snapshot], source_facts, target_facts
+            ),
             actor=principal_id,
             branch_id=resolved_branch_id,
             idempotency_key=idempotency_key,
@@ -7258,6 +7276,7 @@ boundary.
                 "expected_campaign_revision",
                 "object_ruling",
                 "attack_ruling",
+                "sunlight",
             }
             if unexpected:
                 raise ValueError(f"unsupported source object attack fields: {sorted(unexpected)}")
@@ -7275,6 +7294,7 @@ boundary.
                 idempotency_key,
                 object_ruling=data.get("object_ruling"),
                 attack_ruling=data.get("attack_ruling"),
+                sunlight=data.get("sunlight"),
             )
         return self.facade_result(action, result)
 

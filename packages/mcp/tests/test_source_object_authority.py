@@ -60,7 +60,15 @@ class World:
         self.runtime.close()
 
 
-async def setup(tmp_path, *, kind="piercing", limited=False, local=False, ammunition=True):
+async def setup(
+    tmp_path,
+    *,
+    kind="piercing",
+    limited=False,
+    local=False,
+    ammunition=True,
+    source_description=EXCERPT,
+):
     world = World()
     world.config = McpConfig(
         home=tmp_path / "home",
@@ -86,7 +94,7 @@ async def setup(tmp_path, *, kind="piercing", limited=False, local=False, ammuni
                 "action": "start",
                 "payload": {
                     "name": "wall.md",
-                    "content": "# Vault\n\n## Wall\n\n" + EXCERPT,
+                    "content": "# Vault\n\n## Wall\n\n" + source_description,
                     "source_key": "wall",
                     "title": "Wall",
                 },

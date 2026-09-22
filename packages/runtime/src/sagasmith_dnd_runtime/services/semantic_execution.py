@@ -10,6 +10,7 @@ from sagasmith_dnd.resolution_plan import ResolutionPlanPauseError
 from sagasmith_dnd.rule_primitives import validate_primitive
 
 from .. import application_support as _support
+from .sunlight import prepare_attack_action
 
 
 @dataclass(frozen=True)
@@ -304,11 +305,12 @@ class CombatPlanRuntime:
         attack_plan = _support.preflight_attack(
             self.actor(attacker_id),
             self.actor(target_id),
-            action={
+            action=prepare_attack_action(self.context.runtime_services, {
                 "weapon_id": str(arguments["attack_ref"]),
                 "attack_mode": str(arguments.get("attack_mode") or "melee"),
                 "context": _support.deepcopy(arguments.get("context") or {}),
-            },
+            }, campaign_id=self.context.campaign_id, actor_id=attacker_id,
+                target_id=target_id, principal_id="", encounter=self.encounter),
             encounter=self.encounter,
             require_attack_action=False,
             rules=self.context.runtime_services.effective_rule_context(

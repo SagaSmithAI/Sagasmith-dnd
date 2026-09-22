@@ -1244,6 +1244,7 @@ ENGINE_SETTLED_CARD_MECHANIC_IDS = frozenset(
         CORE_FEY_ANCESTRY_MECHANIC_ID,
         CORE_GNOME_CUNNING_MECHANIC_ID,
         CORE_HALFLING_BRAVE_MECHANIC_ID,
+        "dnd5e.core.trait.sunlight_sensitivity",
         "dnd5e.core.magic_ammunition.slaying",
         CORE_BLADE_WARD_MECHANIC_ID,
         CORE_FLY_MECHANIC_ID,

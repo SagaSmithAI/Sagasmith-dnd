@@ -6,6 +6,7 @@ from typing import Any
 
 from .. import application_support as _support
 from ..result_contracts import affected_state_slice
+from .sunlight import prepare_attack_action, prepare_context
 
 
 class AttacksService:
@@ -41,7 +42,12 @@ class AttacksService:
         if membership.role not in _support.CAMPAIGN_DM_ROLES:
             # Tactical context (cover, advantage, concealment and reach) is a
             # scene/DM fact, not a client-controlled modifier.
-            value["context"] = {}
+            sunlight = dict(value.get("context") or {}).get("sunlight")
+            if sunlight is not None and (
+                not isinstance(sunlight, dict) or set(sunlight) != {"receipt"}
+            ):
+                raise PermissionError("player sunlight context requires a signed DM receipt")
+            value["context"] = {"sunlight": sunlight} if sunlight is not None else {}
             value["rulings"] = [
                 item
                 for item in value.get("rulings", [])
@@ -488,6 +494,10 @@ class AttacksService:
         )
         try:
             attacker = self.combat_actor_snapshot(actor_id)
+            action = prepare_attack_action(
+                self, action, campaign_id=campaign_id, actor_id=actor_id,
+                target_id=target_id, principal_id=principal_id, encounter=encounter,
+            )
             plan = _support.preflight_attack(
                 attacker,
                 self.combat_actor_snapshot(target_id),
@@ -559,6 +569,10 @@ class AttacksService:
                 "target_id": plan["target_id"],
                 "weapon_id": plan.get("weapon_id"),
                 "opaque": True,
+            }
+        if dict(action.get("context") or {}).get("sunlight") is not None:
+            plan["sunlight_context"] = {
+                "receipt": action["context"]["sunlight"]["receipt"]
             }
         return plan
 
@@ -698,9 +712,15 @@ class AttacksService:
                 stored = spell_resolution["attacks"][index]
                 stored_action = {"context": _support.deepcopy(stored.get("context") or {})}
                 self.validate_agent_attack_context(campaign_id, stored_action, encounter=encounter)
+                # Source targets and all original attack semantics stay fixed.
+                # Illumination is a newly authorized, expiring scene fact.
+                comparison = _support.deepcopy(action_payload)
+                comparison.setdefault("context", {}).pop("sunlight", None)
+                stored_comparison = _support.deepcopy(stored_action)
+                stored_comparison["context"].pop("sunlight", None)
                 if (
                     target_id != stored["target_id"]
-                    or action_payload != stored_action
+                    or comparison != stored_comparison
                     or cantrip_spell_id
                     or deflect_declaration
                 ):
@@ -726,6 +746,10 @@ class AttacksService:
         )
         attacker_record = self.require_campaign_actor(campaign_id, actor_id)
         target_record = self.require_campaign_actor(campaign_id, target_id)
+        action_payload = prepare_attack_action(
+            self, action_payload, campaign_id=campaign_id, actor_id=actor_id,
+            target_id=target_id, principal_id=principal_id, encounter=encounter,
+        )
         attacker = self.character_view(attacker_record, rules_context=rule_context)
         target = self.character_view(target_record, rules_context=rule_context)
         settled_attacker_sheet = (
@@ -1681,6 +1705,10 @@ class AttacksService:
             campaign_id,
             facts={"actor_id": actor_id, "target_id": target_id, "kind": "attack"},
         )
+        action_payload = prepare_attack_action(
+            self, action_payload, campaign_id=campaign_id, actor_id=actor_id,
+            target_id=target_id, principal_id=principal_id, encounter=trigger_encounter,
+        )
         plan = _support.preflight_attack(
             attacker,
             target,
@@ -2473,6 +2501,7 @@ class AttacksService:
         idempotency_key: str | None = None,
         object_ruling: dict[str, Any] | None = None,
         attack_ruling: dict[str, Any] | None = None,
+        sunlight: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Attack a source-defined destructible scene object outside combat."""
         from sagasmith_dnd.objects import object_attack_plan, resolve_object_attack
@@ -2529,6 +2558,7 @@ class AttacksService:
             "branch_id": resolved_branch_id,
             "object_ruling": object_ruling,
             "attack_ruling": attack_ruling,
+            **({"sunlight": _support.deepcopy(sunlight)} if sunlight is not None else {}),
         }
         scope = f"source-object-attack:{campaign_id}:{resolved_branch_id}:{principal_id}"
         replay = self.replay_idempotent(scope, idempotency_key, payload)
@@ -2594,6 +2624,11 @@ class AttacksService:
                 "target_kind": "object",
                 "target_id": object_id,
                 "scene_id": scene_id,
+                "_sunlight": prepare_context(
+                    self, sunlight, campaign_id=campaign_id, actor_id=character_id,
+                    principal_id=principal_id, mode="attack", subject_kind="object",
+                    subject_id=object_id, scene_id=scene_id,
+                ),
             },
             branch_id=resolved_branch_id,
         )

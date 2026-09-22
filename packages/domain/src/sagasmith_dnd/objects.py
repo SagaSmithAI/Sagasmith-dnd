@@ -137,6 +137,7 @@ def object_attack_plan(
     target = {
         "id": f"scene-object:{profile['scene_id']}:{profile['id']}",
         "kind": "object",
+        "object_id": profile["id"],
         "sheet": sheet,
         "derived": {"armor_class": profile["armor_class"]},
         "death_saves": False,
@@ -150,6 +151,7 @@ def object_attack_plan(
                 "advantage": advantage,
                 "disadvantage": disadvantage,
                 "target_can_see_attacker": True,
+                "sunlight": dict(rules.facts).get("_sunlight") if rules else None,
             },
         },
         require_attack_action=False,

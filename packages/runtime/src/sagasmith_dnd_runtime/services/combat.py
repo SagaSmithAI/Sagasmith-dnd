@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Annotated, Any, Literal
 
 from .. import application_support as _support
+from .sunlight import check_updates, prepare_check_facts
 
 
 def _without_repeated_preflight_cards(encounter: dict[str, Any]) -> dict[str, Any]:
@@ -4370,6 +4371,8 @@ class CombatService:
         expected_revision: int | None = None,
         branch_id: str | None = None,
         idempotency_key: str | None = None,
+        *,
+        sunlight: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Release or ignore the original Ready response; replacement declarations are rejected."""
         self.access.require_actor(campaign_id, actor_id, principal_id, control=True)
@@ -4383,6 +4386,8 @@ class CombatService:
             "branch_id": resolved_branch_id,
         }
         scope = f"combat-ready-action-resolve:{campaign_id}:{resolved_branch_id}:{principal_id}"
+        if sunlight is not None:
+            payload["sunlight"] = _support.deepcopy(sunlight)
         replay = self.replay_idempotent(scope, idempotency_key, payload)
         if replay is not None:
             return self.combat_response(campaign_id, principal_id, replay)
@@ -4411,6 +4416,8 @@ class CombatService:
             from sagasmith_dnd.ready_actions import validate_response
 
             response = validate_response(original_response)
+            if sunlight is not None and response["action"] != "attack":
+                raise ValueError("sunlight is only applicable to a readied attack")
             if response["action"] == "ruling":
                 return self.combat_response(campaign_id, principal_id, {
                     **_support._ruling_status("pending_ruling", "ready_release_effect"),
@@ -4419,6 +4426,10 @@ class CombatService:
                     "campaign_revision": campaign.revision, "combat": encounter,
                 })
             if response["action"] == "attack":
+                if sunlight is not None:
+                    response["attack"].setdefault("context", {})["sunlight"] = (
+                        _support.deepcopy(sunlight)
+                    )
                 action_payload = self.sanitize_attack_action(
                     campaign_id, principal_id, response["attack"]
                 )
@@ -6791,7 +6802,10 @@ class CombatService:
                 rules=self.effective_rule_context(
                     campaign_id,
                     facts={
-                        **settlement_facts,
+                        **prepare_check_facts(
+                            self, settlement_facts, campaign_id=campaign_id, actor_id=actor_id,
+                            principal_id=principal_id,
+                        ),
                         "actor_id": actor_id,
                         "kind": kind,
                         "ability": ability,
@@ -6833,6 +6847,8 @@ class CombatService:
                         },
                     )
                 result = {**result, "action": normalized_check_action}
+        if not any(update.character_id == actor_id for update in updates):
+            updates.extend(check_updates([actor], settlement_facts))
         if encounter is not None and result.get("helped_by"):
             encounter = _support.consume_task_help(
                 encounter,
@@ -8794,6 +8810,7 @@ class CombatService:
                 expected_revision,
                 branch_id,
                 idempotency_key,
+                sunlight_contexts=data.get("sunlight_contexts"),
             )
         elif action == "trigger_action":
             result = self.combat_readied_action_trigger(
@@ -8816,5 +8833,6 @@ class CombatService:
                 expected_revision,
                 branch_id,
                 idempotency_key,
+                sunlight=data.get("sunlight"),
             )
         return self.facade_result(action, result)

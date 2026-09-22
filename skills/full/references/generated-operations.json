@@ -10461,6 +10461,22 @@
                   "release": {
                     "title": "Release",
                     "type": "boolean"
+                  },
+                  "sunlight_contexts": {
+                    "anyOf": [
+                      {
+                        "items": {
+                          "additionalProperties": true,
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Sunlight Contexts"
                   }
                 },
                 "required": [
@@ -10468,7 +10484,7 @@
                   "choice_id",
                   "release"
                 ],
-                "title": "ResolveReadied",
+                "title": "ResolveReadiedSpell",
                 "type": "object"
               }
             },
@@ -10521,6 +10537,19 @@
                   "release": {
                     "title": "Release",
                     "type": "boolean"
+                  },
+                  "sunlight": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": true,
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Sunlight"
                   }
                 },
                 "required": [
@@ -10528,7 +10557,7 @@
                   "choice_id",
                   "release"
                 ],
-                "title": "ResolveReadied",
+                "title": "ResolveReadiedAction",
                 "type": "object"
               }
             },

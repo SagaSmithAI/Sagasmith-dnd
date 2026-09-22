@@ -411,6 +411,21 @@ def _cached_standard2014_content() -> tuple[dict[str, Any], list[dict[str, Any]]
                         "Direct sunlight imposes disadvantage on attacks and sight-based "
                         "Wisdom (Perception) checks."
                     ),
+                    "activation": {"type": "passive"},
+                    "mechanic_refs": ["dnd5e.core.trait.sunlight_sensitivity"],
+                    "choices": {
+                        "source_trait": {
+                            "kind": "sunlight_sensitivity",
+                            "scope": "self_or_subject",
+                            "automatic": True,
+                            "source_ref": "book:players-handbook-2014:p24",
+                            "source_summary": (
+                                "Direct sunlight on the observer, attack target or perceived "
+                                "subject imposes attack and sight-dependent Perception "
+                                "disadvantage."
+                            ),
+                        }
+                    },
                 },
             ],
             "unresolved": [],

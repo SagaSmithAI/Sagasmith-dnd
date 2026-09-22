@@ -3134,6 +3134,8 @@ class SpellsService:
         expected_revision: int | None = None,
         branch_id: str | None = None,
         idempotency_key: str | None = None,
+        *,
+        sunlight_contexts: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Release a held spell with a reaction or ignore this occurrence of its trigger."""
         self.access.require_actor(campaign_id, actor_id, principal_id, control=True)
@@ -3147,6 +3149,8 @@ class SpellsService:
             "branch_id": resolved_branch_id,
         }
         scope = f"combat-ready-resolve:{campaign_id}:{resolved_branch_id}:{principal_id}"
+        if sunlight_contexts is not None:
+            payload["sunlight_contexts"] = _support.deepcopy(sunlight_contexts)
         replay = self.replay_idempotent(scope, idempotency_key, payload)
         if replay is not None:
             return self.combat_response(campaign_id, principal_id, replay)
@@ -3172,6 +3176,18 @@ class SpellsService:
             raise _support.CombatEngineError("choice_id is not this actor's readied spell")
         if declaration is not None and declaration != readied.get("declaration", {}):
             raise _support.CombatEngineError("release cannot replace the stored spell declaration")
+        current_declaration = _support.deepcopy(readied.get("declaration") or {})
+        if sunlight_contexts is not None:
+            attacks = current_declaration.get("attacks")
+            if (
+                not release or not isinstance(attacks, list)
+                or not isinstance(sunlight_contexts, list) or len(sunlight_contexts) != len(attacks)
+            ):
+                raise ValueError(
+                    "sunlight_contexts requires one current ruling per stored spell attack"
+                )
+            for attack, sunlight_context in zip(attacks, sunlight_contexts, strict=True):
+                attack.setdefault("context", {})["sunlight"] = _support.deepcopy(sunlight_context)
         actor = self.characters.get(actor_id)
         sheet = _support.deepcopy(actor.sheet)
         holding_effect = next(
@@ -3255,7 +3271,7 @@ class SpellsService:
                 expected_revision=expected_revision,
                 branch_id=resolved_branch_id,
                 idempotency_key=idempotency_key,
-                declaration=_support.deepcopy(resolved.get("declaration") or {}),
+                declaration=current_declaration,
                 target_allocations=_support.deepcopy(resolved.get("target_allocations")),
                 ready_context={
                     **resolved,

@@ -3064,6 +3064,15 @@ def preflight_attack(
             context["disadvantage"] = True
             context.setdefault("disadvantage_sources", []).append("hostile_creature_within_5_ft")
     attacker_sheet = actor_sheet(attacker)
+    from .sunlight import SUNLIGHT_MECHANIC, sunlight_disadvantage
+
+    sunlight = sunlight_disadvantage(
+        attacker_sheet, context.get("sunlight"), actor_id=actor_id(attacker),
+        subject_id=str(target.get("object_id") or actor_id(target)),
+    )
+    if sunlight:
+        context["disadvantage"] = True
+        context.setdefault("disadvantage_sources", []).append("sunlight_sensitivity")
     attacker_conditions = condition_ids(
         attacker.get("conditions") or attacker_sheet.get("conditions")
     )
@@ -3330,6 +3339,8 @@ def preflight_attack(
         requested=bool(action.get("use_sneak_attack", False)),
     )
     core_boundary_ids: list[str] = []
+    if sunlight is not None:
+        core_boundary_ids.append(SUNLIGHT_MECHANIC)
     is_unarmed_strike = bool(
         weapon.get("item_id") == "unarmed-strike" or weapon.get("unarmed_strike") is True
     )
@@ -8249,6 +8260,17 @@ def resolve_actor_check(
         boundary_ids.append(_JACK_OF_ALL_TRADES_BOUNDARY_ID)
 
     normalized_action = str(action or "").strip().casefold().replace("-", "_")
+    if kind in ABILITY_CHECK_KINDS and normalized_ability == "perception":
+        from .sunlight import SUNLIGHT_MECHANIC, sunlight_disadvantage
+
+        sunlight = sunlight_disadvantage(
+            sheet, dict(rules.facts).get("_sunlight") if rules else None,
+            actor_id=actor_id(actor), perception=True,
+        )
+        if sunlight is not None:
+            boundary_ids.append(SUNLIGHT_MECHANIC)
+        if sunlight:
+            disadvantage = True
     if not normalized_action and rules is not None:
         normalized_action = str(dict(rules.facts).get("action") or "").strip().casefold()
     helped_by = None
@@ -8443,6 +8465,14 @@ def resolve_actor_group_check(
     # An unresolved later participant must not consume an earlier participant's RNG.
     for actor in actors:
         sheet = actor_sheet(actor)
+        if str(ability).strip().casefold() == "perception":
+            from .sunlight import sunlight_disadvantage
+
+            context = normalized_rules.get(actor_id(actor))
+            sunlight_disadvantage(
+                sheet, dict(context.facts).get("_sunlight") if context else None,
+                actor_id=actor_id(actor), perception=True,
+            )
         if _normalize_ruleset(sheet.get("edition")) == "2014" and "frightened" in _condition_set(
             sheet.get("conditions")
         ):
@@ -8689,8 +8719,18 @@ def resolve_actor_contest(
     if target_advantage and target_disadvantage:
         raise CombatEngineError("contest target cannot have advantage and disadvantage together")
 
-    for actor in (source_actor, target_actor):
+    for actor, ability, context in (
+        (source_actor, source_ability, source_rules),
+        (target_actor, target_ability, target_rules),
+    ):
         sheet = actor_sheet(actor)
+        if str(ability).strip().casefold() == "perception":
+            from .sunlight import sunlight_disadvantage
+
+            sunlight_disadvantage(
+                sheet, dict(context.facts).get("_sunlight") if context else None,
+                actor_id=actor_id(actor), perception=True,
+            )
         if _normalize_ruleset(sheet.get("edition")) == "2014" and "frightened" in _condition_set(
             sheet.get("conditions")
         ):

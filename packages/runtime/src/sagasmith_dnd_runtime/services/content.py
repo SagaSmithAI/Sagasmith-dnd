@@ -1256,6 +1256,7 @@ class ContentService:
             "save_source_kind",
             "save_effect_conditions",
             "save_purpose",
+            "_sunlight",
         } & facts.keys()
         if reserved:
             raise ValueError("rule_facts cannot override: " + ", ".join(sorted(reserved)))

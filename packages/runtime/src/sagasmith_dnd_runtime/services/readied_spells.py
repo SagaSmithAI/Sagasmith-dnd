@@ -9,6 +9,8 @@ from sagasmith_dnd.combat_engine import (
 from sagasmith_dnd.spell_resolution import spell_attack_count
 from sagasmith_dnd.spells import apply_cast_effects
 
+from .sunlight import prepare_attack_action
+
 
 def bound_sheet(sheet, card):
     """Use the held source for evaluation without rewriting the actor's current cards."""
@@ -89,6 +91,10 @@ def validate_attacks(
             {"context": deepcopy(attack.get("context") or {})},
         )
         service.validate_agent_attack_context(campaign_id, action, encounter=encounter)
+        action = prepare_attack_action(
+            service, action, campaign_id=campaign_id, actor_id=actor_id,
+            target_id=attack["target_id"], principal_id=principal_id, encounter=encounter,
+        )
         preflight_spell_attack(
             attacker,
             service.combat_actor_snapshot(attack["target_id"]),

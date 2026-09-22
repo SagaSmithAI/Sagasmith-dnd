@@ -94,7 +94,6 @@ def test_core_rule_pack_contains_rules_not_creature_content_contracts() -> None:
         "source_save_effect",
         "source_contest_effect",
         "pack_tactics",
-        "sunlight_sensitivity",
         "assassinate",
         "weapon_hit_save_damage",
         "weapon_hit_contest_pull",
@@ -104,6 +103,9 @@ def test_core_rule_pack_contains_rules_not_creature_content_contracts() -> None:
     }
     for edition in ("2014", "2024"):
         ids = {boundary.id for boundary in get_core_rule_pack(edition).boundaries}
+        # Player Drow now have a reviewed executor; arbitrary monster features
+        # remain source-owned rather than becoming generic Core contracts.
+        assert ("dnd5e.core.trait.sunlight_sensitivity" in ids) == (edition == "2014")
         assert not any(identifier.startswith("dnd5e.core.monster") for identifier in ids)
         assert not any(identifier.rsplit(".", 1)[-1] in forbidden for identifier in ids)
 
