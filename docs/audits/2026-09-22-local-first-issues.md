@@ -16,11 +16,11 @@ blindly treating every sentence of the issue as authoritative.
 
 | Issue | Requested behavior | Current disposition |
 | --- | --- | --- |
-| [#182](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/182) | Model 2014 Tortle Claws as an intrinsic unarmed strike | Implemented candidate; close only after the acceptance tests and main merge are verified. |
-| [#176](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/176) | Preserve and execute 2014 City Watch Watcher Eye feature | Implemented candidate; close only after the acceptance tests and main merge are verified. |
-| [#173](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/173) | Fix 2014 Battle Smith grants and subclass application order | Implemented candidate; close only after the acceptance tests and main merge are verified. |
-| [#172](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/172) | Complete 2014 Artificer character materialization and starting equipment | Implemented candidate; close only after the acceptance tests and main merge are verified. |
-| [#170](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/170) | Implement source-correct 2014 Lay on Hands settlement | Implemented candidate; close only after the acceptance tests and main merge are verified. |
+| [#182](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/182) | Model 2014 Tortle Claws as an intrinsic unarmed strike | Closed completed: main and scoped acceptance verified; evidence recorded on the issue. |
+| [#176](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/176) | Preserve and execute 2014 City Watch Watcher Eye feature | Closed completed: main and scoped acceptance verified; evidence recorded on the issue. |
+| [#173](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/173) | Fix 2014 Battle Smith grants and subclass application order | Open: Eberron build/Defender scenarios pass; complete Tasha-source acceptance is not certified here. |
+| [#172](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/172) | Complete 2014 Artificer character materialization and starting equipment | Closed completed: main and scoped acceptance verified; evidence recorded on the issue. |
+| [#170](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/170) | Implement source-correct 2014 Lay on Hands settlement | Closed completed: main and scoped acceptance verified; evidence recorded on the issue. |
 | [#169](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/169) | Implement source-correct 2014 adventuring gear settlement | Open: still aligned with source-correct local gameplay; full acceptance is not established. |
 | [#168](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/168) | Enforce 2014 Sunlight Sensitivity on attacks and sight checks | Open: still aligned with source-correct local gameplay; full acceptance is not established. |
 | [#165](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/165) | Implement source-correct 2014 working-together checks | Open: still aligned with source-correct local gameplay; full acceptance is not established. |
@@ -38,14 +38,14 @@ blindly treating every sentence of the issue as authoritative.
 | [#149](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/149) | Enforce 2014 occupied-space and squeezing movement rules | Open: still aligned with source-correct local gameplay; full acceptance is not established. |
 | [#148](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/148) | Implement source-correct 2014 underwater combat settlement | Open: still aligned with source-correct local gameplay; full acceptance is not established. |
 | [#147](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/147) | Implement source-correct 2014 mounted combat lifecycle | Open: still aligned with source-correct local gameplay; full acceptance is not established. |
-| [#146](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/146) | Implement 2014 holding-breath and suffocation lifecycle settlement | Implemented candidate; close only after the acceptance tests and main merge are verified. |
-| [#145](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/145) | Implement source-correct 2014 falling damage and prone settlement | Implemented candidate; close only after the acceptance tests and main merge are verified. |
+| [#146](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/146) | Implement 2014 holding-breath and suffocation lifecycle settlement | Closed completed: main and scoped acceptance verified; evidence recorded on the issue. |
+| [#145](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/145) | Implement source-correct 2014 falling damage and prone settlement | Closed completed: main and scoped acceptance verified; evidence recorded on the issue. |
 | [#139](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/139) | Execute the predeclared 2014 readied spell on release | Open: still aligned with source-correct local gameplay; full acceptance is not established. |
 | [#133](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/133) | Bind Ready release to and execute the predeclared response | Open: still aligned with source-correct local gameplay; full acceptance is not established. |
 | [#129](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/129) | Implement source-correct 2014 multiclass advancement | Open: still aligned with source-correct local gameplay; full acceptance is not established. |
 | [#128](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/128) | Implement remaining high-level 2014 Rogue mechanics | Open: still aligned with source-correct local gameplay; full acceptance is not established. |
 | [#127](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/127) | Complete and target-bind the 2014 Help action | Open: still aligned with source-correct local gameplay; full acceptance is not established. |
-| [#123](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/123) | Implement 2014 Rogue Uncanny Dodge as a hit reaction | Implemented candidate; close only after the acceptance tests and main merge are verified. |
+| [#123](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/123) | Implement 2014 Rogue Uncanny Dodge as a hit reaction | Closed completed: main and scoped acceptance verified; evidence recorded on the issue. |
 | [#116](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/116) | Enforce 2014 spell components before casting | Open: still aligned with source-correct local gameplay; full acceptance is not established. |
 | [#113](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/113) | Implement 2014 Paladin Divine Smite settlement | Open: still aligned with source-correct local gameplay; full acceptance is not established. |
 | [#112](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/112) | Implement actual 2014 Bardic Inspiration settlement | Open: still aligned with source-correct local gameplay; full acceptance is not established. |
@@ -55,11 +55,11 @@ blindly treating every sentence of the issue as authoritative.
 | [#107](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/107) | Pause movement before resolving opportunity attacks | Open: still aligned with source-correct local gameplay; full acceptance is not established. |
 | [#106](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/106) | Execute all selected 2014 Fighting Styles | Open: still aligned with source-correct local gameplay; full acceptance is not established. |
 | [#104](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/104) | Implement 2014 Legendary Resistance settlement | Open: still aligned with source-correct local gameplay; full acceptance is not established. |
-| [#101](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/101) | Enforce 2014 rest activity and interruption rules | Implemented candidate; close only after the acceptance tests and main merge are verified. |
-| [#100](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/100) | Allow per-attack Strength or Dexterity choice for finesse weapons | Implemented candidate; close only after the acceptance tests and main merge are verified. |
+| [#101](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/101) | Enforce 2014 rest activity and interruption rules | Closed completed: main and scoped acceptance verified; evidence recorded on the issue. |
+| [#100](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/100) | Allow per-attack Strength or Dexterity choice for finesse weapons | Closed completed: main and scoped acceptance verified; evidence recorded on the issue. |
 | [#97](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/97) | Implement 2014 grapple and shove attack replacements | Open: still aligned with source-correct local gameplay; full acceptance is not established. |
-| [#88](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/88) | Support the 2014 one-spell replacement option for known casters on level up | Implemented candidate; close only after the acceptance tests and main merge are verified. |
-| [#87](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/87) | Strictly validate nested boolean inputs before game-rule settlement | Implemented candidate; close only after the acceptance tests and main merge are verified. |
+| [#88](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/88) | Support the 2014 one-spell replacement option for known casters on level up | Closed completed: main and scoped acceptance verified; evidence recorded on the issue. |
+| [#87](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/87) | Strictly validate nested boolean inputs before game-rule settlement | Closed completed: main and scoped acceptance verified; evidence recorded on the issue. |
 | [#51](https://github.com/SagaSmithAI/Sagasmith-dnd/issues/51) | Track unfixed ChromaDB authorization and code-injection advisories | Open: upstream advisories still have no patched version. |
 
 ## Evidence and limits
