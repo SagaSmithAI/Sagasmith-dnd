@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Annotated, Any, Literal
 
 from .. import application_support as _support
+from ..result_contracts import affected_state_slice
 
 
 class CampaignsService:
@@ -149,6 +150,12 @@ class CampaignsService:
         def response_for(revisions: list[Any]) -> dict[str, Any]:
             stream = _support.active_random_stream()
             response = dict(response_fields)
+            if self.config.local_authority and self.is_dm(campaign.id, principal_id):
+                # These are the exact documents being committed, not a later readback.
+                response["affected_state"] = affected_state_slice(
+                    campaign, branch_id, character_updates or [],
+                    campaign.revision + (1 if persists_campaign else 0),
+                )
             if include_campaign_revision:
                 response["campaign_revision"] = campaign.revision + (1 if persists_campaign else 0)
             if include_revisions:
@@ -2888,6 +2895,10 @@ class CampaignsService:
             return {
                 **base_response,
                 "revisions": [_support.asdict(item) for item in revisions],
+                **({"affected_state": affected_state_slice(
+                    campaign, resolved_branch_id, updates, campaign.revision + 1,
+                )} if self.config.local_authority
+                   and self.is_dm(campaign_id, principal_id) else {}),
             }
 
         revisions_result = _support.StateMutationService(self.storage.database).replace(

@@ -993,7 +993,7 @@ class InventoryService:
                 ),
                 *reference_updates,
             ],
-            include_campaign_revision=False,
+            include_campaign_revision=True,
             include_revisions=False,
             expected_campaign_revision=expected_campaign_revision,
         )
@@ -1160,6 +1160,9 @@ class InventoryService:
         )
         response = {
             "party": self.party_view_from_state(updated_state),
+            "campaign_id": campaign_id,
+            "campaign_revision": campaign.revision + 1,
+            "branch_id": branch_id,
             "character": self.character_view(
                 _support.replace(
                     character,

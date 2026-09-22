@@ -646,6 +646,14 @@ class SharedService:
             ),
             "memory_policy": "domain_authoritative",
         }
+        if self.config.local_authority:
+            campaign = self.campaigns.get(campaign_id)
+            profile = self.rule_profiles.get(campaign_id)
+            value["timeline_epoch"] = str(campaign.timeline_epoch)
+            value["rules_fingerprint"] = _support.hashlib.sha256(_support.canonical_json({
+                "settings": campaign.settings,
+                "profile": _support.asdict(profile) if profile else None,
+            }).encode("utf-8")).hexdigest()
         return {
             **value,
             "context_epoch": _support.hashlib.sha256(
@@ -659,8 +667,11 @@ class SharedService:
                             "role",
                             "audience",
                             "branch_id",
+                            "timeline_epoch",
+                            "rules_fingerprint",
                             "authorization_fingerprint",
                         )
+                        if key in value
                     }
                 ).encode("utf-8")
             ).hexdigest(),

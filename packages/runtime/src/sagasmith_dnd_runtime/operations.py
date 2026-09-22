@@ -152,6 +152,12 @@ class DndRuntime:
         *,
         context: RequestIdentity,
     ) -> Any:
+        local = getattr(self, "local_session", None)
+        if local is not None:
+            return await local.execute(name, arguments, context)
+        return await self.execute_shared(name, arguments, context=context)
+
+    async def execute_shared(self, name, arguments, *, context):
         with self.command_scope(name, arguments, context=context) as (bound, _stream):
             return await self.invoke(name, bound)
 

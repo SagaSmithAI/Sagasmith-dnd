@@ -797,6 +797,51 @@ class RequestScopedMCPServer(MCPServer):
         """Execute one request with fresh identity/role/phase/revision checks."""
 
         arguments = dict(arguments or {})
+        if (getattr(self.runtime, "local_session", None) is not None
+                and name in self.runtime.operations):
+            from sagasmith_dnd_runtime.operations import RequestIdentity
+
+            try:
+                value = await self.runtime.execute(
+                    name, arguments, context=RequestIdentity(self._bound_principal_id)
+                )
+            except (ValueError, PermissionError, LookupError) as exc:
+                if context is None:
+                    raise ToolError(str(exc)) from exc
+                return self._structured_tool_error(str(exc), exc)
+            if isinstance(value, dict):
+                result = CallToolResult(
+                    content=[TextContent(type="text", text=json.dumps(value, ensure_ascii=False))],
+                    structured_content=value,
+                )
+                return (result.content, result.structured_content) if context is None else result
+            if isinstance(value, RuntimeRenderResult):
+                result = CallToolResult(
+                    content=[
+                        TextContent(type="text", text=json.dumps(value.metadata)),
+                        Image(data=value.image.data, format=value.image.format).to_image_content(),
+                    ],
+                    structured_content=value.metadata,
+                )
+                return (result.content, result.structured_content) if context is None else result
+            if isinstance(value, RuntimeImage):
+                result = CallToolResult(content=[
+                    Image(data=value.data, format=value.format).to_image_content(),
+                ])
+                return (result.content, None) if context is None else result
+            if isinstance(value, list) and any(isinstance(item, RuntimeImage) for item in value):
+                result = CallToolResult(content=[
+                    Image(data=item.data, format=item.format).to_image_content()
+                    if isinstance(item, RuntimeImage)
+                    else TextContent(type="text", text=json.dumps(item, ensure_ascii=False))
+                    for item in value
+                ])
+            else:
+                result = CallToolResult(
+                    content=[TextContent(type="text", text=json.dumps(value, ensure_ascii=False))],
+                    structured_content={"result": value},
+                )
+            return (result.content, result.structured_content) if context is None else result
         try:
             _validate_contract_arguments(arguments)
         except ValueError as exc:
@@ -1225,12 +1270,15 @@ def _create_server(config, *, resources):
             subscriptions=mcp._subscriptions,
         )
         try:
-            result = await MCPServer.call_tool(
-                mcp,
-                record.tool_name,
-                arguments,
-                context,
-            )
+            if config.local_authority:
+                result = await mcp.call_tool(record.tool_name, arguments, context)
+            else:
+                result = await MCPServer.call_tool(
+                    mcp,
+                    record.tool_name,
+                    arguments,
+                    context,
+                )
         except ToolError as exc:
             message = _safe_tool_error_message(exc)
             result = mcp._structured_tool_error(message)
@@ -1490,12 +1538,14 @@ def main() -> None:
     # native import can stall when first attempted from FastMCP's running
     # asyncio loop, so warm it on the main thread when the documents extra is
     # installed. A text-only base wheel must still start without that extra.
-    _preload_optional_pdf_runtime()
-
     config = McpConfig.from_environment()
+    if not config.local_authority:
+        _preload_optional_pdf_runtime()
     transport = os.environ.get("SAGASMITH_DND_MCP_TRANSPORT", "stdio").strip().casefold()
     if transport not in {"stdio", "streamable-http"}:
         raise ValueError("SAGASMITH_DND_MCP_TRANSPORT must be 'stdio' or 'streamable-http'")
+    if config.local_authority and transport != "stdio":
+        raise ValueError("local authority is available only over trusted stdio")
     if (
         transport == "streamable-http"
         and config.http_host.strip().casefold() not in {"127.0.0.1", "::1", "localhost"}

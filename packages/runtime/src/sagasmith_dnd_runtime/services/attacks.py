@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from .. import application_support as _support
+from ..result_contracts import affected_state_slice
 
 
 class AttacksService:
@@ -1067,6 +1068,10 @@ class AttacksService:
                     "revisions": [_support.asdict(item) for item in revisions],
                 }
                 stream = _support.active_random_stream()
+                if self.config.local_authority and self.is_dm(campaign_id, principal_id):
+                    response["affected_state"] = affected_state_slice(
+                        campaign, resolved_branch_id, updates, campaign.revision + 1
+                    )
                 if stream is not None and stream.draw_count > 0:
                     response["random_stream_receipt"] = stream.receipt()
                 return response
@@ -1427,6 +1432,10 @@ class AttacksService:
                 "revisions": [_support.asdict(item) for item in revisions],
             }
             stream = _support.active_random_stream()
+            if self.config.local_authority and self.is_dm(campaign_id, principal_id):
+                response["affected_state"] = affected_state_slice(
+                    campaign, resolved_branch_id, updates, campaign.revision + 1
+                )
             if stream is not None and stream.draw_count > 0:
                 response["random_stream_receipt"] = stream.receipt()
             return response

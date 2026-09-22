@@ -46,6 +46,16 @@ CORE_TOOLS = frozenset(
     }
 )
 
+# Host presentation only. The stable catalog and runtime authorization remain unchanged.
+LOCAL_DAILY_TOOLS = frozenset("""
+campaign_query campaign_create character_query character_create_from character_check
+character_action inventory_change inventory_transfer wallet_change game_phase
+module_query module_search module_expand continuity_context memory_change campaign_event
+combat_start combat_query combat_resolve_attack combat_cast_spell combat_movement
+combat_choice combat_end_turn combat_end combat_common_action combat_use_activity
+combat_check character_state_change rule_search rule_expand skill_query
+""".split())
+
 HOST_PRIVATE_TOOLS = frozenset({"npc_conversation_transport"})
 
 

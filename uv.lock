@@ -3473,7 +3473,7 @@ wheels = [
 
 [[package]]
 name = "sagasmith-core"
-version = "0.3.1"
+version = "0.3.2"
 source = { editable = "../sagasmith-core" }
 dependencies = [
     { name = "alembic" },
@@ -3586,7 +3586,7 @@ provides-extras = ["documents", "images", "embedding", "vector", "dense", "all",
 
 [[package]]
 name = "sagasmith-dnd-mcp"
-version = "0.3.0"
+version = "0.3.1"
 source = { editable = "packages/mcp" }
 dependencies = [
     { name = "mcp" },
@@ -3654,7 +3654,7 @@ provides-extras = ["documents", "images", "ocr", "embedding", "vector", "dense",
 
 [[package]]
 name = "sagasmith-dnd-runtime"
-version = "0.3.0"
+version = "0.3.1"
 source = { editable = "packages/runtime" }
 dependencies = [
     { name = "pydantic" },

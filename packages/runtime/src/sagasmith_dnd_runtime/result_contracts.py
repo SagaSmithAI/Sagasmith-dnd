@@ -2,7 +2,26 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from typing import Any
+
+
+def affected_state_slice(campaign, branch_id, updates, revision):
+    """Project the exact documents used by a commit's durable response callback."""
+    return {
+        "campaign_id": campaign.id, "branch_id": branch_id,
+        "timeline_epoch": campaign.timeline_epoch, "campaign_revision": revision,
+        "actors": [
+            {"id": update.character_id,
+             "revision": (update.expected_revision + 1
+                          if update.expected_revision is not None else None),
+             "sheet": {key: deepcopy(update.sheet[key]) for key in (
+                 "combat", "resources", "conditions", "effects", "inventory",
+                 "spellcasting", "abilities", "proficiencies",
+             ) if key in update.sheet}}
+            for update in updates or []
+        ],
+    }
 
 
 def tool_output_schema(tool: str) -> dict[str, Any]:

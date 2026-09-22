@@ -2160,4 +2160,14 @@ def _create_application(config: McpConfig | None = None, *, resources) -> DndRun
         if _services.registered_tool.name == "campaign_query":
             _services.registered_tool.meta["sagasmith_context_sync"] = True
 
+    if _services.config.local_authority:
+        from .local_session import LocalSession
+        from .tool_profiles import LOCAL_DAILY_TOOLS, policy_for_tool
+
+        _services.mcp.local_session = LocalSession(_services.mcp, _services)
+        for operation in _services.mcp.list_tools():
+            operation.meta["sagasmith_local_authority"] = True
+            policy = policy_for_tool(operation.name)
+            operation.meta["sagasmith_local_daily"] = operation.name in LOCAL_DAILY_TOOLS
+            operation.meta["sagasmith_phases"] = sorted(policy.phases) if policy else []
     return _services.mcp

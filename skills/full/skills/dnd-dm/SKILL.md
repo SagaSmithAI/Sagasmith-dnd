@@ -19,7 +19,8 @@ in Agent spatial mode present the DM ruling without inventing coordinates.
 ## Start with the runtime
 
 1. Read this Skill and only the task-relevant deep reference.
-2. Resume with `campaign_query(view="resume")` and read the authoritative phase.
+2. Use the Host's valid authoritative context and phase. Resume with
+   `campaign_query(view="resume")` only when that context is missing or invalid.
 3. Use the Host-selected subset of the stable public catalog.
 4. Call the selected tool directly using its native schema.
 
@@ -79,12 +80,23 @@ section through `skill_query` instead.
   `campaign_event` atomic knowledge, direct `actor_knowledge_change`, and
   `memory_change(action="commit")`; omitted revise fields preserve and validate
   their current source/disclosure values.
-- Carry current campaign/character revisions and stable idempotency keys.
+- In local-authority mode the Host manages identity, campaign/character revisions,
+  branch and stable operation IDs. Supply business intent using the presented schema.
+  Other clients must carry the explicit protocol fields their schemas require.
+- Use committed affected-state slices and returned inventories directly. Read again
+  only when required fields are absent or the binding/revision has become invalid.
+- A complete ordinary attack uses `combat_resolve_attack` directly; its internal
+  preflight, dice, damage and commit do not require separate model calls. Preserve
+  real pending reactions, choices and source rulings.
 - Let `combat_start` and `combat_end` own Combat phase transitions.
 - Use server dice and the campaign random stream.
 - Snapshot meaningful boundaries and branches, not every roll or turn.
-- After restore, discard old context and revisions, resume again, cross the
-  changed host context binding, and reread current campaign and actor state.
+- After restore the Host crosses the new timeline binding and rebuilds context.
+  Never reuse old facts; read only what the rebuilt authoritative slice lacks.
+- Local ambient narration (gesture, tone, explanation) may use valid context without
+  a tool or NPC proposal when it introduces no world fact, disclosure, promise or
+  state change. Those changes still require authoritative commits. Important NPCs
+  retain restricted knowledge and independent evaluation when configured.
 - Keep `standalone/` separate; never silently downgrade Full Runtime.
 
 For exact facade payloads, inspect the selected tool/action and use
