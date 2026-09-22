@@ -23,8 +23,7 @@ snapshot tests remain green. This is domain/MCP evidence, not a live LLM session
 
 ## Next established gaps
 
-1. #107 / #110 / #109: interruptible movement, per-weapon reach crossings and
-   off-turn self-powered movement.
+1. #109: source-bound off-turn self-powered movement.
 2. #133 / #139: execute the original stored Ready response and readied spell.
 3. #116: resolve ordinary spell component eligibility before resource/RNG spend.
 4. #158: source-bound object statistics and damage thresholds.
@@ -32,3 +31,31 @@ snapshot tests remain green. This is domain/MCP evidence, not a live LLM session
 Other valid gameplay and content-publication gaps remain in the
 [audited issue list](2026-09-22-local-first-issues.md). The broader Agent upstream
 roadmap and upstream Chroma advisories have their own scope and evidence gates.
+
+## #107 / #110 — interruptible movement and weapon reach
+
+Movement now commits only the prefix before the earliest reach exit and retains
+the remaining path in a durable continuation. Reactions are offered one at a
+time in path order, with the weapon IDs that produced that specific reach exit.
+Declining an inner reach does not erase later reach crossings. Whole and segmented
+5/10/15-foot weapon paths produce the same options and movement spend.
+
+Runtime resumes inside the existing reaction/choice transaction after nested
+defense, damage, concentration and rescue choices have settled. Death, disabled
+movement, changed position or newly illegal geometry cancel the remainder at the
+committed boundary. Replay preserves the original result and continuation IDs;
+no new Host remainder request is required. Current actor projections refresh
+weapon options after sheet changes. Resumed movement carries source receipts and
+reconciles Witch Bolt concentration in the same commit.
+
+Coordinate-free movement requires explicit boundary distances/weapon IDs and
+prefix terrain cost when needed. Missing facts produce a no-write pending ruling;
+the Runtime never invents coordinates or puts the actor at an untraveled endpoint.
+
+Validation: all 1,735 domain/Runtime cases passed at the broad verification
+checkpoint, and 62 selected MCP cases passed. Additional focused coverage passed
+for blocked continuation geometry, terrain billing and all three reach bands.
+Public MCP cases exercise lethal/missed/declined reactions, later threats,
+restart, exact replay, stale CAS, nested Shield defenses and Help/Sneak Attack
+lifecycle. Ruff, generated operation references and whitespace checks passed.
+These are executable local contract tests; no live LLM campaign is claimed.

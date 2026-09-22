@@ -6,6 +6,7 @@ from typing import Annotated, Any, Literal
 
 from .. import application_support as _support
 from ..result_contracts import affected_state_slice
+from .movement_continuations import reconcile_movement
 
 
 class CampaignsService:
@@ -127,6 +128,20 @@ class CampaignsService:
         campaign_state, character_updates, response_fields = self.reconcile_unconscious_inventory(
             campaign, campaign_state, character_updates, response_fields
         )
+        before_movement = campaign_state
+        campaign_state, character_updates, response_fields = reconcile_movement(
+            self, campaign, campaign_state, character_updates, response_fields
+        )
+        if campaign_state is not before_movement:
+            (
+                campaign_state, character_updates, response_fields,
+            ) = self.reconcile_actor_effect_dependencies(
+                campaign, campaign_state, character_updates, response_fields
+            )
+            rule_receipts = [
+                *list(rule_receipts or []),
+                *list(response_fields.get("movement_rule_receipts") or []),
+            ]
         self.validate_inventory_custody_update(campaign, campaign_state, character_updates)
         if "narrative_followup" not in response_fields:
             followup = self.narrative_followup_for_mutation(

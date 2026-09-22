@@ -1614,6 +1614,18 @@ no destination coordinates and requires exactly `decision_id`, `reason`,
 `moves_farther_from_turn_source`, `enters_turn_source_30_ft`,
 `moves_closer_to_visible_fear_source`, and
 `opportunity_attack_actor_ids` in `spatial_facts`.
+When the threat list is nonempty, `opportunity_attack_boundaries` must bind each
+reach exit to `actor_id`, `distance_ft` from the declared move's origin and
+`weapon_ids`; include the prefix's `difficult_terrain_extra_ft` when terrain adds
+cost. Missing boundaries return a no-write `pending_ruling`. Grid mode derives
+these boundaries from the path and current weapon reaches.
+
+Movement commits only as far as the next reaction and stores a durable
+`movement_continuation`. The reaction, nested damage/defense choices and the
+remaining legal movement settle through the same authoritative commit path.
+Only traveled prefixes spend movement. A disabling reaction or changed path
+stops the continuation; later threats are not offered prematurely. Runtime
+resumes automatically, so the Host must not issue a duplicate remainder move.
 
 Agent-mode attacks require the structured facts `decision_id`, `reason`,
 `targetable`, `in_range`, `long_range`, `cover_degree`,

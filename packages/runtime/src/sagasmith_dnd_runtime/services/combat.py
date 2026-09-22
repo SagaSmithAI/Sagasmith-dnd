@@ -1001,6 +1001,7 @@ class CombatService:
             "moves_closer_to_visible_fear_source",
             "moves_toward_aggressive_target",
             "opportunity_attack_actor_ids",
+            "opportunity_attack_boundaries",
         }
         required_fields = {"decision_id", "reason", "destination_legal", "distance_ft"}
         if set(spatial_facts) - allowed_fields or required_fields - set(spatial_facts):
@@ -1119,6 +1120,12 @@ class CombatService:
                     if isinstance(flags, dict) and "death_save_due" in flags:
                         flags["death_save_due"] = False
                 combatant["condition_sources"] = _support.timed_condition_sources(sheet)
+                from sagasmith_dnd.combat_engine import _opportunity_attack_options
+
+                combatant["opportunity_attack_options"] = _opportunity_attack_options({
+                    "id": actor_id, "sheet": sheet,
+                    "derived": self.derive_character_sheet(sheet, character_id=actor_id),
+                })
                 combatant["speed_multiplier"] = _support.source_speed_multiplier(sheet)
                 if conditions.intersection(_support.INCAPACITATING_STATE_IDS):
                     flags = dict(combatant.get("turn_flags") or {})
@@ -3306,7 +3313,10 @@ class CombatService:
             scope=scope,
             payload=payload,
             response_fields={
-                "status": "committed",
+                "status": (
+                    "pending_reaction" if next_encounter.get("movement_continuation")
+                    else "committed"
+                ),
                 "combat": next_encounter,
                 "rule_receipts": movement_receipts,
                 "ended_witch_bolt_tether_ids": [
@@ -8452,6 +8462,11 @@ class CombatService:
         spatial_facts={decision_id, reason, destination_legal, distance_ft}, with
         distance_ft equal to distance. Optional difficult_terrain_extra_ft adds
         cost; opportunity_attack_actor_ids lists actual threats. Do not invent
+        reaction timing: when threats exist, opportunity_attack_boundaries lists
+        {actor_id, distance_ft, weapon_ids, difficult_terrain_extra_ft?} for each
+        reach exit. Distances and terrain costs are measured from this move's
+        origin. Movement pauses there and resumes after reactions settle.
+        Do not invent
         grid coordinates when the encounter uses Agent positioning. stand uses {}.
         """
         data = self.facade_payload(payload)

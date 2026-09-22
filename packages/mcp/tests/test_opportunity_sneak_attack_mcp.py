@@ -217,6 +217,28 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
                     "idempotency_key": "move",
                 },
             )
+            # Decline earlier exits before testing the whip's own reach boundary.
+            for index in range(3):
+                window = moved["combat"]["pending"][0]
+                if window["actor_id"] == rogue["id"] and window[
+                    "opportunity_attack_weapon_ids"
+                ] == ["whip"]:
+                    break
+                moved = await _call(
+                    server,
+                    "combat_choice",
+                    {
+                        "campaign_id": campaign["id"],
+                        "actor_id": window["actor_id"],
+                        "action": "resolve",
+                        "payload": {
+                            "choice_id": window["id"],
+                            "selection": {"id": "decline"},
+                        },
+                        "expected_revision": moved["campaign_revision"],
+                        "idempotency_key": f"earlier-exit-{index}",
+                    },
+                )
             reactions = await _call(
                 server,
                 "combat_query",
@@ -229,7 +251,7 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
             moved_target = next(
                 item for item in moved["combat"]["combatants"] if item["actor_id"] == mover["id"]
             )
-            assert moved_target["position"] == {"x": 4, "y": 0}
+            assert moved_target["position"] == {"x": 3, "y": 0}
             request = {
                 "campaign_id": campaign["id"],
                 "actor_id": rogue["id"],

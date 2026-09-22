@@ -5441,6 +5441,29 @@ def spend_movement(
     crawl: bool = False,
     spatial_facts: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Move only as far as the next reaction boundary, retaining the paid prefix."""
+    from sagasmith_dnd.movement_continuations import start_movement
+
+    return start_movement(
+        encounter, actor_id_value, distance,
+        destination=destination, path=path, movement_mode=movement_mode,
+        travel_mode=travel_mode, crawl=crawl, spatial_facts=spatial_facts,
+    )
+
+
+def _spend_movement_uninterrupted(
+    encounter: dict[str, Any],
+    actor_id_value: str,
+    distance: int,
+    *,
+    destination: Any = None,
+    path: list[Any] | None = None,
+    movement_mode: str = "voluntary",
+    travel_mode: str = "walk",
+    crawl: bool = False,
+    spatial_facts: dict[str, Any] | None = None,
+    _intermediate_destination: bool = False,
+) -> dict[str, Any]:
     """Apply movement with a separate reason and travel-speed mode.
 
     Explicit token positions, reach values, map bounds/blocked cells, and
@@ -5684,13 +5707,15 @@ def spend_movement(
         )
         if occupants and not sharing_allowed:
             if willing_movement:
-                raise CombatEngineError(
-                    "an actor cannot willingly end movement in another creature's space"
+                if not _intermediate_destination:
+                    raise CombatEngineError(
+                        "an actor cannot willingly end movement in another creature's space"
+                    )
+            else:
+                raise NeedsRulingError(
+                    "an effect-specific ruling is required for an occupied destination",
+                    missing=("occupied_destination_resolution",),
                 )
-            raise NeedsRulingError(
-                "an effect-specific ruling is required for an occupied destination",
-                missing=("occupied_destination_resolution",),
-            )
     turning = dict(combatant.get("turned") or {})
     if willing_movement and "turned" in conditions and agent_facts is not None:
         if agent_facts.get("moves_farther_from_turn_source") is not True:
@@ -5805,11 +5830,6 @@ def spend_movement(
         and target_position is not None
         and not _disengaged(combatant)
     ):
-        existing = {
-            (item.get("event"), item.get("actor_id"), item.get("target_id"))
-            for item in value.get("pending", [])
-            if item.get("status", "pending") == "pending"
-        }
         if path is not None:
             movement_segments = list(zip(waypoints, waypoints[1:]))
         else:
@@ -5823,110 +5843,19 @@ def spend_movement(
                 if inferred_waypoints is not None
                 else [(origin, target_position)]
             )
-        for threat in value.get("combatants", []):
-            if not _can_make_opportunity_attack(threat, combatant):
-                continue
-            threat_position = _position(threat.get("position"))
-            if threat_position is None:
-                continue
-            options = _recorded_opportunity_attack_options(threat)
-            boundaries: list[
-                tuple[int, int, tuple[float, float], tuple[float, float], int, int]
-            ] = []
-            for option in options:
-                reach = int(option["reach_ft"])
-                for segment_index, (start, end) in enumerate(movement_segments):
-                    start_distance = _grid_distance(start, threat_position)
-                    end_distance = _grid_distance(end, threat_position)
-                    if start_distance <= reach < end_distance:
-                        boundaries.append(
-                            (reach, segment_index, start, end, start_distance, end_distance)
-                        )
-                        break
-            if not boundaries:
-                continue
-            # A coarse movement request may cross several reach rings.  The
-            # outermost ring is the first boundary at which an OA can be
-            # made; bind the window to weapons that actually reach it.
-            boundary_reach = max(item[0] for item in boundaries)
-            boundary_index = min(item[1] for item in boundaries if item[0] == boundary_reach)
-            boundary = next(
-                item
-                for item in boundaries
-                if item[0] == boundary_reach and item[1] == boundary_index
-            )
-            target_boundary = _movement_boundary_position(
-                boundary[2], boundary[3], boundary[4], boundary[5], boundary_reach
-            )
-            weapon_ids = [
-                str(option["weapon_id"])
-                for option in options
-                if int(option["reach_ft"]) == boundary_reach
-            ]
-            key = ("movement.leave_reach", threat.get("actor_id"), actor_id_value)
-            if key in existing:
-                continue
-            value["pending"] = [
-                *list(value.get("pending") or []),
-                {
-                    "id": f"reaction-{uuid4().hex}",
-                    "kind": "reaction",
-                    "actor_id": threat["actor_id"],
-                    "target_id": actor_id_value,
-                    "target_position": {"x": target_boundary[0], "y": target_boundary[1]},
-                    "target_visible": True,
-                    "event": "movement.leave_reach",
-                    "trigger": "opportunity_attack",
-                    "opportunity_attack_weapon_ids": weapon_ids,
-                    "opportunity_attack_reach_ft": boundary_reach,
-                    "candidates": [
-                        {"id": "opportunity_attack"},
-                        {"id": "decline"},
-                    ],
-                    "deadline": "before_commit",
-                    "status": "pending",
-                },
-            ]
+        from sagasmith_dnd.movement_continuations import grid_reaction_windows
+
+        value["pending"] = [
+            *list(value.get("pending") or []),
+            *grid_reaction_windows(value, combatant, movement_segments),
+        ]
     if willing_movement and agent_facts is not None and not _disengaged(combatant):
-        combatants = {str(item.get("actor_id") or ""): item for item in value.get("combatants", [])}
-        for threat_id in agent_facts.get("opportunity_attack_actor_ids", []):
-            threat_id = str(threat_id)
-            threat = combatants.get(threat_id)
-            if threat is None or threat_id == actor_id_value:
-                raise CombatEngineError("opportunity_attack_actor_ids contains an unknown threat")
-            if not _can_make_opportunity_attack(threat, combatant):
-                raise CombatEngineError(
-                    "the Agent selected a threat that cannot make an opportunity attack"
-                )
-            key = ("movement.leave_reach", threat_id, actor_id_value)
-            existing = {
-                (item.get("event"), item.get("actor_id"), item.get("target_id"))
-                for item in value.get("pending", [])
-                if item.get("status", "pending") == "pending"
-            }
-            if key in existing:
-                continue
-            value["pending"] = [
-                *list(value.get("pending") or []),
-                {
-                    "id": f"reaction-{uuid4().hex}",
-                    "kind": "reaction",
-                    "actor_id": threat_id,
-                    "target_id": actor_id_value,
-                    "target_position": None,
-                    "target_visible": True,
-                    "event": "movement.leave_reach",
-                    "trigger": "opportunity_attack",
-                    "opportunity_attack_weapon_ids": [
-                        str(option["weapon_id"])
-                        for option in _recorded_opportunity_attack_options(threat)
-                    ],
-                    "candidates": [{"id": "opportunity_attack"}, {"id": "decline"}],
-                    "deadline": "before_commit",
-                    "status": "pending",
-                    "spatial_ruling_id": agent_facts.get("decision_id"),
-                },
-            ]
+        from sagasmith_dnd.movement_continuations import agent_reaction_windows
+
+        value["pending"] = [
+            *list(value.get("pending") or []),
+            *agent_reaction_windows(value, combatant, agent_facts),
+        ]
     if agent_facts is not None:
         value["log"] = [
             *list(value.get("log") or []),

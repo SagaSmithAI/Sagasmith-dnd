@@ -9064,7 +9064,7 @@
     }
   },
   {
-    "description": "Move or stand using the current campaign revision and a request key.\n\nmove payload={distance, destination?, path?, spatial_facts?}; distance is\nfeet traveled, before difficult-terrain cost. In Agent positioning use\nspatial_facts={decision_id, reason, destination_legal, distance_ft}, with\ndistance_ft equal to distance. Optional difficult_terrain_extra_ft adds\ncost; opportunity_attack_actor_ids lists actual threats. Do not invent\ngrid coordinates when the encounter uses Agent positioning. stand uses {}.",
+    "description": "Move or stand using the current campaign revision and a request key.\n\nmove payload={distance, destination?, path?, spatial_facts?}; distance is\nfeet traveled, before difficult-terrain cost. In Agent positioning use\nspatial_facts={decision_id, reason, destination_legal, distance_ft}, with\ndistance_ft equal to distance. Optional difficult_terrain_extra_ft adds\ncost; opportunity_attack_actor_ids lists actual threats. Do not invent\nreaction timing: when threats exist, opportunity_attack_boundaries lists\n{actor_id, distance_ft, weapon_ids, difficult_terrain_extra_ft?} for each\nreach exit. Distances and terrain costs are measured from this move's\norigin. Movement pauses there and resumes after reactions settle.\nDo not invent\ngrid coordinates when the encounter uses Agent positioning. stand uses {}.",
     "error_envelope": {
       "fields": [
         "code",

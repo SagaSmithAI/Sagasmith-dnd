@@ -25,6 +25,18 @@ The Runtime returns `pending_ruling` without spending movement when it is missin
 complete the facts and retry with the current revision. The engine still checks
 reaction eligibility and owns the resulting reaction windows.
 
+When threats exist, also supply `opportunity_attack_boundaries`: one entry for
+each crossed weapon reach, with `actor_id`, `distance_ft` from this move's origin,
+and the eligible `weapon_ids`. If the route has difficult terrain, include its
+extra cost before that boundary as `difficult_terrain_extra_ft`. Derive these
+facts from the scene and current weapon sources; missing timing is a bounded
+ruling, never permission to place the mover at its final destination early.
+The Runtime commits only the prefix, opens one reaction in path order and
+automatically resumes the stored remainder after all nested choices settle.
+Use its returned position/budget/continuation; do not resubmit the remaining
+distance as a second move. Incapacitation, changed geometry or insufficient
+remaining speed can cancel the continuation at the committed boundary.
+
 Do not use `combat_end_turn`, combat restart, or an enemy's inaction to recover
 from a tool/schema error or unfinished content compilation. Keep the current
 turn while repairing the request; if implementation work is needed, preserve it

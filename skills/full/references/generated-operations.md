@@ -664,6 +664,11 @@ feet traveled, before difficult-terrain cost. In Agent positioning use
 spatial_facts={decision_id, reason, destination_legal, distance_ft}, with
 distance_ft equal to distance. Optional difficult_terrain_extra_ft adds
 cost; opportunity_attack_actor_ids lists actual threats. Do not invent
+reaction timing: when threats exist, opportunity_attack_boundaries lists
+{actor_id, distance_ft, weapon_ids, difficult_terrain_extra_ft?} for each
+reach exit. Distances and terrain costs are measured from this move's
+origin. Movement pauses there and resumes after reactions settle.
+Do not invent
 grid coordinates when the encounter uses Agent positioning. stand uses {}.
 
 Phases: combat

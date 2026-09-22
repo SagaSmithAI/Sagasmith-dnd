@@ -115,8 +115,22 @@ def test_movement_requires_explicit_reaction_assessment(tmp_path, provokes):
             )
             assert after == before
             facts["opportunity_attack_actor_ids"] = [actors[1]["id"]] if provokes else []
+            if provokes:
+                missing_boundary = await _call(server, "combat_movement", arguments)
+                assert missing_boundary["status"] == "pending_ruling"
+                assert (
+                    "movement.spatial_facts.opportunity_attack_boundaries"
+                    in missing_boundary["missing"]
+                )
+                facts["opportunity_attack_boundaries"] = [
+                    {
+                        "actor_id": actors[1]["id"],
+                        "distance_ft": 0,
+                        "weapon_ids": ["unarmed-strike"],
+                    }
+                ]
             moved = await _call(server, "combat_movement", arguments)
-            assert moved["status"] == "committed"
+            assert moved["status"] == ("pending_reaction" if provokes else "committed")
             assert await _call(server, "combat_movement", arguments) == moved
             encounter = moved["combat"]
             reactions = [

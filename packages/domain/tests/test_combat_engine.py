@@ -85,6 +85,7 @@ from sagasmith_dnd.combat_engine import (
 from sagasmith_dnd.content_solution import build_content_solution
 from sagasmith_dnd.engine import resolve_check, roll_d20
 from sagasmith_dnd.lifecycle import apply_rest
+from sagasmith_dnd.movement_continuations import resume_pending_movement
 from sagasmith_dnd.resolution_plan import (
     compile_resolution_plan,
     resolution_plan_template,
@@ -1437,13 +1438,25 @@ def test_agent_positioned_movement_consumes_distance_and_opportunity_facts() -> 
         "moves_closer_to_visible_fear_source": False,
         "opportunity_attack_actor_ids": ["threat"],
     }
+    with pytest.raises(NeedsRulingError, match="distance and weapon"):
+        spend_movement(encounter, "mover", 10, spatial_facts=facts)
+    facts["opportunity_attack_boundaries"] = [{
+        "actor_id": "threat", "distance_ft": 5,
+        "difficult_terrain_extra_ft": 0, "weapon_ids": ["unarmed-strike"],
+    }]
     moved = spend_movement(encounter, "mover", 10, spatial_facts=facts)
     current = current_combatant(moved)
 
-    assert current["turn_budget"]["movement"] == 15
+    assert current["turn_budget"]["movement"] == 25
     assert moved["pending"][0]["actor_id"] == "threat"
     assert moved["pending"][0]["target_position"] is None
     assert moved["log"][-1]["decision"]["decision_id"] == "spatial:test-move"
+    resumed = resume_pending_movement(resolve_choice_window(
+        moved, choice_id=moved["pending"][0]["id"], actor_id_value="threat",
+        selection={"id": "decline"},
+    ))
+    assert current_combatant(resumed)["turn_budget"]["movement"] == 15
+    assert "movement_continuation" not in resumed
 
 
 def test_preflight_rejects_an_exhausted_recharge_weapon() -> None:
@@ -7507,7 +7520,7 @@ def test_grid_movement_opens_opportunity_window_only_when_leaving_hostile_reach(
     assert available_reactions(moved_safely, "threat") == []
 
 
-def test_opportunity_window_binds_to_outermost_weapon_reach_for_whole_or_segmented_path() -> None:
+def test_opportunity_windows_follow_each_weapon_reach_for_whole_or_segmented_path() -> None:
     mover = _actor("mover")
     mover.update(initiative=20, position={"x": 0, "y": 0}, disposition="friendly")
     threat = _actor("threat")
@@ -7542,9 +7555,25 @@ def test_opportunity_window_binds_to_outermost_weapon_reach_for_whole_or_segment
     for encounter in (whole, segmented):
         windows = available_reactions(encounter, "threat")
         assert len(windows) == 1
-        assert windows[0]["opportunity_attack_weapon_ids"] == ["reach-weapon"]
-        assert windows[0]["opportunity_attack_reach_ft"] == 10
+        assert windows[0]["opportunity_attack_weapon_ids"] == ["unarmed-strike"]
+        assert windows[0]["opportunity_attack_reach_ft"] == 5
         assert windows[0]["target_position"] != {"x": 4, "y": 0}
+        assert current_combatant(encounter)["position"] == {"x": 2, "y": 0}
+        declined = resolve_choice_window(
+            encounter, choice_id=windows[0]["id"], actor_id_value="threat",
+            selection={"id": "decline"},
+        )
+        resumed = resume_pending_movement(declined)
+        next_window = available_reactions(resumed, "threat")[0]
+        assert next_window["opportunity_attack_weapon_ids"] == ["reach-weapon"]
+        assert current_combatant(resumed)["position"] == {"x": 3, "y": 0}
+        finished = resume_pending_movement(resolve_choice_window(
+            resumed, choice_id=next_window["id"], actor_id_value="threat",
+            selection={"id": "decline"},
+        ))
+        assert current_combatant(finished)["position"] == {"x": 4, "y": 0}
+        assert current_combatant(finished)["turn_budget"]["movement_spent"] == 20
+        assert "movement_continuation" not in finished
 
 
 def test_destination_only_movement_detects_enter_then_leave_of_hostile_reach() -> None:

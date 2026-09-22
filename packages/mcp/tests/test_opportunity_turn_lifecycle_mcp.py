@@ -253,6 +253,25 @@ def test_opportunity_help_is_consumed_on_hit_or_miss_and_sneak_attack_resets_eac
                     "idempotency_key": "move",
                 },
             )
+            # Simultaneous exits are offered one at a time; decline the helper
+            # if it sorts before the rogue, without spending its reaction.
+            if moved["combat"]["pending"][0]["actor_id"] != rogue["id"]:
+                earlier = moved["combat"]["pending"][0]
+                moved = await _call(
+                    server,
+                    "combat_choice",
+                    {
+                        "campaign_id": campaign["id"],
+                        "actor_id": earlier["actor_id"],
+                        "action": "resolve",
+                        "payload": {
+                            "choice_id": earlier["id"],
+                            "selection": {"id": "decline"},
+                        },
+                        "expected_revision": moved["campaign_revision"],
+                        "idempotency_key": "decline-earlier-helper",
+                    },
+                )
             choices = await _call(
                 server,
                 "combat_query",
@@ -270,7 +289,7 @@ def test_opportunity_help_is_consumed_on_hit_or_miss_and_sneak_attack_resets_eac
             assert choices[0]["target_position"] != {"x": 3, "y": 0}
             assert next(
                 item for item in moved["combat"]["combatants"] if item["actor_id"] == mover["id"]
-            )["position"] == {"x": 3, "y": 0}
+            )["position"] == {"x": 2, "y": 0}
             before = await snapshot()
             with pytest.raises(ToolError, match="revision conflict"):
                 await _raw(
