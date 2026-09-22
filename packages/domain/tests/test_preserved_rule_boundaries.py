@@ -145,7 +145,7 @@ def test_core_pack_preserves_prone_grapple_and_ready_boundaries() -> None:
     )
     with pytest.raises(ValueError, match="must crawl or stand"):
         spend_movement(encounter, "actor", 5)
-    crawled = spend_movement(encounter, "actor", 5, crawl=True)
+    crawled = spend_movement(encounter, "actor", 5, crawl=True, destination={"x": 1, "y": 0})
     assert crawled["combatants"][0]["turn_budget"]["movement"] == 20
     stood = stand_up(encounter, "actor")
     assert "prone" not in stood["combatants"][0]["conditions"]

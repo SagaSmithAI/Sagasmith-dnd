@@ -27,8 +27,9 @@ reaction eligibility and owns the resulting reaction windows.
 
 When threats exist, also supply `opportunity_attack_boundaries`: one entry for
 each crossed weapon reach, with `actor_id`, `distance_ft` from this move's origin,
-and the eligible `weapon_ids`. If the route has difficult terrain, include its
-extra cost before that boundary as `difficult_terrain_extra_ft`. Derive these
+and the eligible `weapon_ids`. In 2024, include difficult terrain's extra cost
+before that boundary as `difficult_terrain_extra_ft`. In 2014 the engine derives
+this cost from the required reviewed space segments below. Derive these
 facts from the scene and current weapon sources; missing timing is a bounded
 ruling, never permission to place the mover at its final destination early.
 The Runtime commits only the prefix, opens one reaction in path order and
@@ -36,6 +37,19 @@ automatically resumes the stored remainder after all nested choices settle.
 Use its returned position/budget/continuation; do not resubmit the remaining
 distance as a second move. Incapacitation, changed geometry or insufficient
 remaining speed can cancel the continuation at the committed boundary.
+
+For 2014 agent movement, `space_segments` describes the entire route in positive
+five-foot lengths. Each segment contains `distance_ft`, current `occupant_ids`,
+`passage_width_ft` (explicit `null` means open), and boolean `difficult_terrain`.
+Do not supply computed squeezing or size-eligibility conclusions. The engine
+reads current cards, checks hostile size differences and occupied endpoints,
+charges occupied terrain once, and derives squeezing. Squeezing adds movement
+cost, disadvantages attacks and Dexterity saves, and advantages incoming attacks.
+At encounter start/join, `participant_config.passage_width_ft` records an agent
+actor's initial passage. Grid mode derives footprints from the reviewed map;
+cropped map edges alone do not establish a narrow passage. Use an explicit path
+when the grid route cannot be inferred. Reaction pauses preserve the actual
+prefix's footprint and costs; restart resumes the saved remainder.
 
 Off-turn movement is not automatically forced movement. When the exact source
 makes a creature use its movement, action or reaction, its reviewed semantic

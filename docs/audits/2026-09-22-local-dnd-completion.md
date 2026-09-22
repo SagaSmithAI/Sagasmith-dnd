@@ -5,6 +5,46 @@ requires implementation and applicable validation; pending items remain open.
 Host-managed local execution must preserve Runtime authority, real choices,
 source evidence, CAS, transactions and original-key replay.
 
+## #149 - source-correct 2014 creature spaces and squeezing (local batch)
+
+Encounter resolution projects effective actor size and the full square footprint.
+Grid routes check every crossed footprint, including cells away from a Large
+creature's anchor. Occupied spaces cost difficult terrain once, even when the
+ground is also difficult; hostile traversal requires two size categories of
+difference and willing occupied endpoints fail before any write. Agent routes
+require complete reviewed space segments with actual occupants, passage width
+and ground terrain. The engine derives eligibility and costs from current cards.
+Only physical obstacles establish grid squeezing; map cropping never implies a
+narrow passage. Initial agent passages are explicit encounter facts.
+
+Squeezing persists through exact movement prefixes and restart. Its extra cost,
+outgoing/incoming attack modifiers and Dexterity-save disadvantage use shared
+Core resolution. Grid attacks and opportunity reaches measure the nearest
+occupied footprint cells. Forced displacement respects complete obstacles and
+updates squeezing without consuming movement or triggering opportunity attacks.
+Normal and source-plan movement bind all current participant cards under CAS;
+resumption refreshes and guards those cards before settling the saved remainder.
+Since Core currently has no read-only character guard, these unchanged guarded
+cards receive revisions in the same transaction. Original-key replay remains
+before mutable reads. Source receipts accompany ordinary, semantic and resumed
+movement. Agent/Host instructions describe the reviewed inputs and returned state.
+Geometry refresh preserves encounter-owned speed effects instead of re-deriving
+unrelated turn state from unchanged cards. Player and party-public projections
+omit private movement continuations, including hidden future occupants.
+
+Validation: the complete Domain/Runtime suite passed 2,104 cases. The broad MCP
+run passed 1,600 cases with 32 optional integrations skipped and 12 failures.
+Eight failures were obsolete illegal-path/missing-space fixtures; four exposed
+the geometry refresh resetting encounter-owned speed. After the repair, all 75
+cases in the affected public regression files passed. A further 22-case movement
+checkpoint passed, including all nine new space protocol cases, paused slowing,
+resume CAS rollback, source movement and nested opportunity reactions. The new
+privacy regression passed. Ruff, publisher consistency and whitespace checks pass.
+Core is 1.89.0, SRD 2014 is 1.43.0, SRD 2024 is 1.13.0, standard 2014 is 1.15.0,
+and both presets are 2.11.0. Evidence remains local contract/protocol validation;
+no paid-model campaign or live-stack rollout is claimed. The issue stays open
+until the requested combined push reaches main.
+
 ## #148 - source-correct 2014 underwater combat (local batch)
 
 `environment_change(action="water")` records explicit source-reviewed water

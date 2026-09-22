@@ -1255,6 +1255,7 @@ def start_encounter(
                 },
                 "conditions": list(sheet.get("conditions") or []),
                 "hit_points": int(sheet["combat"]["hp"]["value"]),
+                "size": effective_size(sheet),
                 "condition_sources": timed_condition_sources(sheet),
                 "speed_multiplier": speed_multiplier,
                 "base_speed": speed,
@@ -1288,6 +1289,15 @@ def start_encounter(
             }
         )
         _stances.reconcile(combatants[-1], sheet)
+        if normalized_ruleset == "2014" and normalized_positioning_mode == "grid":
+            from .spaces import grid_space
+
+            if position := _position(combatants[-1].get("position")):
+                combatants[-1].update(grid_space(combatants[-1], position, battle_map or {}))
+        elif normalized_ruleset == "2014" and normalized_positioning_mode == "agent":
+            from .spaces import passage_space
+
+            combatants[-1].update(passage_space(combatants[-1], actor.get("passage_width_ft")))
         if combatants[-1]["surprised"] and normalized_ruleset == "2014":
             combatants[-1]["turn_budget"].update(
                 main_action=0,
@@ -3034,6 +3044,7 @@ def preflight_attack(
         weapon,
         attack_mode=attack_mode,
         spatial_facts=spatial_facts,
+        encounter=encounter,
     )
     if reviewed_object_long_range is not None:
         if target.get("kind") != "object" or type(reviewed_object_long_range) is not bool:
@@ -3057,6 +3068,16 @@ def preflight_attack(
     if underwater and underwater["disadvantage"]:
         context["disadvantage"] = True
         context.setdefault("disadvantage_sources", []).append("underwater_weapon")
+    from .spaces import SPACE_RULE, squeezing
+
+    squeezing_attacker = squeezing(encounter, actor_id(attacker), actor_sheet(attacker))
+    squeezing_target = squeezing(encounter, actor_id(target), actor_sheet(target))
+    if squeezing_attacker:
+        context["disadvantage"] = True
+        context.setdefault("disadvantage_sources", []).append("squeezing")
+    if squeezing_target:
+        context["advantage"] = True
+        context.setdefault("advantage_sources", []).append("target_squeezing")
     close_combat_threat_ids: list[str] = []
     attacker_position = _position(attacker.get("position"))
     if attack_mode == "ranged" and spatial_facts is not None:
@@ -3362,6 +3383,8 @@ def preflight_attack(
     core_boundary_ids: list[str] = []
     if underwater:
         core_boundary_ids.append(WATER_RULE)
+    if squeezing_attacker or squeezing_target:
+        core_boundary_ids.append(SPACE_RULE)
     if sunlight is not None:
         core_boundary_ids.append(SUNLIGHT_MECHANIC)
     is_unarmed_strike = bool(
@@ -5765,11 +5788,54 @@ def _spend_movement_uninterrupted(
     missing_aquatic_or_climb_speed = (
         willing_movement and travel_mode in {"swim", "climb"} and native_travel_speed <= 0
     )
+    space_result = None
+    if _normalize_ruleset(value.get("ruleset")) == "2014":
+        from .spaces import agent_route, grid_route
+
+        if agent_facts is not None:
+            if "space_segments" not in agent_facts:
+                raise NeedsRulingError(
+                    "movement requires reviewed occupied spaces and passage widths",
+                    missing=("movement.spatial_facts.space_segments",),
+                    ruling_kind="agent_dm_adjudication",
+                )
+            space_result = agent_route(
+                value, combatant, agent_facts["space_segments"], distance,
+                voluntary=voluntary, check_endpoint=not _intermediate_destination,
+            )
+        elif origin is not None and target_position is not None:
+            points = [origin]
+            if willing_movement or movement_mode == "forced":
+                for start, end in zip(
+                    waypoints or [origin, target_position],
+                    (waypoints or [origin, target_position])[1:],
+                ):
+                    segment = _inferred_grid_waypoints(start, end)
+                    if segment is None:
+                        raise NeedsRulingError(
+                            "creature spaces require an explicit cell-by-cell movement path",
+                            missing=("movement.path",),
+                        )
+                    points.extend(segment[1:])
+            else:
+                points.append(target_position)
+            space_result = grid_route(
+                value, combatant, points, voluntary=voluntary,
+                check_endpoint=not _intermediate_destination,
+            )
+        elif distance:
+            raise NeedsRulingError(
+                "grid movement requires an origin and destination to settle creature spaces",
+                missing=("movement.positions",),
+            )
+        if space_result is not None:
+            terrain_cost = space_result["terrain_extra_ft"]
     movement_cost = (
         distance
         + (distance if crawl else 0)
         + (distance if missing_aquatic_or_climb_speed else 0)
         + terrain_cost
+        + (space_result["squeezing_extra_ft"] if space_result else 0)
         if willing_movement
         else 0
     )
@@ -5918,6 +5984,14 @@ def _spend_movement_uninterrupted(
             for point in path or [destination]:
                 validate_position(battle_map, point)
         combatant["position"] = deepcopy(destination)
+    if space_result is not None:
+        from .spaces import SPACE_RULE
+
+        combatant.update(space_result["final"])
+        value["log"] = [*value.get("log", []), {
+            "type": "movement_spaces", "actor_id": actor_id_value,
+            "mechanic_id": SPACE_RULE, **deepcopy(space_result),
+        }][-100:]
     if (
         willing_movement
         and origin is not None
@@ -6077,9 +6151,29 @@ def _force_move_directly(
                 validate_position(battle_map, candidate_dict)
             except BattleMapError:
                 break
+        if value.get("ruleset") == "2014":
+            from .spaces import grid_space, overlap
+
+            try:
+                footprint = grid_space(target, candidate, battle_map)
+            except CombatEngineError:
+                break
+            if any(
+                overlap(candidate, footprint["space_ft"], _position(other["position"]),
+                        grid_space(other, _position(other["position"]), battle_map)["space_ft"])
+                for other in value["combatants"]
+                if other["actor_id"] != target_actor_id and other.get("position")
+                and "dead" not in _condition_set(other.get("conditions"))
+                and not (target.get("can_share_space") or other.get("can_share_space"))
+            ):
+                break
         destination = candidate
         moved_cells += 1
     target["position"] = {"x": int(destination[0]), "y": int(destination[1])}
+    if value.get("ruleset") == "2014":
+        from .spaces import grid_space
+
+        target.update(grid_space(target, destination, battle_map))
     moved_distance = moved_cells * 5
     value["log"] = [
         *list(value.get("log") or []),
@@ -8160,6 +8254,12 @@ def resolve_actor_check(
     if armor_stealth_disadvantage:
         disadvantage = True
     boundary_ids = ["dnd5e.core.check.passive"] if passive else []
+    from .spaces import SPACE_RULE, squeezing
+
+    if (kind == "save" and _long_ability_name(ability) == "dexterity"
+            and squeezing(encounter, actor_id(actor), sheet)):
+        disadvantage = True
+        boundary_ids.append(SPACE_RULE)
     dodge_advantage = kind == "save" and encounter_dodge_save_advantage(
         encounter,
         actor_id(actor),
@@ -9547,6 +9647,7 @@ def _attack_range(
     *,
     attack_mode: str,
     spatial_facts: dict[str, Any] | None = None,
+    encounter: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Validate grid distance or consume one explicit Agent spatial ruling."""
     if spatial_facts is not None:
@@ -9574,6 +9675,17 @@ def _attack_range(
     if attacker_position is None or target_position is None:
         return {"enforced": False, "distance_ft": None, "disadvantage": False}
     distance = _grid_distance(attacker_position, target_position)
+    if encounter and encounter.get("ruleset") == "2014":
+        from .spaces import distance_between, grid_space
+
+        battle_map = encounter.get("battle_map") or {}
+        left = grid_space({"size": effective_size(actor_sheet(attacker))},
+                          attacker_position, battle_map)
+        right = grid_space({"size": effective_size(actor_sheet(target))},
+                           target_position, battle_map)
+        distance = distance_between(
+            attacker_position, left["space_ft"], target_position, right["space_ft"],
+        )
     range_data = (
         weapon.get("range_ft")
         if str(weapon.get("attack_type") or "melee").lower() == "ranged"

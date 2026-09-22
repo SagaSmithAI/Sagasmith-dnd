@@ -63,9 +63,13 @@ def test_source_movement_is_paid_off_turn_and_resumes_after_restart(tmp_path, pa
                     actor["turn_budget"]["reaction" if payment == "reaction" else "main_action"]
                     == 0
                 )
-            source_payment = next(
-                e for e in combat["log"] if e["type"] == "source_movement_payment"
-            )
+            # Compact action responses contain only the latest three log items.
+            # Verify the durable payment in the authoritative campaign history.
+            current = await _call(server, "campaign_query", {
+                "view": "get", "payload": {"campaign_id": cid},
+            })
+            source_payment = next(e for e in current["state"]["combat"]["log"]
+                                  if e["type"] == "source_movement_payment")
             assert source_payment["source"]["plan_fingerprint"] == commitment["plan_fingerprint"]
             close_server(server)
             server = create_server(config)

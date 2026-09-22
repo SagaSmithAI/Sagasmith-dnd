@@ -31,6 +31,7 @@ class CombatPlanRuntime:
         self.encounter = _support.deepcopy(self.context.encounter)
         self.records: dict[str, Any] = {}
         self.sheets: dict[str, dict[str, Any]] = {}
+        self.movement_receipts: list[dict[str, Any]] = []
         self.knowledge_transfers: list[_support.ActorKnowledgeTransfer] = []
         self.application_id = str((context.bound_plan.agent_ruling or {}).get("application_id")
                                   or context.bound_plan.fingerprint)
@@ -71,6 +72,7 @@ class CombatPlanRuntime:
         self.encounter = _support.deepcopy(self.context.encounter)
         self.records.clear()
         self.sheets.clear()
+        self.movement_receipts.clear()
         self.knowledge_transfers.clear()
 
     def commit(self) -> None:
@@ -589,7 +591,27 @@ class CombatPlanRuntime:
             "value": settled["value"],
         }
 
+    def bind_movement_spaces(self):
+        if self.encounter.get("ruleset") == "2014":
+            for participant in self.encounter["combatants"]:
+                identifier = participant["actor_id"]
+                self.context.runtime_services.sync_combatant_spaces(
+                    self.encounter, identifier, self.sheet(identifier),
+                )
+
+    def movement_space_receipts(self):
+        from sagasmith_dnd.spaces import SPACE_RULE
+
+        receipts = _support.core_receipts(
+            self.context.runtime_services.effective_rule_context(self.context.campaign_id),
+            [SPACE_RULE] if self.encounter.get("ruleset") == "2014" else [],
+            "movement.semantic",
+        )
+        self.movement_receipts.extend(receipts)
+        return receipts
+
     def _execute_movement_force(self, opcode, arguments, *, step_id):
+        self.bind_movement_spaces()
         before_movement = _support.deepcopy(self.encounter)
         moved = _support.force_move_directly_away(
             self.encounter,
@@ -602,10 +624,12 @@ class CombatPlanRuntime:
             before_movement,
         )
         return {key: value for key, value in moved.items() if key != "encounter"} | {
-            "ended_witch_bolt_tether_ids": ended_tether_ids
+            "ended_witch_bolt_tether_ids": ended_tether_ids,
+            "rule_receipts": self.movement_space_receipts(),
         }
 
     def _execute_movement_move(self, opcode, arguments, *, step_id):
+        self.bind_movement_spaces()
         actor_id = str(arguments["actor_id"])
         before_movement = _support.deepcopy(self.encounter)
         request = {
@@ -648,6 +672,7 @@ class CombatPlanRuntime:
             "position": _support.deepcopy(combatant.get("position")),
             "turn_budget": _support.deepcopy(combatant.get("turn_budget")),
             "movement_payment": arguments.get("payment", "movement"),
+            "rule_receipts": self.movement_space_receipts(),
             "movement_id": next((
                 entry["grant_id"] for entry in reversed(self.encounter.get("log", []))
                 if entry.get("type") == "source_movement_payment"

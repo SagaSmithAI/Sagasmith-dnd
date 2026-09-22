@@ -168,13 +168,13 @@ def test_opportunity_help_is_consumed_on_hit_or_miss_and_sneak_attack_resets_eac
                         {
                             "actor_id": helper["id"],
                             "initiative": 30,
-                            "position": {"x": 1, "y": 1},
+                            "position": {"x": 1, "y": 2},
                             "disposition": "friendly",
                         },
                         {
                             "actor_id": mover["id"],
                             "initiative": 20,
-                            "position": {"x": 0, "y": 0},
+                            "position": {"x": 0, "y": 1},
                             "disposition": "hostile",
                         },
                         {
@@ -248,7 +248,7 @@ def test_opportunity_help_is_consumed_on_hit_or_miss_and_sneak_attack_resets_eac
                     "campaign_id": campaign["id"],
                     "actor_id": mover["id"],
                     "action": "move",
-                    "payload": {"distance": 15, "destination": {"x": 3, "y": 0}},
+                    "payload": {"distance": 15, "destination": {"x": 3, "y": 1}},
                     "expected_revision": ended["campaign_revision"],
                     "idempotency_key": "move",
                 },
@@ -289,7 +289,7 @@ def test_opportunity_help_is_consumed_on_hit_or_miss_and_sneak_attack_resets_eac
             assert choices[0]["target_position"] != {"x": 3, "y": 0}
             assert next(
                 item for item in moved["combat"]["combatants"] if item["actor_id"] == mover["id"]
-            )["position"] == {"x": 2, "y": 0}
+            )["position"] == {"x": 2, "y": 1}
             before = await snapshot()
             with pytest.raises(ToolError, match="revision conflict"):
                 await _raw(

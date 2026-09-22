@@ -11,12 +11,29 @@ def reconcile_movement(runtime, campaign, campaign_state, character_updates, res
         return campaign_state, character_updates, response_fields
     original = encounter
     updates = list(character_updates or [])
+    changed_actor_ids = {
+        update.character_id for update in updates
+        if update.sheet != runtime.characters.get(update.character_id).sheet
+    }
     encounter = support.deepcopy(encounter)
+    if encounter.get("ruleset") == "2014":
+        by_actor = {update.character_id: update for update in updates}
+        for participant in encounter["combatants"]:
+            actor_id = participant["actor_id"]
+            if actor_id not in by_actor:
+                current = runtime.characters.get(actor_id)
+                updates.append(support.CharacterStateUpdate(
+                    character_id=actor_id, sheet=support.deepcopy(current.sheet),
+                    notes=current.notes, expected_revision=current.revision,
+                ))
     for update in updates:
-        runtime.sync_combatant_conditions(encounter, update.character_id, update.sheet)
+        if update.character_id in changed_actor_ids:
+            runtime.sync_combatant_conditions(encounter, update.character_id, update.sheet)
+        else:
+            runtime.sync_combatant_spaces(encounter, update.character_id, update.sheet)
     resumed = resume_pending_movement(encounter)
     if resumed == original:
-        return campaign_state, updates, response_fields
+        return campaign_state, list(character_updates or []), response_fields
     by_actor = {update.character_id: update for update in updates}
     ended = support.newly_ended_witch_bolt_tethers(encounter, resumed)
     for actor_id in sorted({str(item["source_actor_id"]) for item in ended}):
@@ -64,6 +81,8 @@ def reconcile_movement(runtime, campaign, campaign_state, character_updates, res
             runtime.effective_rule_context(campaign.id),
             [
                 "dnd5e.core.reaction.opportunity_path",
+                *(["dnd5e.core.movement.creature_spaces"]
+                  if resumed.get("ruleset") == "2014" else []),
                 *([support.CORE_WITCH_BOLT_MECHANIC_ID] if ended else []),
             ], "movement.resume",
         )

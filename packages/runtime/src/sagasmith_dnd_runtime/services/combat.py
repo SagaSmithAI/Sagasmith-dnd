@@ -682,6 +682,7 @@ class CombatService:
             value.pop("reinforcements", None)
             value.pop("participant_manifest", None)
             value.pop("semantic_state", None)
+            value.pop("movement_continuation", None)
             battle_map = value.get("battle_map")
             if isinstance(battle_map, dict):
                 value["battle_map"] = {
@@ -744,6 +745,7 @@ class CombatService:
             "effects",
             "reinforcements",
             "participant_manifest",
+            "movement_continuation",
         ):
             value.pop(key, None)
         battle_map = value.get("battle_map")
@@ -1004,6 +1006,7 @@ class CombatService:
             "moves_toward_aggressive_target",
             "opportunity_attack_actor_ids",
             "opportunity_attack_boundaries",
+            "space_segments",
         }
         required_fields = {"decision_id", "reason", "destination_legal", "distance_ft"}
         if set(spatial_facts) - allowed_fields or required_fields - set(spatial_facts):
@@ -1018,6 +1021,25 @@ class CombatService:
                 missing=("movement.spatial_facts.opportunity_attack_actor_ids",),
                 ruling_kind="agent_dm_adjudication",
             )
+        if encounter.get("ruleset") == "2014":
+            from sagasmith_dnd.spaces import validate_segments
+
+            if "space_segments" not in spatial_facts:
+                raise _support.NeedsRulingError(
+                    "movement requires explicit occupied spaces and passage widths",
+                    missing=("movement.spatial_facts.space_segments",),
+                    ruling_kind="agent_dm_adjudication",
+                )
+            segments = validate_segments(
+                spatial_facts["space_segments"], spatial_facts["distance_ft"],
+            )
+            ground_cost = sum(s["distance_ft"] for s in segments if s["difficult_terrain"])
+            if ("difficult_terrain_extra_ft" in spatial_facts
+                    and spatial_facts["difficult_terrain_extra_ft"] != ground_cost):
+                raise _support.CombatEngineError(
+                    "terrain cost disagrees with reviewed space segments"
+                )
+            spatial_facts = {**spatial_facts, "difficult_terrain_extra_ft": ground_cost}
         decision_id = str(spatial_facts.get("decision_id") or "").strip()
         reason = " ".join(str(spatial_facts.get("reason") or "").split())
         if not decision_id or not reason:
@@ -1072,6 +1094,26 @@ class CombatService:
             "opportunity_attack_actor_ids": list(threat_ids),
         }
 
+    def sync_combatant_spaces(self, encounter, actor_id, sheet):
+        """Refresh only geometry, preserving encounter-owned speed and turn effects."""
+        if encounter.get("ruleset") != "2014":
+            return
+        from sagasmith_dnd.character_schema import effective_size
+        from sagasmith_dnd.spaces import grid_space, passage_space
+
+        for combatant in [*encounter.get("combatants", []),
+                          *encounter.get("reinforcements", [])]:
+            if combatant.get("actor_id") != actor_id:
+                continue
+            combatant["size"] = effective_size(sheet)
+            if encounter.get("positioning_mode") == "grid" and combatant.get("position"):
+                position = combatant["position"]
+                combatant.update(grid_space(
+                    combatant, (position["x"], position["y"]), encounter.get("battle_map") or {},
+                ))
+            elif encounter.get("positioning_mode") == "agent":
+                combatant.update(passage_space(combatant, combatant.get("passage_width_ft")))
+
     def sync_combatant_conditions(
         self, encounter: dict[str, Any], actor_id: str, sheet: dict[str, Any]
     ) -> None:
@@ -1113,6 +1155,7 @@ class CombatService:
                 prior_dodge_transition = _support.reconcile_dodge_lifecycle(combatant)
                 combatant["conditions"] = list(sheet.get("conditions") or [])
                 combatant["hit_points"] = int(sheet["combat"]["hp"]["value"])
+                self.sync_combatant_spaces(encounter, actor_id, sheet)
                 if (
                     combatant["hit_points"] > 0
                     or _support.condition_ids(sheet.get("conditions"))
@@ -1969,6 +2012,9 @@ class CombatService:
         fabricated grid; grid mode requires an actual map or declared override.
         participant_config supplies encounter facts, not replacement hp/max_hp.
         Initiative ties may require corrected tie_breaker values before startup.
+        In 2014 agent positioning, participant_config.passage_width_ft records
+        the actual initial passage width (null means open space); the engine
+        derives squeezing from the actor's effective size. Grid uses its map.
         Reuse returned combat state/revisions; execute actors in returned turn order.
         """
         self.access.require_campaign(campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES)
@@ -2045,6 +2091,7 @@ class CombatService:
                 "disposition",
                 "reach_ft",
                 "can_share_space",
+                "passage_width_ft",
                 "surprised",
                 "death_saves",
                 "initiative",
@@ -2055,6 +2102,10 @@ class CombatService:
             unknown = set(entry) - allowed
             if unknown:
                 raise ValueError(f"unsupported participant config fields: {sorted(unknown)}")
+            if "passage_width_ft" in entry and (
+                positioning_mode != "agent" or authoritative_ruleset != "2014"
+            ):
+                raise ValueError("initial passage width requires 2014 agent positioning")
             visible_to = entry.get("visible_to_actor_ids")
             if visible_to is not None:
                 if not isinstance(visible_to, list) or any(
@@ -2578,6 +2629,7 @@ class CombatService:
             "disposition",
             "reach_ft",
             "can_share_space",
+            "passage_width_ft",
             "surprised",
             "death_saves",
             "initiative",
@@ -2606,6 +2658,10 @@ class CombatService:
             return self.combat_response(campaign_id, principal_id, replay)
         campaign, encounter = self.active_encounter(campaign_id)
         self.require_no_blocking_pending(encounter)
+        if "passage_width_ft" in config_value and (
+            encounter.get("positioning_mode") != "agent" or encounter.get("ruleset") != "2014"
+        ):
+            raise ValueError("initial passage width requires 2014 agent positioning")
         if campaign.revision != expected_revision:
             raise ValueError(
                 "campaign revision conflict: "
@@ -3249,6 +3305,19 @@ class CombatService:
         _, encounter = self.active_encounter(campaign_id)
         self.require_no_blocking_pending(encounter)
         normalized_spatial_facts = self.validate_agent_movement_facts(encounter, spatial_facts)
+        space_guards = []
+        if encounter.get("ruleset") == "2014":
+            encounter = _support.deepcopy(encounter)
+            # A route depends on every current occupant's actual size, not a
+            # possibly stale encounter projection. Keep those reads under CAS.
+            for participant in encounter["combatants"]:
+                current = self.characters.get(participant["actor_id"])
+                sheet = _support.deepcopy(current.sheet)
+                self.sync_combatant_spaces(encounter, current.id, sheet)
+                space_guards.append(_support.CharacterStateUpdate(
+                    character_id=current.id, sheet=sheet, notes=current.notes,
+                    expected_revision=current.revision,
+                ))
         moving_combatant = next(
             item for item in encounter.get("combatants", []) if item.get("actor_id") == actor_id
         )
@@ -3273,7 +3342,7 @@ class CombatService:
             encounter,
             next_encounter,
         )
-        concentration_updates: list[_support.CharacterStateUpdate] = []
+        concentration_updates: list[_support.CharacterStateUpdate] = list(space_guards)
         for caster_id in sorted(
             {
                 str(item.get("source_actor_id") or "")
@@ -3298,15 +3367,22 @@ class CombatService:
                 caster_id,
                 ended["sheet"],
             )
-            concentration_updates.append(
-                _support.CharacterStateUpdate(
+            replacement = _support.CharacterStateUpdate(
                     character_id=caster_id,
                     sheet=_support.validate_character_sheet(ended["sheet"]),
                     notes=_support.validate_character_notes(caster.notes),
                     expected_revision=caster.revision,
-                )
             )
+            prior = next((u for u in concentration_updates if u.character_id == caster_id), None)
+            if prior is not None:
+                concentration_updates[concentration_updates.index(prior)] = replacement
+            else:
+                concentration_updates.append(replacement)
         movement_boundary_ids: list[str] = []
+        if encounter.get("ruleset") == "2014":
+            from sagasmith_dnd.spaces import SPACE_RULE
+
+            movement_boundary_ids.append(SPACE_RULE)
         normalized_movement_mode = str(movement_mode).strip().lower().replace("-", "_")
         if normalized_movement_mode == "aggressive":
             movement_boundary_ids.append(_support.CORE_ORC_AGGRESSIVE_MECHANIC_ID)
@@ -7252,7 +7328,7 @@ class CombatService:
             },
             character_updates=character_updates,
             actor_knowledge_transfers=runtime.knowledge_transfers,
-            rule_receipts=[receipt],
+            rule_receipts=[receipt, *runtime.movement_receipts],
         )
         return runtime_services.combat_response(campaign_id, principal_id, response)
 
@@ -8614,6 +8690,14 @@ class CombatService:
         {actor_id, distance_ft, weapon_ids, difficult_terrain_extra_ft?} for each
         reach exit. Distances and terrain costs are measured from this move's
         origin. Movement pauses there and resumes after reactions settle.
+        For 2014 agent movement, space_segments must cover the entire distance:
+        [{distance_ft,occupant_ids,passage_width_ft,difficult_terrain}]. Name the
+        actual current occupants; null width explicitly means open space. Use
+        positive five-foot segment lengths and boolean difficult_terrain. The
+        engine derives size eligibility, occupied terrain, and squeezing cost;
+        do not supply computed modifiers. End a willing move in an empty space.
+        Grid mode derives these facts from current footprints and reviewed map
+        cells; a map boundary alone never implies a narrow physical passage.
         Do not invent
         grid coordinates when the encounter uses Agent positioning. stand uses {}.
         """

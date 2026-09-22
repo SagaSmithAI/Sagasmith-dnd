@@ -98,3 +98,16 @@ def test_status_current_turn_does_not_select_an_actor_after_combat_ends():
         "active": False, "turn_index": 0, "combatants": [{"actor_id": "past"}]
     })
     assert CombatService.combat_status(service, "campaign")["current_turn"] is None
+
+
+def test_player_projection_omits_private_remaining_path_occupants():
+    service = SimpleNamespace(access=SimpleNamespace(
+        require_campaign=lambda *args: SimpleNamespace(role="player"),
+    ))
+    encounter = {"active": True, "combatants": [], "movement_continuation": {
+        "request": {"space_segments": [{"occupant_ids": ["hidden-monster"]}]},
+    }}
+    before = deepcopy(encounter)
+    result = CombatService.combat_audience_view(service, "campaign", "player", encounter)
+    assert "movement_continuation" not in result and "hidden-monster" not in str(result)
+    assert encounter == before

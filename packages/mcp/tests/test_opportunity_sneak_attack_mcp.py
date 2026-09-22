@@ -179,7 +179,7 @@ def test_opportunity_sneak_attack_uses_trigger_snapshot_and_reaction_only(
                         {
                             "actor_id": rogue["id"],
                             "initiative": 20,
-                            "position": {"x": 1, "y": 0},
+                            "position": {"x": 1, "y": 1},
                             "disposition": "friendly",
                             "reach_ft": 5,
                         },

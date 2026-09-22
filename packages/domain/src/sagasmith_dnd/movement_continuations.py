@@ -61,6 +61,17 @@ def grid_reaction_windows(encounter, mover, segments):
                 engine._grid_distance(start, position),
                 engine._grid_distance(end, position),
             )
+            if encounter.get("ruleset") == "2014":
+                from .spaces import distance_between, grid_space
+
+                battle_map = encounter.get("battle_map") or {}
+                threat_ft = grid_space(threat, position, battle_map)["space_ft"]
+                before = distance_between(
+                    start, grid_space(mover, start, battle_map)["space_ft"], position, threat_ft,
+                )
+                after = distance_between(
+                    end, grid_space(mover, end, battle_map)["space_ft"], position, threat_ft,
+                )
             for reach in sorted({option["reach_ft"] for option in options}):
                 if not before <= reach < after:
                     continue
@@ -122,8 +133,19 @@ def agent_reaction_windows(encounter, mover, facts):
                 "movement boundary distance must be a crossed five-foot increment"
             )
         terrain = boundary.get("difficult_terrain_extra_ft", 0)
+        total_terrain = facts.get("difficult_terrain_extra_ft", 0)
+        if "space_segments" in facts:
+            from .spaces import slice_segments, validate_segments
+
+            segments = validate_segments(facts["space_segments"], facts["distance_ft"])
+            total_terrain = sum(s["distance_ft"] for s in segments if s["difficult_terrain"])
+            derived_terrain = sum(s["distance_ft"] for s in slice_segments(segments, 0, offset)
+                                  if s["difficult_terrain"])
+            if "difficult_terrain_extra_ft" in boundary and terrain != derived_terrain:
+                raise engine.CombatEngineError("boundary terrain disagrees with reviewed segments")
+            terrain = derived_terrain
         if (
-            facts.get("difficult_terrain_extra_ft", 0)
+            total_terrain and "space_segments" not in facts
             and "difficult_terrain_extra_ft" not in boundary
         ):
             raise engine.NeedsRulingError(
@@ -135,7 +157,7 @@ def agent_reaction_windows(encounter, mover, facts):
             or not isinstance(terrain, int)
             or terrain < 0
             or terrain % 5
-            or terrain > facts.get("difficult_terrain_extra_ft", 0)
+            or terrain > total_terrain
             or terrain > offset
         ):
             raise engine.CombatEngineError("invalid movement boundary terrain cost")
@@ -338,6 +360,20 @@ def start_movement(encounter, actor_id, distance, *, _ignored=(), **request):
         remaining.update(destination=as_positions(points)[-1], path=as_positions(remainder_points))
     else:
         facts = deepcopy(request["spatial_facts"])
+        if "space_segments" in facts:
+            from .spaces import slice_segments
+
+            # Segment facts own the terrain total at every boundary, including
+            # boundaries whose optional legacy scalar was not supplied.
+            facts["difficult_terrain_extra_ft"] = sum(
+                s["distance_ft"] for s in facts["space_segments"] if s["difficult_terrain"]
+            )
+            for boundary_fact in facts["opportunity_attack_boundaries"]:
+                boundary_fact["difficult_terrain_extra_ft"] = sum(
+                    s["distance_ft"] for s in slice_segments(
+                        facts["space_segments"], 0, boundary_fact["distance_ft"],
+                    ) if s["difficult_terrain"]
+                )
         terrain = window["movement_terrain_extra_ft"]
         prefix["spatial_facts"] = {
             **facts,
@@ -362,6 +398,15 @@ def start_movement(encounter, actor_id, distance, *, _ignored=(), **request):
             "opportunity_attack_actor_ids": sorted({b["actor_id"] for b in rest_boundaries}),
             "opportunity_attack_boundaries": rest_boundaries,
         }
+        if "space_segments" in facts:
+            from .spaces import slice_segments
+
+            prefix["spatial_facts"]["space_segments"] = slice_segments(
+                facts["space_segments"], 0, offset,
+            )
+            remaining["spatial_facts"]["space_segments"] = slice_segments(
+                facts["space_segments"], offset, distance,
+            )
     paused = engine._spend_movement_uninterrupted(
         encounter, actor_id, offset, _intermediate_destination=True, **prefix
     )

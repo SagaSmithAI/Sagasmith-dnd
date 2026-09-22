@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.88.0"
+CORE_RULE_PACK_VERSION = "1.89.0"
 
 
 @dataclass(frozen=True)
@@ -168,6 +168,13 @@ _2024_BOUNDARY_CITATIONS = {
 
 
 BOUNDARIES = (
+    CoreBoundary(
+        "dnd5e.core.movement.creature_spaces",
+        ("2014",),
+        "spaces.grid_route|spaces.agent_route|spaces.squeezing",
+        ("tests/test_spaces.py",),
+        "bundled:srd2014/06_Gameplay/Order_of_Combat.md",
+    ),
     CoreBoundary(
         "dnd5e.core.environment.suffocation",
         ("2014",),

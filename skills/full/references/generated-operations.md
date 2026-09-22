@@ -706,6 +706,14 @@ reaction timing: when threats exist, opportunity_attack_boundaries lists
 {actor_id, distance_ft, weapon_ids, difficult_terrain_extra_ft?} for each
 reach exit. Distances and terrain costs are measured from this move's
 origin. Movement pauses there and resumes after reactions settle.
+For 2014 agent movement, space_segments must cover the entire distance:
+[{distance_ft,occupant_ids,passage_width_ft,difficult_terrain}]. Name the
+actual current occupants; null width explicitly means open space. Use
+positive five-foot segment lengths and boolean difficult_terrain. The
+engine derives size eligibility, occupied terrain, and squeezing cost;
+do not supply computed modifiers. End a willing move in an empty space.
+Grid mode derives these facts from current footprints and reviewed map
+cells; a map boundary alone never implies a narrow physical passage.
 Do not invent
 grid coordinates when the encounter uses Agent positioning. stand uses {}.
 
@@ -825,6 +833,9 @@ positioning_mode="agent" uses explicit DM spatial decisions without a
 fabricated grid; grid mode requires an actual map or declared override.
 participant_config supplies encounter facts, not replacement hp/max_hp.
 Initiative ties may require corrected tie_breaker values before startup.
+In 2014 agent positioning, participant_config.passage_width_ft records
+the actual initial passage width (null means open space); the engine
+derives squeezing from the actor's effective size. Grid uses its map.
 Reuse returned combat state/revisions; execute actors in returned turn order.
 
 Phases: play

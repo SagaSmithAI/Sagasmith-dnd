@@ -1437,6 +1437,12 @@ def test_agent_positioned_movement_consumes_distance_and_opportunity_facts() -> 
         "enters_turn_source_30_ft": False,
         "moves_closer_to_visible_fear_source": False,
         "opportunity_attack_actor_ids": ["threat"],
+        "space_segments": [
+            {"distance_ft": 5, "occupant_ids": [], "passage_width_ft": None,
+             "difficult_terrain": False},
+            {"distance_ft": 5, "occupant_ids": [], "passage_width_ft": None,
+             "difficult_terrain": True},
+        ],
     }
     with pytest.raises(NeedsRulingError, match="distance and weapon"):
         spend_movement(encounter, "mover", 10, spatial_facts=facts)
@@ -7167,6 +7173,8 @@ def test_orc_aggressive_agent_positioning_requires_a_toward_decision() -> None:
         "distance_ft": 20,
         "difficult_terrain_extra_ft": 0,
         "moves_toward_aggressive_target": False,
+        "space_segments": [{"distance_ft": 20, "occupant_ids": [], "passage_width_ft": None,
+                            "difficult_terrain": False}],
     }
 
     with pytest.raises(CombatEngineError, match="must move toward"):
@@ -7517,7 +7525,7 @@ def test_grid_movement_opens_opportunity_window_only_when_leaving_hostile_reach(
     mover = _actor("mover")
     mover.update(initiative=20, position={"x": 0, "y": 0}, disposition="friendly")
     threat = _actor("threat")
-    threat.update(initiative=10, position={"x": 1, "y": 0}, disposition="hostile", reach_ft=5)
+    threat.update(initiative=10, position={"x": 1, "y": 1}, disposition="hostile", reach_ft=5)
     encounter = _grid_encounter([mover, threat])
 
     moved = spend_movement(encounter, "mover", 15, destination={"x": 3, "y": 0})
@@ -7534,7 +7542,7 @@ def test_opportunity_windows_follow_each_weapon_reach_for_whole_or_segmented_pat
     mover = _actor("mover")
     mover.update(initiative=20, position={"x": 0, "y": 0}, disposition="friendly")
     threat = _actor("threat")
-    threat.update(initiative=10, position={"x": 1, "y": 0}, disposition="hostile")
+    threat.update(initiative=10, position={"x": 1, "y": 1}, disposition="hostile")
     threat["derived"]["inventory"]["weapon_attacks"] = [
         {
             "item_id": "reach-weapon",
@@ -7748,7 +7756,7 @@ def test_hidden_mover_does_not_automatically_reveal_itself_with_a_reaction_windo
         hidden=True,
     )
     threat = _actor("threat")
-    threat.update(initiative=10, position={"x": 1, "y": 0}, disposition="hostile")
+    threat.update(initiative=10, position={"x": 1, "y": 1}, disposition="hostile")
     encounter = _grid_encounter([mover, threat])
     moved = spend_movement(encounter, "mover", 15, destination={"x": 3, "y": 0})
     assert available_reactions(moved, "threat") == []
@@ -7787,7 +7795,7 @@ def test_recorded_visibility_can_open_reaction_window_for_invisible_mover() -> N
         visible_to_actor_ids=["threat"],
     )
     threat = _actor("threat")
-    threat.update(initiative=10, position={"x": 1, "y": 0}, disposition="hostile")
+    threat.update(initiative=10, position={"x": 1, "y": 1}, disposition="hostile")
     encounter = _grid_encounter([mover, threat])
     moved = spend_movement(encounter, "mover", 15, destination={"x": 3, "y": 0})
     assert available_reactions(moved, "threat")[0]["target_id"] == "mover"

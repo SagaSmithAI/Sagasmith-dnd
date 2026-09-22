@@ -129,6 +129,9 @@ def test_medicine_stabilization_pays_action_and_commits_target_atomically(
                     {"destination": {"x": 0, "y": 2}} if positioning_mode == "grid" else
                     {"spatial_facts": {"decision_id": "move-away", "reason": "Walk away",
                                        "distance_ft": 10, "destination_legal": True,
+                                       "space_segments": [{"distance_ft": 10,
+                                           "occupant_ids": [], "passage_width_ft": None,
+                                           "difficult_terrain": False}],
                                        "opportunity_attack_actor_ids": []}}
                 )},
                 "expected_revision": started["campaign_revision"],
@@ -182,6 +185,9 @@ def test_medicine_stabilization_pays_action_and_commits_target_atomically(
                     {"destination": {"x": 0, "y": 0}} if positioning_mode == "grid" else
                     {"spatial_facts": {"decision_id": "move-back", "reason": "Return to patient",
                                        "distance_ft": 10, "destination_legal": True,
+                                       "space_segments": [{"distance_ft": 10,
+                                           "occupant_ids": [], "passage_width_ft": None,
+                                           "difficult_terrain": False}],
                                        "opportunity_attack_actor_ids": []}}
                 )},
                 "expected_revision": after_far_attempt["revision"],

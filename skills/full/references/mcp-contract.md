@@ -1620,16 +1620,32 @@ continuation retains source identity and payment through each reach boundary,
 and later semantic steps wait until the complete movement settles. Source
 eligibility and any optional player choice must precede the selected response.
 In agent mode, movement has
-no destination coordinates and requires exactly `decision_id`, `reason`,
+no destination coordinates and accepts `decision_id`, `reason`,
 `destination_legal`, `distance_ft`, `difficult_terrain_extra_ft`,
 `moves_farther_from_turn_source`, `enters_turn_source_30_ft`,
 `moves_closer_to_visible_fear_source`, and
 `opportunity_attack_actor_ids` in `spatial_facts`.
 When the threat list is nonempty, `opportunity_attack_boundaries` must bind each
 reach exit to `actor_id`, `distance_ft` from the declared move's origin and
-`weapon_ids`; include the prefix's `difficult_terrain_extra_ft` when terrain adds
-cost. Missing boundaries return a no-write `pending_ruling`. Grid mode derives
+`weapon_ids`; in 2024 include the prefix's `difficult_terrain_extra_ft` when terrain
+adds cost. In 2014 terrain prefixes are derived from `space_segments`. Missing
+boundaries return a no-write `pending_ruling`. Grid mode derives
 these boundaries from the path and current weapon reaches.
+
+2014 agent movement also requires `space_segments` covering the entire declared
+distance. Each segment has exactly `{distance_ft, occupant_ids, passage_width_ft,
+difficult_terrain}`: a positive five-foot length, unique current actor IDs,
+a positive passage width or explicit `null` for open space, and a boolean ground
+terrain fact. An optional legacy terrain total must agree with these segments.
+Runtime binds all current actor sizes under CAS and derives hostile traversal
+eligibility, occupied difficult terrain, and squeezing costs. Occupied and ground
+difficult terrain do not stack; squeezing adds its separate extra cost. A willing
+move cannot end in an occupied footprint. Grid uses all current occupied cells,
+including Large and larger footprints. Only actual obstacles establish a narrow
+passage, never a cropped map edge. Initial agent passage widths are recorded via
+`participant_config.passage_width_ft` in `combat_start`/`combat_join`. Persisted
+squeezing affects all structured attacks and Dexterity saves through shared Core
+resolution; explicit widths are geometry facts, not caller-supplied modifiers.
 
 Movement commits only as far as the next reaction and stores a durable
 `movement_continuation`. The reaction, nested damage/defense choices and the

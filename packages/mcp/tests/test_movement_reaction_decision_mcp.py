@@ -93,6 +93,10 @@ def test_movement_requires_explicit_reaction_assessment(tmp_path, provokes):
                 "reason": "The actor moves away; reaction eligibility is explicitly assessed.",
                 "destination_legal": True,
                 "distance_ft": 5,
+                "space_segments": [{
+                    "distance_ft": 5, "occupant_ids": [], "passage_width_ft": None,
+                    "difficult_terrain": False,
+                }],
             }
             arguments = {
                 "campaign_id": campaign["id"],
