@@ -42,6 +42,13 @@ _release = _payload(
 )
 
 ACTION_PAYLOADS: dict[str, dict[str, type[Payload]]] = {
+    "environment_change": {
+        "water": _payload(
+            "WaterEnvironment", source_ref=(dict[str, Any], ...), source_excerpt=(str, ...),
+            reason=(str, ...), actors=(list[dict[str, Any]], []),
+            objects=(list[dict[str, Any]], []),
+        ),
+    },
     "character_check": {
         "working_together": _payload(
             "WorkingTogetherCheck", actor_ids=(list[Identifier], ...), ability=(str, ...),

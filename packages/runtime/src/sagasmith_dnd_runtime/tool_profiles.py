@@ -54,6 +54,7 @@ module_query module_search module_expand continuity_context memory_change campai
 combat_start combat_query combat_resolve_attack combat_cast_spell combat_movement
 combat_choice combat_end_turn combat_end combat_common_action combat_use_activity
 combat_check character_state_change rule_search rule_expand skill_query
+environment_change
 """.split())
 
 HOST_PRIVATE_TOOLS = frozenset({"npc_conversation_transport"})
@@ -66,7 +67,7 @@ def _names(value: str) -> frozenset[str]:
 PHASE_TOOLS = {
     PROFILE_LOBBY: _names(
         """
-        access_grant access_revoke actor_knowledge_change actor_knowledge_query
+        environment_change access_grant access_revoke actor_knowledge_change actor_knowledge_query
         addon_actor_instantiate bounded_evaluation branch_change branch_query campaign_change
         campaign_create
         campaign_event campaign_rules character_ability_apply character_action
@@ -81,7 +82,7 @@ PHASE_TOOLS = {
     ),
     PROFILE_PLAY: _names(
         """
-        access_grant access_revoke actor_knowledge_change actor_knowledge_query
+        environment_change access_grant access_revoke actor_knowledge_change actor_knowledge_query
         addon_actor_instantiate bounded_evaluation
         branch_query campaign_change campaign_event campaign_rules character_action
         character_check character_content_apply character_metadata_update
@@ -95,7 +96,8 @@ PHASE_TOOLS = {
     ),
     PROFILE_COMBAT: _names(
         """
-        access_grant access_revoke actor_knowledge_query addon_actor_instantiate bounded_evaluation
+        environment_change access_grant access_revoke actor_knowledge_query addon_actor_instantiate
+        bounded_evaluation
         branch_change branch_query
         campaign_rules character_query character_state_change
         combat_cast_spell combat_check combat_choice
@@ -115,7 +117,8 @@ PHASE_TOOLS = {
 PHASE_DM_TOOLS = {
     PROFILE_LOBBY: _names(
         """
-        access_grant access_revoke actor_knowledge_change addon_actor_instantiate branch_change
+        environment_change access_grant access_revoke actor_knowledge_change addon_actor_instantiate
+        branch_change
         branch_query campaign_change campaign_event campaign_rules content_pack content_solution
         memory_change
         memory_query module_draft module_expand module_query module_search module_set_progress
@@ -125,7 +128,7 @@ PHASE_DM_TOOLS = {
     ),
     PROFILE_PLAY: _names(
         """
-        access_grant access_revoke actor_knowledge_change addon_actor_instantiate
+        environment_change access_grant access_revoke actor_knowledge_change addon_actor_instantiate
         campaign_change campaign_event
         campaign_rules character_content_apply chase
         combat_start content_pack content_solution memory_change memory_query module_set_progress
@@ -135,7 +138,8 @@ PHASE_DM_TOOLS = {
     ),
     PROFILE_COMBAT: _names(
         """
-        access_grant access_revoke addon_actor_instantiate branch_change campaign_rules combat_end
+        environment_change access_grant access_revoke addon_actor_instantiate branch_change
+        campaign_rules combat_end
         combat_join combat_map_patch
         content_pack content_solution module_expand combat_resolve_hide playthrough_manifest
         snapshot_create snapshot_query

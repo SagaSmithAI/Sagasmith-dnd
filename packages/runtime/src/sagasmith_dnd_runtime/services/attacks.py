@@ -598,6 +598,8 @@ class AttacksService:
         close_threat_actor_ids, helper_actor_ids, target_adjacent_ally_actor_ids,
         cleave_secondary_eligible. Ground them in the current scene, never invent
         coordinates to bypass a missing spatial decision. Grid mode uses its map.
+        Underwater ranged weapon attacks require an explicit long_range boolean;
+        true automatically misses, while false still applies weapon exceptions.
         """
         return self._settle_combat_attack(
             campaign_id=campaign_id,
@@ -2503,7 +2505,13 @@ class AttacksService:
         attack_ruling: dict[str, Any] | None = None,
         sunlight: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Attack a source-defined destructible scene object outside combat."""
+        """Attack a source-defined destructible scene object outside combat.
+
+        Underwater ranged attacks require attack_ruling={reason,source_excerpt,
+        long_range:bool}, reviewed by the DM against the exact module source.
+        long_range means beyond this weapon's normal range and automatically
+        misses underwater. No coordinates are inferred from the source.
+        """
         from sagasmith_dnd.objects import object_attack_plan, resolve_object_attack
 
         from .source_objects import approved_attack_context, approved_profile, project_response
@@ -2632,18 +2640,24 @@ class AttacksService:
             },
             branch_id=resolved_branch_id,
         )
+        effective_profile = _support.deepcopy(profile)
+        if "water_environment" in existing:
+            effective_profile["fully_immersed"] = existing["water_environment"]["fully_immersed"]
         plan = object_attack_plan(
             attacker,
-            profile,
+            effective_profile,
             weapon_id=weapon_id,
             advantage=advantage,
             disadvantage=disadvantage,
             rules=rules,
+            reviewed_long_range=(
+                context_approval["ruling"].get("long_range") if context_approval else None
+            ),
         )
         attack_roll = _support.roll_attack_action(plan=plan)
         updated_attacker, settled = resolve_object_attack(
             attacker,
-            profile,
+            effective_profile,
             hit_points_before,
             plan=plan,
             attack=attack_roll,
@@ -2667,6 +2681,10 @@ class AttacksService:
         )
         object_after = {
             **immutable,
+            **({"fully_immersed": effective_profile["fully_immersed"]}
+               if "fully_immersed" in effective_profile else {}),
+            **({"water_environment": existing["water_environment"]}
+               if "water_environment" in existing else {}),
             "hit_points": hit_points_after,
             "destroyed": hit_points_after <= 0,
             "last_attack": {

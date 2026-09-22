@@ -2795,9 +2795,17 @@ def validate_character_sheet(
             "wounded",
             "rest_history",
             "short_rest_hit_dice",
+            "water_environment",
         },
     )
     hp = _object(combat["hp"], "sheet.combat.hp")
+    water_environment = None
+    if "water_environment" in combat:
+        from .water import validate_water_state
+
+        if edition != "2014":
+            raise ValueError("water_environment requires reviewed 2014 rules")
+        water_environment = validate_water_state(combat["water_environment"])
     _reject_unknown(hp, "sheet.combat.hp", {"value", "max", "temp"})
     hp_max = _integer(hp["max"], "sheet.combat.hp.max", minimum=1)
     hp_value = _integer(hp["value"], "sheet.combat.hp.value", minimum=0)
@@ -3835,6 +3843,7 @@ def validate_character_sheet(
             "inspiration": _boolean(combat["inspiration"], "sheet.combat.inspiration"),
             "wounded": _boolean(combat["wounded"], "sheet.combat.wounded"),
             "rest_history": normalized_rest_history,
+            **({"water_environment": water_environment} if water_environment is not None else {}),
             **(
                 {"short_rest_hit_dice": normalized_short_rest_hit_dice}
                 if normalized_short_rest_hit_dice is not None
@@ -4931,6 +4940,9 @@ def _weapon_attacks(
                 "official_item": official_item,
                 "materialized_item_hash": materialized_item_hash,
                 "source_key": item.get("source_key", ""),
+                **({"base_weapon_source": copy.deepcopy(
+                    dict(selection.get("selection") or {}).get("base_weapon_source")
+                )} if has_official_contract and official_binding_valid and selection else {}),
                 "attunement": item.get("attunement", "none"),
             }
         )

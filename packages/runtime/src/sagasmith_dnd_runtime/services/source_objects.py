@@ -174,7 +174,17 @@ def approved_attack_context(
         raise ValueError("object attack advantage and disadvantage must be booleans")
     if not advantage and not disadvantage and ruling is None:
         return None
-    review = _review(services, campaign_id, principal_id, ruling, expanded, "object attack context")
+    range_value = None
+    if isinstance(ruling, dict) and "long_range" in ruling:
+        ruling = deepcopy(ruling)
+        range_value = ruling.pop("long_range")
+        if type(range_value) is not bool:
+            raise ValueError("object attack long_range must be a boolean")
+    review = dict(_review(
+        services, campaign_id, principal_id, ruling, expanded, "object attack context",
+    ))
+    if range_value is not None:
+        review["long_range"] = range_value
     return support.sign_receipt(
         {
             "purpose": "source_object_attack_context",

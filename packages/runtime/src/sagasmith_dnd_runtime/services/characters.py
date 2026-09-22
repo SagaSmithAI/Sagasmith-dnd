@@ -888,6 +888,8 @@ class CharactersService:
         candidate_combat = dict(candidate_sheet.get("combat") or {})
         candidate_has_window = "short_rest_hit_dice" in candidate_combat
         current_combat = dict(current_sheet.get("combat") or {}) if current_sheet else {}
+        if candidate_combat.get("water_environment") != current_combat.get("water_environment"):
+            raise ValueError("water_environment is engine-owned; use environment_change")
         pending_hp = "preclass_constitution_hp_adjustment"
         if not allow_preclass_hp_change and (
             (pending_hp in candidate_combat) != (pending_hp in current_combat)
@@ -3985,7 +3987,11 @@ class CharactersService:
             response_extra={"result": result},
             rule_receipts=_support.core_receipts(
                 self.effective_rule_context(current.campaign_id),
-                ["dnd5e.core.damage.zero_hp"] if int(applied["after_hp"]) == 0 else [],
+                [
+                    *(["dnd5e.core.damage.zero_hp"] if int(applied["after_hp"]) == 0 else []),
+                    *(["dnd5e.core.combat.underwater"]
+                      if "environment_receipts" in applied else []),
+                ],
                 "damage.apply",
             ),
         )
@@ -7258,7 +7264,11 @@ boundary.
         material, size, resilience, defenses, threshold and applicability cannot
         be replaced. Huge objects use separately identified Large-or-smaller
         sections. Poison/psychic immunity is automatic. Advantage/disadvantage
-        require a fresh DM attack_ruling={reason,source_excerpt}. Reuse the
+        require a fresh DM attack_ruling={reason,source_excerpt}. Underwater
+        ranged attacks also require long_range:bool in that ruling; beyond the
+        weapon's normal range they automatically miss. Object profiles may
+        declare fully_immersed; later water transitions use environment_change.
+        Reuse the
         idempotency key on retries; a new attack requires a new key.
         """
         data = self.facade_payload(payload)

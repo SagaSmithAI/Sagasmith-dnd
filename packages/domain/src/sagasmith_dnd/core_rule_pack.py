@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.87.0"
+CORE_RULE_PACK_VERSION = "1.88.0"
 
 
 @dataclass(frozen=True)
@@ -455,6 +455,13 @@ BOUNDARIES = (
         "working_together.resolve_working_together",
         ("tests/test_working_together.py",),
         "bundled:srd2014/06_Gameplay/Using_Ability_Scores.md#working-together",
+    ),
+    CoreBoundary(
+        "dnd5e.core.combat.underwater",
+        ("2014",),
+        "water.underwater_weapon_rule|combat_engine._adjust_damage_amount|objects.apply_object_damage",
+        ("tests/test_underwater.py",),
+        "bundled:srd2014/06_Gameplay/Order_of_Combat.md#underwater-combat",
     ),
     CoreBoundary(
         "dnd5e.core.weapon.reach",

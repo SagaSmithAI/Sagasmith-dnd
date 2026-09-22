@@ -355,6 +355,12 @@ class LocalSession:
         ))}
         if arguments.get("owner") == "character":
             selected.add(arguments.get("owner_id"))
+        for identifier in values.get("actor_ids", []) or []:
+            if isinstance(identifier, str):
+                selected.add(identifier)
+        for actor in values.get("actors", []) or []:
+            if isinstance(actor, dict) and isinstance(actor.get("actor_id"), str):
+                selected.add(actor["actor_id"])
         actors = self.services.characters.list(
             campaign_id=campaign_id, character_ids=[key for key in selected if key in revisions],
         )

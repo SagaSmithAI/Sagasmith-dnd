@@ -3159,7 +3159,7 @@
     }
   },
   {
-    "description": "Commit one noncombat spell cast, activity, or source-defined object attack.\n\nattack_source_object requires weapon_id, reason, source_ref, object,\nexpected_campaign_revision and the actor expected_revision. First use\nrequires DM-reviewed object statistics and object_ruling={reason,\nsource_excerpt}; Runtime signs and persists the exact approved profile.\nLater attacks may reference object={id,scene_id}. AC, original HP,\nmaterial, size, resilience, defenses, threshold and applicability cannot\nbe replaced. Huge objects use separately identified Large-or-smaller\nsections. Poison/psychic immunity is automatic. Advantage/disadvantage\nrequire a fresh DM attack_ruling={reason,source_excerpt}. Reuse the\nidempotency key on retries; a new attack requires a new key.",
+    "description": "Commit one noncombat spell cast, activity, or source-defined object attack.\n\nattack_source_object requires weapon_id, reason, source_ref, object,\nexpected_campaign_revision and the actor expected_revision. First use\nrequires DM-reviewed object statistics and object_ruling={reason,\nsource_excerpt}; Runtime signs and persists the exact approved profile.\nLater attacks may reference object={id,scene_id}. AC, original HP,\nmaterial, size, resilience, defenses, threshold and applicability cannot\nbe replaced. Huge objects use separately identified Large-or-smaller\nsections. Poison/psychic immunity is automatic. Advantage/disadvantage\nrequire a fresh DM attack_ruling={reason,source_excerpt}. Underwater\nranged attacks also require long_range:bool in that ruling; beyond the\nweapon's normal range they automatically miss. Object profiles may\ndeclare fully_immersed; later water transitions use environment_change.\nReuse the\nidempotency key on retries; a new attack requires a new key.",
     "error_envelope": {
       "fields": [
         "code",
@@ -10992,7 +10992,7 @@
     }
   },
   {
-    "description": "Resolve one attack and atomically update actors and encounter.\n\nUse the active actor and campaign revision from the latest receipt, plus\nidempotency_key. action={weapon_id, context?}; use an owned weapon ID.\nAgent positioning requires action.context.spatial_facts={decision_id,\nreason, targetable, in_range, cover_degree, attacker_can_see_target,\ntarget_can_see_attacker}. Flags are booleans; cover_degree is none/half/\nthree_quarters/total. Optional facts: long_range, target_within_5_ft,\nclose_threat_actor_ids, helper_actor_ids, target_adjacent_ally_actor_ids,\ncleave_secondary_eligible. Ground them in the current scene, never invent\ncoordinates to bypass a missing spatial decision. Grid mode uses its map.",
+    "description": "Resolve one attack and atomically update actors and encounter.\n\nUse the active actor and campaign revision from the latest receipt, plus\nidempotency_key. action={weapon_id, context?}; use an owned weapon ID.\nAgent positioning requires action.context.spatial_facts={decision_id,\nreason, targetable, in_range, cover_degree, attacker_can_see_target,\ntarget_can_see_attacker}. Flags are booleans; cover_degree is none/half/\nthree_quarters/total. Optional facts: long_range, target_within_5_ft,\nclose_threat_actor_ids, helper_actor_ids, target_adjacent_ally_actor_ids,\ncleave_secondary_eligible. Ground them in the current scene, never invent\ncoordinates to bypass a missing spatial decision. Grid mode uses its map.\nUnderwater ranged weapon attacks require an explicit long_range boolean;\ntrue automatically misses, while false still applies weapon exceptions.",
     "error_envelope": {
       "fields": [
         "code",
@@ -13946,6 +13946,299 @@
       "combat": [],
       "lobby": [],
       "play": []
+    }
+  },
+  {
+    "description": "Record a DM-reviewed 2014 water transition without moving an actor.\n\npayload={source_ref,source_excerpt,reason,actors?:[{actor_id,underwater,\nfully_immersed}],objects?:[{scene_id,object_id,fully_immersed}]}.\nCopy the exact active module source. All booleans are explicit; fully\nimmersed actors must be underwater. Objects require a reviewed profile;\nan initial source-object profile may also declare fully_immersed.\nThis records environmental facts only. Set breathing separately from\nthe actor's real ability to breathe; immersion alone does not decide it.\nUse this operation on entering/leaving water, including during combat.\nPending combat choices must finish before changing their environment.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
+    "id": "environment_change",
+    "idempotent": true,
+    "input_schema": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "water"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "additionalProperties": false,
+                "properties": {
+                  "actors": {
+                    "default": [],
+                    "items": {
+                      "additionalProperties": true,
+                      "type": "object"
+                    },
+                    "title": "Actors",
+                    "type": "array"
+                  },
+                  "objects": {
+                    "default": [],
+                    "items": {
+                      "additionalProperties": true,
+                      "type": "object"
+                    },
+                    "title": "Objects",
+                    "type": "array"
+                  },
+                  "reason": {
+                    "title": "Reason",
+                    "type": "string"
+                  },
+                  "source_excerpt": {
+                    "title": "Source Excerpt",
+                    "type": "string"
+                  },
+                  "source_ref": {
+                    "additionalProperties": true,
+                    "title": "Source Ref",
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "source_ref",
+                  "source_excerpt",
+                  "reason"
+                ],
+                "title": "WaterEnvironment",
+                "type": "object"
+              }
+            },
+            "required": [
+              "payload"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "action": {
+          "const": "water",
+          "default": "water",
+          "description": "Exact operation supported by this facade.",
+          "maxLength": 256,
+          "title": "Action",
+          "type": "string"
+        },
+        "branch_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Authoritative timeline branch identifier.",
+          "maxLength": 256,
+          "title": "Branch Id"
+        },
+        "campaign_id": {
+          "description": "Authoritative campaign identifier.",
+          "maxLength": 256,
+          "title": "Campaign Id",
+          "type": "string"
+        },
+        "expected_revision": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Authority revision guard used to reject stale mutations.",
+          "title": "Expected Revision"
+        },
+        "idempotency_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Stable business-operation key reused unchanged across retries.",
+          "maxLength": 256,
+          "title": "Idempotency Key"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "description": "Operation-specific bounded JSON object described by the selected action.",
+          "title": "Payload",
+          "type": "object"
+        },
+        "principal_id": {
+          "default": "system:local",
+          "description": "Caller hint overwritten by process binding or signed Host delegation.",
+          "maxLength": 256,
+          "title": "Principal Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "campaign_id",
+        "payload"
+      ],
+      "title": "environment_changeInput",
+      "type": "object"
+    },
+    "output_schema": {
+      "additionalProperties": true,
+      "description": "Structured authoritative result for environment_change.",
+      "properties": {
+        "action": {
+          "description": "Authoritative action returned by environment_change.",
+          "type": "string"
+        },
+        "branch_id": {
+          "description": "Authoritative branch id returned by environment_change.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "campaign_id": {
+          "description": "Authoritative campaign id returned by environment_change.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "campaign_revision": {
+          "description": "Authoritative campaign revision returned by environment_change.",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "character_revision": {
+          "description": "Authoritative character revision returned by environment_change.",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "error": {
+          "additionalProperties": false,
+          "description": "Authoritative error returned by environment_change.",
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "recovery": {
+              "type": [
+                "string",
+                "object"
+              ]
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable",
+            "recovery"
+          ],
+          "type": "object"
+        },
+        "event_sequence": {
+          "description": "Authoritative event sequence returned by environment_change.",
+          "type": "integer"
+        },
+        "has_more": {
+          "description": "Authoritative has more returned by environment_change.",
+          "type": "boolean"
+        },
+        "host_context_binding": {
+          "description": "Authoritative host context binding returned by environment_change.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "idempotent_replay": {
+          "description": "Authoritative idempotent replay returned by environment_change.",
+          "type": "boolean"
+        },
+        "next_cursor": {
+          "description": "Authoritative next cursor returned by environment_change.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "random_stream_receipt": {
+          "description": "Authoritative random stream receipt returned by environment_change.",
+          "type": "object"
+        },
+        "resolution_id": {
+          "description": "Authoritative resolution id returned by environment_change.",
+          "type": "string"
+        },
+        "status": {
+          "description": "Authoritative status returned by environment_change.",
+          "type": "string"
+        },
+        "thread_id": {
+          "description": "Authoritative thread id returned by environment_change.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "phases": [
+      "combat",
+      "lobby",
+      "play"
+    ],
+    "read_only": false,
+    "requires_campaign": true,
+    "revision_fields": [
+      "expected_revision"
+    ],
+    "roles": {
+      "combat": [
+        "dm",
+        "owner"
+      ],
+      "lobby": [
+        "dm",
+        "owner"
+      ],
+      "play": [
+        "dm",
+        "owner"
+      ]
     }
   },
   {

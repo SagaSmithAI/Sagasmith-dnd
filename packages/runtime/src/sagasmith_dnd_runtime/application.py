@@ -2005,6 +2005,9 @@ def _create_application(config: McpConfig | None = None, *, resources) -> DndRun
     _services.campaign_change = _services.public_tool()(
         _services.bind("campaign_change", "campaign_change")
     )
+    _services.environment_change = _services.public_tool()(
+        _services.bind("environment_change", "environment_change")
+    )
 
     _services.playthrough_runtime_projection = _services.bind(
         "playthrough_runtime_projection", "playthrough_runtime_projection"

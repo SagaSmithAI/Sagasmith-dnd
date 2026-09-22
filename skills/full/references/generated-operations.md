@@ -57,6 +57,7 @@ idempotency key when recovering an unknown dispatch. Never retry with a new key.
 | `dnd_ability_roll` | lobby, play | expected_campaign_revision | True |
 | `dnd_check` | combat, play | expected_campaign_revision | True |
 | `dnd_dice_roll` | combat, lobby, play | expected_campaign_revision | True |
+| `environment_change` | combat, lobby, play | expected_revision | True |
 | `game_phase` | lobby, play, combat | expected_revision | True |
 | `inventory_change` | lobby, play | expected_revision | True |
 | `inventory_transfer` | lobby, play | — | True |
@@ -311,7 +312,11 @@ Later attacks may reference object={id,scene_id}. AC, original HP,
 material, size, resilience, defenses, threshold and applicability cannot
 be replaced. Huge objects use separately identified Large-or-smaller
 sections. Poison/psychic immunity is automatic. Advantage/disadvantage
-require a fresh DM attack_ruling={reason,source_excerpt}. Reuse the
+require a fresh DM attack_ruling={reason,source_excerpt}. Underwater
+ranged attacks also require long_range:bool in that ruling; beyond the
+weapon's normal range they automatically miss. Object profiles may
+declare fully_immersed; later water transitions use environment_change.
+Reuse the
 idempotency key on retries; a new attack requires a new key.
 
 Phases: lobby, play
@@ -785,6 +790,8 @@ three_quarters/total. Optional facts: long_range, target_within_5_ft,
 close_threat_actor_ids, helper_actor_ids, target_adjacent_ally_actor_ids,
 cleave_secondary_eligible. Ground them in the current scene, never invent
 coordinates to bypass a missing spatial decision. Grid mode uses its map.
+Underwater ranged weapon attacks require an explicit long_range boolean;
+true automatically misses, while false still applies weapon exceptions.
 
 Phases: combat
 
@@ -930,6 +937,28 @@ Exact input schema (copy field names and nesting):
 
 ```json
 {"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"expression":{"title":"Expression","type":"string","description":"Bounded expression value accepted by dnd_dice_roll."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"expected_campaign_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Campaign Revision","description":"Campaign revision guard used to reject stale mutations."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","expression"],"title":"dnd_dice_rollInput","type":"object"}
+```
+
+## environment_change
+
+Record a DM-reviewed 2014 water transition without moving an actor.
+
+payload={source_ref,source_excerpt,reason,actors?:[{actor_id,underwater,
+fully_immersed}],objects?:[{scene_id,object_id,fully_immersed}]}.
+Copy the exact active module source. All booleans are explicit; fully
+immersed actors must be underwater. Objects require a reviewed profile;
+an initial source-object profile may also declare fully_immersed.
+This records environmental facts only. Set breathing separately from
+the actor's real ability to breathe; immersion alone does not decide it.
+Use this operation on entering/leaving water, including during combat.
+Pending combat choices must finish before changing their environment.
+
+Phases: combat, lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"payload":{"additionalProperties":true,"title":"Payload","type":"object","description":"Operation-specific bounded JSON object described by the selected action."},"action":{"const":"water","default":"water","title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","payload"],"title":"environment_changeInput","type":"object","allOf":[{"if":{"properties":{"action":{"const":"water"}},"required":["action"]},"then":{"properties":{"payload":{"additionalProperties":false,"properties":{"source_ref":{"additionalProperties":true,"title":"Source Ref","type":"object"},"source_excerpt":{"title":"Source Excerpt","type":"string"},"reason":{"title":"Reason","type":"string"},"actors":{"default":[],"items":{"additionalProperties":true,"type":"object"},"title":"Actors","type":"array"},"objects":{"default":[],"items":{"additionalProperties":true,"type":"object"},"title":"Objects","type":"array"}},"required":["source_ref","source_excerpt","reason"],"title":"WaterEnvironment","type":"object"}},"required":["payload"]}}]}
 ```
 
 ## game_phase

@@ -34,6 +34,7 @@ PROFILE_FIELDS = frozenset(
         "damage_vulnerabilities",
         "damage_filter",
         "section_of",
+        "fully_immersed",
     }
 )
 
@@ -78,6 +79,10 @@ def validate_object_profile(value: Any) -> dict[str, Any]:
     result["armor_class"] = _integer(value.get("armor_class"), "armor_class", 1, 30)
     result["hit_points"] = _integer(value.get("hit_points"), "hit_points", 1)
     result["damage_threshold"] = _integer(value.get("damage_threshold", 0), "damage_threshold", 0)
+    if "fully_immersed" in value:
+        if type(value["fully_immersed"]) is not bool:
+            raise ValueError("object fully_immersed must be a boolean")
+        result["fully_immersed"] = value["fully_immersed"]
     for defense in ("immunities", "resistances", "vulnerabilities"):
         key = f"damage_{defense}"
         result[key] = _strings(value.get(key, []), key, set(DAMAGE_TYPES))
@@ -118,6 +123,7 @@ def object_attack_plan(
     advantage: bool = False,
     disadvantage: bool = False,
     rules: ResolutionContext | None = None,
+    reviewed_long_range: bool | None = None,
 ) -> dict[str, Any]:
     """Use only the shared attack preflight; the object never enters creature settlement."""
     profile = validate_object_profile(profile)
@@ -156,6 +162,7 @@ def object_attack_plan(
         },
         require_attack_action=False,
         rules=rules,
+        reviewed_object_long_range=reviewed_long_range,
     )
     unsupported = [
         key
@@ -240,7 +247,9 @@ def apply_object_damage(
                 or kind in damage_filter["allowed_damage_types"]
             )
         )
-        resistant = kind in profile["damage_resistances"]
+        resistant = kind in profile["damage_resistances"] or (
+            kind == "fire" and profile.get("fully_immersed", False)
+        )
         vulnerable = kind in profile["damage_vulnerabilities"]
         adjusted = 0 if immune or not applicable else (amount // 2 if resistant else amount)
         if vulnerable:
@@ -325,4 +334,8 @@ def resolve_object_attack(
         *plan.get("rule_receipts", []),
         *core_receipts(rules, [OBJECT_RULE], "object.attack.resolve"),
     ]
+    if profile.get("fully_immersed") and plan["damage_type"] == "fire" and attack["hit"]:
+        from .water import WATER_RULE
+
+        result["rule_receipts"].extend(core_receipts(rules, [WATER_RULE], "object.damage.fire"))
     return updated, result

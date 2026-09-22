@@ -5,6 +5,42 @@ requires implementation and applicable validation; pending items remain open.
 Host-managed local execution must preserve Runtime authority, real choices,
 source evidence, CAS, transactions and original-key replay.
 
+## #148 - source-correct 2014 underwater combat (local batch)
+
+`environment_change(action="water")` records explicit source-reviewed water
+facts for canonical actors and approved scene objects. It requires a DM, an
+exact active-module excerpt and reason, strict booleans, campaign/actor CAS,
+and an original-key receipt in the same transaction. Ordinary character
+creation/patching cannot forge this state. Pending combat choices must finish
+before their environment changes. Actor cards contain the public rule receipt;
+the original module excerpt stays in a DM-only resolution. Local Host fills
+metadata and returns all affected actor slices, including multiple actors.
+
+Shared weapon preflight uses the selected card's weapon type, bound SRD/base
+weapon source and effective swimming speed. It applies melee and ranged
+exceptions, ordinary advantage cancellation, and a no-dice automatic miss
+beyond normal range. The attempted attack still spends its action/ammunition.
+Agent geometry requires an explicit range classification. Source-object ranged
+attacks use a signed DM range ruling without invented coordinates. Spell
+attacks retain their separate rules. Fire resistance for fully immersed actors
+and objects uses the existing typed-damage ordering, once per damage type,
+after a successful save's reduction. It retains environmental provenance and
+source-boundary receipts. Object transitions preserve their signed original
+profiles while projecting the current immersion state. Dry and 2024 behavior
+remain separate; movement and breathing are not inferred from immersion.
+
+Validation: 2,065 Domain/Runtime cases passed, including 43 water mechanics
+cases. Seven public Runtime/MCP/Host cases passed with real temporary storage,
+real deterministic RNG, restart/replay, stale CAS, receipt rollback, invalid
+facts, source-object defenses and combat budget/ammunition spending. The broad
+MCP run passed 1,601 cases with 32 optional integrations skipped; its only three
+failures were catalog assertions still expecting 79 tools. Updating those to
+80 passed all 12 catalog/real-stdio protocol cases. Ruff, publisher consistency
+and whitespace checks passed. Core is 1.88.0, SRD 2014 is 1.42.0, SRD 2024 is
+1.12.0, standard 2014 is 1.14.0, and both presets are 2.10.0. These are local
+contract results, not live-model campaign acceptance. This commit stays on
+local main for the requested batch; the issue is not closed ahead of a push.
+
 ## #165 — source-correct 2014 Working Together (local batch)
 
 `character_check(action="working_together")` binds every participant to one

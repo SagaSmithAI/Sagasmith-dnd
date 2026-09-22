@@ -673,6 +673,24 @@ ordering and stop conditions in `references/CHAR_CREATION.md`.
 
 ## Combat boundary
 
+For 2014 water scenes, record entering, becoming fully immersed, and leaving
+with `environment_change(action="water")`. Supply the exact active-module
+`source_ref`, `source_excerpt`, DM `reason`, and explicit actor entries
+`{actor_id,underwater,fully_immersed}`. Reviewed objects use
+`{scene_id,object_id,fully_immersed}`. This is durable environment state;
+ordinary character edits cannot replace it. Finish pending combat choices first.
+The Host supplies revisions and returns the affected actor cards. Movement and
+breathing are separate facts: do not infer that a swimmer cannot breathe.
+
+Attack preflight reads the selected weapon and effective swimming speed. It
+applies the source-defined underwater exceptions and automatically misses a
+ranged weapon attack beyond normal range, without rolling; the attempted
+attack still spends its action/ammunition. In agent positioning, explicitly
+supply `spatial_facts.long_range` without inventing coordinates. An out-of-combat
+source-object attack needs a DM `attack_ruling` with the exact excerpt, reason,
+and `long_range` boolean. Fully immersed actors/objects receive fire resistance
+through the shared damage pipeline; do not halve damage a second time.
+
 Use `combat_preflight_attack` before every attack commit. The engine automatically
 settles initiative, turn resources, canonical weapon attack data, attack nat-1/
 nat-20, damage dice and typed trait ordering, temporary HP, concentration save

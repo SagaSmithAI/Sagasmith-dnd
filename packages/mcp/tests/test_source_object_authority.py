@@ -68,6 +68,7 @@ async def setup(
     local=False,
     ammunition=True,
     source_description=EXCERPT,
+    random_seed=None,
 ):
     world = World()
     world.config = McpConfig(
@@ -84,7 +85,8 @@ async def setup(
     world.runtime = create_runtime(world.config)
     try:
         campaign = await world.call(
-            "campaign_create", {"name": "Objects", "edition": "2014", "idempotency_key": "campaign"}
+            "campaign_create", {"name": "Objects", "edition": "2014", "idempotency_key": "campaign",
+                                **({"random_seed": random_seed} if random_seed else {})}
         )
         world.cid = campaign["id"]
         staged = await world.call(

@@ -2513,6 +2513,7 @@ def preflight_attack(
     allow_out_of_turn: bool = False,
     require_attack_action: bool = True,
     rules: ResolutionContext | None = None,
+    reviewed_object_long_range: bool | None = None,
 ) -> dict[str, Any]:
     """Validate an attack declaration without changing any state or rolling."""
     actor_sheet(attacker)
@@ -3034,9 +3035,28 @@ def preflight_attack(
         attack_mode=attack_mode,
         spatial_facts=spatial_facts,
     )
+    if reviewed_object_long_range is not None:
+        if target.get("kind") != "object" or type(reviewed_object_long_range) is not bool:
+            raise CombatEngineError("reviewed object range requires an object and a boolean")
+        if attack_mode != "ranged" and reviewed_object_long_range:
+            raise CombatEngineError("melee object attacks cannot use long range")
+        range_result = {
+            "enforced": True, "distance_ft": None,
+            "disadvantage": reviewed_object_long_range, "source": "reviewed_object_range",
+        }
     if range_result["disadvantage"]:
         context["disadvantage"] = True
         context.setdefault("disadvantage_sources", []).append("weapon_long_range")
+    from .water import WATER_RULE, underwater_weapon_rule
+
+    underwater = underwater_weapon_rule(
+        actor_sheet(attacker), weapon, attack_mode=attack_mode,
+        swim_speed=int(dict(actor_derived(attacker).get("speed") or {}).get("swim", 0)),
+        range_result=range_result,
+    )
+    if underwater and underwater["disadvantage"]:
+        context["disadvantage"] = True
+        context.setdefault("disadvantage_sources", []).append("underwater_weapon")
     close_combat_threat_ids: list[str] = []
     attacker_position = _position(attacker.get("position"))
     if attack_mode == "ranged" and spatial_facts is not None:
@@ -3340,6 +3360,8 @@ def preflight_attack(
         requested=bool(action.get("use_sneak_attack", False)),
     )
     core_boundary_ids: list[str] = []
+    if underwater:
+        core_boundary_ids.append(WATER_RULE)
     if sunlight is not None:
         core_boundary_ids.append(SUNLIGHT_MECHANIC)
     is_unarmed_strike = bool(
@@ -3375,6 +3397,7 @@ def preflight_attack(
         "status": "ready",
         "kind": "attack",
         "attacker_id": actor_id(attacker),
+        "underwater": underwater,
         "target_id": actor_id(target),
         "attack_ability": attack_ability,
         "attack_ability_modifier": modifier,
@@ -3504,6 +3527,7 @@ def preflight_spell_attack(
     synthetic_id = f"spell-attack:{spell_id}"
     synthetic = {
         "item_id": synthetic_id,
+        "spell_attack": True,
         "magical": True,
         "name": str(spell.get("name") or spell_id),
         "attack_type": attack_mode,
@@ -3564,14 +3588,23 @@ def roll_attack_action(
     rng: Any = None,
 ) -> dict[str, Any]:
     """Roll one prepared attack without rolling damage or changing actor state."""
-    attack = resolve_attack(
-        armor_class=int(plan["target_ac"]),
-        attack_bonus=int(plan["attack_bonus"]),
-        advantage=bool(plan.get("advantage")),
-        disadvantage=bool(plan.get("disadvantage")),
-        reroll_ones=bool(plan.get("halfling_lucky")),
-        rng=rng,
-    )
+    if dict(plan.get("underwater") or {}).get("automatic_miss"):
+        attack = {
+            "kind": "attack", "armor_class": int(plan["target_ac"]),
+            "attack_bonus": int(plan["attack_bonus"]), "total": 0,
+            "natural": None, "rolls": [], "rerolls": [], "critical": False, "fumble": False,
+            "hit": False, "automatic_miss": True, "reason": "underwater_beyond_normal_range",
+            "advantage": False, "disadvantage": False, "roll_mode": "automatic_miss",
+        }
+    else:
+        attack = resolve_attack(
+            armor_class=int(plan["target_ac"]),
+            attack_bonus=int(plan["attack_bonus"]),
+            advantage=bool(plan.get("advantage")),
+            disadvantage=bool(plan.get("disadvantage")),
+            reroll_ones=bool(plan.get("halfling_lucky")),
+            rng=rng,
+        )
     if attack["hit"] and plan.get("automatic_critical_on_hit"):
         attack["critical"] = True
     return {
@@ -4237,6 +4270,10 @@ def resolve_attack_damage(
         resolution_boundaries.append("dnd5e.core.attack.hidden_reveal")
     if isinstance(result.get("damage"), dict):
         resolution_boundaries.append("dnd5e.core.damage.zero_hp")
+        if "environment_receipts" in result["damage"]:
+            from .water import WATER_RULE
+
+            resolution_boundaries.append(WATER_RULE)
         if bool(plan.get("knock_out", False)):
             resolution_boundaries.append("dnd5e.core.damage.knockout")
         if (
@@ -4674,6 +4711,11 @@ def apply_damage_to_sheet(
         melee=melee,
     )
     result["defense_sources"] = defense_sources
+    from .water import water_state
+
+    water = water_state(sheet)
+    if normalized == "fire" and water["fully_immersed"]:
+        result["environment_receipts"] = deepcopy(water.get("rule_receipts", []))
     if attack_facts is not None:
         result["attack_facts"] = deepcopy(attack_facts)
     return result
@@ -4943,6 +4985,9 @@ def apply_damage_parts_to_sheet(
         remaining_temp -= absorbed
         detail["absorbed_temp"] = absorbed
         detail["hp_damage"] = detail["applied_amount"] - absorbed
+    from .water import water_state
+
+    water = water_state(sheet)
     return {
         "sheet": applied["sheet"],
         "parts": details,
@@ -4956,6 +5001,8 @@ def apply_damage_parts_to_sheet(
         "concentration": applied["concentration"],
         "ended_effect_ids": applied["ended_effect_ids"],
         "massive_damage": applied["massive_damage"],
+        **({"environment_receipts": deepcopy(water.get("rule_receipts", []))}
+           if "fire" in grouped and water["fully_immersed"] else {}),
         **({"attack_facts": deepcopy(attack_facts)} if attack_facts is not None else {}),
     }
 
@@ -5224,6 +5271,11 @@ def _adjust_damage_amount(
         for item_id, values in item_sources[defense].items()
         if normalized in values
     ]
+    from .water import WATER_RULE, water_state
+
+    if normalized == "fire" and water_state(sheet)["fully_immersed"]:
+        resistances.add("fire")
+        active_sources.append(WATER_RULE)
     # Temporary defenses belong to the effect ledger, not permanent traits.
     # The lifecycle deactivates expired effects; sets avoid multiplying duplicate
     # grants while preserving each contributing source in the damage receipt.
@@ -8701,7 +8753,14 @@ def resolve_save_damage_to_sheets(
                 "success": bool(saved["success"]),
                 "save_bonus": int(normalized_save_bonuses.get(target_id, 0)),
                 "damage_reduction": reduction,
-                "rule_receipts": list(reduction_settlement.get("rule_receipts") or []),
+                "rule_receipts": [
+                    *list(reduction_settlement.get("rule_receipts") or []),
+                    *core_receipts(
+                        rules, ["dnd5e.core.combat.underwater"]
+                        if damaged_result and "environment_receipts" in damaged_result else [],
+                        "damage.fire.apply",
+                    ),
+                ],
                 "damage_amount": damage_amount,
                 "damage": damaged_result,
             }
@@ -9491,6 +9550,17 @@ def _attack_range(
 ) -> dict[str, Any]:
     """Validate grid distance or consume one explicit Agent spatial ruling."""
     if spatial_facts is not None:
+        from .water import water_state
+
+        if (
+            attack_mode == "ranged" and not weapon.get("spell_attack")
+            and water_state(actor_sheet(attacker))["underwater"]
+            and type(spatial_facts.get("long_range")) is not bool
+        ):
+            raise NeedsRulingError(
+                "underwater ranged attacks require explicit long_range spatial facts",
+                missing=("attack.spatial_facts.long_range",), ruling_kind="agent_dm_adjudication",
+            )
         return {
             "enforced": True,
             "distance_ft": None,
@@ -9529,7 +9599,12 @@ def _attack_range(
     long = _positive_int(range_data.get("long"), default=normal)
     if long < normal:
         long = normal
-    if distance > long:
+    from .water import water_state
+
+    underwater_ranged = water_state(actor_sheet(attacker))["underwater"] and not weapon.get(
+        "spell_attack"
+    )
+    if distance > long and not underwater_ranged:
         raise CombatEngineError("target is outside weapon range")
     return {
         "enforced": True,

@@ -3477,6 +3477,32 @@ class CampaignsService:
             ]
         return self.facade_result(view, result)
 
+    def environment_change(
+        self, campaign_id: str, payload: dict[str, Any], action: Literal["water"] = "water",
+        principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None, branch_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Record a DM-reviewed 2014 water transition without moving an actor.
+
+        payload={source_ref,source_excerpt,reason,actors?:[{actor_id,underwater,
+        fully_immersed}],objects?:[{scene_id,object_id,fully_immersed}]}.
+        Copy the exact active module source. All booleans are explicit; fully
+        immersed actors must be underwater. Objects require a reviewed profile;
+        an initial source-object profile may also declare fully_immersed.
+        This records environmental facts only. Set breathing separately from
+        the actor's real ability to breathe; immersion alone does not decide it.
+        Use this operation on entering/leaving water, including during combat.
+        Pending combat choices must finish before changing their environment.
+        """
+        from .environment import change_water_environment
+
+        return change_water_environment(
+            self, campaign_id, payload, principal_id=principal_id,
+            expected_revision=expected_revision, branch_id=branch_id,
+            idempotency_key=idempotency_key,
+        )
+
     def campaign_change(
         self,
         campaign_id: str,

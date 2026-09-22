@@ -7696,7 +7696,10 @@ class CombatService:
         applied_result = {key: value for key, value in applied.items() if key != "sheet"}
         damage_receipts = _support.core_receipts(
             self.effective_rule_context(campaign_id, branch_id=resolved_branch_id),
-            ["dnd5e.core.damage.zero_hp"] if int(applied["after_hp"]) == 0 else [],
+            [
+                *(["dnd5e.core.damage.zero_hp"] if int(applied["after_hp"]) == 0 else []),
+                *(["dnd5e.core.combat.underwater"] if "environment_receipts" in applied else []),
+            ],
             "damage.apply",
         )
         encounter = existing_encounter
