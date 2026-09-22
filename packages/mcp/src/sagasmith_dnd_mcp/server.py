@@ -938,6 +938,10 @@ class RequestScopedMCPServer(MCPServer):
         campaign_id = self._argument_campaign_id(arguments) or (
             exposure.campaign_id if exposure is not None else None
         ) or (auth_context.campaign_id if auth_context is not None else None)
+        if name == "campaign_create":
+            # Delegation bootstrap scope is not the newly created campaign.
+            # Resolve the real scope from the authoritative result below.
+            campaign_id = None
         context_manager = (
             self._random_context_factory(campaign_id, name, arguments)
             if campaign_id and name not in CORE_TOOLS

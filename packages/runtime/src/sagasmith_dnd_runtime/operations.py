@@ -194,7 +194,11 @@ class DndRuntime:
                 campaign_id = self.ports["module_chunk_campaign"](arguments["chunk_id"])
         if context.campaign_id and campaign_id and context.campaign_id != campaign_id:
             raise PermissionError("request identity belongs to another campaign")
-        campaign_id = campaign_id or context.campaign_id or None
+        # Creation has no existing campaign scope. Hosted delegation may carry
+        # a conversation bootstrap identifier, which is not a persisted campaign.
+        campaign_id = campaign_id or (
+            context.campaign_id if name != "campaign_create" else None
+        ) or None
         if campaign_id:
             self.ports["validate_request_scope"](campaign_id, name, arguments)
         # This facade nests its campaign selector in payload rather than the

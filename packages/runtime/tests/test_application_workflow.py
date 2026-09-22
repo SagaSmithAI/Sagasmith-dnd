@@ -19,14 +19,15 @@ async def main():
         auto_seed_rules=False,
     ))
     try:
-        # Hosted creation carries an empty campaign scope before a campaign exists.
-        identity = RequestIdentity("system:local", "")
+        # Hosted creation can carry a bootstrap conversation scope before creation.
+        identity = RequestIdentity("system:local", "local:discord:group:table-1")
         args = {"name": "Application-only campaign", "edition": "2014",
                 "idempotency_key": "create-campaign"}
         campaign = await runtime.execute("campaign_create", args, context=identity)
         replay = await runtime.execute("campaign_create", args, context=identity)
         assert campaign == replay
         assert campaign["revision"] >= 0
+        identity = RequestIdentity("system:local", campaign["id"])
         result = await runtime.execute("campaign_query", {
             "view": "get", "payload": {"campaign_id": campaign["id"]},
         }, context=identity)
