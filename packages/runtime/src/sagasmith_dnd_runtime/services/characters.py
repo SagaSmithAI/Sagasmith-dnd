@@ -6701,6 +6701,20 @@ boundary.
         payload={reason}. It derives armor training from unchanged recorded source gear,
         accepts no supplied proficiencies, and preserves active combat and all actor state.
         """
+        data = self.facade_payload(payload)
+        # Validate declarations before looking up an actor or consulting its phase.
+        # The combat guard must not hide a malformed boolean behind a lookup error.
+        for field in {
+            "damage": ("critical", "knock_out", "melee"),
+            "breathing_transition": ("choking",),
+        }.get(action, ()):
+            self.facade_bool(data, field)
+        for field in {
+            "breathing_transition": ("can_breathe",),
+            "revive": ("soul_willing", "body_intact"),
+        }.get(action, ()):
+            if field in data:
+                self.required_boolean(data, field)
         current = self.characters.get(character_id)
         if (current.campaign_id is not None
                 and self.authoritative_phase(current.campaign_id) == "combat"
@@ -6708,7 +6722,6 @@ boundary.
             raise _support.ExposureError(
                 "during combat character_state_change supports only statblock_proficiency_sync"
             )
-        data = self.facade_payload(payload)
         if action == "effect_add":
             result = self.character_effect_add(
                 character_id,
