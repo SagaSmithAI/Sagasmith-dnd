@@ -80,6 +80,15 @@ public release.
 
 ## Import and activation
 
+Rule mechanics and source-bound plans may declare `requires`, mapping canonical
+primitive names to exact supported versions. Inspect
+[`generated-primitives.json`](../../generated-primitives.json) before authoring;
+do not infer support from an opcode name alone. Respect its execution context,
+especially paid attack-defense operations. Use package-qualified rule/effect IDs,
+counter keys and link kinds. Capability requirements never substitute for source
+evidence, package locks or branch authorization. Missing engine capabilities require
+an installed engine update, not an invented tool or executable code in the archive.
+
 Every `content_pack` request declares one of the four route kinds
 `core_rules|addon|module|preset`; the server never infers it from other fields
 or from archive contents. Its complete action set is

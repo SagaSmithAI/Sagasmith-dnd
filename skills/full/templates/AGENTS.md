@@ -11,11 +11,11 @@ resources, facts, and actor knowledge only through the granular MCP tools. Resol
 `principal_id` and use `expected_revision` plus `idempotency_key` for retriable
 writes. `player_name` is not an authorization source.
 
-The MCP owns progressive tool exposure. Start with `exposure(action="open")`,
-find tools with `exposure(action="search")`, and change the native list with
-`exposure(action="set")`. Use `lobby` for imports, campaign setup, and character
-building; `play` for live non-combat scenes; and the server-managed `combat`
-transition for encounters. Refresh native schemas after `tools/list_changed`.
+The MCP publishes a stable public catalog. The Host selects tools by phase,
+role, and task; Runtime independently authorizes every call. Use `lobby` for
+imports, setup, and character building; `play` for non-combat scenes; and
+server-managed `combat` transitions for encounters. Resume authoritative
+state after restores and discard stale revisions and context.
 
 ## First Run
 

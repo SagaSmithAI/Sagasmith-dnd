@@ -3473,7 +3473,7 @@ wheels = [
 
 [[package]]
 name = "sagasmith-core"
-version = "0.3.0"
+version = "0.3.2"
 source = { editable = "../sagasmith-core" }
 dependencies = [
     { name = "alembic" },
@@ -3586,7 +3586,7 @@ provides-extras = ["documents", "images", "embedding", "vector", "dense", "all",
 
 [[package]]
 name = "sagasmith-dnd-mcp"
-version = "0.3.0"
+version = "0.3.1"
 source = { editable = "packages/mcp" }
 dependencies = [
     { name = "mcp" },
@@ -3599,7 +3599,7 @@ dependencies = [
 all = [
     { name = "pillow" },
     { name = "sagasmith-core", extra = ["documents", "embedding", "ocr", "vector"] },
-    { name = "sagasmith-dnd", extra = ["images"] },
+    { name = "sagasmith-dnd-runtime", extra = ["images"] },
 ]
 dense = [
     { name = "sagasmith-core", extra = ["embedding", "vector"] },
@@ -3620,7 +3620,7 @@ gateway = [
 ]
 images = [
     { name = "pillow" },
-    { name = "sagasmith-dnd", extra = ["images"] },
+    { name = "sagasmith-dnd-runtime", extra = ["images"] },
 ]
 ocr = [
     { name = "sagasmith-core", extra = ["documents", "ocr"] },
@@ -3646,26 +3646,61 @@ requires-dist = [
     { name = "sagasmith-core", extras = ["embedding", "vector"], marker = "extra == 'dense'", editable = "../sagasmith-core" },
     { name = "sagasmith-core", extras = ["vector"], marker = "extra == 'vector'", editable = "../sagasmith-core" },
     { name = "sagasmith-dnd", editable = "packages/domain" },
-    { name = "sagasmith-dnd", extras = ["images"], marker = "extra == 'all'", editable = "packages/domain" },
-    { name = "sagasmith-dnd", extras = ["images"], marker = "extra == 'images'", editable = "packages/domain" },
     { name = "sagasmith-dnd-runtime", editable = "packages/runtime" },
+    { name = "sagasmith-dnd-runtime", extras = ["images"], marker = "extra == 'all'", editable = "packages/runtime" },
+    { name = "sagasmith-dnd-runtime", extras = ["images"], marker = "extra == 'images'", editable = "packages/runtime" },
 ]
 provides-extras = ["documents", "images", "ocr", "embedding", "vector", "dense", "all", "gateway", "dev"]
 
 [[package]]
 name = "sagasmith-dnd-runtime"
-version = "0.3.0"
+version = "0.3.1"
 source = { editable = "packages/runtime" }
 dependencies = [
+    { name = "pydantic" },
     { name = "sagasmith-core" },
     { name = "sagasmith-dnd" },
 ]
 
+[package.optional-dependencies]
+all = [
+    { name = "pillow" },
+    { name = "pymupdf" },
+    { name = "sagasmith-core", extra = ["documents", "embedding", "vector"] },
+]
+dense = [
+    { name = "sagasmith-core", extra = ["embedding", "vector"] },
+]
+documents = [
+    { name = "sagasmith-core", extra = ["documents"] },
+]
+embedding = [
+    { name = "sagasmith-core", extra = ["embedding"] },
+]
+images = [
+    { name = "pillow" },
+    { name = "pymupdf" },
+]
+vector = [
+    { name = "sagasmith-core", extra = ["vector"] },
+]
+
 [package.metadata]
 requires-dist = [
+    { name = "pillow", marker = "extra == 'all'", specifier = ">=10.0.0,<13.0.0" },
+    { name = "pillow", marker = "extra == 'images'", specifier = ">=10.0.0,<13.0.0" },
+    { name = "pydantic", specifier = ">=2.11.0,<3.0.0" },
+    { name = "pymupdf", marker = "extra == 'all'", specifier = ">=1.26.0,<2.0.0" },
+    { name = "pymupdf", marker = "extra == 'images'", specifier = ">=1.26.0,<2.0.0" },
     { name = "sagasmith-core", editable = "../sagasmith-core" },
+    { name = "sagasmith-core", extras = ["documents"], marker = "extra == 'documents'", editable = "../sagasmith-core" },
+    { name = "sagasmith-core", extras = ["documents", "embedding", "vector"], marker = "extra == 'all'", editable = "../sagasmith-core" },
+    { name = "sagasmith-core", extras = ["embedding"], marker = "extra == 'embedding'", editable = "../sagasmith-core" },
+    { name = "sagasmith-core", extras = ["embedding", "vector"], marker = "extra == 'dense'", editable = "../sagasmith-core" },
+    { name = "sagasmith-core", extras = ["vector"], marker = "extra == 'vector'", editable = "../sagasmith-core" },
     { name = "sagasmith-dnd", editable = "packages/domain" },
 ]
+provides-extras = ["documents", "images", "embedding", "vector", "dense", "all"]
 
 [[package]]
 name = "sagasmith-dnd-workspace"

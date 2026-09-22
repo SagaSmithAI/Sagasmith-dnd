@@ -3,8 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-
-from sagasmith_dnd.portrait_extraction import PortraitExtractor, extract_actor_portrait
+from sagasmith_dnd_runtime.portrait_extraction import PortraitExtractor, extract_actor_portrait
 
 pymupdf = pytest.importorskip("pymupdf")
 

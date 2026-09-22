@@ -4,14 +4,18 @@ from __future__ import annotations
 
 import inspect
 from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import dataclass, field
+from functools import wraps
 from types import SimpleNamespace
 from typing import Any, Callable, get_type_hints
 
 from pydantic import ConfigDict, create_model
 
-from .tool_profiles import CORE_TOOLS, policy_for_tool
+from .tool_profiles import CORE_TOOLS, PROFILES, policy_for_tool
+
+TRANSITION_COMMANDS = frozenset({"combat_start", "combat_end"})
 
 
 class OperationError(ValueError):
@@ -78,6 +82,7 @@ class DndRuntime:
         self.prompts: list[tuple[dict[str, Any], Callable]] = []
         self.ports: dict[str, Any] = {}
         self._tool_manager = self
+        self._transition = ContextVar(f"dnd_transition_{id(self)}", default=None)
 
     def tool(self, *, annotations: OperationHints | None = None):
         def register(function):
@@ -93,9 +98,20 @@ class DndRuntime:
                 __config__=ConfigDict(extra="forbid"),
                 **fields,
             )
+            implementation = function
+            if function.__name__ in TRANSITION_COMMANDS:
+                @wraps(function)
+                def implementation(*args, **kwargs):
+                    command = self._transition.get()
+                    if command is not None and command["response"] is not None:
+                        return deepcopy(command["response"])
+                    result = function(*args, **kwargs)
+                    if command is not None:
+                        self.ports["remember_transition"](command, result)
+                    return result
             self.operations[function.__name__] = Operation(
                 function.__name__,
-                function,
+                implementation,
                 model,
                 model.model_json_schema(),
                 annotations,
@@ -136,6 +152,12 @@ class DndRuntime:
         *,
         context: RequestIdentity,
     ) -> Any:
+        local = getattr(self, "local_session", None)
+        if local is not None:
+            return await local.execute(name, arguments, context)
+        return await self.execute_shared(name, arguments, context=context)
+
+    async def execute_shared(self, name, arguments, *, context):
         with self.command_scope(name, arguments, context=context) as (bound, _stream):
             return await self.invoke(name, bound)
 
@@ -158,25 +180,58 @@ class DndRuntime:
         )
         if not campaign_id:
             actor_id = arguments.get("character_id") or arguments.get("actor_id")
+            if name == "character_query" and isinstance(payload, dict) and arguments.get(
+                "view"
+            ) in {"get", "rest", "advancement"}:
+                actor_id = payload.get("character_id") or actor_id
             if arguments.get("owner") == "party":
                 campaign_id = arguments.get("owner_id")
             elif arguments.get("owner") == "character":
                 actor_id = arguments.get("owner_id")
             if actor_id and not campaign_id:
                 campaign_id = self.ports["character_campaign"](actor_id)
+            if name == "module_expand" and arguments.get("chunk_id") and not campaign_id:
+                campaign_id = self.ports["module_chunk_campaign"](arguments["chunk_id"])
         if context.campaign_id and campaign_id and context.campaign_id != campaign_id:
             raise PermissionError("request identity belongs to another campaign")
-        campaign_id = campaign_id or context.campaign_id
-        self.ports["authorize_tool_policy"](name, context.principal_id, campaign_id)
-        manager = (
-            self.ports["campaign_random_context"](campaign_id, name, arguments)
-            if campaign_id and name not in CORE_TOOLS
-            else nullcontext(None)
+        # Creation has no existing campaign scope. Hosted delegation may carry
+        # a conversation bootstrap identifier, which is not a persisted campaign.
+        campaign_id = campaign_id or (
+            context.campaign_id if name != "campaign_create" else None
+        ) or None
+        if campaign_id:
+            self.ports["validate_request_scope"](campaign_id, name, arguments)
+        # This facade nests its campaign selector in payload rather than the
+        # top-level trusted arguments injected by MCP clients.
+        if name == "character_query" and context.campaign_id and arguments.get(
+            "view", "list"
+        ) in {"list", "batch", "catalog"}:
+            arguments["payload"] = {**(payload or {}), "campaign_id": campaign_id}
+        transition = (
+            self.ports["transition_scope"](
+                name, dict(operation.input_model.model_validate(arguments)),
+                campaign_id, context.principal_id,
+            ) if campaign_id and name in TRANSITION_COMMANDS else nullcontext(None)
         )
-        with manager as stream:
-            yield arguments, stream
-            if stream is not None and stream.has_unpersisted_draws:
-                raise RuntimeError("application returned without committing random progress")
+        with transition as command:
+            self.ports["authorize_tool_policy"](
+                name, context.principal_id, campaign_id,
+                replay=command is not None and command["response"] is not None,
+            )
+            manager = (
+                self.ports["campaign_random_context"](campaign_id, name, arguments)
+                if campaign_id and name not in CORE_TOOLS else nullcontext(None)
+            )
+            token = self._transition.set(command)
+            try:
+                with manager as stream:
+                    yield arguments, stream
+                    if stream is not None and stream.has_unpersisted_draws:
+                        raise RuntimeError(
+                            "application returned without committing random progress"
+                        )
+            finally:
+                self._transition.reset(token)
 
     def contract(self) -> list[dict[str, Any]]:
         rows = []
@@ -187,7 +242,9 @@ class DndRuntime:
                     "id": operation.name,
                     "input_schema": operation.parameters,
                     "output_schema": operation.fn_metadata.output_schema,
-                    "phases": sorted(policy.phases) if policy else [],
+                    "phases": sorted(policy.phases) if policy else (
+                        list(PROFILES) if operation.name in CORE_TOOLS else []
+                    ),
                     "roles": {phase: sorted(policy.roles(phase)) for phase in policy.phases}
                     if policy
                     else {},

@@ -195,6 +195,7 @@ export interface CombatantView {
 }
 
 export interface CombatStatus {
+  operation_status?: string;
   active: boolean;
   positioning_mode: 'grid' | 'agent';
   round?: number;

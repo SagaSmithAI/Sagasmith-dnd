@@ -11,17 +11,12 @@ from sagasmith_core.content_pack import (
     loads_content_archive,
 )
 from sagasmith_core.indexed_source import rule_chunk_key
-
 from sagasmith_dnd.character_schema import default_character_notes, default_character_sheet
 from sagasmith_dnd.content_actors import build_dnd_content_actor
 from sagasmith_dnd.content_packages import (
     _module_scene_metadata,
-    _portrait_cache_key,
-    _portrait_sources,
     _refresh_reviewed_content_hashes,
     _translate_module_refs,
-    attach_actor_portraits,
-    attach_auxiliary_assets,
     build_preset_content_package,
     build_rule_content_package,
     canonicalize_dnd_content_package,
@@ -29,7 +24,13 @@ from sagasmith_dnd.content_packages import (
     validate_dnd_content_package,
 )
 from sagasmith_dnd.content_validation import content_fingerprint
-from sagasmith_dnd.portrait_extraction import ExtractedPortrait, PortraitInspection
+from sagasmith_dnd_runtime.content_assets import (
+    _portrait_cache_key,
+    _portrait_sources,
+    attach_actor_portraits,
+    attach_auxiliary_assets,
+)
+from sagasmith_dnd_runtime.portrait_extraction import ExtractedPortrait, PortraitInspection
 
 
 def test_module_scene_metadata_isolates_dnd_profile_fields() -> None:
@@ -322,6 +323,26 @@ def test_finalized_module_does_not_require_party_size_recommendation(
     validated = validate_dnd_content_package(package)
 
     assert validated["content"]["play_profile"]["party_size"]["minimum"] is None
+
+
+def test_module_profile_allows_omitted_party_advice_but_validates_provided_advice():
+    from sagasmith_dnd.content_packages import _validate_module_play_profile
+
+    source = [{"source_key": "book", "page": 1, "chunk_hash": "a" * 64, "note": "Reviewed"}]
+    profile = {
+        "starting_level": {"value": 1, "source_refs": source},
+        "expected_end_level": {"value": 2, "source_refs": source},
+        "advancement": {"modes": ["milestone"], "recommended": "milestone",
+                        "source_refs": source},
+        "pregenerated_characters": {"available": False, "applicability": "None included",
+                                   "source_refs": source},
+    }
+    _validate_module_play_profile(profile)
+    assert "party_size" not in profile
+    with pytest.raises(ValueError, match="valid 1 to 20 range"):
+        _validate_module_play_profile({**profile, "party_size": {
+            "minimum": 5, "maximum": 2, "source_refs": source,
+        }})
 
 
 def test_emergent_module_shard_requires_scene_and_lineage_but_not_ending(
@@ -735,11 +756,11 @@ def test_portraits_attach_to_source_statblock_cards_without_runtime_instances(
         method="test-reviewed-crop",
     )
     monkeypatch.setattr(
-        "sagasmith_dnd.portrait_extraction.PortraitExtractor.inspect",
+        "sagasmith_dnd_runtime.portrait_extraction.PortraitExtractor.inspect",
         lambda *args, **kwargs: PortraitInspection(portrait, "extracted", True, 1, 0.95),
     )
     monkeypatch.setattr(
-        "sagasmith_dnd.portrait_extraction.PortraitExtractor.extract_reviewed_crop",
+        "sagasmith_dnd_runtime.portrait_extraction.PortraitExtractor.extract_reviewed_crop",
         lambda *args, **kwargs: portrait,
     )
     source_path = tmp_path / "source.pdf"
@@ -779,7 +800,7 @@ def test_portraits_attach_to_source_statblock_cards_without_runtime_instances(
     assert audit["reviewed"][0]["decision"] == "crop"
 
     monkeypatch.setattr(
-        "sagasmith_dnd.portrait_extraction.PortraitExtractor.inspect",
+        "sagasmith_dnd_runtime.portrait_extraction.PortraitExtractor.inspect",
         lambda *args, **kwargs: PortraitInspection(
             None, "no_visual_candidate", True, 0, 0.0
         ),

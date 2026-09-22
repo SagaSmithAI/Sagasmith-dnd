@@ -34,7 +34,10 @@ class SagaSmithStorage:
     def __init__(self, config: McpConfig) -> None:
         self.config = config
         self.config.prepare()
-        self.database = Database(config.database_url or sqlite_database_url(config.database_path))
+        self.database = Database(
+            config.database_url or sqlite_database_url(config.database_path),
+            local_authority=config.local_authority,
+        )
         try:
             self.vectors = VectorStore(DND5E.id)
         except BaseException as initialization_error:

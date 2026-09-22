@@ -1194,6 +1194,9 @@ def test_existing_legacy_dwarf_selection_survives_core_content_upgrade(
             receipt["mechanic_id"] for receipt in upgraded_character["derived"]["rule_receipts"]
         }
         tampered_sheet = deepcopy(upgraded_character["sheet"])
+        # Direct creation cannot copy this engine-owned application receipt.
+        # Keep this fixture focused on rejecting the forged dwarf speed source.
+        tampered_sheet["combat"].pop("preclass_constitution_hp_adjustment", None)
         tampered_species = next(
             selection
             for selection in tampered_sheet["content"]["selections"]
@@ -2023,8 +2026,9 @@ def test_legacy_campaign_without_core_lock_fails_closed(tmp_path: Path) -> None:
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize("combat_locked", [False, True])
 def test_checkpointed_core_relock_preserves_profile_and_adopts_current_runtime(
-    tmp_path: Path,
+    tmp_path: Path, combat_locked: bool,
 ) -> None:
     config = McpConfig(
         home=tmp_path / "home",
@@ -2064,6 +2068,19 @@ def test_checkpointed_core_relock_preserves_profile_and_adopts_current_runtime(
             )
         finally:
             database.dispose()
+        if combat_locked:
+            from sagasmith_core import CampaignService
+            from sagasmith_dnd_runtime.application_support import COMBAT_MUTATION_LOCK
+
+            database = Database(sqlite_database_url(config.database_path))
+            try:
+                campaigns = CampaignService(database)
+                current = campaigns.get(campaign["id"])
+                campaigns.update(campaign["id"], state={
+                    **current.state, "mutation_locks": [deepcopy(COMBAT_MUTATION_LOCK)],
+                }, expected_revision=current.revision)
+            finally:
+                database.dispose()
         changed = await call(
             server,
             "campaign_query",

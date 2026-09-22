@@ -529,7 +529,7 @@ def test_scag_watchers_eye_is_source_bound_bounded_and_persistent(
                 "character_check",
                 {**call_args, "principal_id": "player:spoof", "idempotency_key": "denied"},
             )
-        with pytest.raises(Exception, match="requires exactly"):
+        with pytest.raises(Exception, match="unexpected payload.bonus"):
             await _call(
                 server,
                 "character_check",

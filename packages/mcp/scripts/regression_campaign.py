@@ -4098,6 +4098,7 @@ async def _prepare_core_wizard(args: argparse.Namespace) -> dict[str, Any]:
                             "character_id": actor["id"],
                             "action": "level_advance",
                             "payload": {
+                                "target_level": new_level,
                                 "class_name": "Wizard",
                                 "hp_method": "fixed",
                                 "reason": "prepare a rules-complete campaign regression PC",

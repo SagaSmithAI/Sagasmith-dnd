@@ -12,6 +12,46 @@ async def _call(server, name: str, arguments: dict):
     return result.get("result", result) if isinstance(result, dict) else result
 
 
+def test_event_rejects_silent_payload_loss_before_write(tmp_path: Path) -> None:
+    config = McpConfig(
+        home=tmp_path / "home", database_url=None, chroma_url=None,
+        chroma_path_override=None, dnd_skills_dir=tmp_path / "dnd",
+        modulegen_skills_dir=tmp_path / "modulegen", auto_seed_rules=False,
+    )
+
+    async def exercise() -> None:
+        server = create_server(config)
+        try:
+            campaign = await _call(server, "campaign_create", {
+                "name": "Event fidelity", "idempotency_key": "campaign",
+            })
+            args = {"campaign_id": campaign["id"], "action": "add", "idempotency_key": "victory"}
+            for field, value in (
+                ("audience", "party"), ("details", {"rounds": 8}),
+                ("type", "combat_victory"), ("campaign_id", campaign["id"]),
+            ):
+                with pytest.raises(Exception, match="unexpected payload fields"):
+                    await _call(server, "campaign_event", {
+                        **args, "payload": {"summary": "Victory", field: value},
+                    })
+            assert await _call(server, "campaign_event", {
+                "campaign_id": campaign["id"], "action": "list",
+            }) == []
+            event = await _call(server, "campaign_event", {
+                **args, "payload": {
+                    "summary": "Victory", "audience_scope": "party",
+                    "event_type": "combat_victory",
+                    "payload": {"rounds": 8, "details": {"survivors": 3}},
+                },
+            })
+            assert event["audience_scope"] == "party"
+            assert event["payload"] == {"rounds": 8, "details": {"survivors": 3}}
+        finally:
+            close_server(server)
+
+    asyncio.run(exercise())
+
+
 def test_actor_scoped_event_is_visible_only_to_witnesses(tmp_path: Path) -> None:
     config = McpConfig(
         home=tmp_path / "home",

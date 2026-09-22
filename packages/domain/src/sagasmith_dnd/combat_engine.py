@@ -56,7 +56,6 @@ from sagasmith_dnd.engine import (
     roll,
     roll_d20,
 )
-from sagasmith_dnd.hit_points import apply_basic_healing_to_sheet
 from sagasmith_dnd.official_item_materialization import (
     ARCANE_PROPULSION_ARM_ID,
     ARMBLADE_ID,
@@ -244,30 +243,14 @@ def d20_exhaustion_adjustment(
 ) -> dict[str, Any]:
     """Apply the edition-specific exhaustion rule to one d20 roll."""
 
-    normalized_ruleset = _normalize_ruleset(ruleset)
-    if isinstance(exhaustion, bool) or not isinstance(exhaustion, int) or exhaustion < 0:
-        raise CombatEngineError("exhaustion must be a non-negative integer")
-    if kind not in {"ability", "attack", "check", "death_save", "initiative", "save"}:
-        raise CombatEngineError("unsupported exhaustion roll kind")
-    adjusted_bonus = int(bonus)
-    adjusted_disadvantage = bool(disadvantage)
-    exhaustion_disadvantage = False
-    if normalized_ruleset == "2024":
-        adjusted_bonus -= 2 * exhaustion
-    elif (
-        kind in ABILITY_CHECK_KINDS | {"initiative"}
-        and exhaustion >= 1
-        or kind in {"attack", "death_save", "save"}
-        and exhaustion >= 3
-    ):
-        adjusted_disadvantage = True
-        exhaustion_disadvantage = True
-    return {
-        "bonus": adjusted_bonus,
-        "disadvantage": adjusted_disadvantage,
-        "exhaustion_disadvantage": exhaustion_disadvantage,
-        "applied": adjusted_bonus != int(bonus) or adjusted_disadvantage != bool(disadvantage),
-    }
+    from sagasmith_dnd.edition_policy import edition_policy
+
+    try:
+        return edition_policy(ruleset).d20.exhaustion_adjustment(
+            exhaustion=exhaustion, kind=kind, bonus=bonus, disadvantage=disadvantage,
+        )
+    except ValueError as error:
+        raise CombatEngineError(str(error)) from error
 
 
 class CombatEngineError(ValueError):
@@ -2806,6 +2789,16 @@ def preflight_attack(
     attack_mode = str(action.get("attack_mode") or weapon.get("attack_type") or "melee").lower()
     if attack_mode not in {"melee", "ranged"}:
         raise CombatEngineError("attack_mode must be melee or ranged")
+    if (
+        spatial_facts is not None
+        and attack_mode == "melee"
+        and int(5 if weapon.get("reach_ft") is None else weapon["reach_ft"]) <= 5
+        and spatial_facts.get("target_within_5_ft") is False
+    ):
+        raise CombatEngineError(
+            "spatial facts contradict weapon reach: this melee attack cannot reach "
+            "a target beyond 5 feet; move into reach or use a recorded ranged attack"
+        )
     weapon_attack_type = str(weapon.get("attack_type") or "melee").lower()
     if weapon_attack_type == "ranged" and attack_mode != "ranged":
         raise CombatEngineError("a ranged weapon cannot make a melee weapon attack")
@@ -3193,6 +3186,16 @@ def preflight_attack(
             )
         )
     distance = range_result.get("distance_ft")
+    if (
+        spatial_facts is not None
+        and target_conditions & {"prone", "paralyzed", "unconscious"}
+        and not isinstance(spatial_facts.get("target_within_5_ft"), bool)
+    ):
+        raise NeedsRulingError(
+            "target_within_5_ft must be an explicit boolean for this target's conditions",
+            missing=["attack.spatial_facts.target_within_5_ft"],
+            ruling_kind="agent_dm_adjudication",
+        )
     target_within_5_ft = (
         bool(spatial_facts.get("target_within_5_ft"))
         if spatial_facts is not None
@@ -3488,6 +3491,7 @@ def preflight_spell_attack(
     synthetic_id = f"spell-attack:{spell_id}"
     synthetic = {
         "item_id": synthetic_id,
+        "magical": True,
         "name": str(spell.get("name") or spell_id),
         "attack_type": attack_mode,
         "attack_ability": "spell",
@@ -5206,6 +5210,19 @@ def _adjust_damage_amount(
         for item_id, values in item_sources[defense].items()
         if normalized in values
     ]
+    # Temporary defenses belong to the effect ledger, not permanent traits.
+    # The lifecycle deactivates expired effects; sets avoid multiplying duplicate
+    # grants while preserving each contributing source in the damage receipt.
+    for effect in sheet.get("effects", []):
+        if not isinstance(effect, dict) or not effect.get("active"):
+            continue
+        for change in effect.get("changes", []):
+            if change.get("mode") != "add" or change.get("value") != normalized:
+                continue
+            for defense, values in defenses.items():
+                if change.get("path") == f"traits.{defense}":
+                    values.add(normalized)
+                    active_sources.append(f"effect:{effect.get('id', '')}")
     if normalized == "poison" and sheet_is_petrified(sheet):
         active_sources.append("condition:petrified")
         return raw, 0, normalized, "immune", active_sources
@@ -6351,6 +6368,10 @@ def resolve_common_action(
         raise CombatEngineError(f"unsupported common action: {action}")
     if action == "shake_sleep" and _normalize_ruleset(value.get("ruleset")) != "2014":
         raise CombatEngineError("shake_sleep requires the 2014 Sleep mechanic")
+    if action in {"influence", "study", "utilize"} and _normalize_ruleset(
+        value.get("ruleset")
+    ) != "2024":
+        raise CombatEngineError(f"{action} requires the 2024 ruleset")
     current = current_combatant(value)
     combatant = next(
         (item for item in value.get("combatants", []) if item.get("actor_id") == actor_id_value),
@@ -7387,7 +7408,9 @@ def apply_healing_to_sheet(
         }
     effective_amount = max(0, requested_amount + bonus)
     try:
-        basic = apply_basic_healing_to_sheet(value, amount=effective_amount)
+        from sagasmith_dnd.rule_primitives import apply_sheet_primitive
+
+        basic = apply_sheet_primitive(value, "healing.apply", {"amount": effective_amount})
     except ValueError as error:
         raise CombatEngineError(str(error)) from error
     value = basic["sheet"]
@@ -8008,6 +8031,8 @@ def resolve_actor_check(
     normalized_ruleset = _normalize_ruleset(ruleset or sheet.get("edition"))
     conditions = _condition_set(sheet.get("conditions"))
     exhaustion = int(sheet.get("combat", {}).get("exhaustion", 0) or 0)
+    if "dead" in conditions:
+        raise CombatEngineError("dead actors cannot make checks or saving throws")
     modifier_save_purpose = save_purpose
     if modifier_save_purpose is None and rules is not None:
         modifier_save_purpose = str(dict(rules.facts).get("save_purpose") or "") or None
@@ -8270,6 +8295,7 @@ def resolve_actor_check(
     def with_rule_receipts(result: dict[str, Any]) -> dict[str, Any]:
         result["effect_roll_bonus"] = effect_roll_bonus
         result["equipment_disadvantage"] = equipment_disadvantage
+        result["armor_stealth_disadvantage"] = armor_stealth_disadvantage
         if helped_by:
             result["helped_by"] = helped_by
             result["advantage_source"] = "help"

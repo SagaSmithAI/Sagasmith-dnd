@@ -12,10 +12,8 @@ from sagasmith_dnd.ability_generation import normalize_ability_generation
 from sagasmith_dnd.activity_identity import is_multiattack_activity
 from sagasmith_dnd.actor_types import NON_PLAYER_CHARACTER_TYPES
 from sagasmith_dnd.conditions import (
-    apply_effect_conditions,
     condition_ids,
     effect_is_suspended_by_petrification,
-    reconcile_ended_effect_conditions,
 )
 from sagasmith_dnd.content_solution import (
     ContentSolutionError,
@@ -2438,6 +2436,13 @@ def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
         path = change["path"]
         mode = change["mode"]
         change_value = change["value"]
+        if path in {"traits.resistances", "traits.immunities", "traits.vulnerabilities"}:
+            if (
+                mode != "add"
+                or not isinstance(change_value, str)
+                or change_value not in DAMAGE_TYPES
+            ):
+                raise ValueError(f"{field} {path} requires add with a canonical damage type")
         if path in {
             "combat.hp.maximum_multiplier",
             "combat.hp.current_multiplier_on_apply",
@@ -2757,6 +2762,7 @@ def validate_character_sheet(
             "speed",
             "hit_dice",
             "hp_progression",
+            "preclass_constitution_hp_adjustment",
             "death_saves",
             "last_death_save_elapsed_tick",
             "exhaustion",
@@ -3769,6 +3775,18 @@ def validate_character_sheet(
             },
             "hit_dice": normalized_hit_dice,
             "hp_progression": hp_progression,
+            **(
+                {
+                    "preclass_constitution_hp_adjustment": _integer(
+                        combat["preclass_constitution_hp_adjustment"],
+                        "sheet.combat.preclass_constitution_hp_adjustment",
+                        minimum=-30,
+                        maximum=30,
+                    )
+                }
+                if "preclass_constitution_hp_adjustment" in combat
+                else {}
+            ),
             "death_saves": {
                 "successes": _integer(
                     death_saves["successes"],
@@ -4207,11 +4225,15 @@ def _weapon_is_proficient(item: dict[str, Any], proficiencies: list[str]) -> boo
     if bool(mechanics.get("proficient", False)):
         return True
     keys = _proficiency_keys(proficiencies)
-    name = str(item.get("name") or "").strip().casefold()
+    name = str(item.get("name") or "").strip().casefold().replace("-", " ").replace("_", " ")
     category = str(mechanics.get("category") or "").strip().casefold()
     return bool(
         name in keys
+        # Source grants name weapon types in the plural (e.g. "shortswords").
+        # Match the complete name, never a substring of another weapon type.
+        or (name and f"{name}s" in keys)
         or f"{name} weapon" in keys
+        or f"{name} weapons" in keys
         or (category and f"{category} weapons" in keys)
         or "all weapons" in keys
     )
@@ -4539,6 +4561,23 @@ def _derive_armor_class(
                     "bonus": ability_bonus,
                 }
 
+    # The 2014 class selection is a passive bonus, not a replacement AC formula.
+    # A shield alone is not worn armor; repeated selections never stack.
+    defense_styles = {
+        f"dnd5e.content.srd2014.feature.{class_name}-{feature}"
+        for class_name, feature in (
+            ("fighter", "fighting-style"), ("paladin", "fighting-style"),
+            ("ranger", "fighting-style"), ("fighter", "additional-fighting-style"),
+        )
+    }
+    if value["edition"] == "2014" and armor_id and any(
+        feature["id"] in defense_styles
+        and str(feature.get("choices", {}).get("option", "")).casefold() == "defense"
+        for feature in value["content"]["features"]
+    ):
+        total += 1
+        breakdown["defense_fighting_style"] = 1
+
     # A statblock AC override is the creature's printed AC calculation. Explicit
     # equipped magic-item bonuses still modify that calculation, just as active
     # effects do below. Keeping these bonuses outside the override branch lets a
@@ -4616,6 +4655,10 @@ def _derive_armor_class(
                     or change["value"] < 0
                 ):
                     unresolved_effects.add(effect["id"])
+                continue
+            if change["path"] in {
+                "traits.resistances", "traits.immunities", "traits.vulnerabilities"
+            }:
                 continue
             if change["path"] not in {"derived.armor_class", "combat.ac"}:
                 unresolved_effects.add(effect["id"])
@@ -4758,9 +4801,6 @@ def _weapon_attacks(
         magic_weapon = magic_properties_active and (
             mechanics["magical"]
             or mechanics["magic_bonus"] != 0
-            or bool(mechanics["additional_damage"])
-            or bool(mechanics["versatile_additional_damage"])
-            or bool(mechanics["on_hit_effect"])
         )
         if battle_ready and magic_weapon and ability in {"strength", "dexterity"}:
             ability = "intelligence"
@@ -5495,7 +5535,16 @@ def update_inventory_item(
     item = next((entry for entry in value["inventory"]["items"] if entry["id"] == item_id), None)
     if item is None:
         raise LookupError(item_id)
-    replacement = {**item, **_object(patch, "item patch"), "id": item_id}
+    changes = _object(patch, "item patch")
+    replacement = {**item, **changes, "id": item_id}
+    if "mechanics" in changes:
+        # Binding ammunition must not reset damage, range, or other mechanics.
+        # Explicit field values (including null and empty lists) still replace
+        # their previous values; nested mechanic records remain whole values.
+        replacement["mechanics"] = {
+            **item["mechanics"],
+            **_object(changes["mechanics"], "item.mechanics"),
+        }
     replacement = _normalize_item(replacement, "item", generate_id=False)
     index = value["inventory"]["items"].index(item)
     value["inventory"]["items"][index] = replacement
@@ -5719,6 +5768,18 @@ def adjust_wallet(sheet: dict[str, Any], denomination: str, amount: int) -> dict
     return validate_character_sheet(value)
 
 
+def validate_equipment_hand_capacity(sheet: dict[str, Any]) -> None:
+    """Check a normalized loadout without preventing reads of legacy sheets."""
+    occupied = sum(
+        sheet["inventory"]["equipment_slots"][slot] is not None
+        for slot in ("main_hand", "off_hand", "shield")
+    )
+    if occupied > sheet["traits"]["anatomy"]["functional_hands"]:
+        raise ValueError(
+            "equipped weapons and shield exceed functional hands; stow an item first"
+        )
+
+
 def equip_inventory_item(sheet: dict[str, Any], item_id: str, slot: str | None) -> dict[str, Any]:
     value = validate_character_sheet(sheet)
     item = next((entry for entry in value["inventory"]["items"] if entry["id"] == item_id), None)
@@ -5742,6 +5803,8 @@ def equip_inventory_item(sheet: dict[str, Any], item_id: str, slot: str | None) 
             previous["equipped"] = False
             previous["equipped_slot"] = None
         value["inventory"]["equipment_slots"][slot] = item_id
+    if slot in {"main_hand", "off_hand", "shield"}:
+        validate_equipment_hand_capacity(value)
     return validate_character_sheet(value)
 
 
@@ -5750,9 +5813,12 @@ def add_effect(sheet: dict[str, Any], effect: dict[str, Any]) -> tuple[dict[str,
     entry = _normalize_effect(effect, "effect")
     if any(current["id"] == entry["id"] for current in value["effects"]):
         raise ValueError("effect id already exists")
-    value["effects"].append(entry)
-    apply_effect_conditions(value, entry)
-    return validate_character_sheet(value), entry["id"]
+    from sagasmith_dnd.rule_primitives import apply_sheet_primitive
+
+    settled = apply_sheet_primitive(
+        value, "effect.apply", {"effect": entry, "effect_id": entry["id"]},
+    )
+    return validate_character_sheet(settled["sheet"]), entry["id"]
 
 
 def remove_effect(sheet: dict[str, Any], effect_id: str) -> dict[str, Any]:
@@ -5761,9 +5827,10 @@ def remove_effect(sheet: dict[str, Any], effect_id: str) -> dict[str, Any]:
     effect = next((entry for entry in effects if entry["id"] == effect_id), None)
     if effect is None:
         raise LookupError(effect_id)
-    effects.remove(effect)
-    reconcile_ended_effect_conditions(value, ended_effects=[effect])
-    return validate_character_sheet(value)
+    from sagasmith_dnd.rule_primitives import apply_sheet_primitive
+
+    settled = apply_sheet_primitive(value, "effect.remove", {"effect_id": effect_id})
+    return validate_character_sheet(settled["sheet"])
 
 
 def set_spell_prepared(sheet: dict[str, Any], spell_id: str, prepared: bool) -> dict[str, Any]:

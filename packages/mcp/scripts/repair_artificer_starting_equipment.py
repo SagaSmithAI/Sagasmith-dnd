@@ -12,10 +12,7 @@ from sagasmith_core.content_pack import (
     dumps_content_archive,
     loads_content_archive,
 )
-from sagasmith_dnd.content_packages import (
-    content_definition_checksum,
-    validate_dnd_content_package,
-)
+from sagasmith_dnd.content_packages import content_definition_checksum, validate_dnd_content_package
 from sagasmith_dnd.content_validation import build_catalog_review, build_selection_contract
 
 _SOURCE_KEY = "user.rulebook.d-d-5e-eberron-rising-from-the-last-war.3129363313"

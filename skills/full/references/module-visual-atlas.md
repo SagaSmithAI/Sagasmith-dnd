@@ -101,7 +101,7 @@ branch checkout restore the corresponding atlas review. It is not written back
 into immutable imported module metadata and does not leak into sibling branches.
 Pack combat-grid templates instead live in the immutable finalized Module Pack;
 each combat receives a fresh encounter-local copy. Every Agent/session must
-open its own exposure, but all authorized Agents read
+use its own trusted request identity, while authorized Agents read
 the same branch state through MCP.
 
 The rendered page is DM/owner evidence. Do not show it or keeper-only topology to

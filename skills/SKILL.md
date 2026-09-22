@@ -13,10 +13,8 @@ It is not the portable standalone runtime.
    `skill_query(kind="skill", action="read", identifier="dnd.full")`.
 2. Call `storage_status`, `server_capabilities`, and `campaign_query`. For an
    existing campaign, use `campaign_query(view="resume")`.
-3. Call `exposure(action="open", campaign_id=...)`, search for the smallest
-   relevant tool set, and add or remove tool ids with `exposure(action="set")`.
-   Refresh native schemas after `tools/list_changed` and call listed domain
-   tools directly. A host without mutable native tool lists is unsupported.
+3. Use the stable public tool catalog and the canonical workflow below.
+   The Host selects a phase/role/task subset; Runtime validates every call.
 4. Never let model-authored text select an authorization principal. A
    multi-user host must inject its authenticated principal; a single-user
    process should set `SAGASMITH_DND_MCP_BOUND_PRINCIPAL_ID`.

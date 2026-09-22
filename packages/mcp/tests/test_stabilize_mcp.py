@@ -17,8 +17,9 @@ async def _call(server, name: str, arguments: dict):
 
 
 @pytest.mark.parametrize(("seed", "expected_success"), [(0, True), (2, False)])
+@pytest.mark.parametrize("positioning_mode", ["grid", "agent"])
 def test_medicine_stabilization_pays_action_and_commits_target_atomically(
-    tmp_path: Path, monkeypatch, seed: int, expected_success: bool
+    tmp_path: Path, monkeypatch, seed: int, expected_success: bool, positioning_mode: str,
 ) -> None:
     original_check = server_module.resolve_actor_check
 
@@ -94,21 +95,22 @@ def test_medicine_stabilization_pays_action_and_commits_target_atomically(
             server,
             "combat_start",
             {
-                "positioning_mode": "grid",
-                "battle_map": {"width_cells": 12, "height_cells": 12},
+                "positioning_mode": positioning_mode,
+                **({"battle_map": {"width_cells": 12, "height_cells": 12}}
+                   if positioning_mode == "grid" else {}),
                 "campaign_id": campaign["id"],
                 "participant_ids": [helper["id"], target["id"]],
                 "participant_config": [
                     {
                         "actor_id": helper["id"],
                         "initiative": 20,
-                        "position": {"x": 0, "y": 0},
+                        **({"position": {"x": 0, "y": 0}} if positioning_mode == "grid" else {}),
                         "disposition": "friendly",
                     },
                     {
                         "actor_id": target["id"],
                         "initiative": 10,
-                        "position": {"x": 1, "y": 0},
+                        **({"position": {"x": 1, "y": 0}} if positioning_mode == "grid" else {}),
                         "disposition": "friendly",
                     },
                 ],
@@ -123,7 +125,12 @@ def test_medicine_stabilization_pays_action_and_commits_target_atomically(
                 "campaign_id": campaign["id"],
                 "actor_id": helper["id"],
                 "action": "move",
-                "payload": {"distance": 10, "destination": {"x": 0, "y": 2}},
+                "payload": {"distance": 10, **(
+                    {"destination": {"x": 0, "y": 2}} if positioning_mode == "grid" else
+                    {"spatial_facts": {"decision_id": "move-away", "reason": "Walk away",
+                                       "distance_ft": 10, "destination_legal": True,
+                                       "opportunity_attack_actor_ids": []}}
+                )},
                 "expected_revision": started["campaign_revision"],
                 "idempotency_key": "stabilize-move-far",
             },
@@ -149,6 +156,9 @@ def test_medicine_stabilization_pays_action_and_commits_target_atomically(
                     "ability": "wisdom",
                     "expected_revision": moved_far["campaign_revision"],
                     "idempotency_key": "stabilize-too-far",
+                    **({"spatial_facts": {"decision_id": "far", "reason": "Ten feet away",
+                                          "within_5_ft": False}}
+                       if positioning_mode == "agent" else {}),
                 },
             )
         after_far_attempt = await _call(
@@ -168,7 +178,12 @@ def test_medicine_stabilization_pays_action_and_commits_target_atomically(
                 "campaign_id": campaign["id"],
                 "actor_id": helper["id"],
                 "action": "move",
-                "payload": {"distance": 10, "destination": {"x": 0, "y": 0}},
+                "payload": {"distance": 10, **(
+                    {"destination": {"x": 0, "y": 0}} if positioning_mode == "grid" else
+                    {"spatial_facts": {"decision_id": "move-back", "reason": "Return to patient",
+                                       "distance_ft": 10, "destination_legal": True,
+                                       "opportunity_attack_actor_ids": []}}
+                )},
                 "expected_revision": after_far_attempt["revision"],
                 "idempotency_key": "stabilize-move-back",
             },
@@ -184,6 +199,9 @@ def test_medicine_stabilization_pays_action_and_commits_target_atomically(
                 "ability": "wisdom",
                 "expected_revision": moved_back["campaign_revision"],
                 "idempotency_key": "stabilize-medicine",
+                **({"spatial_facts": {"decision_id": "adjacent", "reason": "Beside patient",
+                                      "within_5_ft": True}}
+                   if positioning_mode == "agent" else {}),
             },
         )
 

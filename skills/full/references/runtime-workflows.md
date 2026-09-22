@@ -2,6 +2,30 @@
 
 ## Invariants
 
+### 2014 short-rest Hit Dice
+
+Spend at most one initial Hit Die per member in `party_rest`. Inspect the actual
+healing roll before choosing another die. Then call
+`campaign_change(action="short_rest_hit_die")` with payload
+`{character_id, expected_character_revision, decision:"spend"|"stop",
+rest_completed_elapsed_ticks, hit_die_key?}`. Copy the completed rest's elapsed
+ticks and the exact actor Hit Die pool key from receipts. Include `hit_die_key`
+for `spend`; omit it for `stop`. The top-level `expected_revision` is the current
+campaign revision. Use one new idempotency key per decision, reusing it only to
+retry that same decision. Do not advance the clock or precommit multiple dice
+between these choices.
+
+### Shared authority
+
+- UI and Agent share the same revision and authority boundary. Refresh state
+  after a revision conflict. For a paid semantic plan, refresh only target facts
+  and omit the old bound fingerprint; preserve its application, plan, bindings,
+  ruling and source evidence. Never pay the action again just to refresh facts.
+- When `combat_choice(execute_plan)` returns `pending_choice`, let the owning
+  player resolve the recorded defense or concentration save, then resume the
+  same application with the current revision and a new request key. Runtime
+  persists completed steps and dice across restarts. Retries of an uncertain
+  request must keep its original key and payload.
 - Keep the active `campaign_id`, edition, and locale explicit.
 - Never mix 2014 and 2024 rules unless the user explicitly requests comparison.
 - Search first, then expand only the selected rule or module chunk.
@@ -87,6 +111,12 @@
   hide and inject the authenticated principal. A single-user process should set
   `SAGASMITH_DND_MCP_BOUND_PRINCIPAL_ID`; never expose authorization identity as
   a model choice.
+- For semantic `target.validate`, provide reviewed `agent_ruling.target_facts`
+  keyed by step ID, then target actor ID. Bind the encounter ID, scene ID and
+  current campaign revision; each step also binds its source actor ID. A required
+  visibility fact must be explicit, and Agent range needs `distance_ft` without
+  invented coordinates. Reuse the exact paid commitment on settlement. See
+  `docs/extension-authoring.md` in the source repository for the JSON contract.
 - Supply `expected_revision` and an `idempotency_key` on retriable writes. Treat a
   revision conflict as a fresh read/review cycle, not as permission to overwrite.
 - For rule-profile and rule-pack writes, obtain `campaign_revision` from

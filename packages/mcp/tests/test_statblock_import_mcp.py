@@ -589,6 +589,45 @@ def test_imported_rule_source_creates_a_source_bound_combat_actor(tmp_path: Path
             "unconscious",
         ]
         assert initialized["source_evidence"]["source_id"] == ingested["source_id"]
+        trait_arguments = {
+            "character_id": downed["character"]["id"],
+            "action": "source_traits",
+            "payload": {
+                "source_ref": f"rule-chunk:{created['source']['chunk_ids'][0]}",
+                "reason": "Apply the reviewed adventure captive variant.",
+                "traits": {"damage_resistances": ["fire"], "darkvision_ft": 60},
+            },
+            "expected_revision": initialized["character"]["revision"],
+            "idempotency_key": "source-traits-captive",
+        }
+        for invalid_traits in ({"current_hit_points": 4}, {"darkvision_ft": True}, {}):
+            with pytest.raises(ToolError):
+                await _call(
+                    server,
+                    "character_state_change",
+                    {
+                        **trait_arguments,
+                        "payload": {**trait_arguments["payload"], "traits": invalid_traits},
+                    },
+                )
+        with pytest.raises(ToolError, match="managed sources"):
+            await _call(
+                server,
+                "character_state_change",
+                {
+                    **trait_arguments,
+                    "payload": {**trait_arguments["payload"], "source_ref": "rule-chunk:absent"},
+                },
+            )
+        repaired = await _call(server, "character_state_change", trait_arguments)
+        assert await _call(server, "character_state_change", trait_arguments) == repaired
+        assert repaired["character"]["revision"] == initialized["character"]["revision"] + 1
+        repaired_sheet = repaired["character"]["sheet"]
+        assert repaired_sheet["traits"]["resistances"] == ["fire"]
+        assert repaired_sheet["traits"]["senses"]["darkvision"] == 60
+        for key in ("combat", "conditions", "resources", "inventory"):
+            assert repaired_sheet.get(key) == initialized["character"]["sheet"].get(key)
+        assert repaired["source_evidence"]["source_id"] == ingested["source_id"]
         with pytest.raises(ToolError, match="managed sources"):
             await _call(
                 server,
@@ -721,6 +760,31 @@ def test_rule_statblock_recovers_split_text_layout_without_images(tmp_path: Path
                 "idempotency_key": "create-guard",
             },
         )
+
+        guard_chunks = [
+            item for item in chunks if "GUARD" in item["heading_path"]
+        ]
+        omitted_action = next(item for item in guard_chunks if "Spear." in item["content"])
+        with pytest.raises(ToolError, match="incomplete statblock evidence") as failure:
+            await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "statblock",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "source_id": ingested["source_id"],
+                        "chunk_ids": [
+                            item["id"] for item in guard_chunks
+                            if item["id"] != omitted_action["id"]
+                        ],
+                        "source_statblock_name": "Guard",
+                        "name": "Incomplete Guard",
+                    },
+                    "idempotency_key": "reject-missing-action",
+                },
+            )
+        assert omitted_action["id"] in str(failure.value)
 
         recovery = created["source"]["text_layout_recovery"]
         assert recovery["profile"] == "deterministic-text-layout-v1"

@@ -17,6 +17,7 @@ import type {
   InstalledPackSummary,
   PackKind,
 } from '../features/content/contracts';
+import { pendingWriteStore, type PendingWrite } from './pendingWrites';
 
 export const API_BASE = (import.meta.env.PUBLIC_SAGASMITH_API_BASE || 'http://127.0.0.1:8766').replace(/\/$/, '');
 export const DEMO_MODE = import.meta.env.PUBLIC_SAGASMITH_DEMO === '1';
@@ -59,13 +60,7 @@ export class GatewayRequestError extends Error {
   }
 }
 
-function unwrap<T>(value: T | { data: T }): T {
-  return value && typeof value === 'object' && 'data' in value
-    ? (value as { data: T }).data
-    : value as T;
-}
-
-async function gatewayRequest<T>(path: string, init?: RequestInit, timeoutMs = 8000): Promise<GatewayResult<T>> {
+async function rawGatewayRequest<T>(path: string, init?: RequestInit, timeoutMs = 8000): Promise<GatewayResult<T>> {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -92,6 +87,91 @@ async function gatewayRequest<T>(path: string, init?: RequestInit, timeoutMs = 8
   } finally {
     window.clearTimeout(timeout);
   }
+}
+
+const writeQueues = new Map<string, Promise<unknown>>();
+function serialized<T>(id: string, work: () => Promise<T>): Promise<T> {
+  const result = (writeQueues.get(id) || Promise.resolve()).catch(() => undefined).then(async () =>
+    typeof navigator !== 'undefined' && navigator.locks
+      ? navigator.locks.request(`sagasmith-write:${id}`, work) : work());
+  writeQueues.set(id, result);
+  void result.finally(() => { if (writeQueues.get(id) === result) writeQueues.delete(id); }).catch(() => undefined);
+  return result;
+}
+function notifyPending() { window.dispatchEvent?.(new Event('sagasmith:pending-writes')); }
+export async function listPendingWrites() {
+  return (await pendingWriteStore('list')).filter(item => item.id.startsWith(API_BASE + '/'));
+}
+async function dispatchWrite<T>(record: PendingWrite): Promise<GatewayResult<T>> {
+  const wasUncertain = record.uncertain;
+  // Persist before dispatch: a tab crash must not turn an unknown write into a new one.
+  await pendingWriteStore('put', { ...record, uncertain: true });
+  let body: string | FormData;
+  if (record.kind === 'json') body = record.payload as string;
+  else {
+    body = new FormData();
+    for (const [key, value] of record.payload as [string, string | File][]) body.append(key, value);
+  }
+  try {
+    const result = await rawGatewayRequest<T>(record.path, {
+      method: 'POST', body,
+      headers: record.kind === 'json' ? { 'Content-Type': 'application/json' } : undefined,
+    }, record.timeoutMs);
+    await pendingWriteStore('delete', record.id);
+    notifyPending();
+    return result;
+  } catch (error) {
+    // Network loss and server/dispatch failures can happen after a commit.
+    const definite = !wasUncertain && error instanceof GatewayRequestError && (
+      (error.status >= 400 && error.status < 500 && error.code !== 'dispatch_unknown')
+      || error.code === 'deadline_before_dispatch' || error.code === 'backpressure'
+    );
+    if (definite) await pendingWriteStore('delete', record.id);
+    notifyPending();
+    if (!definite && error instanceof GatewayRequestError) {
+      error.message += '；结果待确认。请使用页面上的“恢复原请求”，不要开始新的操作。';
+    }
+    throw error;
+  }
+}
+export function recoverPendingWrite(id: string) {
+  return serialized(id, async () => {
+    const record = (await listPendingWrites()).find(item => item.id === id);
+    if (!record) throw new Error('待确认请求已处理，请刷新当前状态。');
+    return dispatchWrite(record);
+  });
+}
+async function gatewayRequest<T>(path: string, init?: RequestInit, timeoutMs = 8000): Promise<GatewayResult<T>> {
+  if (init?.method !== 'POST') return rawGatewayRequest<T>(path, init, timeoutMs);
+  const id = API_BASE + path;
+  return serialized(id, async () => {
+    const form = init.body instanceof FormData;
+    const data = form ? Array.from((init.body as FormData).entries()).filter(([key]) => key !== 'idempotency_key')
+      : JSON.parse(String(init.body));
+    const suppliedKey = form ? (init.body as FormData).get('idempotency_key') : data.idempotency_key;
+    if (!form) delete data.idempotency_key;
+    const identity = JSON.stringify(form ? await Promise.all(data.map(async ([key, value]: [string, string | File]) =>
+      [key, typeof value === 'string' ? value : {
+        name: value.name, type: value.type,
+        hash: Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', await value.arrayBuffer())))
+          .map(byte => byte.toString(16).padStart(2, '0')).join(''),
+      }])) : data);
+    const previous = (await listPendingWrites()).find(item => item.id === id);
+    if (previous) {
+      if (previous.identity !== identity) throw new Error('此操作仍有结果待确认的请求，请先恢复原请求。');
+      return dispatchWrite<T>(previous);
+    }
+    const key = typeof suppliedKey === 'string' && suppliedKey ? suppliedKey : globalThis.crypto.randomUUID();
+    const record: PendingWrite = { id, path, identity, timeoutMs, kind: form ? 'form' : 'json',
+      payload: form ? [...data, ['idempotency_key', key]] : JSON.stringify({ ...data, idempotency_key: key }),
+    };
+    // IndexedDB keeps the exact request, including upload bytes, across page reloads.
+    // A storage failure prevents dispatch, so no unrecorded write can occur.
+    // add is atomic across tabs, even when Web Locks is unavailable.
+    await pendingWriteStore('add', record);
+    notifyPending();
+    return dispatchWrite<T>(record);
+  });
 }
 
 async function fetchJson<T>(path: string): Promise<T> {
@@ -144,7 +224,6 @@ export async function uploadContentPack(
 ): Promise<GatewayResult<unknown>> {
   const body = new FormData();
   body.set('kind', kind);
-  body.set('idempotency_key', globalThis.crypto?.randomUUID?.() || `ui-import-${Date.now()}`);
   if (progressRemaps?.length) body.set('progress_remaps', JSON.stringify(progressRemaps));
   body.set('archive', archive, filename);
   return gatewayRequest(
@@ -163,7 +242,6 @@ export function mutateContentPack(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       ...input,
-      idempotency_key: input.idempotency_key || globalThis.crypto?.randomUUID?.() || `ui-pack-${Date.now()}`,
     }),
   }, 120000);
 }
@@ -208,7 +286,6 @@ export function createActorFromPreset(
       pack_id: pack.id,
       version: pack.version,
       name: name || undefined,
-      idempotency_key: globalThis.crypto?.randomUUID?.() || `ui-actor-${Date.now()}`,
     }),
   });
 }
@@ -244,8 +321,8 @@ export async function submitCombatMove(
   distance: number,
   expectedRevision: number,
   branchId?: string,
-): Promise<CombatStatus> {
-  const response = await fetch(`${API_BASE}/api/campaigns/${encodeURIComponent(campaignId)}/combat/move`, {
+): Promise<CombatStatus | { operation_status: string }> {
+  const response = await gatewayRequest<CombatStatus | { operation_status: string }>(`/api/campaigns/${encodeURIComponent(campaignId)}/combat/move`, {
     method: 'POST',
     credentials: 'include',
     headers: requestHeaders({ 'Content-Type': 'application/json' }),
@@ -255,14 +332,9 @@ export async function submitCombatMove(
       distance,
       expected_revision: expectedRevision,
       branch_id: branchId,
-      idempotency_key: globalThis.crypto?.randomUUID?.() || `ui-${Date.now()}`,
     }),
   });
-  if (!response.ok) {
-    const problem = await response.json().catch(() => ({})) as { error?: string };
-    throw new GatewayRequestError(response.status, problem.error || 'Move rejected', problem);
-  }
-  return unwrap(await response.json() as CombatStatus | { data: CombatStatus });
+  return response.data;
 }
 
 export function subscribeCampaign(campaignId: string, onRevision: () => void): () => void {

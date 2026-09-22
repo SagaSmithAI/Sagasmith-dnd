@@ -2,8 +2,10 @@ import asyncio
 from pathlib import Path
 
 import pytest
+from mcp import Client
 from sagasmith_dnd.character_schema import derive_character_sheet
 from sagasmith_dnd.statblocks import parse_2014_statblock
+from sagasmith_dnd_runtime.operations import RequestIdentity
 
 from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.server import create_server
@@ -128,6 +130,23 @@ def test_text_module_statblock_candidate_can_create_a_source_bound_actor(
         ]
         assert candidate["execution_state"] == "review_ready", candidate.get("review_error")
         assert [item["chunk_id"] for item in source_chunks] == candidate["source_chunk_ids"]
+        # Stable catalogs must infer the owner campaign without a session exposure.
+        async with Client(server, mode="legacy") as client:
+            expanded = await client.call_tool(
+                "module_expand", {"chunk_id": candidate["source_chunk_ids"][0]},
+            )
+            assert not expanded.is_error
+            assert expanded.structured_content["campaign_id"] == campaign["id"]
+        with pytest.raises(PermissionError, match="another campaign"):
+            await server.runtime.execute(
+                "module_expand", {"chunk_id": candidate["source_chunk_ids"][0]},
+                context=RequestIdentity("system:local", "different-campaign"),
+            )
+        with pytest.raises(Exception, match="(?i)(access|member|permission|allowed)"):
+            await server.runtime.execute(
+                "module_expand", {"chunk_id": candidate["source_chunk_ids"][0]},
+                context=RequestIdentity("player:outsider"),
+            )
         assert candidate["validation"]["name"] == "GOBLIN"
         assert candidate["ruling_requirement"]["default_resolver"] == "agent"
         assert candidate["ruling_requirement"]["ruling_kind"] == "source_or_scene_fact"

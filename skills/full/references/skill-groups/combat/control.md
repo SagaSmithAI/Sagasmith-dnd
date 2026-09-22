@@ -11,9 +11,21 @@ continue with `character_state_change(death_save|stabilize)` until settled. Use
 an audited structured outcome; do not force a module ending from narration
 alone.
 
-After `combat_end`, consume `tools/list_changed`, refresh the native Play tool
-list, and use `exposure(search/set)` on the existing binding for the needed Play
-tools. Re-query character and campaign state, then commit durable casualties,
+Between post-combat death saves, follow the returned cadence: advance one round
+with `campaign_change(action="clock_advance", payload={period:"round", count:1})`.
+Do not reroll at the same game-time tick. Stable still means unconscious at 0 HP.
+For unassisted recovery, use `campaign_change(action="stable_recovery",
+payload={members:[{character_id, expected_revision}]})` with the campaign revision
+guard and an idempotency key. Runtime rolls the 1d4-hour recovery period and
+settles HP and elapsed time together. First establish whether uninterrupted
+recovery is possible in the actual scene; the operation does not establish a
+safe location or neutralize nearby enemies. Do not manually roll then heal.
+An enemy's source-described intent to drive intruders away is not proof that an
+unconscious creature actually moved. Record the actual action before changing
+its location, and keep intent distinct from completed events.
+
+After `combat_end`, use the Host-selected Play tools. Re-query character
+and campaign state, then commit durable casualties,
 relationships, clues, loot, scene progress, and manifest changes through normal
 Play continuity tools.
 

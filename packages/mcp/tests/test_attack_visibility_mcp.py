@@ -221,6 +221,7 @@ def test_hidden_attack_reveals_attacker_to_its_target(tmp_path: Path) -> None:
                         "reason": "The attacker shifts through an open nearby space.",
                         "destination_legal": True,
                         "distance_ft": 5,
+                        "opportunity_attack_actor_ids": [],
                     },
                 },
                 "expected_revision": agent_started["campaign_revision"],

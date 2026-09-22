@@ -92,7 +92,11 @@ def validated_save_source_facts(
         raise ValueError("check.save save_effect_conditions must be a list of strings")
     normalized_conditions = [item.strip().casefold() for item in conditions]
     if any(item not in _SAVE_CONDITIONS for item in normalized_conditions):
-        raise ValueError("check.save save_effect_conditions contains an unsupported condition")
+        raise ValueError(
+            "check.save save_effect_conditions contains an unsupported condition; "
+            "use condition IDs (not prose or damage): " + ", ".join(sorted(_SAVE_CONDITIONS))
+            + "; use [] when no condition applies"
+        )
     if len(normalized_conditions) != len(set(normalized_conditions)):
         raise ValueError("check.save save_effect_conditions cannot contain duplicates")
     if type(poison) is not bool:

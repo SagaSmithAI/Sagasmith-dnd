@@ -1,0 +1,30 @@
+{
+  "schema_version": 2,
+  "id": "example.field-medic.treat",
+  "source_card_id": "example.field-medic",
+  "source_card_kind": "activity",
+  "trigger": "action",
+  "editions": ["2014", "2024"],
+  "requires": {"target.validate": 1, "resource.spend": 1, "healing.apply": 1},
+  "slots": {
+    "source_actor": {"kind": "actor_id", "owner": "agent", "description": "Actor using the treatment activity."},
+    "target_actor": {"kind": "actor_id", "owner": "agent", "description": "Visible creature receiving treatment."}
+  },
+  "steps": [
+    {"id": "target", "op": "target.validate", "args": {
+      "source_actor_id": {"$slot": "source_actor"},
+      "target_ids": [{"$slot": "target_actor"}], "require_visible": true
+    }},
+    {"id": "cost", "op": "resource.spend", "args": {
+      "actor_id": {"$slot": "source_actor"}, "resource_ref": "resources.example_medical_supplies", "amount": 1
+    }},
+    {"id": "heal", "op": "healing.apply", "args": {
+      "target_ids": [{"$slot": "target_actor"}], "amount": 5, "source": "Example Field Medic"
+    }}
+  ],
+  "citations": [{
+    "source": "example:field-medic",
+    "source_ref": {"source_key": "field-medic-example", "chunk_id": "treatment"},
+    "source_excerpt": "Synthetic tutorial rule: use an action and one medical supply to restore five hit points to a visible creature."
+  }]
+}

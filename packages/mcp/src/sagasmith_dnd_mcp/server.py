@@ -18,6 +18,7 @@ from uuid import uuid4
 from weakref import WeakValueDictionary
 
 import sagasmith_dnd_runtime.application as _application
+import sagasmith_dnd_runtime.application_support as _application_support
 from mcp.server.caching import CacheHint
 from mcp.server.context import ServerRequestContext
 from mcp.server.lowlevel.server import NotificationOptions
@@ -81,20 +82,24 @@ from sagasmith_dnd_mcp.tool_profiles import (
 
 
 def __getattr__(name):
-    return getattr(_application, name)
+    return getattr(_application_support, name)
 
 
 class _CompatibilityModule(_types.ModuleType):
     def __setattr__(self, name, value):
-        if hasattr(_application, name) and name not in {"create_server", "main", "close_server"}:
-            setattr(_application, name, value)
+        if hasattr(_application_support, name) and name not in {
+            "create_server", "main", "close_server"
+        }:
+            setattr(_application_support, name, value)
         super().__setattr__(name, value)
 
 
 _sys.modules[__name__].__class__ = _CompatibilityModule
 
 
-def _attach_auth_receipt(result: Any, context: AuthContext | None, tool: str) -> Any:
+def _attach_auth_receipt(
+    result: Any, context: AuthContext | None, tool: str, campaign_revision: int | None = None,
+) -> Any:
     if context is None:
         return result
     if isinstance(result, CallToolResult):
@@ -104,6 +109,7 @@ def _attach_auth_receipt(result: Any, context: AuthContext | None, tool: str) ->
     else:
         return result
     receipt = context.audit_receipt(tool=tool, revision=_auth_receipt_revision(structured))
+    receipt["campaign_revision"] = campaign_revision
     updated = []
     attached = False
     for item in content:
@@ -151,6 +157,7 @@ class RequestScopedMCPServer(MCPServer):
         authorization_fingerprint_lookup: Any,
         bound_principal_id: str | None = None,
         auth_context_secret: str | None = None,
+        legacy_exposure: bool = False,
         **kwargs: Any,
     ) -> None:
         self.exposure_registry = exposure_registry
@@ -163,6 +170,7 @@ class RequestScopedMCPServer(MCPServer):
         self._authorization_fingerprint_lookup = authorization_fingerprint_lookup
         self._bound_principal_id = bound_principal_id.strip() if bound_principal_id else None
         self._auth_context_secret = auth_context_secret
+        self._legacy_exposure = legacy_exposure
         self._auth_context_nonces = AuthContextNonceGuard() if auth_context_secret else None
         self._exposure_locks: WeakValueDictionary[str, asyncio.Lock] = WeakValueDictionary()
         self._sessions: WeakValueDictionary[str, Any] = WeakValueDictionary()
@@ -177,7 +185,7 @@ class RequestScopedMCPServer(MCPServer):
             return original_initialization_options(
                 notification_options
                 or NotificationOptions(
-                    tools_changed=True,
+                    tools_changed=legacy_exposure,
                     prompts_changed=False,
                     resources_changed=False,
                 ),
@@ -342,28 +350,44 @@ class RequestScopedMCPServer(MCPServer):
         text = message.strip() or "The tool request was rejected."
         lowered = text.casefold()
         retryable = any(
-            marker in lowered for marker in ("stale", "expired", "timeout", "temporar", "conflict")
+            marker in lowered for marker in (
+                "stale", "expired", "timeout", "temporarily unavailable", "temporary failure",
+                "conflict",
+            )
         )
         code = (
             "stale_revision"
-            if "stale" in lowered and "revision" in lowered
+            if "revision" in lowered and ("stale" in lowered or "conflict" in lowered)
             else "expired_handle"
             if "expired" in lowered and ("handle" in lowered or "exposure" in lowered)
             else "authorization_denied"
-            if any(marker in lowered for marker in ("auth", "principal", "permission", "access"))
+            if any(marker in lowered for marker in (
+                "auth context", "delegation", "principal", "permission denied", "access denied",
+            ))
             else "invalid_request"
         )
+        recovery = {
+            "stale_revision": (
+                "Read the current authoritative state, reconcile the rejected operation, "
+                "then retry with its revision and the original idempotency key."
+            ),
+            "expired_handle": "Obtain a new owner-bound handle, then retry the rejected request.",
+            "authorization_denied": (
+                "Use the authenticated owner/authorized principal or obtain a fresh "
+                "audience-bound delegation."
+            ),
+        }.get(code, (
+            "If dispatch completion is unknown, query or replay the original operation "
+            "with the same idempotency key before issuing another write."
+            if retryable else
+            "Correct the indicated fields using the tool schema or its exact Skill section, "
+            "then retry. Do not repeat unchanged invalid arguments."
+        ))
         error = {
             "code": code,
             "message": text,
             "retryable": retryable,
-            "recovery": (
-                "Refresh the authoritative revision or handle and retry with "
-                "the same idempotency key."
-                if retryable
-                else "Correct the request or obtain a new audience-bound "
-                "delegation before retrying."
-            ),
+            "recovery": recovery,
         }
         return CallToolResult(
             is_error=True,
@@ -593,7 +617,10 @@ class RequestScopedMCPServer(MCPServer):
                 and not (name == "exposure" and arguments.get("action") == "open")
             ):
                 expected_campaign = exposure.campaign_id or ""
-            expected_revision = arguments.get("expected_revision", arguments.get("base_revision"))
+            operation = self.runtime.operations.get(name)
+            revision_field = (operation.meta.get("sagasmith_campaign_revision_argument")
+                              if operation is not None else "base_revision")
+            expected_revision = arguments.get(revision_field) if revision_field else None
             if isinstance(expected_revision, bool) or not isinstance(expected_revision, int):
                 expected_revision = None
             expected_resource_owner = (
@@ -677,12 +704,12 @@ class RequestScopedMCPServer(MCPServer):
         ctx: ServerRequestContext,
         params: PaginatedRequestParams | None,
     ) -> ListToolsResult:
-        """Keep the legacy adapter while making modern catalogs stateless."""
+        """Keep catalogs stable unless the dynamic compatibility adapter is enabled."""
 
         tools = await self.list_tools()
         era = "modern" if ctx.protocol_version == "2026-07-28" else "legacy"
         self._metric_counts[("catalog", era, "tools/list", "success")] += 1
-        if ctx.protocol_version != "2026-07-28":
+        if self._legacy_exposure and ctx.protocol_version != "2026-07-28":
             context = Context(
                 request_context=ctx, mcp_server=self, subscriptions=self._subscriptions
             )
@@ -770,6 +797,51 @@ class RequestScopedMCPServer(MCPServer):
         """Execute one request with fresh identity/role/phase/revision checks."""
 
         arguments = dict(arguments or {})
+        if (getattr(self.runtime, "local_session", None) is not None
+                and name in self.runtime.operations):
+            from sagasmith_dnd_runtime.operations import RequestIdentity
+
+            try:
+                value = await self.runtime.execute(
+                    name, arguments, context=RequestIdentity(self._bound_principal_id)
+                )
+            except (ValueError, PermissionError, LookupError) as exc:
+                if context is None:
+                    raise ToolError(str(exc)) from exc
+                return self._structured_tool_error(str(exc), exc)
+            if isinstance(value, dict):
+                result = CallToolResult(
+                    content=[TextContent(type="text", text=json.dumps(value, ensure_ascii=False))],
+                    structured_content=value,
+                )
+                return (result.content, result.structured_content) if context is None else result
+            if isinstance(value, RuntimeRenderResult):
+                result = CallToolResult(
+                    content=[
+                        TextContent(type="text", text=json.dumps(value.metadata)),
+                        Image(data=value.image.data, format=value.image.format).to_image_content(),
+                    ],
+                    structured_content=value.metadata,
+                )
+                return (result.content, result.structured_content) if context is None else result
+            if isinstance(value, RuntimeImage):
+                result = CallToolResult(content=[
+                    Image(data=value.data, format=value.format).to_image_content(),
+                ])
+                return (result.content, None) if context is None else result
+            if isinstance(value, list) and any(isinstance(item, RuntimeImage) for item in value):
+                result = CallToolResult(content=[
+                    Image(data=item.data, format=item.format).to_image_content()
+                    if isinstance(item, RuntimeImage)
+                    else TextContent(type="text", text=json.dumps(item, ensure_ascii=False))
+                    for item in value
+                ])
+            else:
+                result = CallToolResult(
+                    content=[TextContent(type="text", text=json.dumps(value, ensure_ascii=False))],
+                    structured_content={"result": value},
+                )
+            return (result.content, result.structured_content) if context is None else result
         try:
             _validate_contract_arguments(arguments)
         except ValueError as exc:
@@ -811,7 +883,8 @@ class RequestScopedMCPServer(MCPServer):
             return private_result
         legacy_request = (
             self._request_session(context)
-            if context is not None and context.protocol_version != "2026-07-28"
+            if self._legacy_exposure and context is not None
+            and context.protocol_version != "2026-07-28"
             else None
         )
         legacy_session_key = legacy_request[0] if legacy_request else None
@@ -847,7 +920,8 @@ class RequestScopedMCPServer(MCPServer):
                 context=context,
                 exposure=exposure,
             )
-            if auth_context is not None and legacy_session_key is None:
+            if (auth_context is not None and legacy_session_key is None
+                    and name not in self.runtime.operations):
                 policy_campaign_id = self._argument_campaign_id(arguments) or None
                 policy = policy_for_tool(name)
                 if policy_campaign_id is None and policy is not None and policy.requires_campaign:
@@ -864,6 +938,10 @@ class RequestScopedMCPServer(MCPServer):
         campaign_id = self._argument_campaign_id(arguments) or (
             exposure.campaign_id if exposure is not None else None
         ) or (auth_context.campaign_id if auth_context is not None else None)
+        if name == "campaign_create":
+            # Delegation bootstrap scope is not the newly created campaign.
+            # Resolve the real scope from the authoritative result below.
+            campaign_id = None
         context_manager = (
             self._random_context_factory(campaign_id, name, arguments)
             if campaign_id and name not in CORE_TOOLS
@@ -902,6 +980,9 @@ class RequestScopedMCPServer(MCPServer):
             if message.startswith("Unknown tool") or "validation error" in message.casefold():
                 raise
             return self._structured_tool_error(message, exc)
+        committed_revision = self.runtime.ports["committed_campaign_revision"](
+            campaign_id, arguments.get("idempotency_key"),
+        ) if auth_context is not None else None
         result = self._ensure_text_fallback(result)
         result = self._attach_random_receipt(result, random_receipt)
         result = self._canonicalize_structured_text(result)
@@ -940,7 +1021,7 @@ class RequestScopedMCPServer(MCPServer):
                     current_exposure.revision if current_exposure is not None else 0
                 )
             result = self._attach_host_context_binding(result, binding)
-        result = _attach_auth_receipt(result, auth_context, name)
+        result = _attach_auth_receipt(result, auth_context, name, committed_revision)
         # Preserve the historical direct-Python testing API. Network requests
         # always supply Context and therefore always receive the SDK v2
         # CallToolResult expected by both protocol eras.
@@ -1166,6 +1247,7 @@ def _create_server(config, *, resources):
         authorization_fingerprint_lookup=access.authorization_fingerprint,
         bound_principal_id=config.bound_principal_id,
         auth_context_secret=config.auth_context_secret,
+        legacy_exposure=config.legacy_exposure,
         cache_hints={"tools/list": CacheHint(ttl_ms=300_000, scope="private")},
         extensions=[tasks_extension],
     )
@@ -1192,12 +1274,15 @@ def _create_server(config, *, resources):
             subscriptions=mcp._subscriptions,
         )
         try:
-            result = await MCPServer.call_tool(
-                mcp,
-                record.tool_name,
-                arguments,
-                context,
-            )
+            if config.local_authority:
+                result = await mcp.call_tool(record.tool_name, arguments, context)
+            else:
+                result = await MCPServer.call_tool(
+                    mcp,
+                    record.tool_name,
+                    arguments,
+                    context,
+                )
         except ToolError as exc:
             message = _safe_tool_error_message(exc)
             result = mcp._structured_tool_error(message)
@@ -1299,7 +1384,7 @@ def _create_server(config, *, resources):
         if config.bound_principal_id is not None:
             principal_id = config.bound_principal_id
         request = mcp._request_session(ctx)
-        modern = ctx.protocol_version == "2026-07-28"
+        modern = not config.legacy_exposure or ctx.protocol_version == "2026-07-28"
         session_key = request[0] if request is not None else f"direct:{principal_id}"
         if modern:
             session_key = f"handle:{uuid4().hex}"
@@ -1333,14 +1418,14 @@ def _create_server(config, *, resources):
             return {
                 **exposures.status(opened),
                 "exposure_handle": opened.id,
-                "native_dynamic_tools": False,
-                "catalog_effect": "guidance_only",
+                "native_dynamic_tools": not modern,
+                "catalog_effect": "guidance_only" if modern else "dynamic_compatibility",
                 "next": "Pass exposure_handle to exposure(get|search|set).",
             }
 
         handle = str(exposure_handle or "").strip()
         if modern and not handle:
-            raise ExposureError("exposure_handle is required on the 2026-07-28 path")
+            raise ExposureError("exposure_handle is required for catalog guidance")
         current = exposures.get(handle) if handle else exposures.active(session_key)
         if current is None:
             raise ExposureError("Unknown or expired exposure_handle. Use action='open'.")
@@ -1457,12 +1542,14 @@ def main() -> None:
     # native import can stall when first attempted from FastMCP's running
     # asyncio loop, so warm it on the main thread when the documents extra is
     # installed. A text-only base wheel must still start without that extra.
-    _preload_optional_pdf_runtime()
-
     config = McpConfig.from_environment()
+    if not config.local_authority:
+        _preload_optional_pdf_runtime()
     transport = os.environ.get("SAGASMITH_DND_MCP_TRANSPORT", "stdio").strip().casefold()
     if transport not in {"stdio", "streamable-http"}:
         raise ValueError("SAGASMITH_DND_MCP_TRANSPORT must be 'stdio' or 'streamable-http'")
+    if config.local_authority and transport != "stdio":
+        raise ValueError("local authority is available only over trusted stdio")
     if (
         transport == "streamable-http"
         and config.http_host.strip().casefold() not in {"127.0.0.1", "::1", "localhost"}

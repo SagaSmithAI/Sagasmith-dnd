@@ -3048,6 +3048,29 @@ def test_agent_review_can_keep_custom_multiattack_as_agent_ruling() -> None:
     assert filled["fill"]["multiattack_options"][0]["resolution"] == "agent_ruling"
 
 
+def test_reviewed_multiattack_mismatch_exposes_exact_repair_without_accepting_it() -> None:
+    parsed = parse_2014_statblock(BANDIT_CAPTAIN, source_key="module-review:repair-excerpt")
+    activity = next(
+        item for item in parsed.sheet["content"]["activities"] if item["name"] == "Multiattack"
+    )
+    declaration = {
+        "activity_id": activity["id"],
+        "source_excerpt": "***Multiattack.*** " + activity["description"],
+        "reason": "Retain the source procedure for Agent resolution.",
+        "resolution": "agent_ruling",
+    }
+    with pytest.raises(StatblockImportError) as error:
+        apply_reviewed_statblock_fill(parsed.sheet, {"multiattack_options": [declaration]})
+    expected = " ".join(activity["description"].split())
+    assert f"activity_id={activity['id']!r}" in str(error.value)
+    assert f"expected source_excerpt={expected!r}" in str(error.value)
+    declaration["source_excerpt"] = expected
+    repaired = apply_reviewed_statblock_fill(
+        parsed.sheet, {"multiattack_options": [declaration]}
+    )
+    assert repaired["fill"]["multiattack_options"][0]["source_excerpt"] == expected
+
+
 def test_agent_ruling_multiattack_rejects_structured_options() -> None:
     parsed = parse_2014_statblock(
         BANDIT_CAPTAIN,
@@ -3135,6 +3158,32 @@ def test_statblock_explicit_heavy_armor_preserves_non_ac_mechanics_with_override
     assert parsed.sheet["inventory"]["equipment_slots"]["armor"] == "statblock-chain-mail"
     assert parsed.sheet["inventory"]["equipment_slots"]["shield"] == "statblock-shield"
     assert derived["stealth_disadvantage"] is True
+    assert derived["armor_proficiency"]["proficient"] is True
+    assert derived["armor_proficiency"]["disadvantage_abilities"] == []
+    assert derived["armor_proficiency"]["blocks_spellcasting"] is False
+    assert set(parsed.sheet["traits"]["proficiencies"]["armor"]) == {"Chain Mail", "Shield"}
+
+
+def test_legacy_statblock_armor_sync_rejects_unrecorded_or_modified_equipment():
+    from copy import deepcopy
+
+    from sagasmith_dnd.statblocks import synchronize_statblock_armor_proficiencies
+
+    sheet = parse_2014_statblock(BANDIT_CAPTAIN, source_key="module-review:legacy-armor").sheet
+    sheet["traits"]["proficiencies"]["armor"] = []
+    before = deepcopy(sheet)
+    repaired, evidence = synchronize_statblock_armor_proficiencies(sheet)
+    assert sheet == before
+    assert repaired["traits"]["proficiencies"]["armor"] == ["Studded Leather"]
+    assert evidence[0]["source_key"] == "module-review:legacy-armor"
+    assert synchronize_statblock_armor_proficiencies(repaired)[0] == repaired
+    for field, value in [("source_key", ""), ("description", "Bought at a shop"),
+                         ("name", "Plate"), ("id", "new-armor")]:
+        altered = deepcopy(before)
+        armor = next(item for item in altered["inventory"]["items"] if item["kind"] == "armor")
+        armor[field] = value
+        with pytest.raises(ValueError, match="no unchanged source-recorded"):
+            synchronize_statblock_armor_proficiencies(altered)
 
 
 def test_numeric_statblock_spell_attack_is_executable() -> None:

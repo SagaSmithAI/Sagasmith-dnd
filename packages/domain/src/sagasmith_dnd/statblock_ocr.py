@@ -126,7 +126,7 @@ def recover_2014_pdf_statblock_layout(
         if recovered is not None:
             break
     if recovered is None or selected_scale is None or selected_model is None:
-        raise RuntimeError(
+        raise StatblockImportError(
             "layout OCR did not find one structurally unambiguous target statblock "
             "on candidate pages " + ", ".join(str(value) for value in attempted_pages)
         )
@@ -233,7 +233,7 @@ def recover_2014_pdf_statblock_layout(
                 None,
             )
             if matching_pair is None:
-                raise RuntimeError(
+                raise StatblockImportError(
                     "no independent layout OCR model/scale corroborated all critical "
                     "statblock facts; " + "; ".join(secondary_failures)
                 )

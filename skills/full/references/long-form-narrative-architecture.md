@@ -450,9 +450,9 @@ Agent 每次 session 都应假定自己“刚醒来”，不能靠旧对话继�
 2. `campaign_query(view="resume", payload={"campaign_id": ...})`，一次取得 campaign、
    当前 branch/head、manifest、current scene、continuity、当前 context receipt
    与有效 phase；
-3. 调用 `exposure(action="open")` 打开 campaign exposure；
-4. 用 `exposure(action="search")` 找到所需工具，再用 `action="set"` 改变原生列表；
-5. 处理 `tools/list_changed`，按原生 schema 直接调用工具；
+3. 由可信 Host 注入 principal 和 campaign 请求上下文；
+4. 从稳定公开目录中按 phase、role、task 选择工具；
+5. 按原生 schema 直接调用工具，由 Runtime 执行权限与阶段校验；
 6. 对每个实际行动 actor 单独调用 `continuity_context`；
 7. DM 行为裁定加入相关 actor/scene/location/quest/item refs；
 8. 重读 party 和所有相关 Character；
@@ -780,7 +780,7 @@ branch merge；需要比较时使用 `branch_query(view="compare")`。
 Restore 会从历史节点 fork 新历史，而不是把旧节点原地改写。恢复后必须：
 
 1. 验证新 head 和 lineage；
-2. 重开 exposure；
+2. resume 并跨越变更后的 host context binding；
 3. 重读 campaign、manifest、characters、scene progress；
 4. 重读 events/facts；
 5. 对每个 actor 重读 continuity context；
@@ -809,7 +809,7 @@ Dream 只保存：
 
 ## 权限、受众与工具阶段
 
-每个 MCP session/principal 拥有独立 exposure。阶段决定可加载工具：
+每个请求使用独立的可信身份与战役绑定。Host 按阶段筛选稳定公开目录，Runtime 校验调用：
 
 - Lobby：导入、规则包、角色准备、行政和开局质量门禁；
 - Play：场景、检定、时间、连续性、追逐和非战斗状态；

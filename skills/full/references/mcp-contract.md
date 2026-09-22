@@ -21,13 +21,13 @@ ordered import stages, canonical citation fields, and play/combat settlement too
 | Snapshot | `snapshot_create`, `snapshot_query(list/verify/lineage/recap/core)`, `snapshot_restore`, `branch_query(list/compare)`, `branch_change(create/checkout/create_core_upgrade)` |
 | Audit | `state_revision(history/receipt/undo/redo)` |
 
-Do not call retired names or emulate aliases client-side. Pack authoring and
-inspection are exposed only in Lobby through `rulebook_draft`, `module_draft`,
-and `content_pack`; finalized Pack reads do not bypass that phase boundary. The
+Do not call retired names or emulate aliases client-side. Pack authoring stays
+in Lobby through `rulebook_draft`, `module_draft`, and `content_pack` mutations.
+Owner/DM `content_pack(list|get)` reads are available during Play and Combat. The
 consolidated calls include:
 
 - `chase(action="start" | "query" | "take_turn" | "end")`;
-- `character_check(action="check" | "group" | "contest" | "reroll")`;
+- `character_check(action="check" | "group" | "contest" | "reroll" | "scene_save" | "source_feature")`;
 - `campaign_rules(action="core_relock")`;
 - `rulebook_draft(action="evidence" | "edit")`;
 - `module_draft(action="evidence" | "edit")`;
@@ -60,8 +60,12 @@ or archive contents. Its complete action set is
 `list|get|import|export|activate|deactivate|remove`. The
 published action-payload contract is the single exact-field whitelist; handlers
 add domain checks but do not maintain a second allowed/required field table.
-all `rulebook_draft`, `module_draft`, and `content_pack` actions are Lobby-only
-and DM-only. Chase, contests, and Heroic
+All `rulebook_draft` and `module_draft` actions, and `content_pack` mutations,
+are Lobby-only and DM-only. Content Pack list/get remain DM-only in every phase;
+`module_expand` remains available in combat for source verification.
+`snapshot_restore` is available in all phases, with the same owner, revision,
+branch, snapshot integrity, runtime compatibility and conversation guards.
+Chase, contests, and Heroic
 Inspiration rerolls are Play-only. On-hit rulings are
 Combat-only. Loading a facade through a lower-risk group does not authorize its
 other actions outside those action-level boundaries. `playthrough_manifest` and
@@ -564,16 +568,11 @@ first and preserve its exact source reference/checksum. Build a generated PC onl
 when no suitable active PC exists or an explicit player choice calls for one;
 never build seats merely to reach a printed recommendation or initial plan. This
 precedence is a provenance quality gate, not a fixed party count.
-If complete text search plus visual review proves that the module states no
-party-size range, record that absence and any Agent-selected positive initial
-plan, but do not block party construction or play on completing the recommendation
-review. Never silently present four, or a semantically unrelated search hit, as
-the module's recommendation.
-The manifest preserves this as `party_size_review` with
-`default_resolver="agent"` and `ruling_kind="source_or_scene_fact"` while the
-Agent performs the DM review. Missing recommendation evidence is diagnostic, not
-an external play boundary; mechanically indispensable actor data remains subject
-to its ordinary validation.
+Party size is a player/DM choice with at least one active PC. Record a printed
+recommendation only when known; missing counts require no exhaustive search,
+visual inspection, rule fallback, or `party_size_review`. Never present a chosen
+count as a module recommendation. Mechanically indispensable actor data still
+requires its ordinary validation.
 
 For a dead, missing, or departed PC, prefer an applicable unused module
 pregenerated character and otherwise create one new legal character through the
@@ -738,7 +737,9 @@ dice, and healing calls.
 `character_state_change(action="level_advance")` is DM-authorized and valid only
 in `lobby`, outside active combat. It requires the current actor revision, a fresh
 idempotency key, the exact existing `class_name`, `hp_method` (`fixed` or
-`rolled`; never provide `hp_roll`), and nonempty `reason` and `source_ref`. In XP
+`rolled`; never provide `hp_roll`), integer `target_level` (current total level + 1),
+and nonempty `reason` and `source_ref`. An already reached target is rejected
+even with a new key; replay the original key/payload after an uncertain result. In XP
 mode it requires the actor's current cumulative XP to meet the next-level
 threshold; milestone mode relies on the cited trigger. It currently advances a
 2014 or 2024 single-class actor exactly one level; multiclass advancement remains
@@ -765,7 +766,7 @@ projection with a second write.
 |---|---|---|
 | Rules edition and locale | Core campaign Rule Profile | Bound character `sheet.edition` is projected on every write |
 | Elapsed campaign time | `campaign.state.game_time.elapsed_ticks` | `world_time` is an optional anchored calendar projection; wall-clock timestamps and exposure TTLs are operational time |
-| Runtime phase | Active `campaign.state.combat.active`, otherwise `campaign.state.game_phase` (`lobby` or `play`) | The campaign view's `effective_game_phase` is the server-owned derivation consumed by drivers; exposure refreshes from it |
+| Runtime phase | Active `campaign.state.combat.active`, otherwise `campaign.state.game_phase` (`lobby` or `play`) | The campaign view's `effective_game_phase` is the server-owned derivation consumed by drivers; Hosts select task tools from it |
 | Active module | Core active `ModuleSource` revision set, captured as exact `module_activations` in a snapshot | Import-job `activated` is a workflow receipt; do not store `module_drafts.active` in campaign state |
 | Rule source revision | Immutable `RuleSource` id and chunks | A reimport retires the prior revision; default search selects the active revision, while an exact historic source id/citation remains auditable |
 
@@ -1039,28 +1040,14 @@ operational signal, not permission to rewrite history automatically.
 - `full` uses MCP-owned SQLite, optional ChromaDB, and managed module artifacts.
 - `standalone/` remains a separate portable file workflow; it does not call MCP.
 
-## Session exposure and game phase
+## Public catalog and game phase
 
-The MCP, not Agent configuration, owns tool exposure. Every connection starts
-with exactly 7 core tools: `exposure`, `server_capabilities`, `storage_status`,
-`campaign_query`, `game_phase`, `resolution_presentation`, and `skill_query`.
-
-Call `exposure(action="open", campaign_id?, principal_id?)`, discover exact tool
-ids with `action="search"`, and change the session's loaded ids with
-`action="set"` plus `add_tool_ids`/`remove_tool_ids`. `action="get"` returns the
-current campaign, principal, phase, expiry, and loaded ids. Opening again replaces
-the session binding and clears its loaded tool ids. A campaign phase change,
-snapshot restore, branch checkout, or state undo/redo keeps the binding, crops
-incompatible tools, and may change the authoritative phase or branch. After the
-notification, refresh the native list and use `exposure(search/set)` to load the
-needed tools; do not call `open` merely to refresh phase exposure.
-
-Every successful open/set sends MCP `tools/list_changed`. The Host must refresh
-the native list and call newly listed domain tools directly. This is the only
-exposure layer. Use the native tool schema plus runtime validation as the input
-contract. A Host that cannot refresh mutable native schemas does not implement
-this D&D contract. Use bounded `skill_query(outline/section/search)` only for
-task-specific Skill depth.
+Modern MCP publishes a stable public operation catalog. The Host selects a
+bounded subset by phase, role, and task. Runtime independently validates
+trusted identity, campaign binding, permissions, and phase at call time.
+Use native tool schemas and bounded `skill_query(outline/section/search)`
+reads. Hosts do not need mutable native tool lists. The optional historical
+protocol is documented only in [legacy-adapter.md](legacy-adapter.md).
 
 | Phase | Intended state |
 |---|---|
@@ -1068,7 +1055,6 @@ task-specific Skill depth.
 | `play` | live non-combat exploration, downtime, dialogue, checks, and continuity |
 | `combat` | active structured encounters in Grid or Agent spatial mode |
 
-The server initialization capability advertises `tools.listChanged=true`.
 Single-user hosts should set `SAGASMITH_DND_MCP_BOUND_PRINCIPAL_ID`; the server
 then overwrites model-authored principal fields. Multi-user hosts must instead
 hide and inject the authenticated principal per request. `system:local` is only
@@ -1081,11 +1067,10 @@ binding establishes or changes a context epoch. A repeated identical binding
 does not loop. Audience, role, principal, campaign, branch, checkout, and
 restore transitions intentionally establish a new epoch.
 
-An exposure without `campaign_id` may add only bootstrap/storage tools allowed
-by their policy. After campaign creation or selection, reopen with the campaign
-id. Campaign administration and rule/module authoring additionally require
-owner/DM membership. A campaign-bound exposure rejects arguments that
-target a different campaign, including character ids resolved to that campaign.
+Before campaign selection, use only policy-authorized bootstrap/storage tools.
+After creation or selection, bind trusted request identity to the campaign.
+Campaign administration and rule/module authoring require owner/DM membership.
+Bound requests reject a different campaign, including one resolved from actor ids.
 Objective memory, actor-knowledge writes, snapshot history, state history, rule
 receipts, scene progression, combat start/end/join, and map patches are likewise
 kept under owner/DM authorization. Tool visibility never replaces actor and
@@ -1101,7 +1086,7 @@ Use `game_phase(action="set", tool_profile="lobby" | "play")` only for the
 non-combat transition. Leaving Play requires every chase and persistent NPC
 conversation to be closed. `combat_start` likewise requires no active chase or
 conversation, moves the campaign to `combat`, and
-`combat_end` returns it to `play`; the server removes incompatible loaded tools.
+`combat_end` returns it to `play`; the Host selects the next phase subset.
 Authorization, revision, idempotency, and engine checks apply even if a
 client presents a stale schema.
 Direct character-card mutations (sheet replacement, inventory, wallet, effects,

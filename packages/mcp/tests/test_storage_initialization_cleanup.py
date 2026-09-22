@@ -18,8 +18,8 @@ def test_partial_storage_initialization_disposes_database(
     real_database = storage_module.Database
 
     class OpenedDatabase(real_database):
-        def __init__(self, url: str) -> None:
-            super().__init__(url)
+        def __init__(self, url: str, *, local_authority: bool = False) -> None:
+            super().__init__(url, local_authority=local_authority)
             # Force a real pooled SQLite handle before the later constructor fails.
             with self.engine.connect() as connection:
                 connection.exec_driver_sql("SELECT 1")

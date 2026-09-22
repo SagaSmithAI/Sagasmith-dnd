@@ -20,9 +20,8 @@ the concise parent Skill and the MCP native tool list are the current entry poin
 ## Runtime
 
 This full skill is MCP-first. Start with `storage_status`, then call
-`exposure(action="open")` for the active campaign. Search for exact tool ids,
-change the native list with `exposure(action="set")`, refresh after
-`tools/list_changed`, and call listed tools directly. The short fragments under
+`campaign_query(view="resume")` and read authoritative state. Use the stable
+public catalog and call Host-selected tools directly. The short fragments under
 `../../references/skill-groups/` route ordinary work; this larger document is
 an on-demand deep reference.
 All raw tool names below may be prefixed by the host, for example
@@ -38,7 +37,7 @@ these deep references only when needed:
 
 - actor creation or advancement: `references/CHAR_CREATION.md`
 - actor, items, wallet, spells, effects, or resources:
-  `../../references/character-schema-v2.md`
+  `dnd:full/references/character-schema-v2.md` via `skill_query(kind="asset", action="read", identifier=...)`
 - module preparation or scene transitions: `references/MODULE_INDEX.md` and
   `references/MODULE_ARC.md`
 - real campaign rehearsal or corpus regression:
@@ -73,9 +72,10 @@ the campaign.
    `source_ref` returned by `module_expand`, including its service-owned
    `content_sha256`. If expansion omits it, stop and repair the import/exposure
    path; never synthesize the hash client-side. Copy every runtime excerpt from
-   that exact expanded chunk, not merely from the concatenated scene text. Before
-   any mutation, expand the cited `chunk_id` again and require the returned
-   canonical source metadata, digest, and excerpt to match.
+   that exact expanded chunk, not merely from the concatenated scene text. Reuse
+   this verified immutable reference within the same active module and branch;
+   Runtime validates it on each mutation. Expand again after a module/branch
+   change, restore, stale-source rejection, or when the required excerpt is absent.
 3. Ask for intent when it is ambiguous. Never reveal unseen rooms, future twists,
    hidden motives, or sibling-branch facts.
 4. Use campaign-bound `rule_search(campaign_id=...)` then
@@ -241,7 +241,7 @@ Keep these distinct:
 
 Cards and import diffs use the same ownership contract. Preserve
 `ruling_requirement`/`ruling_requirements` on descriptive activities, feat
-prerequisites, source-bound spells, critical follow-ups, party-size reviews, and
+prerequisites, source-bound spells, critical follow-ups, and
 `needs_dm_review` scene-progress impacts. Ordinary source-or-scene adjudication
 defaults to the Agent; a missing ranged/spell range, incomplete hydration, or
 other absent/contradictory source mechanic remains
@@ -540,11 +540,13 @@ insufficient exact payment, unavailable Core lock, or failed validation must
 leave character, wallet, clock, inventory, and effects unchanged.
 
 During initial lobby setup, submit the complete level 1+ prepared list through
-`character_spell_prepare(mode="replace_all", event="setup")`; use `mode="set"`
+`character_spell_prepare(mode="replace_all", payload={spell_ids:[...]})`; use `mode="set"`
 only for an initial setup edit. Once the campaign first enters live play,
 returning to lobby does not reopen setup. During live play, a prepared-list
 change must be a member choice in
-`campaign_change(action="party_rest", prepared_spell_ids=[...])`. Do not
+`campaign_change(action="party_rest", payload={rest_type:"long_rest",
+duration_minutes:480, members:[{character_id, expected_revision,
+prepared_spell_ids:[...]}]})`. Do not
 simulate a long rest by repeated toggles. The runtime enforces 2014/2024 class
 timing and replacement count, class-level spell eligibility, Wizard spellbook
 membership, always-prepared and cantrip exclusions, and multiclass
@@ -754,6 +756,21 @@ through the owned window. Knowledge transfer, possession, transformation, or
 other semantics that the generic plan vocabulary cannot express remain an
 explicit Agent/DM ruling plus ordinary public continuity and state operations;
 the engine must not infer them from a monster name or prose fragment.
+
+For a noncombat module hazard, use `character_check(action="scene_save")` with
+`payload={actor_id, ability, dc, source_ref, source_excerpt, reason,
+save_source_kind, save_effect_conditions, save_against_poison}`. Copy the exact
+active module citation from `module_expand`; the excerpt must match that chunk.
+The DM classifies the clause as `nonmagical_effect` or `magical_effect`, provides
+the prevented conditions as a list (for example `["restrained"]` for a snare),
+and explicitly records whether this save is against poison. This only rolls the
+save; apply its source-supported consequences separately. It does not replace a
+spell/card executor or its action/resource payment. Never put these fields in
+generic `rule_facts`, ignore `pending_ruling`, or use a bare die to bypass it.
+
+For ordinary skill checks, send the skill name in `payload.ability`, for example
+`{actor_id,kind:"check",ability:"stealth",dc:12}`. Proficiency and expertise are
+derived from the actor. There is no separate `skill` field.
 
 For a semantic `check.save`, record conditional-save classification in that
 step's existing `args.source` object when authoring its plan. Include the exact

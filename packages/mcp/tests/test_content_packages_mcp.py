@@ -28,10 +28,7 @@ from sagasmith_dnd.character_schema import (
     equip_inventory_item,
 )
 from sagasmith_dnd.content_actors import build_dnd_content_actor
-from sagasmith_dnd.content_packages import (
-    build_preset_content_package,
-    build_rule_content_package,
-)
+from sagasmith_dnd.content_packages import build_preset_content_package, build_rule_content_package
 from sagasmith_dnd.standard_feature_ids import (
     TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
     TORTLE_NATURAL_ARMOR_AUTHORITY_KEY,
@@ -1069,6 +1066,20 @@ def test_bundled_srd_monster_presets_are_catalog_imports(tmp_path: Path) -> None
         )
         catalog = shared["content_package"]["actors"]
         frog = next(item for item in catalog if item["name"] == "Frog")
+        catalog_rows = await _call(server, "character_query", {
+            "view": "catalog", "payload": {
+                "campaign_id": campaign["id"], "kind": "actor_card", "query": "Frog",
+            },
+        })
+        frog_artifact = next(item for item in catalog_rows if item["name"] == "Frog")
+        direct_preset = await _call(server, "character_create_from", {
+            "mode": "content_actor", "payload": {
+                "campaign_id": campaign["id"], "artifact_id": frog_artifact["id"],
+                "name": "Catalog Frog",
+            }, "idempotency_key": "catalog-frog",
+        })
+        assert direct_preset["character"]["name"] == "Catalog Frog"
+        assert direct_preset["character"]["sheet"]["combat"]["hp"] == frog["sheet"]["combat"]["hp"]
         imported = await _call(
             server,
             "character_create_from",

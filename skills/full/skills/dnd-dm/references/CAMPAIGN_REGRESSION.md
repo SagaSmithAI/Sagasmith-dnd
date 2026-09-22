@@ -36,30 +36,17 @@ D&D, MCP, or a generic driver heuristic.
 
 Run every step through one campaign-bound MCP session/exposure at a time.
 
-1. Cold-start each DM and player session from exactly the six native core tools:
-   `skill_query`, `campaign_query`, `exposure`, `game_phase`,
-   `server_capabilities`, and `storage_status`. Use Skill guidance plus
-   `exposure(open/search/set)`, consume every real `tools/list_changed`, refresh
-   `tools/list`, and call only tools present in that session's native list. Do
-   not call an unexposed facade, emulate a result, or use an alias fallback.
-   Issue one short capability phrase or exact tool id per exposure search; a
-   concatenated list of tool names plus narrative text is an invalid discovery
-   probe. After `set` and `tools/list_changed`, call the newly listed native tool
-   itself. Core `campaign_query` must never proxy a `character_query`,
-   `combat_query`, or mutation by carrying synthetic `tool`/`action` fields.
-   Open once for the campaign/principal binding; after phase, restore, checkout,
-   undo, or redo, keep that binding and use `exposure(search/set)` to load the
-   needed current-phase tools. Record native tool, phase, exposure, and
-   `host_context_binding` timelines. A player session must prove that DM-only
-   tools cannot be loaded and that module, continuity, and combat projections
-   are player-safe.
+1. Cold-start each DM and player with a trusted identity. Verify the stable
+   public catalog and the Host-selected phase/role/task subset. Call native
+   tools directly; never proxy mutations through `campaign_query`. Prove
+   that DM-only calls are rejected for players even when invoked directly,
+   and that module, continuity, and combat projections are player-safe.
+   Record tool, phase, branch, and `host_context_binding` timelines.
 
-   Never issue `game_phase`, `combat_start`, `combat_end`, restore, checkout,
-   undo, or redo in the same parallel tool batch as an `exposure(set)` built
-   from the old native list. Wait for the authoritative transition, consume its
-   `tools/list_changed`, refresh `tools/list`, then search and set the next
-   phase's tools. Parallelizing the transition with stale exposure is a host
-   ordering bug, not a recoverable discovery shortcut.
+   Serialize phase changes, restore, checkout, undo, and redo before calls
+   depending on their results. Re-read authoritative state, cross changed
+   context bindings, and rebuild requests with current revisions. Do not
+   batch a transition with a mutation built from the old state.
 
    Before campaign creation, read the edition and selected advancement mode
    from the discovered inventory unit, current Pack descriptor, or source
@@ -122,7 +109,7 @@ Run every step through one campaign-bound MCP session/exposure at a time.
      "source_refs": ["<exact validated module source reference>"],
      "current": {"module_id": "", "chapter_id": "", "chapter_title": "", "scene_id": "", "scene_title": "", "objective": ""},
      "traversal": {"reachable_scene_ids": [], "visited_scene_ids": [], "excluded_scenes": [], "branch_decisions": []},
-     "party": {"party_size_status": "source_confirmed", "recommended_minimum": "<source integer>", "recommended_maximum": "<source integer>", "selected_size": "<positive Agent selection>", "party_size_review": {}, "use_pregenerated_first": true, "members": [], "replacements": []},
+     "party": {"use_pregenerated_first": true, "members": [], "replacements": []},
      "npcs": [],
      "quests": [],
      "clues": [],
@@ -217,20 +204,12 @@ Run every step through one campaign-bound MCP session/exposure at a time.
     positive initial party choice; only then build the
    remaining legal seats from active content catalog ids. A present applicable
    pregen may not be skipped for a generated optimization. Preserve each pregen's
-   source reference and document checksum. If extraction cannot find a party-size
-   range, search the complete normalized document, expand every plausible hit, and
-   visually inspect the introduction and character-creation pages. A semantic
-   search miss or unrelated numeral hit is not a source range. If the module is
-   genuinely silent, stop the source-confirmed gate and have the SagaSmith Agent
-   acting as DM record an explicit review before building any PC. The review
-   must retain the reviewed module
-   pages, search terms, exact fallback rule reference and checksum, selected
-   count, and `represented_as_module_recommendation=false`. A completed review
-   may use an exact enabled-Core design baseline, but it must not relabel that
-   number as the module's recommendation; never silently default to four. Use a
-   manifest `party_size_review` with `default_resolver="agent"` and
-   `ruling_kind="source_or_scene_fact"` for this Agent-owned review; image/source
-   evidence that still cannot be inspected remains an explicit external gate.
+    source reference and document checksum. Party size is an advisory choice,
+    not a source-review gate. A missing printed range requires no exhaustive
+    search, visual inspection, rule fallback, or `party_size_review`. Choose and
+    label a positive simulated party size under the regression authorization;
+    never represent that choice as a module recommendation. Runtime membership
+    may change and needs only at least one active PC.
    Use a
    level appropriate to the adventure segment. Exhaust advancement follow-ups,
    prepared spells, features, derived-state re-reads, and a verified snapshot
@@ -252,8 +231,8 @@ Run every step through one campaign-bound MCP session/exposure at a time.
    combat statblock, use the public driver's `prepare-narrative-npc` path: cite
    the active module/scene/chunk/page/hash and an excerpt containing the exact
    name and assign the creation a stable `--occurrence-id`. Close or abort any
-   active NPC conversation, return to `lobby`, consume `tools/list_changed`, and
-   load `character_create_from` through the current exposure before creating the
+   active NPC conversation, return to `lobby`, refresh state, and
+   call the public `character_create_from` tool before creating the
    actor with `mode="narrative_npc"`. Verify `combat_eligible=false` plus the
    `narrative_only`/`source_bound` tags, register the actor in the manifest, then
    return to `play`, consume the new native list, and verify its checkpoint.
@@ -662,8 +641,8 @@ Run every step through one campaign-bound MCP session/exposure at a time.
    portraits or the deterministic fallback. Rendering failure is non-blocking
    and must retain the text/alt projection. An `agent` encounter supplies no map
    or coordinates and records the Agent's action-specific `spatial_facts`.
-   After `combat_start` and `combat_end`, consume `tools/list_changed`, verify
-   the native list, then `exposure(search/set)` the required current-phase tools;
+   After `combat_start` and `combat_end`, verify authoritative phase and
+   use the Host-selected current-phase tools;
    phase refresh never auto-loads the next phase's tools. Exercise at least one structured automatic path
    and any relevant owned reaction/choice window. End with a structured outcome;
    never stop while a spell resolution, reaction, death save, or concentration
@@ -1542,14 +1521,11 @@ Run this audit through a real MCP session and capture notifications. Exercise
 an exact idempotent retry, a stale revision conflict followed by authoritative
 refresh and request rebuild, process/session restart plus resume, verified
 `snapshot_restore`, branch create/checkout, and `state_revision` undo/redo.
-After every operation that can change phase or checkout, require an immediate
-`tools/list_changed`, refresh the native list before the next domain call, use
-`exposure(search/set)` on the retained binding, and prove the next legal call
-succeeds. Within the same Host process, never call `exposure(open)` after one of
-these transitions: `open` replaces the session exposure and is not a refresh.
-Only a new MCP session or a genuinely changed campaign/principal binding opens
-again. Cross a changed host context binding for checkout/restore; do not
-mistake a phase-only transition for a context-epoch barrier.
+After every phase or checkout transition, verify the public catalog stays
+stable, refresh authoritative state, and prove the next legal call succeeds.
+Cross changed host context bindings for checkout/restore; do not mistake a
+phase-only transition for a context-epoch barrier. Test the optional legacy
+adapter separately using its explicit guide.
 
 Every checkpoint must capture the exact active module revision set. After a
 restore or branch creation, verify those module ids before reading the current

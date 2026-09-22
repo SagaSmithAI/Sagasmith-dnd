@@ -4,7 +4,8 @@ import hashlib
 import json
 from pathlib import Path
 
-from aiohttp import FormData
+import pytest
+from aiohttp import FormData, web
 from aiohttp.test_utils import TestClient, TestServer
 from mcp.types import CallToolResult, ImageContent, TextContent
 from sagasmith_core.content_pack import dumps_content_archive
@@ -61,6 +62,121 @@ def app_for(tmp_path: Path, gateway_config: GatewayConfig | None = None):
         InProcessTestClient(value),
         value,
     )
+
+
+@pytest.mark.parametrize("failure", [TimeoutError, asyncio.QueueFull])
+def test_committed_movement_does_not_depend_on_followup_reads(tmp_path, failure):
+    class Client:
+        async def start(self):
+            pass
+
+        async def stop(self):
+            pass
+
+        async def call_tool(self, tool, arguments):
+            if tool != "combat_movement":
+                raise failure("projection unavailable after commit")
+            return CallToolResult(content=[], structuredContent={
+                "status": "committed", "action": "move", "result": {
+                    "status": "committed", "campaign_revision": 8, "branch_id": "branch",
+                    "combat": {"combatants": [], "round": 2},
+                },
+            })
+
+    async def exercise():
+        async with TestClient(TestServer(create_app(
+            GatewayConfig(), Client(), config(tmp_path),
+        ))) as client:
+            response = await client.post("/api/campaigns/campaign/combat/move", json={
+                "actor_id": "actor", "distance": 5, "destination": {"x": 1, "y": 0},
+                "expected_revision": 7, "idempotency_key": "original-key",
+            })
+            assert response.status == 200
+            result = await response.json()
+            assert result["data"]["operation_status"] == "committed"
+            assert result["data"]["round"] == 2
+            assert result["meta"]["campaign_revision"] == 8
+
+    asyncio.run(exercise())
+
+
+def test_read_under_continuous_writes_returns_conflict_instead_of_torn_view(tmp_path):
+    async def exercise():
+        app = app_for(tmp_path)
+        gateway = app[GATEWAY_KEY]
+        revisions = []
+
+        async def changing_meta(*args):
+            revisions.append(len(revisions) + 1)
+            return {"campaign_revision": revisions[-1]}
+
+        async def projection(*args):
+            return {"combatants": []}
+
+        gateway.campaign_meta = changing_meta
+        gateway.call = projection
+        async with TestClient(TestServer(app)) as client:
+            response = await client.get("/api/campaigns/campaign/combat")
+            assert response.status == 409
+            assert (await response.json())["code"] == "read_snapshot_conflict"
+            assert len(revisions) == 6
+
+    asyncio.run(exercise())
+
+
+def test_token_cors_preflight_does_not_bypass_actual_request_auth(tmp_path):
+    class Client:
+        async def start(self):
+            pass
+
+        async def stop(self):
+            pass
+
+    async def exercise():
+        origin = "http://localhost:4321"
+        app = create_app(GatewayConfig(bearer_token="test-only", allowed_origins=(origin,)),
+                         Client(), config(tmp_path))
+
+        async def endpoint(request):
+            return web.json_response({"ok": True})
+
+        async def stream_endpoint(request):
+            response = web.StreamResponse(headers={"Content-Type": "text/event-stream"})
+            await response.prepare(request)
+            await response.write(b"data: ready\n\n")
+            return response
+
+        app.router.add_get("/cors-probe", endpoint)
+        app.router.add_get("/cors-stream-probe", stream_endpoint)
+        async with TestClient(TestServer(app)) as client:
+            headers = {"Origin": origin, "Access-Control-Request-Method": "POST",
+                       "Access-Control-Request-Headers": "authorization, content-type"}
+            preflight = await client.options("/cors-probe", headers=headers)
+            assert preflight.status == 204
+            assert preflight.headers["Access-Control-Allow-Origin"] == origin
+            denied = await client.get("/cors-probe", headers={"Origin": origin})
+            assert denied.status == 401
+            assert denied.headers["Access-Control-Allow-Origin"] == origin
+            accepted = await client.get("/cors-probe", headers={
+                "Origin": origin, "Authorization": "Bearer test-only",
+            })
+            assert accepted.status == 200
+            streamed = await client.get("/cors-stream-probe", headers={
+                "Origin": origin, "Authorization": "Bearer test-only",
+            })
+            assert streamed.headers["Access-Control-Allow-Origin"] == origin
+            assert await streamed.text() == "data: ready\n\n"
+            forbidden = await client.options("/cors-probe", headers={
+                **headers, "Origin": "https://untrusted.example",
+            })
+            assert forbidden.status == 403
+            assert "Access-Control-Allow-Origin" not in forbidden.headers
+            unsupported = await client.options("/cors-probe", headers={
+                **headers, "Access-Control-Request-Headers": "x-admin",
+            })
+            assert unsupported.status == 403
+
+    asyncio.run(exercise())
 
 
 def test_gateway_pool_is_sticky_and_rotates_only_switching_browser(monkeypatch) -> None:
@@ -430,6 +546,16 @@ def test_gateway_imports_and_projects_finalized_preset_inventory(tmp_path: Path)
             )
             assert imported.status == 200
             import_payload = await imported.json()
+            retry_form = FormData()
+            retry_form.add_field("kind", "preset")
+            retry_form.add_field("idempotency_key", "gateway-import-preset")
+            retry_form.add_field("archive", archive, filename="gateway.sagasmith-pack",
+                                 content_type="application/octet-stream")
+            replayed = await client.post(
+                f"/api/campaigns/{campaign['id']}/content-packs/import", data=retry_form,
+            )
+            assert replayed.status == 200
+            assert (await replayed.json())["data"] == import_payload["data"]
             assert import_payload["data"]["archive"]["sha256"] == hashlib.sha256(
                 archive
             ).hexdigest()

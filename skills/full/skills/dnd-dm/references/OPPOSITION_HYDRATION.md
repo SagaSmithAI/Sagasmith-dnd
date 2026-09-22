@@ -6,14 +6,19 @@ Do not treat that gap alone as proof that the active Pack needs a new review.
 
 ## Establish the source path
 
-1. Move to `lobby` before authoring or actor creation. Consume
-   `tools/list_changed`, refresh the native list, and use
-   `exposure(search/set)` to load `rule_search`, `rule_seed_status`,
-   `rulebook_draft`, `character_create_from`, and module authoring tools only as
-   needed.
-2. Re-read `character_query(view="list")`. Reuse every existing actor whose
-   returned `statblock.source_identity` matches the required printed card, and
-   create only the exact shortfall.
+1. Move to `lobby` before authoring or actor creation. Use `rule_search`,
+   `rule_seed_status`, `rulebook_draft`, `character_create_from`, and module
+   authoring tools from the public catalog only as needed.
+2. Re-read `character_query(view="list")`. A matching
+   `statblock.source_identity` establishes the mechanical card, not the identity
+   of an individual creature. Reuse an actor only when the encounter record or
+   established campaign events identify that same individual at this location.
+   Otherwise create distinct instances for the source encounter's occupants,
+   reusing the reviewed card rather than the actor ids. Give each instance a
+   location-specific name and retain its actor id in the participant manifest.
+   Never move, heal, resurrect, or duplicate an existing individual merely to
+   fill a new encounter's count. A recurring creature retains its actual wounds
+   and other state; a relocation needs established narrative evidence.
 3. Search the exact printed creature identity first with only `campaign_id`,
    `query`, and optional `top_k`. Campaign binding already scopes the default
    edition, locale, and enabled sources. If a filtered search misses, retry this
@@ -39,6 +44,12 @@ Do not treat that gap alone as proof that the active Pack needs a new review.
 
 ## Hydrate from a canonical rule source
 
+For catalog discovery, use `character_query(view="catalog")` with
+`kind="actor_card"`, the creature name as `query`, and `include_context=false`
+(the default). Only request `include_context=true` after copying a full artifact
+id from the search result. That option is an exact-id lookup, not a name search;
+an exact-id miss does not establish that the canonical rule source is absent.
+
 1. Treat every returned `source_id` and `chunk_id` as an opaque exact value.
    Copy complete ids character-for-character from one latest successful
    `rule_search` result. Never retype, normalize, splice, or reconstruct them.
@@ -46,6 +57,13 @@ Do not treat that gap alone as proof that the active Pack needs a new review.
    selected evidence in `payload.chunk_ids`, and the exact printed identity in
    `payload.source_statblock_name`. There is no `exact_chunks` field. Give
    repeated instances distinct `payload.name` values.
+   Include the complete same-creature source subtree, including Actions,
+   reactions, and other subordinate sections; a search hit containing only
+   attributes and passive traits is not a complete card. If creation reports
+   missing chunk ids, read and include those exact same-source chunks before
+   retrying. After creation, compare the printed attacks and activities with
+   the returned mechanics. A valid actor with no weapon attacks is not proof
+   that the source creature has no attacks.
 3. If creation reports a source/chunk mismatch, search again and compare the
    submitted JSON to one result. A one-character mismatch is Agent input error,
    not missing evidence and not grounds to weaken validation.
@@ -78,15 +96,71 @@ Do not treat that gap alone as proof that the active Pack needs a new review.
    into Pack data or use a generic sheet patch.
 6. Re-read every created actor and require `statblock.source_identity` to match
    the intended source card.
+   Also compare the instance against every explicit encounter override. For
+   example, `variant.damage_resistances` and `variant.darkvision_ft` carry
+   printed resistance and vision changes; the base creature does not supply
+   them automatically. Setting `variant.current_hit_points=0` alone does not
+   establish stable/unconscious conditions. Use the public condition/recovery
+   operations to represent the exact sourced state, then verify it before
+   actions or conversation. Do not manufacture damage to obtain that state.
+   An unconscious captive cannot provide clues merely because the DM has read
+   the source: establish recovery and an actual published native NPC response
+   before recording their testimony as party knowledge.
+
+For repeated occupants, first create and verify one instance from the selected
+card. Only after that succeeds, create the exact remaining shortfall. Do not
+fan out an unverified transcription or parser path into many identical failures.
+A shared source failure applies to all copies; repair that source path once.
+Keep the campaign in `lobby` until all required creation calls and preflight
+finish successfully. Switching to `play` depends on those results and must not
+run concurrently with actor creation. After a partial failure, list existing
+instances and retry only missing ones using their original operation keys.
+
+## Repair an existing incomplete rule-source card
+
+For an already created actor whose rule-source import omitted a printed section,
+use `character_create_from(mode="statblock")` with the complete same-creature
+`chunk_ids`, `source_id`, and `source_statblock_name`, plus
+`payload.replace_character_id` and the latest actor `payload.expected_revision`.
+Keep its exact `name` and `character_type`; omit `summary` and `notes` to retain
+existing metadata. Use one new repair idempotency key and verify the returned
+actor id is unchanged. Do not create another instance of the same individual.
+
+This route rebuilds the sheet. First read current HP, conditions, resources,
+inventory, and source variants; retain every established state change and
+explicit source override. Do not use it as a rest, resurrection, or combat reset.
+An untouched fresh import can be repaired with the same source variant. If the
+public replacement cannot preserve a changed actor's state, resolve that repair
+gap before applying it. `content_solution` resolves an existing recorded source
+card; it cannot restore an attack that was never imported. A missing card error
+requires import repair, not repeated guesses at card ids or kinds.
 
 ## Hydrate module-only opposition
 
 1. When the exact creature exists only in the active module, inspect the
    current Pack's immutable content reviews. Use
    `character_create_from(mode="module_statblock")` only with the returned
-   `review_id`, and pass the exact printed card as `payload.source_identity`.
-2. If a finalized Pack lacks the required review, create an explicit new
-   draft/version from the same managed source. Select an explicit version greater
+   `review_id`, and pass the card's exact printed creature name as the string
+   `payload.source_identity` (for example `"Redbrand Ruffian"`), not the card
+   text or a source-reference object. Use `payload.name` for the distinct
+   instance name. A review id is never a source chunk id. The
+   `reviewed_rule_statblock` mode instead requires a rulebook job; it is not
+   the module-review route.
+2. For an already installed module missing a review, use
+   `module_query(view="candidates", payload={module_id, query:"<printed name>"})`.
+   Read its managed chunks or request the actual page with
+   `module_draft(action="evidence", payload={module_id, kind:"page", page_number:N})`.
+   Submit `module_draft(action="edit", payload={module_id, operation:"content", ...})`
+   using the returned review contract and evidence-bound transcription. Installed
+   module content/statblock review accepts `module_id` directly without a draft
+   job. Read back `module_query(view="content")`, then materialize its `review_id`.
+   Do not create a draft or search for an editable handle solely for this review.
+   `evidence(kind="chunks")` is a draft route; installed source chunks are read
+   through `module_expand` using the candidate's exact chunk ids.
+
+   If the source itself needs revision or a new distributable Pack is required,
+   create an explicit new draft/version from the same managed source. Select an
+   explicit version greater
    than the active Pack; never reuse its version or rely on the first-release
    default. Add only the evidence-backed
    missing review, re-read it, finalize it, import the new artifact, and
@@ -142,7 +216,7 @@ Do not treat that gap alone as proof that the active Pack needs a new review.
    resolution plan or later ruling boundary when that separate mechanism is
    actually exercised. An `img_*` id returned by page rendering identifies a
    delivered media artifact, not a managed `source_asset_id`; omit it from the
-   content review. Call `module_query(view="assets")` for the draft module and
+   content review. Call `module_query(view="assets")` for the module being reviewed and
    select the PDF asset whose checksum exactly matches the managed source; its
    returned `id` is the valid `source_asset_id`. Bind an image-only review with
    that asset id plus the exact managed page. Use source chunks as additional
@@ -153,6 +227,14 @@ Do not treat that gap alone as proof that the active Pack needs a new review.
 
 ## Verify and return to play
 
+For a legacy 2014 NPC import incorrectly penalized for its printed armor or
+shield, use `character_state_change(action="statblock_proficiency_sync",
+payload={reason})` with the current actor revision and a stable request key.
+The Runtime derives only the unchanged source-recorded equipment's proficiency;
+do not supply a proficiency list or replace the full sheet. This repair is
+available during combat and preserves wounds, resources, initiative and random
+state. Preserve earlier erroneous rolls as audit evidence; do not replay them.
+
 Run `module_query(view="preflight")`. Its `ready`, `card_valid`,
 `hard_blockers`, and `disabled_capabilities` fields are the combat gate. A
 usable attack card is not wholly blocked merely because unrelated source-backed
@@ -160,7 +242,7 @@ spells are disabled; retain those diagnostics and avoid only the unavailable
 capability. Repair first when the whole card is invalid, the intended action is
 disabled, or indispensable evidence is absent or conflicting.
 
-Restore the entry phase after preparation, consume the native tool-list change,
-refresh the list, and use `exposure(search/set)` for the next phase. Stop for
+Restore the entry phase after preparation and re-read authoritative state.
+Use the Host-selected tools for that phase. Stop for
 external input only after the exact rule, reviewed rulebook, and module-review
 paths are absent, contradictory, or unavailable.

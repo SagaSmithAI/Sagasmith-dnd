@@ -43,6 +43,7 @@ def test_stdio_rejects_missing_tampered_and_replayed_auth_context(tmp_path: Path
         env.update(
             {
                 "SAGASMITH_DND_MCP_HOME": str(tmp_path / "home"),
+                "SAGASMITH_DND_MCP_LEGACY_EXPOSURE": "1",
                 "SAGASMITH_DND_MCP_AUTO_SEED": "0",
                 "SAGASMITH_AUTH_CONTEXT_SECRET": SECRET,
             }

@@ -240,8 +240,9 @@ Equipment slots are `armor`, `shield`, `main_hand`, `off_hand`, `head`, `neck`,
 `cloak`, `gloves`, `boots`, `ring_1`, `ring_2`, `shoulders`, `back`, `chest`,
 `wrists`, `waist`, and `legs`. The slot map and each item's
 `equipped` / `equipped_slot` fields must agree. Use
-`inventory_change(action="equip"|"unequip")`; never set those fields through an
-inventory patch.
+`inventory_change(action="equip", payload={item_id, slot})`; an explicit
+`slot: null` unequips the item. There is no `unequip` action. Never set those
+fields through an inventory patch.
 
 Armor and shields have strict mechanics:
 
@@ -280,8 +281,14 @@ otherwise armor or `combat.ac.base`; then shield, equipped magic-item AC bonuses
 and supported active effects. `derived.armor_class_breakdown` explains every
 applied source. A supported effect change uses
 `{ "path": "derived.armor_class", "mode": "add|override", "value": <integer> }`.
-Other effect changes remain in `derived.unresolved_rules` for Agent-performed
-DM adjudication.
+Temporary damage defenses use a typed change such as
+`{"path":"traits.vulnerabilities","mode":"add","value":"necrotic"}`.
+The same contract accepts `traits.resistances` and `traits.immunities`, with one
+canonical damage type per change. These affect damage only while the effect is
+active; duplicate grants do not stack. Use the effect's duration for expiry,
+without modifying permanent traits. An event description alone does not apply
+the defense. Unsupported effect changes remain in `derived.unresolved_rules`
+for Agent-performed DM adjudication.
 
 Actor effects remain in `sheet.effects`. Effects attached to a room, object,
 scene, or the campaign instead live in `campaign.state.world_effects` and are
@@ -341,8 +348,15 @@ dialogue as memory.
 `notes.profile.backstory` holds the longer character history; it complements, but
 does not replace, the compact public `summary` and `appearance`.
 
-Use `character_sheet_replace` only for a reviewed complete draft or a
-deliberate full-sheet change. Never hand-edit one inventory entry, wallet balance,
+Use `character_sheet_replace` in lobby for a reviewed draft or an explicit
+source-backed correction. Supply exactly one of `sheet` (complete replacement)
+or `patch` (bounded change). For example, `patch={"combat":{"hp":{"max":12,
+"value":12}}}` preserves all other sheet fields, including signed content.
+Objects merge recursively; lists replace whole lists; null is a literal value,
+not deletion. Omit `notes` to preserve them. Both forms retain schema, authority,
+actor revision and idempotency checks. Never reconstruct a large signed sheet
+for a small correction, or use a correction as a reward, reroll or healing.
+Never hand-edit one inventory entry, wallet balance,
 prepared spell or effect through a raw sheet replacement during play. Persist
 accepted subjective entries with `actor_knowledge_change` or the
 `actor_knowledge` member of `memory_change(action="commit")`.

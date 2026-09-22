@@ -95,6 +95,7 @@ def test_real_core_evasion_is_applied_to_level_seven_classes(
                             "character_id": character["id"],
                             "action": "level_advance",
                             "payload": {
+                                "target_level": level,
                                 "class_name": class_name,
                                 "hp_method": "fixed",
                                 "reason": "milestone",

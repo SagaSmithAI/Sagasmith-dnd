@@ -94,6 +94,15 @@ def test_generic_checks_reject_caller_owned_save_classification(tmp_path: Path) 
                 with pytest.raises(ToolError, match="rule_facts cannot override"):
                     await server.call_tool("character_check", arguments)
                 assert await snapshot() == before
+            with pytest.raises(ToolError, match="unexpected payload.skill"):
+                await server.call_tool("character_check", {
+                    "campaign_id": campaign["id"], "action": "check",
+                    "payload": {
+                        "actor_id": character["id"], "kind": "check",
+                        "ability": "wisdom", "skill": "perception", "dc": 12,
+                    }, "expected_revision": before["revision"], "idempotency_key": "skill-typo",
+                })
+            assert await snapshot() == before
             # Validation failures must neither persist a roll nor consume a
             # campaign revision/idempotency result. A normal check still works.
             _, accepted = await server.call_tool(

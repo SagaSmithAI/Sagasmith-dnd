@@ -465,6 +465,38 @@ def test_modern_task_success_and_cancel_use_standard_methods(tmp_path: Path) -> 
     asyncio.run(exercise())
 
 
+def test_ocr_review_uses_durable_task_and_replays_failure_receipt(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        campaign_id = await _campaign(server)
+        arguments = {
+            "campaign_id": campaign_id,
+            "action": "edit",
+            "payload": {
+                "operation": "statblock", "module_id": "missing-module",
+                "scene_id": "missing-scene", "content_key": "commoner",
+                "name": "Commoner", "page_number": 1,
+            },
+            "idempotency_key": "ocr-task",
+        }
+        async with Client(server, mode="2026-07-28",
+                          extensions=[advertise(TASKS_EXTENSION_ID)]) as client:
+            task = await _create_task(client, arguments)
+            assert task.result_type == "task"
+            replay = await _create_task(client, arguments)
+            assert replay.task_id == task.task_id
+            for _ in range(50):
+                result = await client.session.send_request(
+                    GetTaskRequest(params=TaskIdParams(taskId=task.task_id)), TaskResult,
+                )
+                if result.status != "working":
+                    break
+                await asyncio.sleep(0.02)
+            assert result.status == "completed"
+            assert CallToolResult.model_validate(result.result).is_error
+    asyncio.run(exercise())
+
+
 def test_inprocess_agent_style_claim_uses_adopted_tasks_capability(
     tmp_path: Path,
 ) -> None:

@@ -284,6 +284,7 @@ def test_stdio_character_roll_persists_and_replays_its_stream_receipt(tmp_path: 
         env.update(
             {
                 "SAGASMITH_DND_MCP_HOME": str(tmp_path / "stdio-home"),
+                "SAGASMITH_DND_MCP_LEGACY_EXPOSURE": "1",
                 "SAGASMITH_DND_MCP_AUTO_SEED": "0",
             }
         )

@@ -800,6 +800,7 @@ async def _run(server: Any) -> tuple[dict[str, Any], dict[str, Any]]:
                 "character_id": character["id"],
                 "action": "level_advance",
                 "payload": {
+                    "target_level": level,
                     "class_name": "Artificer",
                     "hp_method": "fixed",
                     "reason": "official expansion regression",

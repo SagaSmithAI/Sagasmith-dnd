@@ -283,6 +283,44 @@ def test_progression_printings_are_source_bound_without_hiding_new_features(tmp_
             server, "character_query", {**current_query, "principal_id": "player:builder"}
         )
         assert owner_plan["follow_up"] == follow_up
+        play = await _call(
+            server,
+            "game_phase",
+            {
+                "campaign_id": campaign["id"],
+                "action": "set",
+                "tool_profile": "play",
+                "expected_revision": current_plan["campaign_revision"],
+                "idempotency_key": "inspect-current-features-in-play",
+            },
+        )
+        play_plan = await _call(
+            server, "character_query", {**current_query, "principal_id": "player:builder"}
+        )
+        assert play_plan["follow_up"] == follow_up
+        assert play_plan["character_revision"] == character["revision"]
+        assert play_plan["campaign_revision"] == play["campaign_revision"]
+        with pytest.raises(Exception, match="switch to lobby"):
+            await _call(
+                server,
+                "character_query",
+                {**current_query, "payload": {**current_query["payload"], "scope": "next_level"}},
+            )
+        with pytest.raises(Exception, match="control|access"):
+            await _call(
+                server, "character_query", {**current_query, "principal_id": "player:observer"}
+            )
+        await _call(
+            server,
+            "game_phase",
+            {
+                "campaign_id": campaign["id"],
+                "action": "set",
+                "tool_profile": "lobby",
+                "expected_revision": play["campaign_revision"],
+                "idempotency_key": "return-to-level-planning",
+            },
+        )
         with pytest.raises(Exception, match="control|access"):
             await _call(
                 server, "character_query", {**current_query, "principal_id": "player:observer"}

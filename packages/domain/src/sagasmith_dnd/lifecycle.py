@@ -27,6 +27,7 @@ from sagasmith_dnd.conditions import (
     reconcile_condition_projection,
     reconcile_ended_effect_conditions,
 )
+from sagasmith_dnd.edition_policy import edition_policy
 from sagasmith_dnd.editions import normalize_dnd_edition
 from sagasmith_dnd.engine import roll
 from sagasmith_dnd.game_time import (
@@ -1187,8 +1188,9 @@ def apply_rest(
     heroic_inspiration_result: dict[str, Any] | None = None
     if rest_type == "long_rest":
         exhaustion = int(combat.get("exhaustion", 0) or 0)
-        if edition == "2024" or food_and_drink:
-            exhaustion = max(0, exhaustion - 1)
+        exhaustion = edition_policy(edition).rest.recover_exhaustion(
+            exhaustion, food_and_drink=food_and_drink,
+        )
         value = set_exhaustion_level(value, exhaustion)
         combat = value["combat"]
         hp = dict(combat["hp"])
@@ -1208,7 +1210,7 @@ def apply_rest(
             roll_value = int(spend["roll"])
             mutate_bounded_resource(resource, amount=1, direction="spend")
             healing = roll_value + effective_ability_modifier(value, "constitution")
-            hit_die_healing += max(1 if edition == "2024" else 0, healing)
+            hit_die_healing += edition_policy(edition).rest.hit_die_healing(healing)
         if hit_die_healing:
             healed = apply_basic_healing_to_sheet(value, amount=hit_die_healing)
             value = healed["sheet"]
@@ -1320,65 +1322,12 @@ def apply_rest(
         recovered["pact_magic"] = mutation["amount"]
     if rest_type == "long_rest":
         hit_dice = value.get("combat", {}).get("hit_dice", {})
-        if edition == "2024":
-            allocation = {
-                key: int(resource.get("max", 0) or 0) - int(resource.get("value", 0) or 0)
-                for key, resource in hit_dice.items()
-                if isinstance(resource, dict)
-            }
-        else:
-            missing = {
-                key: int(resource.get("max", 0) or 0) - int(resource.get("value", 0) or 0)
-                for key, resource in hit_dice.items()
-                if isinstance(resource, dict)
-            }
-            allowance = max(
-                1,
-                sum(
-                    int(resource.get("max", 0) or 0)
-                    for resource in hit_dice.values()
-                    if isinstance(resource, dict)
-                )
-                // 2,
+        try:
+            allocation = edition_policy(edition).rest.recover_hit_dice(
+                hit_dice, hit_dice_recovery,
             )
-            if hit_dice_recovery is None:
-                if (
-                    sum(1 for amount in missing.values() if amount > 0) > 1
-                    and sum(missing.values()) > allowance
-                ):
-                    raise CombatEngineError(
-                        "2014 long-rest hit-die recovery needs a player allocation"
-                    )
-                allocation = {
-                    key: min(amount, allowance) for key, amount in missing.items()
-                }
-            else:
-                if not isinstance(hit_dice_recovery, dict):
-                    raise CombatEngineError(
-                        "2014 hit-die recovery allocation must be an object"
-                    )
-                unknown_keys = set(hit_dice_recovery) - set(missing)
-                if unknown_keys:
-                    raise CombatEngineError(
-                        "2014 hit-die recovery allocation contains an unknown hit die"
-                    )
-                if any(
-                    isinstance(amount, bool)
-                    or not isinstance(amount, int)
-                    or amount < 0
-                    for amount in hit_dice_recovery.values()
-                ):
-                    raise CombatEngineError(
-                        "2014 hit-die recovery counts must be non-negative integers"
-                    )
-                allocation = {
-                    key: hit_dice_recovery.get(key, 0) for key in missing
-                }
-            if (
-                any(amount < 0 or amount > missing[key] for key, amount in allocation.items())
-                or sum(allocation.values()) > allowance
-            ):
-                raise CombatEngineError("2014 hit-die recovery allocation is invalid")
+        except ValueError as error:
+            raise CombatEngineError(str(error)) from error
         for key, amount in allocation.items():
             resource = hit_dice[key]
             mutation = mutate_bounded_resource(

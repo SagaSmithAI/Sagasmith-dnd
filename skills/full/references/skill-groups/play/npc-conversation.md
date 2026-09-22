@@ -4,6 +4,43 @@ Use `npc_conversation` as the only Director-visible MCP facade and read
 `../../host-integration-npc-conversation.md` before the first connected
 multi-turn dialogue.
 
+## Prepare source-bound NPC context
+
+Before the first `open`, read the NPC's encounter and portrayal text as well as
+its statblock. A statblock import supplies mechanics; it does not give an isolated
+worker the Director's source reads. Scene ids in `audience_facts.basis_refs` do
+not copy that source text into the worker's knowledge.
+
+Persist only what this NPC knows through `actor_knowledge_change(action="add")`:
+put `campaign_id`, `actor_id`, `knowledge_key`, `proposition`, and optional
+`subject_ref`, `source_event_id`, `cause`, `disclosure_scope`, `branch_id` inside
+`payload`. Use `subject_ref` for the source reference and `disclosure_scope="dm"`
+for private preparation; `source_ref` and `visibility` are not fields of this
+operation. Keep exact source-defined prices, deadlines, limits and known secrets
+in bounded propositions. Do not grant the NPC unrelated DM secrets, other actors'
+private thoughts, or knowledge of future events. Characterization guidance and
+mechanical rulings are not automatically things the NPC knows or may say.
+
+Check the successful receipts before opening. Reuse existing knowledge keys and
+revise existing records rather than duplicating them on every turn. If source
+preparation changes after opening, close or abort and release the old workers,
+then open with fresh context. Do not patch an already issued private capsule.
+
+To revise, use `actor_knowledge_change(action="revise", payload={knowledge_id,
+proposition, expected_revision_id}, idempotency_key=...)`. Copy `knowledge_id`
+from the knowledge record's `id` and `expected_revision_id` from its
+`revision_id`; this is a string, distinct from the optional top-level numeric
+campaign `expected_revision`. Omitted source and disclosure fields are retained.
+Keep encounter thresholds and numeric rules in the Director's source evidence;
+give the NPC only the corresponding source-supported personal knowledge or
+intent, rather than a rulebook instruction it could repeat as dialogue.
+
+Before publishing a consequential quote, compare it with the prepared source
+constraints. Missing context is a preparation defect, not permission to invent
+terms. If an unsupported quote was already published, preserve its history,
+record an explicit correction, and obtain a fresh native worker clarification
+before any transaction. The Director must not write the replacement NPC speech.
+
 1. `open` with every PC and NPC runtime id together in the one
    `payload.participant_actor_ids` array. At least one listed actor must be a
    campaign-bound NPC or monster. Put `idempotency_key` inside the payload along
@@ -58,6 +95,14 @@ multi-turn dialogue.
    when necessary), call `publish` with the returned `publication_id`, current
    conversation revision, a new idempotency key, and the same complete
    `audience_facts` shape, then show only MCP `publication`.
+   Use the revision returned by `npc_conversation_worker`, not the earlier
+   activation descriptor: checkout and submission advance the conversation.
+   A refusal, offer, or threat does not itself require a roll. Choosing whether
+   a PC retreats, negotiates, or advances remains that PC's choice. In an
+   authorized automated regression, the Director may choose for its test PCs;
+   do not create a dice roll merely to answer that choice. If a worker already
+   emitted such a request, preserve it and close the conversation through the
+   normal handoff, then make the permitted choice without inventing a mechanic.
 5. If a proposal requests a mechanic, stop publication work, select the
    actor-owned and listener candidates that are already valid, and atomically
    `close` the conversation (or `abort` it when no draft should persist). Release

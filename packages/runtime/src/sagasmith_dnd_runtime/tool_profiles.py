@@ -46,6 +46,16 @@ CORE_TOOLS = frozenset(
     }
 )
 
+# Host presentation only. The stable catalog and runtime authorization remain unchanged.
+LOCAL_DAILY_TOOLS = frozenset("""
+campaign_query campaign_create character_query character_create_from character_check
+character_action inventory_change inventory_transfer wallet_change game_phase
+module_query module_search module_expand continuity_context memory_change campaign_event
+combat_start combat_query combat_resolve_attack combat_cast_spell combat_movement
+combat_choice combat_end_turn combat_end combat_common_action combat_use_activity
+combat_check character_state_change rule_search rule_expand skill_query
+""".split())
+
 HOST_PRIVATE_TOOLS = frozenset({"npc_conversation_transport"})
 
 
@@ -75,24 +85,27 @@ PHASE_TOOLS = {
         addon_actor_instantiate bounded_evaluation
         branch_query campaign_change campaign_event campaign_rules character_action
         character_check character_content_apply character_metadata_update
-        character_query character_state_change chase combat_start content_solution
+        character_query character_state_change chase combat_query combat_start
+        content_pack content_solution
         continuity_context dnd_ability_roll dnd_check dnd_dice_roll inventory_change
         inventory_transfer memory_change memory_query module_expand module_query module_search
         module_set_progress npc_conversation playthrough_manifest rule_expand rule_search
-        snapshot_create snapshot_query state_revision wallet_change
+        snapshot_create snapshot_query snapshot_restore state_revision wallet_change
         """
     ),
     PROFILE_COMBAT: _names(
         """
         access_grant access_revoke actor_knowledge_query addon_actor_instantiate bounded_evaluation
         branch_change branch_query
-        campaign_rules character_query combat_cast_spell combat_check combat_choice
+        campaign_rules character_query character_state_change
+        combat_cast_spell combat_check combat_choice
         combat_common_action combat_concentration_check combat_end combat_end_turn combat_hp_change
         combat_join combat_map_patch combat_movement combat_preflight_attack combat_query
         combat_reaction_attack combat_ready combat_resolve_attack combat_resolve_hide
         combat_use_activity
         combat_use_official_item
-        content_solution continuity_context dnd_check dnd_dice_roll module_query module_search
+        content_pack content_solution continuity_context dnd_check dnd_dice_roll module_expand
+        module_query module_search
         playthrough_manifest rule_expand rule_search snapshot_create snapshot_query snapshot_restore
         state_revision
         """
@@ -115,15 +128,17 @@ PHASE_DM_TOOLS = {
         access_grant access_revoke actor_knowledge_change addon_actor_instantiate
         campaign_change campaign_event
         campaign_rules character_content_apply chase
-        combat_start content_solution memory_change memory_query module_set_progress
-        npc_conversation playthrough_manifest snapshot_create snapshot_query state_revision
+        combat_start content_pack content_solution memory_change memory_query module_set_progress
+        npc_conversation playthrough_manifest snapshot_create snapshot_query snapshot_restore
+        state_revision
         """
     ),
     PROFILE_COMBAT: _names(
         """
         access_grant access_revoke addon_actor_instantiate branch_change campaign_rules combat_end
         combat_join combat_map_patch
-        content_solution combat_resolve_hide playthrough_manifest snapshot_create snapshot_query
+        content_pack content_solution module_expand combat_resolve_hide playthrough_manifest
+        snapshot_create snapshot_query
         snapshot_restore
         state_revision
         """

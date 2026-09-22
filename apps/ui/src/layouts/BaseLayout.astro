@@ -1,5 +1,6 @@
 ---
 import '../styles/global.css';
+import PendingWrites from '../components/PendingWrites';
 
 export interface Props {
   title: string;
@@ -64,7 +65,7 @@ const active = (prefix: string) => prefix === '/' ? path === '/' : path.startsWi
             <span class="alpha-badge">ALPHA / LOCAL</span>
           </div>
         </header>
-        <main class="workspace-main"><slot /></main>
+        <main class="workspace-main"><PendingWrites client:load /><slot /></main>
       </div>
     </div>
     <script>

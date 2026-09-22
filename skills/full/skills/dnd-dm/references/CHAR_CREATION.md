@@ -1,5 +1,13 @@
 # Character Creation and Advancement
 
+For a standard catalog background, submit only its required choices. Do not add
+`custom_name`, custom `skills`, or `equipment_mode` unless intentionally using
+the custom-background route. Duplicate proficiencies do not require a custom
+background: `skill_replacements` is an object mapping each duplicate skill to a
+valid unowned replacement, for example `{"insight":"history"}`, not an array.
+`pending_choice` or `pending_ruling` is not a completed application; resolve its
+bounded requirement, then read back the background and awarded inventory.
+
 Apply ability scores only through `character_ability_apply`; never write the six
 ability fields or their derived modifiers directly. The supported creation paths
 have distinct provenance:
@@ -94,16 +102,12 @@ ambiguous, or otherwise unsupported, keep it unresolved instead of substituting
 a similar creature. Bounded layout OCR recovery remains 2014-only; use complete
 indexed text or capable visual review for 2024.
 
-Do not equate a missing module party-size range with four PCs. After complete
-text search and visual review prove that the module is silent, a regression may
-continue only after the SagaSmith Agent acting as DM records that negative
-finding and an exact enabled-rule fallback. Missing or conflicting text/image
-evidence still requires a capable external source review. Keep the reviewed
-count and rule checksum on the
-party manifest and mark it as an Agent-as-DM decision, not a module
-recommendation. Build
-the reviewed number of seats only after this gate; continue to prefer every
-applicable module pregen within those seats.
+Party size is a player/DM choice, not a required source-review gate. Record a
+module recommendation only when known; missing recommendations need no exhaustive
+search, visual review, rule fallback, or `party_size_review`. Require at least one
+active PC and allow membership to change. In an authorized autonomous regression,
+choose and label the simulated party size, then continue. Do not attribute that
+choice to the module or silently invent a four-PC recommendation.
 
 Do not equate one structured sample-background artifact with a rule that every
 PC must use the same unmodified background. The 2014 Core rule **Customizing a
@@ -173,7 +177,9 @@ new card passes its full audit, return to `play` and use a source-cited joining
 event at the current Scene Atlas location to grant only facts the living
 participants explicitly tell the replacement.
 
-Before creating any actor, read `character-schema-v2.md`. All PCs, NPCs, and
+Before creating any actor, read
+`skill_query(kind="asset", action="read", identifier="dnd:full/references/character-schema-v2.md")`.
+All PCs, NPCs, and
 monsters require complete structured cards; NPCs and monsters require
 `notes.profile.summary`. Do not persist an unconfirmed draft. After every creation
 or advancement, call `character_query(view="get")`. Use returned `derived`

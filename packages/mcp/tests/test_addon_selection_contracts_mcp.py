@@ -1564,6 +1564,7 @@ def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
                     "character_id": owner["id"],
                     "action": "level_advance",
                     "payload": {
+                        "target_level": 4,
                         "class_name": "Artificer",
                         "hp_method": "fixed",
                         "reason": "Steel Defender owner scaling regression",
@@ -1588,6 +1589,7 @@ def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
                 "character_id": owner["id"],
                 "action": "level_advance",
                 "payload": {
+                    "target_level": 5,
                     "class_name": "Artificer",
                     "hp_method": "fixed",
                     "reason": "Steel Defender owner scaling regression",
@@ -2916,6 +2918,21 @@ def test_reviewed_addon_item_uses_bound_inventory_materializer(tmp_path: Path) -
             queried[0]["runtime_context"]["content_hash"]
             == (applied["content_context"]["content_hash"])
         )
+        top_level_query = await _call(
+            server,
+            "character_query",
+            {
+                "view": "catalog",
+                "query": artifact["id"],
+                "payload": {
+                    "campaign_id": campaign["id"],
+                    "kind": "item",
+                    "include_context": True,
+                },
+                "principal_id": "system:local",
+            },
+        )
+        assert top_level_query == queried
 
     import asyncio
 
@@ -3627,6 +3644,7 @@ def test_reviewed_addon_background_materializes_embedded_equipment(tmp_path: Pat
                 "character_id": marked_character["id"],
                 "action": "level_advance",
                 "payload": {
+                    "target_level": 4,
                     "class_name": "Wizard",
                     "hp_method": "fixed",
                     "reason": "unlock the reviewed level-four species feature",
@@ -5101,6 +5119,15 @@ def test_reviewed_addon_base_class_uses_bound_level_one_materializer(
                 },
             )
 
+        cantrip_catalog = await _call(
+            server, "character_query", {
+                "view": "catalog", "payload": {
+                    "campaign_id": campaign["id"], "kind": "spell",
+                    "query": "dnd5e.content.srd2014.spell.guidance",
+                },
+            },
+        )
+        assert cantrip_catalog[0]["selection_requirements"]["methods"] == ["known"]
         latest = infused
         for index, slug in enumerate(("light", "mending"), start=1):
             latest = await _call(

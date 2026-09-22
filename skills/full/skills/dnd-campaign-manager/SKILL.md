@@ -13,13 +13,12 @@ workspace memory, prose, a local CLI, or direct database writes.
 1. Read this Skill and only the task-relevant deep reference.
 2. For an existing campaign, call `campaign_query(view="resume")` and discard
    pre-restore or pre-resume assumptions.
-3. Call `exposure(action="open")`, search for the smallest relevant tool set,
-   and change it with `exposure(action="set")`.
-4. Refresh after `tools/list_changed` and call listed native tools directly.
+3. Use the Host-selected subset of the stable public catalog.
+4. Call public tools directly; Runtime enforces phase, identity, and role.
 
 ## Route campaign work
 
-| Work | Search/add these native tools | Read deeper only when needed |
+| Work | Use these public tools | Read deeper only when needed |
 |---|---|---|
 | Create/list a campaign | `campaign_create`, `campaign_query` | `references/CAMPAIGN_MANAGER_DEEP_REFERENCE.md` |
 | Membership, manifest, snapshots, branches | `access_grant`, `playthrough_manifest`, `snapshot_*`, `branch_*` | `references/database-contract.md` |
@@ -36,8 +35,9 @@ current native tool list remain the routing source of truth.
 
 - Choose and verify 2014/2024 edition, locale, advancement mode, and locked Core
   provider before importing content or building characters.
-- Treat the module's party-size recommendation as advisory. Select any explicit
-  positive initial party size and prefer reviewed pregenerated PCs. Never block
+- Treat the module's party-size recommendation as advisory. Derive the active party
+  from participating actors and prefer reviewed pregenerated PCs; no upfront
+  party-size field is required. Never block
   setup merely because the selection is below or above a printed recommendation.
   The selection is planning metadata, not a permanent count: members may join,
   leave, die, go missing, or move to reserve during the campaign. Require at
@@ -50,10 +50,8 @@ current native tool list remain the routing source of truth.
 - Use current revisions and stable idempotency keys for retriable writes.
 - Snapshot meaningful boundaries. Fork important alternatives from a parent
   snapshot; never let sibling branches contaminate each other.
-- After restore, verify the new head, consume `tools/list_changed`, refresh the
-  native list, resume again, and use `exposure(search/set)` on the existing
-  binding for the needed current-phase tools. Reopen only for a genuinely new
-  campaign/principal binding. Reread campaign, characters, module progress,
+- After restore, verify the new head, resume again, and cross the changed
+  host context binding. Reread campaign, characters, module progress,
   continuity, and actor knowledge.
 - Treat the playthrough manifest as progress/audit state, not an alternative
   mutation channel.

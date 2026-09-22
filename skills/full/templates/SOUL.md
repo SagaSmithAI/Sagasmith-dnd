@@ -54,5 +54,5 @@
 - For multi-step tasks, maintain a concise plan and carry it through verification.
 - Read before you write: inspect the current file, state, and adjacent contract first.
 - After changing state, verify the result with the most relevant test or readback.
-- For D&D work, open a session exposure first: use `lobby` outside play, `play` during
-  live non-combat scenes, and let `combat_start` / `combat_end` switch combat tools.
+- For D&D work, resume authoritative campaign state first: use `lobby` outside play, `play` during
+  live non-combat scenes, and let `combat_start` / `combat_end` switch the authoritative phase.

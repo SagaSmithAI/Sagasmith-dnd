@@ -8,6 +8,7 @@ from sagasmith_dnd.resolution_plan import (
     ResolutionPlanBindingError,
     ResolutionPlanCompilationError,
     ResolutionPlanExecutionError,
+    ResolutionPlanPauseError,
     bind_resolution_plan,
     compile_resolution_plan,
     execute_resolution_plan,
@@ -143,6 +144,30 @@ def _agent_ruling() -> dict:
         "source_ref": _citation()["source_ref"],
         "source_excerpt": _citation()["source_excerpt"],
     }
+
+
+@pytest.mark.parametrize("completed_step", [False, True])
+def test_choice_checkpoint_records_step_and_stops_later_execution(completed_step):
+    class PausingRuntime(RecordingRuntime):
+        def execute(self, opcode, arguments, *, step_id, prior_results):
+            result = super().execute(
+                opcode, arguments, step_id=step_id, prior_results=prior_results,
+            )
+            raise ResolutionPlanPauseError(result if completed_step else None)
+
+    bound = bind_resolution_plan(compile_resolution_plan(_plan()), {
+        "source_actor": "beast", "targets": ["hero"], "save_dc": 14, "damage": "3d8",
+    }, agent_ruling=_agent_ruling())
+    runtime = PausingRuntime()
+    result = execute_resolution_plan(bound, runtime)
+    assert result.status == "pending_choice"
+    assert runtime.events[-1] == "commit"
+    assert len(runtime.events) == 3
+    assert ("targets" in result.results) is completed_step
+    assert result.receipt["steps"][0]["status"] == (
+        "committed" if completed_step else "pending_choice"
+    )
+    assert result.receipt["committed"] is False
 
 
 def test_rule_card_locks_steps_while_agent_only_fills_typed_slots() -> None:
@@ -346,6 +371,51 @@ def _attack_ac_bonus_plan(arguments: dict) -> dict:
         ],
         "citations": [_citation()],
     }
+
+
+def test_plan_and_binding_are_detached_and_edition_scoped() -> None:
+    raw = _plan()
+    raw["editions"] = ["2024"]
+    compiled = compile_resolution_plan(raw)
+    bindings = {"source_actor": "prism-beast", "targets": ["hero-1"],
+                "save_dc": 14, "damage": "3d8"}
+    with pytest.raises(ResolutionPlanBindingError, match="incompatible"):
+        bind_resolution_plan(compiled, bindings, edition="2014")
+    bound = bind_resolution_plan(compiled, bindings, edition="2024")
+    raw["steps"][0]["args"]["exclude_self"] = False
+    compiled.steps[0]["args"]["exclude_self"] = False
+    bindings["targets"].append("hero-2")
+    bound.steps[0]["args"]["target_ids"].append("hero-3")
+    bound.bindings["targets"].append("hero-4")
+    assert compiled.steps[0]["args"]["exclude_self"] is True
+    assert bound.steps[0]["args"]["target_ids"] == ["hero-1"]
+    assert compile_resolution_plan(resolution_plan_template(compiled)) == compiled
+
+
+def test_plan_capabilities_are_checked_and_retained_in_its_fingerprint() -> None:
+    raw = _plan()
+    baseline = compile_resolution_plan(raw)
+    raw["requires"] = {"check.save": 1, "damage.apply": 1}
+    compiled = compile_resolution_plan(raw)
+    assert compiled.fingerprint != baseline.fingerprint
+    assert resolution_plan_contract(compiled)["requires"] == raw["requires"]
+    assert compile_resolution_plan(resolution_plan_template(compiled)) == compiled
+    raw["requires"]["damage.apply"] = 99
+    with pytest.raises(ResolutionPlanCompilationError, match="unsupported primitive version"):
+        compile_resolution_plan(raw)
+
+
+def test_resolved_result_is_revalidated_before_primitive_execution() -> None:
+    plan = _plan()
+    plan["steps"][1]["args"]["dc"] = {"$result": "targets.arguments.source"}
+    del plan["slots"]["save_dc"]
+    bound = bind_resolution_plan(plan, {"source_actor": "prism-beast", "targets": ["hero-1"],
+                                       "damage": "3d8"})
+    runtime = RecordingRuntime()
+    with pytest.raises(ResolutionPlanExecutionError):
+        execute_resolution_plan(bound, runtime)
+    assert runtime.events[-1] == "rollback"
+    assert not any(event.startswith("execute:save:") for event in runtime.events)
 
 
 @pytest.mark.parametrize(

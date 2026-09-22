@@ -28,7 +28,7 @@ from sagasmith_dnd.character_schema import (
     validate_world_time,
 )
 from sagasmith_dnd.chase_engine import start_chase
-from sagasmith_dnd.combat_engine import start_encounter
+from sagasmith_dnd.combat_engine import apply_damage_to_sheet, start_encounter
 from sagasmith_dnd.content_solution import build_content_solution
 from sagasmith_dnd.resolution_plan import compile_resolution_plan
 from sagasmith_dnd.rule_engine import ResolutionContext, resolution_context
@@ -232,7 +232,14 @@ def test_weapon_attacks_derive_actor_proficiency_and_finesse_ability() -> None:
     assert finesse_attack["damage_expression"] == "1d4 + 3"
 
 
-def test_2014_battle_ready_uses_intelligence_for_active_magic_weapons_only() -> None:
+@pytest.mark.parametrize("extra", [
+    {"on_hit_effect": "DC 11 Strength save or fall prone."},
+    {"additional_damage": [{"damage_formula": "1d6", "damage_type": "poison"}]},
+    {"versatile_additional_damage": [{"damage_formula": "1d6", "damage_type": "poison"}]},
+])
+def test_2014_battle_ready_uses_intelligence_for_active_magic_weapons_only(
+    extra: dict[str, Any],
+) -> None:
     sheet = default_character_sheet()
     sheet["abilities"]["strength"]["score"] = 8
     sheet["abilities"]["dexterity"]["score"] = 10
@@ -276,6 +283,7 @@ def test_2014_battle_ready_uses_intelligence_for_active_magic_weapons_only() -> 
                 "attack_ability": "strength",
                 "damage_formula": "1d4",
                 "damage_type": "piercing",
+                **extra,
             },
         },
     )
@@ -291,6 +299,21 @@ def test_2014_battle_ready_uses_intelligence_for_active_magic_weapons_only() -> 
     assert magic_attack["attack_bonus"] == 6
     assert magic_attack["damage_bonus"] == 4
     assert attacks[mundane_id]["attack_ability"] == "strength"
+    assert attacks[mundane_id]["magical"] is False
+    assert magic_attack["magical"] is True
+    target = default_character_sheet()
+    target["combat"]["hp"].update(value=20, max=20)
+    target["traits"]["damage_defenses"] = [{
+        "kind": "resistance",
+        "damage_types": ["piercing"],
+        "predicates": ["nonmagical_attack"],
+        "source_key": "test:nonmagical-resistance",
+    }]
+    damage = apply_damage_to_sheet(
+        target, amount=8, damage_type="piercing",
+        attack_facts={"magical": attacks[mundane_id]["magical"], "materials": []},
+    )
+    assert damage["applied_amount"] == 4
 
 
 @pytest.mark.parametrize(
@@ -1276,6 +1299,37 @@ def test_party_state_validates_structured_world_effect_targets() -> None:
                 ]
             }
         )
+
+
+@pytest.mark.parametrize("class_name", ["fighter", "paladin", "ranger"])
+def test_defense_style_requires_worn_armor_and_does_not_stack(class_name: str) -> None:
+    feature = {
+        "id": f"dnd5e.content.srd2014.feature.{class_name}-fighting-style",
+        "name": "Fighting Style", "source_key": class_name.title(),
+        "choices": {"option": "Defense"},
+    }
+    sheet = validate_character_sheet({"edition": "2014", "content": {"features": [feature]}})
+    sheet, shield_id = add_inventory_item(sheet, {
+        "id": "shield", "name": "Shield", "kind": "shield",
+        "mechanics": {"ac_bonus": 2},
+    })
+    sheet = equip_inventory_item(sheet, shield_id, "shield")
+    assert derive_character_sheet(sheet)["armor_class"] == 12
+    sheet, armor_id = add_inventory_item(sheet, {
+        "id": "chain", "name": "Chain mail", "kind": "armor",
+        "mechanics": {"base_ac": 16, "dexterity_mode": "none"},
+    })
+    sheet = equip_inventory_item(sheet, armor_id, "armor")
+    derived = derive_character_sheet(sheet)
+    assert derived["armor_class"] == 19
+    assert derived["armor_class_breakdown"]["defense_fighting_style"] == 1
+    sheet["content"]["features"].append({
+        **feature, "id": "dnd5e.content.srd2014.feature.fighter-additional-fighting-style",
+    })
+    assert derive_character_sheet(sheet)["armor_class"] == 19
+    for item in sheet["content"]["features"]:
+        item["choices"]["option"] = "Archery"
+    assert derive_character_sheet(sheet)["armor_class"] == 18
 
 
 def test_equipment_slots_and_ac_derive_from_armor_shield_magic_and_effects() -> None:

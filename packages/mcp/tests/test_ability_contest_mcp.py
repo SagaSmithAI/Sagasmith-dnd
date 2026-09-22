@@ -63,7 +63,7 @@ def test_character_check_facade_rejects_attack_kind_before_actor_lookup(
         )
         with pytest.raises(
             Exception,
-            match=r"payload.kind must be ability, check, save, or death_save",
+            match=r"payload.kind: Input should be 'ability', 'check', 'save' or 'death_save'",
         ):
             await _call(
                 server,

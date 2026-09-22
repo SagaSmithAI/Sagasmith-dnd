@@ -18,7 +18,7 @@ idempotency key when recovering an unknown dispatch. Never retry with a new key.
 | `campaign_change` | lobby, play | expected_revision | True |
 | `campaign_create` | lobby | — | True |
 | `campaign_event` | lobby, play | — | True |
-| `campaign_query` |  | — | True |
+| `campaign_query` | lobby, play, combat | — | True |
 | `campaign_rules` | combat, lobby, play | expected_revision | True |
 | `character_ability_apply` | lobby | expected_revision | True |
 | `character_action` | lobby, play | expected_revision | True |
@@ -29,7 +29,7 @@ idempotency key when recovering an unknown dispatch. Never retry with a new key.
 | `character_query` | combat, lobby, play | — | True |
 | `character_sheet_replace` | lobby | expected_revision | True |
 | `character_spell_prepare` | lobby | expected_revision | True |
-| `character_state_change` | lobby, play | expected_revision | True |
+| `character_state_change` | combat, lobby, play | expected_revision | True |
 | `chase` | play | expected_revision | True |
 | `combat_cast_spell` | combat | expected_revision | True |
 | `combat_check` | combat | expected_revision | True |
@@ -43,7 +43,7 @@ idempotency key when recovering an unknown dispatch. Never retry with a new key.
 | `combat_map_patch` | combat | expected_revision | True |
 | `combat_movement` | combat | expected_revision | True |
 | `combat_preflight_attack` | combat | — | False |
-| `combat_query` | combat | — | True |
+| `combat_query` | combat, play | — | True |
 | `combat_reaction_attack` | combat | expected_revision | True |
 | `combat_ready` | combat | expected_revision | True |
 | `combat_resolve_attack` | combat | expected_revision | True |
@@ -51,38 +51,1349 @@ idempotency key when recovering an unknown dispatch. Never retry with a new key.
 | `combat_start` | play | expected_revision | True |
 | `combat_use_activity` | combat | expected_revision | True |
 | `combat_use_official_item` | combat | expected_revision | True |
-| `content_pack` | lobby | expected_revision | True |
+| `content_pack` | combat, lobby, play | expected_revision | True |
 | `content_solution` | combat, lobby, play | expected_revision | True |
 | `continuity_context` | combat, lobby, play | — | True |
 | `dnd_ability_roll` | lobby, play | expected_campaign_revision | True |
 | `dnd_check` | combat, play | expected_campaign_revision | True |
 | `dnd_dice_roll` | combat, lobby, play | expected_campaign_revision | True |
-| `game_phase` |  | expected_revision | True |
+| `game_phase` | lobby, play, combat | expected_revision | True |
 | `inventory_change` | lobby, play | expected_revision | True |
 | `inventory_transfer` | lobby, play | — | True |
 | `memory_change` | lobby, play | expected_revision | True |
 | `memory_query` | lobby, play | — | True |
 | `module_draft` | lobby | expected_revision | True |
-| `module_expand` | lobby, play | — | True |
+| `module_expand` | combat, lobby, play | — | True |
 | `module_query` | combat, lobby, play | — | True |
 | `module_search` | combat, lobby, play | — | True |
 | `module_set_progress` | lobby, play | — | True |
 | `npc_conversation` | play | — | False |
 | `npc_conversation_transport` |  | — | False |
 | `playthrough_manifest` | combat, lobby, play | expected_revision | True |
-| `resolution_presentation` |  | — | False |
+| `resolution_presentation` | lobby, play, combat | — | False |
 | `rule_expand` | combat, lobby, play | — | True |
 | `rule_search` | combat, lobby, play | — | True |
 | `rule_seed_bundled` | lobby | — | False |
 | `rule_seed_status` | lobby | — | True |
 | `rulebook_draft` | lobby | expected_revision | True |
-| `server_capabilities` |  | — | True |
-| `skill_query` |  | — | True |
+| `server_capabilities` | lobby, play, combat | — | True |
+| `skill_query` | lobby, play, combat | — | True |
 | `snapshot_create` | combat, lobby, play | expected_revision | True |
 | `snapshot_query` | combat, lobby, play | — | True |
-| `snapshot_restore` | combat, lobby | expected_revision | True |
+| `snapshot_restore` | combat, lobby, play | expected_revision | True |
 | `state_revision` | combat, lobby, play | — | True |
 | `storage_migrate` | lobby | — | False |
-| `storage_status` |  | — | True |
+| `storage_status` | lobby, play, combat | — | True |
 | `system_list` | lobby | — | True |
 | `wallet_change` | lobby, play | expected_revision | True |
+
+## access_grant
+
+Grant campaign membership or actor-level authority without exposing unrelated edits.
+
+Phases: combat, lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"scope":{"enum":["campaign","actor"],"title":"Scope","type":"string","description":"Bounded scope value accepted by access_grant."},"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"principal_id":{"title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"by_principal_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"By Principal Id","description":"Authenticated writer principal; modern requests bind it from Host delegation.","maxLength":256}},"required":["scope","campaign_id","principal_id"],"title":"access_grantInput","type":"object"}
+```
+
+## access_revoke
+
+Revoke one campaign member and all subordinate actor authority atomically.
+
+Phases: combat, lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"principal_id":{"title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"by_principal_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"By Principal Id","description":"Authenticated writer principal; modern requests bind it from Host delegation.","maxLength":256}},"required":["campaign_id","principal_id"],"title":"access_revokeInput","type":"object"}
+```
+
+## actor_knowledge_change
+
+Add or revise actor knowledge without crossing actor-knowledge boundaries.
+
+For add, payload requires campaign_id, actor_id, knowledge_key and
+proposition. Optional subject_ref identifies the subject/source;
+source_event_id links an existing event and disclosure_scope controls
+visibility. source_ref and visibility are not supported aliases.
+
+Phases: lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"action":{"enum":["add","revise","retract","forget"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"additionalProperties":true,"title":"Payload","type":"object","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["action","payload"],"title":"actor_knowledge_changeInput","type":"object"}
+```
+
+## actor_knowledge_query
+
+Read only one actor's branch-scoped, subjective knowledge.
+
+Phases: combat, lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"actor_id":{"title":"Actor Id","type":"string","description":"Authoritative campaign actor identifier.","maxLength":256},"view":{"default":"list","enum":["list","search"],"title":"View","type":"string","description":"Bounded view value accepted by actor_knowledge_query."},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"query":{"default":"","maxLength":200,"title":"Query","type":"string","description":"Case-insensitive bounded search text."},"limit":{"default":50,"maximum":100,"minimum":1,"title":"Limit","type":"integer","description":"Maximum records to return in this bounded page (1 through 100)."},"cursor":{"anyOf":[{"maxLength":1024,"type":"string"},{"type":"null"}],"default":null,"title":"Cursor","description":"Opaque continuation cursor returned by the preceding response.","maxLength":1024}},"required":["campaign_id","actor_id"],"title":"actor_knowledge_queryInput","type":"object"}
+```
+
+## addon_actor_instantiate
+
+Instantiate one enabled, reviewed addon actor template without evaluating prose.
+
+Phases: combat, lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"artifact_id":{"title":"Artifact Id","type":"string","description":"Bounded artifact id value accepted by addon_actor_instantiate.","maxLength":256},"owner_character_id":{"title":"Owner Character Id","type":"string","description":"Bounded owner character id value accepted by addon_actor_instantiate.","maxLength":256},"name":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Name","description":"Bounded name value accepted by addon_actor_instantiate.","maxLength":256},"character_type":{"default":"monster","enum":["npc","monster"],"title":"Character Type","type":"string","description":"Bounded character type value accepted by addon_actor_instantiate."},"player_name":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Player Name","description":"Bounded player name value accepted by addon_actor_instantiate."},"summary":{"default":"","title":"Summary","type":"string","description":"Bounded summary value accepted by addon_actor_instantiate."},"notes":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Notes","description":"Bounded notes value accepted by addon_actor_instantiate."},"owner_class_name":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Owner Class Name","description":"Bounded owner class name value accepted by addon_actor_instantiate."},"casting_slot_level":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Casting Slot Level","description":"Bounded casting slot level value accepted by addon_actor_instantiate."},"template_variant":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Template Variant","description":"Bounded template variant value accepted by addon_actor_instantiate."},"participant_config":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Participant Config","description":"Bounded participant config value accepted by addon_actor_instantiate."},"replace_existing":{"default":false,"title":"Replace Existing","type":"boolean","description":"Bounded replace existing value accepted by addon_actor_instantiate."},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","artifact_id","owner_character_id"],"title":"addon_actor_instantiateInput","type":"object"}
+```
+
+## bounded_evaluation
+
+Validate one isolated proposal against its live signed context receipt.
+
+Phases: combat, lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"action":{"const":"validate","title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"proposal":{"additionalProperties":true,"title":"Proposal","type":"object","description":"Bounded proposal value accepted by bounded_evaluation."},"bundle_receipt":{"additionalProperties":true,"title":"Bundle Receipt","type":"object","description":"Bounded bundle receipt value accepted by bounded_evaluation."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256}},"required":["campaign_id","action","proposal","bundle_receipt"],"title":"bounded_evaluationInput","type":"object"}
+```
+
+## branch_change
+
+Create or checkout a branch under campaign and branch revision guards.
+
+Phases: combat, lobby
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"action":{"enum":["create","checkout","create_core_upgrade"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"additionalProperties":true,"title":"Payload","type":"object","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"expected_branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Expected Branch Id","description":"Branch guard that must match the current authoritative branch.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","action","payload"],"title":"branch_changeInput","type":"object"}
+```
+
+## branch_query
+
+List branches or compare two branch heads without changing checkout state.
+
+Phases: combat, lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"view":{"default":"list","enum":["list","compare"],"title":"View","type":"string","description":"Bounded view value accepted by branch_query."},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"query":{"default":"","maxLength":200,"title":"Query","type":"string","description":"Case-insensitive bounded search text."},"limit":{"default":50,"maximum":100,"minimum":1,"title":"Limit","type":"integer","description":"Maximum records to return in this bounded page (1 through 100)."},"cursor":{"anyOf":[{"maxLength":1024,"type":"string"},{"type":"null"}],"default":null,"title":"Cursor","description":"Opaque continuation cursor returned by the preceding response.","maxLength":1024}},"required":["campaign_id"],"title":"branch_queryInput","type":"object"}
+```
+
+## campaign_change
+
+Update campaign state, advancement, clock, or campaign-space effects.
+
+party_rest payload: {members:[{character_id, expected_revision}],
+rest_type:"long_rest"|"short_rest", duration_minutes}. Each member uses
+its actor revision; top-level expected_revision is the campaign revision.
+Optional member rest choices are documented in runtime-workflows.md.
+In 2014, spend at most one initial Hit Die per member, then inspect its
+roll before deciding on another. short_rest_hit_die payload requires
+{character_id,expected_character_revision,decision:"spend"|"stop",
+rest_completed_elapsed_ticks,hit_die_key?}. Use the completed rest's
+actual elapsed ticks and the actor's exact Hit Die pool key; hit_die_key
+is required for spend and omitted for stop. Top-level expected_revision
+is the current campaign revision. Each new decision gets a new key.
+For live prepared-spell changes, put prepared_spell_ids on that member
+in a legal long_rest; returning to Lobby does not reopen initial setup.
+clock_advance payload={period, count?, expected_elapsed_ticks?}. period is
+minute/hour/day/round/encounter; expected_elapsed_ticks is the resulting
+clock, required for minute/hour/day (10 ticks/minute), not the old clock.
+
+Phases: lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"payload":{"additionalProperties":true,"title":"Payload","type":"object","description":"Operation-specific bounded JSON object described by the selected action."},"action":{"default":"update","enum":["update","clock_set","clock_advance","party_rest","short_rest_hit_die","stable_recovery","effect_add","effect_remove","advancement_configure","experience_award","loot_acquire","currency_spend","item_spend","consumable_use"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","payload"],"title":"campaign_changeInput","type":"object"}
+```
+
+## campaign_create
+
+Create a D&D 5e campaign inside the MCP-owned SQLite database.
+
+Phases: lobby
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"name":{"title":"Name","type":"string","description":"Bounded name value accepted by campaign_create.","maxLength":256},"description":{"default":"","title":"Description","type":"string","description":"Bounded description value accepted by campaign_create."},"edition":{"default":"2024","title":"Edition","type":"string","description":"Bounded edition value accepted by campaign_create."},"locale":{"default":"en","title":"Locale","type":"string","description":"Bounded locale value accepted by campaign_create."},"advancement_mode":{"default":"milestone","enum":["milestone","xp"],"title":"Advancement Mode","type":"string","description":"Bounded advancement mode value accepted by campaign_create."},"random_seed":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Random Seed","description":"Bounded random seed value accepted by campaign_create."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["name"],"title":"campaign_createInput","type":"object"}
+```
+
+## campaign_event
+
+Append an auditable campaign event or retrieve its branch-visible event log.
+
+When actor knowledge is included, a DM-only event may only create
+DM-scoped knowledge.  Owner, party, player, and public knowledge must
+cite a party/player/public/actor-visible event.
+
+For add, put event details in payload.payload and visibility in
+payload.audience_scope; campaign_id belongs at the top level.
+
+Phases: lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"action":{"enum":["add","list"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256},"query":{"default":"","maxLength":200,"title":"Query","type":"string","description":"Case-insensitive bounded search text."},"limit":{"default":50,"maximum":100,"minimum":1,"title":"Limit","type":"integer","description":"Maximum records to return in this bounded page (1 through 100)."},"cursor":{"anyOf":[{"maxLength":1024,"type":"string"},{"type":"null"}],"default":null,"title":"Cursor","description":"Opaque continuation cursor returned by the preceding response.","maxLength":1024}},"required":["campaign_id","action"],"title":"campaign_eventInput","type":"object"}
+```
+
+## campaign_query
+
+Read campaign pages, party state, or one complete resume bundle.
+
+view=list needs no campaign id. All other views require payload.campaign_id.
+With no campaign, list or campaign_create first. Agent startup/resume uses
+payload={campaign_id, detail:"summary"} to avoid returning combat logs and
+full state documents. detail defaults to full for existing UI clients.
+Follow summary read_next for omitted detail; omission never means absent.
+Use resume once when reconnecting/restoring, then reuse write receipts.
+
+Phases: lobby, play, combat
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"view":{"default":"list","enum":["list","get","party","resume","binding"],"title":"View","type":"string","description":"Bounded view value accepted by campaign_query."},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"query":{"default":"","maxLength":200,"title":"Query","type":"string","description":"Case-insensitive bounded search text."},"limit":{"default":50,"maximum":100,"minimum":1,"title":"Limit","type":"integer","description":"Maximum records to return in this bounded page (1 through 100)."},"offset":{"default":0,"maximum":100000,"minimum":0,"title":"Offset","type":"integer","description":"Non-negative bounded compatibility offset; prefer opaque cursors where available."},"cursor":{"anyOf":[{"maxLength":1024,"type":"string"},{"type":"null"}],"default":null,"title":"Cursor","description":"Opaque continuation cursor returned by the preceding response.","maxLength":1024}},"title":"campaign_queryInput","type":"object"}
+```
+
+## campaign_rules
+
+Read or change the base rule profile; use content_pack for Pack changes.
+
+get_profile needs no payload. set_profile uses {edition, locale?,
+publications?, options?}. core_relock uses {expected_core_fingerprint,
+expected_head_snapshot_id, reason}: read the exact old fingerprint from
+get_profile, create/verify a current checkpoint, and pass its head ID,
+current branch and campaign revision. Only relock after reviewing an
+actual runtime upgrade; it is not required to equip items or use presets.
+explain accepts {event?}; receipts accepts {mechanic_id?, limit?}.
+
+Phases: combat, lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"action":{"enum":["get_profile","set_profile","core_relock","explain","receipts"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","action"],"title":"campaign_rulesInput","type":"object"}
+```
+
+## character_ability_apply
+
+Apply manual, standard-array, point-buy, or engine-rolled ability scores.
+
+Phases: lobby
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"character_id":{"title":"Character Id","type":"string","description":"Authoritative player character or NPC identifier.","maxLength":256},"method":{"title":"Method","type":"string","description":"Bounded method value accepted by character_ability_apply."},"assignments":{"anyOf":[{"additionalProperties":{"type":"integer"},"type":"object"},{"type":"null"}],"default":null,"title":"Assignments","description":"Bounded assignments value accepted by character_ability_apply."},"rolls":{"default":null,"title":"Rolls","type":"null","description":"Bounded rolls value accepted by character_ability_apply."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations.","type":"integer"},"idempotency_key":{"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256,"type":"string","minLength":1}},"required":["character_id","expected_revision","idempotency_key","method"],"title":"character_ability_applyInput","type":"object"}
+```
+
+## character_action
+
+Commit one noncombat spell cast, activity, or source-defined object attack.
+
+attack_source_object payload requires weapon_id, reason, source_ref,
+expected_campaign_revision, and object={id,name,scene_id,armor_class,
+hit_points,damage_immunities?}. Supply expected_revision for the actor.
+source_ref must identify an exact managed module chunk and its checksum;
+object statistics must follow that source. Reuse the same object id and
+original maximum hit_points for later attacks; Runtime tracks remaining
+HP. Each actual attack needs its own idempotency key; retries reuse it.
+Optional advantage/disadvantage require actual circumstances. Do not
+probe write operations with invented objects or placeholder source refs.
+
+Phases: lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"character_id":{"title":"Character Id","type":"string","description":"Authoritative player character or NPC identifier.","maxLength":256},"action":{"enum":["cast_spell","use_activity","attack_source_object","revive_steel_defender"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"additionalProperties":true,"title":"Payload","type":"object","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["character_id","action","payload"],"title":"character_actionInput","type":"object"}
+```
+
+## character_check
+
+Resolve a check or bounded source feature in the Play phase.
+
+check payload: {actor_id, kind, ability, dc?, bonus?, advantage?,
+disadvantage?, proficient?, rule_facts?}. For skills use ability="stealth"
+(or another skill name), not ability="dexterity" plus a skill field.
+For a skill check use kind="check" and ability="stealth" (for example).
+kind is ability/check/save/death_save, never skill. Skill
+proficiency/expertise comes from the actor; do not add it manually.
+Requires campaign revision, branch_id and idempotency_key.
+scene_save resolves a DM-classified module hazard with exact active
+source_ref/source_excerpt, reason, save_source_kind, save_effect_conditions
+and save_against_poison. source_ref is the complete object returned by
+module_expand (including chunk_id, checksum and location fields), not a
+string. Copy it verbatim; do not guess hashes or rebuild a partial object.
+source_excerpt must be a contiguous verbatim passage from that chunk;
+preserve OCR spelling and parenthetical text. Use the shortest passage
+containing the save clause. save_effect_conditions is a list of D&D
+condition IDs, e.g. ["restrained"] or [], never outcome prose or damage.
+It rolls the save only; settle its consequences
+separately. Spell/card saves must use their paid source executor.
+
+Phases: play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"action":{"default":"check","enum":["check","scene_save","group","contest","reroll","source_feature"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id"],"title":"character_checkInput","type":"object","allOf":[{"if":{"properties":{"action":{"const":"scene_save"}},"required":["action"]},"then":{"properties":{"payload":{"additionalProperties":false,"properties":{"actor_id":{"maxLength":256,"minLength":1,"title":"Actor Id","type":"string"},"ability":{"title":"Ability","type":"string"},"dc":{"title":"Dc","type":"integer"},"source_ref":{"additionalProperties":true,"title":"Source Ref","type":"object"},"source_excerpt":{"title":"Source Excerpt","type":"string"},"reason":{"title":"Reason","type":"string"},"save_source_kind":{"enum":["nonmagical_effect","magical_effect"],"title":"Save Source Kind","type":"string"},"save_effect_conditions":{"items":{"type":"string"},"title":"Save Effect Conditions","type":"array"},"save_against_poison":{"title":"Save Against Poison","type":"boolean"},"advantage":{"default":false,"title":"Advantage","type":"boolean"},"disadvantage":{"default":false,"title":"Disadvantage","type":"boolean"},"bonus":{"default":0,"title":"Bonus","type":"integer"}},"required":["actor_id","ability","dc","source_ref","source_excerpt","reason","save_source_kind","save_effect_conditions","save_against_poison"],"title":"SceneHazardSave","type":"object"}},"required":["payload"]}},{"if":{"properties":{"action":{"const":"check"}}},"then":{"properties":{"payload":{"additionalProperties":false,"properties":{"actor_id":{"maxLength":256,"minLength":1,"title":"Actor Id","type":"string"},"kind":{"enum":["ability","check","save","death_save"],"title":"Kind","type":"string"},"ability":{"title":"Ability","type":"string"},"dc":{"default":0,"title":"Dc","type":"integer"},"proficient":{"default":false,"title":"Proficient","type":"boolean"},"bonus":{"default":0,"title":"Bonus","type":"integer"},"advantage":{"default":false,"title":"Advantage","type":"boolean"},"disadvantage":{"default":false,"title":"Disadvantage","type":"boolean"},"rule_facts":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Rule Facts"}},"required":["actor_id","kind","ability"],"title":"CharacterCheck","type":"object"}},"required":["payload"]}},{"if":{"properties":{"action":{"const":"group"}},"required":["action"]},"then":{"properties":{"payload":{"additionalProperties":false,"properties":{"actor_ids":{"items":{"maxLength":256,"minLength":1,"type":"string"},"title":"Actor Ids","type":"array"},"ability":{"title":"Ability","type":"string"},"dc":{"title":"Dc","type":"integer"},"proficient":{"default":false,"title":"Proficient","type":"boolean"},"bonus":{"default":0,"title":"Bonus","type":"integer"},"advantage":{"default":false,"title":"Advantage","type":"boolean"},"disadvantage":{"default":false,"title":"Disadvantage","type":"boolean"},"rule_facts":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Rule Facts"}},"required":["actor_ids","ability","dc"],"title":"CharacterGroupCheck","type":"object"}},"required":["payload"]}},{"if":{"properties":{"action":{"const":"contest"}},"required":["action"]},"then":{"properties":{"payload":{"additionalProperties":false,"properties":{"source_actor_id":{"maxLength":256,"minLength":1,"title":"Source Actor Id","type":"string"},"target_actor_id":{"maxLength":256,"minLength":1,"title":"Target Actor Id","type":"string"},"source_ability":{"title":"Source Ability","type":"string"},"target_ability":{"title":"Target Ability","type":"string"},"source_proficient":{"default":false,"title":"Source Proficient","type":"boolean"},"target_proficient":{"default":false,"title":"Target Proficient","type":"boolean"},"source_bonus":{"default":0,"title":"Source Bonus","type":"integer"},"target_bonus":{"default":0,"title":"Target Bonus","type":"integer"},"source_advantage":{"default":false,"title":"Source Advantage","type":"boolean"},"source_disadvantage":{"default":false,"title":"Source Disadvantage","type":"boolean"},"target_advantage":{"default":false,"title":"Target Advantage","type":"boolean"},"target_disadvantage":{"default":false,"title":"Target Disadvantage","type":"boolean"},"source_rule_facts":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Source Rule Facts"},"target_rule_facts":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Target Rule Facts"}},"required":["source_actor_id","target_actor_id","source_ability","target_ability"],"title":"CharacterContest","type":"object"}},"required":["payload"]}},{"if":{"properties":{"action":{"const":"reroll"}},"required":["action"]},"then":{"properties":{"payload":{"additionalProperties":false,"properties":{"actor_id":{"maxLength":256,"minLength":1,"title":"Actor Id","type":"string"},"resolution_id":{"maxLength":256,"minLength":1,"title":"Resolution Id","type":"string"},"roll_index":{"title":"Roll Index","type":"integer"},"expected_original_roll":{"title":"Expected Original Roll","type":"integer"}},"required":["actor_id","resolution_id","roll_index","expected_original_roll"],"title":"CharacterReroll","type":"object"}},"required":["payload"]}},{"if":{"properties":{"action":{"const":"source_feature"}},"required":["action"]},"then":{"properties":{"payload":{"additionalProperties":false,"properties":{"actor_id":{"maxLength":256,"minLength":1,"title":"Actor Id","type":"string"},"feature_id":{"maxLength":256,"minLength":1,"title":"Feature Id","type":"string"},"capability":{"title":"Capability","type":"string"},"settlement_ref":{"title":"Settlement Ref","type":"string"},"fact_key":{"title":"Fact Key","type":"string"}},"required":["actor_id","feature_id","capability","settlement_ref","fact_key"],"title":"CharacterSourceFeature","type":"object"}},"required":["payload"]}}]}
+```
+
+## character_content_apply
+
+Apply an exact active class/species/background/item/spell/feature artifact.
+
+Requires the actor's expected_revision and idempotency_key. Read the
+artifact's selection_contract and pass choices in selection. Omit grant
+in Lobby: grant is Play authorization, not an item quantity. For item
+quantity/equipment choices follow the returned catalog selection schema.
+
+Phases: lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"character_id":{"title":"Character Id","type":"string","description":"Authoritative player character or NPC identifier.","maxLength":256},"artifact_id":{"title":"Artifact Id","type":"string","description":"Bounded artifact id value accepted by character_content_apply.","maxLength":256},"selection":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Selection","description":"Bounded selection value accepted by character_content_apply."},"grant":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Grant","description":"Bounded grant value accepted by character_content_apply."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations.","type":"integer"},"idempotency_key":{"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256,"type":"string","minLength":1}},"required":["artifact_id","character_id","expected_revision","idempotency_key"],"title":"character_content_applyInput","type":"object"}
+```
+
+## character_create_from
+
+Create a campaign actor from a validated build or source-bound card.
+
+New PC: mode=build, payload={campaign_id, name, summary}; omit sheet/notes.
+Use result.instance.id, then character_ability_apply and catalog-backed
+character_content_apply. Read CHAR_CREATION.md before building. Never
+guess a full PC sheet for direct mode; it requires a complete valid card.
+For a preset NPC/monster use mode=content_actor with payload={campaign_id,
+artifact_id, name?}. Copy the exact actor artifact ID from the preset
+catalog. If resolving a specific archive, also provide source_path or
+artifact (exactly one); never substitute the Pack ID for the actor ID.
+
+Phases: lobby
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"mode":{"enum":["direct","build","template","statblock","reviewed_rule_statblock","module_statblock","narrative_npc","content_actor"],"title":"Mode","type":"string","description":"Bounded mode value accepted by character_create_from."},"payload":{"additionalProperties":true,"title":"Payload","type":"object","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["mode","payload"],"title":"character_create_fromInput","type":"object"}
+```
+
+## character_metadata_update
+
+Update name, player_name, summary, or notes (not mechanical fields).
+
+Supply the character's revision as expected_revision and a request key.
+Read and preserve existing notes before sending the updated notes object.
+
+Phases: lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"character_id":{"title":"Character Id","type":"string","description":"Authoritative player character or NPC identifier.","maxLength":256},"payload":{"additionalProperties":true,"title":"Payload","type":"object","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations.","type":"integer"},"idempotency_key":{"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256,"type":"string","minLength":1}},"required":["character_id","expected_revision","idempotency_key","payload"],"title":"character_metadata_updateInput","type":"object"}
+```
+
+## character_query
+
+Read actors, catalog options, or a rest/advancement preflight.
+
+get payload={character_id}; batch={campaign_id,character_ids:[...]};
+list={campaign_id}; catalog={campaign_id,kind?,query?,include_context?}.
+Search names with include_context=false (default); then use the returned
+full artifact id as query with include_context=true for runtime details.
+For NPC/monster catalog cards use kind="actor_card", not "actor";
+omit kind to search across categories. Catalog cards are not existing actors:
+list/get reads campaign instances. For installed module statblock reviews,
+use module_query content with content_kind="dnd5e_2014_statblock".
+rest={character_id,rest_type,duration_minutes,...}; short rests require
+duration_minutes. document reads an allowlisted source_path, not a
+character-sheet section. Reuse write receipts before reloading full cards.
+
+Phases: combat, lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"view":{"default":"list","enum":["get","batch","list","library","document","rest","advancement","catalog"],"title":"View","type":"string","description":"Bounded view value accepted by character_query."},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"query":{"default":"","maxLength":200,"title":"Query","type":"string","description":"Case-insensitive bounded search text."},"limit":{"default":50,"maximum":100,"minimum":1,"title":"Limit","type":"integer","description":"Maximum records to return in this bounded page (1 through 100)."},"offset":{"default":0,"maximum":100000,"minimum":0,"title":"Offset","type":"integer","description":"Non-negative bounded compatibility offset; prefer opaque cursors where available."},"cursor":{"anyOf":[{"maxLength":1024,"type":"string"},{"type":"null"}],"default":null,"title":"Cursor","description":"Opaque continuation cursor returned by the preceding response.","maxLength":1024}},"title":"character_queryInput","type":"object"}
+```
+
+## character_sheet_replace
+
+Update a lobby sheet using exactly one of sheet or patch.
+
+sheet replaces the complete sheet. For bounded corrections prefer patch,
+e.g. {combat:{hp:{max:12,value:12}}}. Objects merge recursively; omitted
+fields remain unchanged, lists replace whole lists, and null is a value,
+not a deletion instruction. Existing schema, source and engine-owned
+state checks apply equally to both forms. Never reconstruct signed content
+to edit an unrelated field. Omit notes to preserve existing notes.
+
+Phases: lobby
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"character_id":{"title":"Character Id","type":"string","description":"Authoritative player character or NPC identifier.","maxLength":256},"sheet":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Sheet","description":"Bounded sheet value accepted by character_sheet_replace."},"notes":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Notes","description":"Bounded notes value accepted by character_sheet_replace."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256},"patch":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Patch","description":"Bounded patch value accepted by character_sheet_replace."}},"required":["character_id"],"title":"character_sheet_replaceInput","type":"object"}
+```
+
+## character_spell_prepare
+
+Set one prepared spell or replace the validated prepared-spell list.
+
+Requires the character's expected_revision and idempotency_key. Payload
+for set: {spell_id, prepared}; replace_all: {spell_ids, event?}. Spell ids
+must be learned on this actor first, not merely listed in the catalog.
+
+Phases: lobby
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"character_id":{"title":"Character Id","type":"string","description":"Authoritative player character or NPC identifier.","maxLength":256},"mode":{"enum":["set","replace_all"],"title":"Mode","type":"string","description":"Bounded mode value accepted by character_spell_prepare."},"payload":{"additionalProperties":true,"title":"Payload","type":"object","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations.","type":"integer"},"idempotency_key":{"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256,"type":"string","minLength":1}},"required":["character_id","expected_revision","idempotency_key","mode","payload"],"title":"character_spell_prepareInput","type":"object"}
+```
+
+## character_state_change
+
+Apply a character transition; expected_revision is the actor revision.
+
+damage payload={parts:[{amount:1,damage_type:"bludgeoning"}],
+critical?:bool,knock_out?:bool,melee?:bool}. Do not use a top-level amount
+for damage or open combat just to settle a trap/fall. heal uses {amount}.
+effect_add uses {effect}; effect_remove uses {effect_id}; resource_set
+uses {resource,value}; exhaustion_set uses {value}. Keep one stable
+idempotency_key per intended transition and copy its new actor revision.
+level_advance requires {class_name,hp_method,reason,source_ref,target_level}.
+target_level is the intended TOTAL character level, exactly current + 1.
+Read progression before advancing; never repeat a completed milestone.
+source_traits is DM-only, outside combat, for existing non-PC actors:
+{source_ref,reason,traits:{damage_resistances?:["fire"],darkvision_ft?:60,
+languages?:["Common"],damage_immunities?:[],damage_vulnerabilities?:[],
+condition_immunities?:[]}}. Each supplied trait replaces that trait only;
+copy the full source-supported list. It preserves HP, conditions and resources.
+statblock_proficiency_sync is DM-only for legacy 2014 non-PC imports:
+payload={reason}. It derives armor training from unchanged recorded source gear,
+accepts no supplied proficiencies, and preserves active combat and all actor state.
+
+Phases: combat, lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"character_id":{"title":"Character Id","type":"string","description":"Authoritative player character or NPC identifier.","maxLength":256},"action":{"enum":["effect_add","effect_remove","resource_set","exhaustion_set","damage","heal","death_save","stabilize","revive","level_advance","resource_sync","source_state","source_traits","statblock_proficiency_sync","stand","knock_prone","breathing_transition"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["character_id","action"],"title":"character_state_changeInput","type":"object"}
+```
+
+## chase
+
+Run the source-reviewed 2014 chase procedure only during Play.
+
+Phases: play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"action":{"enum":["start","query","take_turn","end"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","action"],"title":"chaseInput","type":"object"}
+```
+
+## combat_cast_spell
+
+Cast the exact spell_id recorded on the caster card, on a legal turn.
+
+Requires current campaign expected_revision and idempotency_key. The card
+determines action/slot cost; never spend them separately. target_allocations
+is only for source-bound Magic Missile, not ordinary spell targets.
+In Agent positioning, native single-target spells use declaration
+{target_id, spatial_facts:{decision_id,reason,targetable,in_range,
+attacker_can_see_target}}. Magic Missile uses target_allocations plus
+declaration={target_spatial_facts:{target_id: facts}}. Grid uses positions.
+For an Agent-resolved standard spell, omit declaration to obtain the
+agent_ruling_contract, then copy its submission_shape under declaration,
+filling application_id, decision and reason and preserving source_excerpt.
+payment_required=true means nothing has been paid yet. After payment is
+recorded, do not cast again to finish the effect or use another attack
+action. Follow the returned resolution/owned choice contract; combat_choice
+needs an actual choice_id, not an application_id. Agent-ruling commitment
+records payment and adjudication, not automatic target HP/condition changes.
+Resolve remaining source-grounded consequences through their public tools.
+
+Phases: combat
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"actor_id":{"title":"Actor Id","type":"string","description":"Authoritative campaign actor identifier.","maxLength":256},"spell_id":{"title":"Spell Id","type":"string","description":"Bounded spell id value accepted by combat_cast_spell.","maxLength":256},"cast_level":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Cast Level","description":"Bounded cast level value accepted by combat_cast_spell."},"ritual":{"default":false,"title":"Ritual","type":"boolean","description":"Bounded ritual value accepted by combat_cast_spell."},"signature_free_cast":{"default":false,"title":"Signature Free Cast","type":"boolean","description":"Bounded signature free cast value accepted by combat_cast_spell."},"feature_cast_source":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Feature Cast Source","description":"Bounded feature cast source value accepted by combat_cast_spell."},"component_ruling":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Component Ruling","description":"Bounded component ruling value accepted by combat_cast_spell."},"source_item_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Source Item Id","description":"Bounded source item id value accepted by combat_cast_spell.","maxLength":256},"choice_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Choice Id","description":"Bounded choice id value accepted by combat_cast_spell.","maxLength":256},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256},"target_allocations":{"anyOf":[{"items":{"additionalProperties":true,"type":"object"},"type":"array"},{"type":"null"}],"default":null,"title":"Target Allocations","description":"Bounded target allocations value accepted by combat_cast_spell."},"declaration":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Declaration","description":"Bounded declaration value accepted by combat_cast_spell."}},"required":["campaign_id","actor_id","spell_id"],"title":"combat_cast_spellInput","type":"object"}
+```
+
+## combat_check
+
+Resolve a check/save/death-save or an atomic Medicine stabilization.
+
+kind=stabilize pays the action and rolls DC10 Medicine atomically. In
+Agent positioning supply spatial_facts={decision_id,reason,within_5_ft:true}.
+Grid positioning uses recorded positions. Do not prepay common_action.
+
+Phases: combat
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"actor_id":{"title":"Actor Id","type":"string","description":"Authoritative campaign actor identifier.","maxLength":256},"kind":{"title":"Kind","type":"string","description":"Bounded kind value accepted by combat_check.","maxLength":256},"ability":{"default":"","title":"Ability","type":"string","description":"Bounded ability value accepted by combat_check."},"target_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Target Id","description":"Bounded target id value accepted by combat_check.","maxLength":256},"action":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Action","description":"Exact operation supported by this facade.","maxLength":256},"dc":{"default":0,"title":"Dc","type":"integer","description":"Bounded D&D difficulty class used by the authoritative check."},"proficient":{"default":false,"title":"Proficient","type":"boolean","description":"Bounded proficient value accepted by combat_check."},"bonus":{"default":0,"title":"Bonus","type":"integer","description":"Bounded bonus value accepted by combat_check."},"advantage":{"default":false,"title":"Advantage","type":"boolean","description":"Bounded advantage value accepted by combat_check."},"disadvantage":{"default":false,"title":"Disadvantage","type":"boolean","description":"Bounded disadvantage value accepted by combat_check."},"rule_facts":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Rule Facts","description":"Bounded rule facts value accepted by combat_check."},"spatial_facts":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Spatial Facts","description":"Bounded spatial facts value accepted by combat_check."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","actor_id","kind"],"title":"combat_checkInput","type":"object"}
+```
+
+## combat_choice
+
+Open or resolve a validated choice window during active combat.
+
+Phases: combat
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"action":{"enum":["open","resolve","resolve_defense","on_hit_ruling","execute_plan"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"additionalProperties":true,"title":"Payload","type":"object","description":"Operation-specific bounded JSON object described by the selected action."},"actor_id":{"title":"Actor Id","description":"Authoritative campaign actor identifier.","maxLength":256,"type":"string","minLength":1},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["action","actor_id","campaign_id","payload"],"title":"combat_choiceInput","type":"object","allOf":[{"if":{"properties":{"action":{"const":"open"}},"required":["action"]},"then":{"properties":{"payload":{"additionalProperties":false,"properties":{"event":{"title":"Event","type":"string"},"candidates":{"anyOf":[{"items":{"additionalProperties":true,"type":"object"},"type":"array"},{"type":"null"}],"default":null,"title":"Candidates"},"kind":{"default":"reaction","title":"Kind","type":"string"}},"required":["event"],"title":"OpenChoice","type":"object"}},"required":["payload"]}},{"if":{"properties":{"action":{"const":"resolve"}},"required":["action"]},"then":{"properties":{"payload":{"additionalProperties":false,"properties":{"choice_id":{"maxLength":256,"minLength":1,"title":"Choice Id","type":"string"},"selection":{"additionalProperties":true,"title":"Selection","type":"object"}},"required":["choice_id","selection"],"title":"ResolveChoice","type":"object"}},"required":["payload"]}},{"if":{"properties":{"action":{"const":"resolve_defense"}},"required":["action"]},"then":{"properties":{"payload":{"additionalProperties":false,"properties":{"choice_id":{"maxLength":256,"minLength":1,"title":"Choice Id","type":"string"},"selection":{"additionalProperties":true,"title":"Selection","type":"object"}},"required":["choice_id","selection"],"title":"ResolveChoice","type":"object"}},"required":["payload"]}},{"if":{"properties":{"action":{"const":"on_hit_ruling"}},"required":["action"]},"then":{"properties":{"payload":{"additionalProperties":false,"properties":{"choice_id":{"maxLength":256,"minLength":1,"title":"Choice Id","type":"string"},"selection":{"additionalProperties":true,"title":"Selection","type":"object"}},"required":["choice_id","selection"],"title":"ResolveChoice","type":"object"}},"required":["payload"]}},{"if":{"properties":{"action":{"const":"execute_plan"}},"required":["action"]},"then":{"properties":{"payload":{"additionalProperties":false,"properties":{"commitment":{"additionalProperties":true,"title":"Commitment","type":"object"}},"required":["commitment"],"title":"ExecutePlan","type":"object"}},"required":["payload"]}}]}
+```
+
+## combat_common_action
+
+Settle a common action atomically. In 2014 combat, draw_weapon uses
+payload={item_id, slot: main_hand|off_hand}; stow_weapon uses {item_id}.
+Requires an owned weapon, empty destination hand, and current actor turn.
+Pays the free object interaction, otherwise an available action. Do not
+prepay interact_object or use inventory_change(equip) during combat.
+
+Phases: combat
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"actor_id":{"title":"Actor Id","type":"string","description":"Authoritative campaign actor identifier.","maxLength":256},"action":{"enum":["command_dependent","dash","disengage","dodge","drop_held","draw_weapon","stow_weapon","emerge_shell","escape","help","hide","influence","interact_object","improvise","pickup_ground","ready","revive_steel_defender","search","shell_defense","shake_hypnotic_pattern","shake_sleep","stabilize","study","sustain_spell","use_object","utilize"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"target_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Target Id","description":"Bounded target id value accepted by combat_common_action.","maxLength":256},"trigger":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Trigger","description":"Bounded trigger value accepted by combat_common_action."},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","actor_id","action"],"title":"combat_common_actionInput","type":"object"}
+```
+
+## combat_concentration_check
+
+Resolve a pending concentration save and deactivate effects only on failure.
+
+Phases: combat
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"target_id":{"title":"Target Id","type":"string","description":"Bounded target id value accepted by combat_concentration_check.","maxLength":256},"dc":{"title":"Dc","type":"integer","description":"Bounded D&D difficulty class used by the authoritative check."},"effect_ids":{"items":{"type":"string"},"title":"Effect Ids","type":"array","description":"Bounded effect ids value accepted by combat_concentration_check.","maxItems":1000},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","target_id","dc","effect_ids"],"title":"combat_concentration_checkInput","type":"object"}
+```
+
+## combat_end
+
+Close an encounter atomically while preserving its final audit state.
+
+Optional outcome is {status, summary}; status is defeat, interrupted,
+surrender, truce, victory, or withdrawal. Requires campaign revision,
+current branch_id and idempotency_key. Settle pending choices first.
+
+Phases: combat
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"outcome":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Outcome","description":"Bounded outcome value accepted by combat_end."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations.","type":"integer"},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256,"type":"string","minLength":1}},"required":["campaign_id","expected_revision","idempotency_key"],"title":"combat_endInput","type":"object"}
+```
+
+## combat_end_turn
+
+Advance a structured encounter turn with optimistic concurrency.
+
+Phases: combat
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"actor_id":{"title":"Actor Id","type":"string","description":"Authoritative campaign actor identifier.","maxLength":256},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","actor_id"],"title":"combat_end_turnInput","type":"object"}
+```
+
+## combat_hp_change
+
+Apply structured damage or healing; damage parts and healing amounts stay distinct.
+
+Phases: combat
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"target_id":{"title":"Target Id","type":"string","description":"Bounded target id value accepted by combat_hp_change.","maxLength":256},"action":{"enum":["damage","fall","heal","stabilize","save_damage"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"additionalProperties":true,"title":"Payload","type":"object","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","target_id","action","payload"],"title":"combat_hp_changeInput","type":"object","allOf":[{"if":{"properties":{"action":{"const":"damage"}},"required":["action"]},"then":{"properties":{"payload":{"additionalProperties":false,"properties":{"parts":{"items":{"additionalProperties":true,"type":"object"},"title":"Parts","type":"array"},"critical":{"default":false,"title":"Critical","type":"boolean"},"knock_out":{"default":false,"title":"Knock Out","type":"boolean"},"melee":{"default":false,"title":"Melee","type":"boolean"}},"required":["parts"],"title":"ApplyDamage","type":"object"}},"required":["payload"]}},{"if":{"properties":{"action":{"const":"fall"}},"required":["action"]},"then":{"properties":{"payload":{"additionalProperties":false,"properties":{"distance_ft":{"title":"Distance Ft","type":"integer"}},"required":["distance_ft"],"title":"ApplyFall","type":"object"}},"required":["payload"]}},{"if":{"properties":{"action":{"const":"heal"}},"required":["action"]},"then":{"properties":{"payload":{"additionalProperties":false,"properties":{"amount":{"title":"Amount","type":"integer"},"source_actor_id":{"anyOf":[{"maxLength":256,"minLength":1,"type":"string"},{"type":"null"}],"default":null,"title":"Source Actor Id"},"spell_id":{"anyOf":[{"maxLength":256,"minLength":1,"type":"string"},{"type":"null"}],"default":null,"title":"Spell Id"},"spell_level":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Spell Level"}},"required":["amount"],"title":"ApplyHealing","type":"object"}},"required":["payload"]}},{"if":{"properties":{"action":{"const":"stabilize"}},"required":["action"]},"then":{"properties":{"payload":{"additionalProperties":false,"properties":{"source_excerpt":{"title":"Source Excerpt","type":"string"}},"required":["source_excerpt"],"title":"SourceStabilization","type":"object"}},"required":["payload"]}},{"if":{"properties":{"action":{"const":"save_damage"}},"required":["action"]},"then":{"properties":{"payload":{"additionalProperties":false,"properties":{"target_ids":{"anyOf":[{"items":{"maxLength":256,"minLength":1,"type":"string"},"type":"array"},{"type":"null"}],"default":null,"title":"Target Ids"},"application_id":{"anyOf":[{"maxLength":256,"minLength":1,"type":"string"},{"type":"null"}],"default":null,"title":"Application Id"},"source_actor_id":{"maxLength":256,"minLength":1,"title":"Source Actor Id","type":"string"},"source_card_id":{"maxLength":256,"minLength":1,"title":"Source Card Id","type":"string"},"source_card_kind":{"title":"Source Card Kind","type":"string"},"save_ability":{"title":"Save Ability","type":"string"},"save_dc":{"title":"Save Dc","type":"integer"},"damage_expression":{"title":"Damage Expression","type":"string"},"damage_type":{"title":"Damage Type","type":"string"},"half_on_success":{"title":"Half On Success","type":"boolean"},"save_advantage":{"default":false,"title":"Save Advantage","type":"boolean"},"save_disadvantage":{"default":false,"title":"Save Disadvantage","type":"boolean"},"mechanic_source_excerpt":{"title":"Mechanic Source Excerpt","type":"string"},"agent_ruling":{"additionalProperties":true,"title":"Agent Ruling","type":"object"},"spatial_facts":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Spatial Facts"}},"required":["source_actor_id","source_card_id","source_card_kind","save_ability","save_dc","damage_expression","damage_type","half_on_success","mechanic_source_excerpt","agent_ruling"],"title":"SaveDamage","type":"object"}},"required":["payload"]}}]}
+```
+
+## combat_join
+
+Queue one canonical campaign actor to enter combat at the next round.
+
+Phases: combat
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"actor_id":{"title":"Actor Id","type":"string","description":"Authoritative campaign actor identifier.","maxLength":256},"participant_config":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Participant Config","description":"Bounded participant config value accepted by combat_join."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","actor_id"],"title":"combat_joinInput","type":"object"}
+```
+
+## combat_map_patch
+
+Record Agent-as-DM-confirmed changes from a temporary battle map.
+
+Phases: combat
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"patches":{"items":{"additionalProperties":true,"type":"object"},"title":"Patches","type":"array","description":"Bounded patches value accepted by combat_map_patch.","maxItems":1000},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","patches"],"title":"combat_map_patchInput","type":"object"}
+```
+
+## combat_movement
+
+Move or stand using the current campaign revision and a request key.
+
+move payload={distance, destination?, path?, spatial_facts?}; distance is
+feet traveled, before difficult-terrain cost. In Agent positioning use
+spatial_facts={decision_id, reason, destination_legal, distance_ft}, with
+distance_ft equal to distance. Optional difficult_terrain_extra_ft adds
+cost; opportunity_attack_actor_ids lists actual threats. Do not invent
+grid coordinates when the encounter uses Agent positioning. stand uses {}.
+
+Phases: combat
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"actor_id":{"title":"Actor Id","type":"string","description":"Authoritative campaign actor identifier.","maxLength":256},"action":{"enum":["move","stand"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","actor_id","action"],"title":"combat_movementInput","type":"object","allOf":[{"if":{"properties":{"action":{"const":"move"}},"required":["action"]},"then":{"properties":{"payload":{"additionalProperties":false,"properties":{"distance":{"title":"Distance","type":"integer"},"destination":{"anyOf":[{"additionalProperties":{"type":"number"},"type":"object"},{"items":{"type":"number"},"type":"array"},{"maxItems":2,"minItems":2,"prefixItems":[{"type":"number"},{"type":"number"}],"type":"array"},{"type":"null"}],"default":null,"title":"Destination"},"path":{"anyOf":[{"items":{"anyOf":[{"additionalProperties":{"type":"number"},"type":"object"},{"items":{"type":"number"},"type":"array"},{"maxItems":2,"minItems":2,"prefixItems":[{"type":"number"},{"type":"number"}],"type":"array"}]},"type":"array"},{"type":"null"}],"default":null,"title":"Path"},"movement_mode":{"default":"voluntary","title":"Movement Mode","type":"string"},"travel_mode":{"default":"walk","title":"Travel Mode","type":"string"},"crawl":{"default":false,"title":"Crawl","type":"boolean"},"spatial_facts":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Spatial Facts"}},"required":["distance"],"title":"MoveActor","type":"object"}},"required":["payload"]}},{"if":{"properties":{"action":{"const":"stand"}},"required":["action"]},"then":{"properties":{"payload":{"anyOf":[{"additionalProperties":false,"properties":{},"title":"StandActor","type":"object"},{"type":"null"}]}}}}]}
+```
+
+## combat_preflight_attack
+
+Validate an attack without rolling, paying resources or changing state.
+
+action uses weapon_id from the actor's weapon attacks. In Agent positioning,
+put spatial facts in action.context.spatial_facts; see combat_resolve_attack
+for required fields. Reuse this action for resolution if state is unchanged.
+
+Phases: combat
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"actor_id":{"title":"Actor Id","type":"string","description":"Authoritative campaign actor identifier.","maxLength":256},"target_id":{"title":"Target Id","type":"string","description":"Bounded target id value accepted by combat_preflight_attack.","maxLength":256},"action":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Action","description":"Exact operation supported by this facade.","maxLength":256},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256}},"required":["campaign_id","actor_id","target_id"],"title":"combat_preflight_attackInput","type":"object"}
+```
+
+## combat_query
+
+Read combat state or DM-only transaction receipts.
+
+available_actions and reactions require top-level actor_id, not payload.
+status needs only campaign_id; payload={detail:"summary"} omits the
+accumulated encounter log and repeated preflight cards while retaining
+all current tactical fields and the source manifest's evidence and counts.
+Omit detail or use "full" to include historical log entries.
+transaction_receipt requires
+payload={idempotency_key, branch_id?}; render accepts audience_projection.
+
+Phases: combat, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"view":{"default":"status","enum":["status","available_actions","reactions","render","transaction_history","transaction_receipt"],"title":"View","type":"string","description":"Bounded view value accepted by combat_query."},"actor_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Actor Id","description":"Authoritative campaign actor identifier.","maxLength":256},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"query":{"default":"","maxLength":200,"title":"Query","type":"string","description":"Case-insensitive bounded search text."},"limit":{"default":50,"maximum":100,"minimum":1,"title":"Limit","type":"integer","description":"Maximum records to return in this bounded page (1 through 100)."},"cursor":{"anyOf":[{"maxLength":1024,"type":"string"},{"type":"null"}],"default":null,"title":"Cursor","description":"Opaque continuation cursor returned by the preceding response.","maxLength":1024}},"required":["campaign_id"],"title":"combat_queryInput","type":"object"}
+```
+
+## combat_reaction_attack
+
+Resolve an owned opportunity-attack window atomically with its attack.
+
+Phases: combat
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"actor_id":{"title":"Actor Id","type":"string","description":"Authoritative campaign actor identifier.","maxLength":256},"choice_id":{"title":"Choice Id","type":"string","description":"Bounded choice id value accepted by combat_reaction_attack.","maxLength":256},"target_id":{"title":"Target Id","type":"string","description":"Bounded target id value accepted by combat_reaction_attack.","maxLength":256},"action":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Action","description":"Exact operation supported by this facade.","maxLength":256},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","actor_id","choice_id","target_id"],"title":"combat_reaction_attackInput","type":"object"}
+```
+
+## combat_ready
+
+Run readied spell/action transitions without bypassing trigger or release validation.
+
+Phases: combat
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"action":{"enum":["ready_spell","trigger_spell","resolve_spell","trigger_action","resolve_action"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"additionalProperties":true,"title":"Payload","type":"object","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","action","payload"],"title":"combat_readyInput","type":"object","allOf":[{"if":{"properties":{"action":{"const":"ready_spell"}},"required":["action"]},"then":{"properties":{"payload":{"additionalProperties":false,"properties":{"actor_id":{"maxLength":256,"minLength":1,"title":"Actor Id","type":"string"},"spell_id":{"maxLength":256,"minLength":1,"title":"Spell Id","type":"string"},"trigger":{"title":"Trigger","type":"string"},"cast_level":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Cast Level"},"declaration":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Declaration"}},"required":["actor_id","spell_id","trigger"],"title":"ReadySpell","type":"object"}},"required":["payload"]}},{"if":{"properties":{"action":{"const":"trigger_spell"}},"required":["action"]},"then":{"properties":{"payload":{"additionalProperties":false,"properties":{"readied_id":{"maxLength":256,"minLength":1,"title":"Readied Id","type":"string"},"event":{"title":"Event","type":"string"}},"required":["readied_id","event"],"title":"TriggerReadied","type":"object"}},"required":["payload"]}},{"if":{"properties":{"action":{"const":"trigger_action"}},"required":["action"]},"then":{"properties":{"payload":{"additionalProperties":false,"properties":{"readied_id":{"maxLength":256,"minLength":1,"title":"Readied Id","type":"string"},"event":{"title":"Event","type":"string"}},"required":["readied_id","event"],"title":"TriggerReadied","type":"object"}},"required":["payload"]}},{"if":{"properties":{"action":{"const":"resolve_spell"}},"required":["action"]},"then":{"properties":{"payload":{"additionalProperties":false,"properties":{"actor_id":{"maxLength":256,"minLength":1,"title":"Actor Id","type":"string"},"choice_id":{"maxLength":256,"minLength":1,"title":"Choice Id","type":"string"},"release":{"title":"Release","type":"boolean"},"declaration":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Declaration"}},"required":["actor_id","choice_id","release"],"title":"ResolveReadied","type":"object"}},"required":["payload"]}},{"if":{"properties":{"action":{"const":"resolve_action"}},"required":["action"]},"then":{"properties":{"payload":{"additionalProperties":false,"properties":{"actor_id":{"maxLength":256,"minLength":1,"title":"Actor Id","type":"string"},"choice_id":{"maxLength":256,"minLength":1,"title":"Choice Id","type":"string"},"release":{"title":"Release","type":"boolean"},"declaration":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Declaration"}},"required":["actor_id","choice_id","release"],"title":"ResolveReadied","type":"object"}},"required":["payload"]}}]}
+```
+
+## combat_resolve_attack
+
+Resolve one attack and atomically update actors and encounter.
+
+Use the active actor and campaign revision from the latest receipt, plus
+idempotency_key. action={weapon_id, context?}; use an owned weapon ID.
+Agent positioning requires action.context.spatial_facts={decision_id,
+reason, targetable, in_range, cover_degree, attacker_can_see_target,
+target_can_see_attacker}. Flags are booleans; cover_degree is none/half/
+three_quarters/total. Optional facts: long_range, target_within_5_ft,
+close_threat_actor_ids, helper_actor_ids, target_adjacent_ally_actor_ids,
+cleave_secondary_eligible. Ground them in the current scene, never invent
+coordinates to bypass a missing spatial decision. Grid mode uses its map.
+
+Phases: combat
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"actor_id":{"title":"Actor Id","type":"string","description":"Authoritative campaign actor identifier.","maxLength":256},"target_id":{"title":"Target Id","type":"string","description":"Bounded target id value accepted by combat_resolve_attack.","maxLength":256},"action":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Action","description":"Exact operation supported by this facade.","maxLength":256},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","actor_id","target_id"],"title":"combat_resolve_attackInput","type":"object"}
+```
+
+## combat_resolve_hide
+
+Resolve a paid Cunning Action Hide attempt without another payment.
+
+Phases: combat
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"actor_id":{"title":"Actor Id","type":"string","description":"Authoritative campaign actor identifier.","maxLength":256},"ruling":{"additionalProperties":true,"title":"Ruling","type":"object","description":"Bounded ruling value accepted by combat_resolve_hide."},"observer_ids":{"anyOf":[{"items":{"type":"string"},"type":"array"},{"type":"null"}],"default":null,"title":"Observer Ids","description":"Bounded observer ids value accepted by combat_resolve_hide."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","actor_id","ruling"],"title":"combat_resolve_hideInput","type":"object"}
+```
+
+## combat_start
+
+Start one encounter from existing canonical campaign actor IDs.
+
+For a module encounter, pass its scene_id and source-backed
+participant_manifest after module_query(view="preflight"). Omitting
+scene_id creates an ad-hoc encounter and does not validate module progress.
+Read the current scene rather than inventing a replacement encounter.
+positioning_mode="agent" uses explicit DM spatial decisions without a
+fabricated grid; grid mode requires an actual map or declared override.
+participant_config supplies encounter facts, not replacement hp/max_hp.
+Initiative ties may require corrected tie_breaker values before startup.
+Reuse returned combat state/revisions; execute actors in returned turn order.
+
+Phases: play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"participant_ids":{"items":{"type":"string"},"title":"Participant Ids","type":"array","description":"Bounded participant ids value accepted by combat_start.","maxItems":1000},"positioning_mode":{"enum":["grid","agent"],"title":"Positioning Mode","type":"string","description":"Bounded positioning mode value accepted by combat_start."},"participant_config":{"anyOf":[{"items":{"additionalProperties":true,"type":"object"},"type":"array"},{"type":"null"}],"default":null,"title":"Participant Config","description":"Bounded participant config value accepted by combat_start."},"participant_manifest":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Participant Manifest","description":"Bounded participant manifest value accepted by combat_start."},"name":{"default":"Combat","title":"Name","type":"string","description":"Bounded name value accepted by combat_start.","maxLength":256},"scene_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Scene Id","description":"Bounded scene id value accepted by combat_start.","maxLength":256},"scope_id":{"default":"party","title":"Scope Id","type":"string","description":"Bounded scope id value accepted by combat_start.","maxLength":256},"battle_map":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Battle Map","description":"Bounded battle map value accepted by combat_start."},"battle_map_template_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Battle Map Template Id","description":"Bounded battle map template id value accepted by combat_start.","maxLength":256},"battle_map_override_reason":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Battle Map Override Reason","description":"Bounded battle map override reason value accepted by combat_start."},"ruleset":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Ruleset","description":"Bounded ruleset value accepted by combat_start."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","participant_ids","positioning_mode"],"title":"combat_startInput","type":"object"}
+```
+
+## combat_use_activity
+
+Pay an activity and settle supported Core outcomes; return rulings for the rest.
+
+Phases: combat
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"actor_id":{"title":"Actor Id","type":"string","description":"Authoritative campaign actor identifier.","maxLength":256},"activity_id":{"title":"Activity Id","type":"string","description":"Bounded activity id value accepted by combat_use_activity.","maxLength":256},"declaration":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Declaration","description":"Bounded declaration value accepted by combat_use_activity."},"choice_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Choice Id","description":"Bounded choice id value accepted by combat_use_activity.","maxLength":256},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","actor_id","activity_id"],"title":"combat_use_activityInput","type":"object"}
+```
+
+## combat_use_official_item
+
+Resolve one attuned Eberron weapon transition through the turn economy.
+
+Phases: combat
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"actor_id":{"title":"Actor Id","type":"string","description":"Authoritative campaign actor identifier.","maxLength":256},"item_id":{"title":"Item Id","type":"string","description":"Bounded item id value accepted by combat_use_official_item.","maxLength":256},"operation":{"title":"Operation","type":"string","description":"Bounded operation value accepted by combat_use_official_item."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","actor_id","item_id","operation"],"title":"combat_use_official_itemInput","type":"object"}
+```
+
+## content_pack
+
+Inspect and manage finalized core_rules, addon, module, or preset Packs.
+
+Every action needs payload={campaign_id, kind, ...}. Import uses exactly
+one source_path or artifact. Module get/activate uses the local module_id
+returned by import/list, not the archive pack_id. Mutations require Lobby,
+the current campaign expected_revision and a stable idempotency_key.
+Preset Packs are usable immediately after import; do not activate them.
+Preset list/get also require payload.edition; for an exact stored preset,
+get uses pack_id and version returned by list. Versions are not interchangeable.
+
+Phases: combat, lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"action":{"enum":["list","get","import","export","activate","deactivate","remove"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Revision","description":"Authority revision guard used to reject stale mutations."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Request Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256},"query":{"default":"","maxLength":200,"title":"Query","type":"string","description":"Case-insensitive bounded search text."},"limit":{"default":50,"maximum":100,"minimum":1,"title":"Limit","type":"integer","description":"Maximum records to return in this bounded page (1 through 100)."},"cursor":{"anyOf":[{"maxLength":1024,"type":"string"},{"type":"null"}],"default":null,"title":"Cursor","description":"Opaque continuation cursor returned by the preceding response.","maxLength":1024}},"required":["action"],"title":"content_packInput","type":"object"}
+```
+
+## content_solution
+
+Inspect or author one source-bound custom-content solution at first use.
+
+Phases: combat, lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"action":{"enum":["query","compile"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"actor_id":{"title":"Actor Id","type":"string","description":"Authoritative campaign actor identifier.","maxLength":256},"source_card_id":{"title":"Source Card Id","type":"string","description":"Bounded source card id value accepted by content_solution.","maxLength":256},"source_card_kind":{"enum":["activity","feature","item","monster_action","spell","trait"],"title":"Source Card Kind","type":"string","description":"Bounded source card kind value accepted by content_solution."},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","action","actor_id","source_card_id","source_card_kind"],"title":"content_solutionInput","type":"object"}
+```
+
+## continuity_context
+
+Retrieve current continuity plus pinned, source-exact DM module context.
+
+Phases: combat, lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"query":{"default":"","title":"Query","type":"string","description":"Case-insensitive bounded search text.","maxLength":256},"actor_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Actor Id","description":"Authoritative campaign actor identifier.","maxLength":256},"scope_id":{"default":"party","title":"Scope Id","type":"string","description":"Bounded scope id value accepted by continuity_context.","maxLength":256},"audience":{"default":"dm","title":"Audience","type":"string","description":"Audience scope used to filter private campaign information."},"purpose":{"default":"general","enum":["general","npc_turn","actor_turn","audience_render","faction_turn","campaign_expansion","source_interpretation","bounded_ruling","actor_memory"],"title":"Purpose","type":"string","description":"Bounded purpose value accepted by continuity_context."},"subject_ref":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Subject Ref","description":"Bounded subject ref value accepted by continuity_context."},"evaluation_target_refs":{"anyOf":[{"items":{"type":"string"},"type":"array"},{"type":"null"}],"default":null,"title":"Evaluation Target Refs","description":"Bounded evaluation target refs value accepted by continuity_context."},"interlocutor_actor_ids":{"anyOf":[{"items":{"type":"string"},"type":"array"},{"type":"null"}],"default":null,"title":"Interlocutor Actor Ids","description":"Bounded interlocutor actor ids value accepted by continuity_context."},"stimulus":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Stimulus","description":"Bounded stimulus value accepted by continuity_context."},"conversation_limit":{"default":8,"title":"Conversation Limit","type":"integer","description":"Bounded conversation limit value accepted by continuity_context.","minimum":1,"maximum":100},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"limit":{"default":8,"title":"Limit","type":"integer","description":"Maximum records to return in this bounded page (1 through 100).","minimum":1,"maximum":100},"budget_chars":{"default":12000,"title":"Budget Chars","type":"integer","description":"Maximum characters in the returned context bundle."},"related_refs":{"anyOf":[{"items":{"type":"string"},"type":"array"},{"type":"null"}],"default":null,"title":"Related Refs","description":"Bounded related refs value accepted by continuity_context."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256}},"required":["campaign_id"],"title":"continuity_contextInput","type":"object"}
+```
+
+## dnd_ability_roll
+
+Generate ability scores and atomically advance the campaign random stream.
+
+Phases: lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"edition":{"default":"","title":"Edition","type":"string","description":"Bounded edition value accepted by dnd_ability_roll."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"expected_campaign_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Campaign Revision","description":"Campaign revision guard used to reject stale mutations."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id"],"title":"dnd_ability_rollInput","type":"object"}
+```
+
+## dnd_check
+
+Resolve a check and atomically advance the campaign random stream.
+
+Phases: combat, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"dc":{"title":"Dc","type":"integer","description":"Bounded D&D difficulty class used by the authoritative check."},"ability_score":{"title":"Ability Score","type":"integer","description":"Bounded ability score value accepted by dnd_check."},"proficient":{"default":false,"title":"Proficient","type":"boolean","description":"Bounded proficient value accepted by dnd_check."},"level":{"default":1,"title":"Level","type":"integer","description":"Bounded level value accepted by dnd_check."},"bonus":{"default":0,"title":"Bonus","type":"integer","description":"Bounded bonus value accepted by dnd_check."},"advantage":{"default":false,"title":"Advantage","type":"boolean","description":"Bounded advantage value accepted by dnd_check."},"disadvantage":{"default":false,"title":"Disadvantage","type":"boolean","description":"Bounded disadvantage value accepted by dnd_check."},"kind":{"default":"ability","title":"Kind","type":"string","description":"Bounded kind value accepted by dnd_check.","maxLength":256},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"expected_campaign_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Campaign Revision","description":"Campaign revision guard used to reject stale mutations."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","dc","ability_score"],"title":"dnd_checkInput","type":"object"}
+```
+
+## dnd_dice_roll
+
+Roll a validated expression and atomically advance the campaign random stream.
+
+Phases: combat, lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"expression":{"title":"Expression","type":"string","description":"Bounded expression value accepted by dnd_dice_roll."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"expected_campaign_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Campaign Revision","description":"Campaign revision guard used to reject stale mutations."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","expression"],"title":"dnd_dice_rollInput","type":"object"}
+```
+
+## game_phase
+
+Get or set the persisted noncombat tool profile; combat is engine-controlled.
+
+Phases: lobby, play, combat
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"action":{"default":"get","enum":["get","set"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"tool_profile":{"anyOf":[{"enum":["lobby","play"],"type":"string"},{"type":"null"}],"default":null,"title":"Tool Profile","description":"Bounded tool profile value accepted by game_phase."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id"],"title":"game_phaseInput","type":"object"}
+```
+
+## inventory_change
+
+Change owned inventory using the owner's current revision and a request key.
+
+Character payloads: add={item}, update={item_id, patch},
+remove={item_id, quantity?}, equip={item_id, slot},
+where an explicit slot=null unequips the item; do not patch equipped flags.
+recharge={item_id, trigger}, consume_ammunition={weapon_id, quantity?}.
+item_id is the owned sheet.inventory.items[].id from the latest receipt,
+not a catalog artifact_id. Party supports only add/remove. Apply catalog
+equipment with character_content_apply first, then equip its returned
+owned item ID; change quantity through update rather than applying twice.
+update.patch.mechanics merges mechanic fields; omitted fields are preserved.
+Bind ammunition with patch={mechanics:{ammunition_item_id:<owned ammo id>}}.
+Explicit null clears a nullable field; nested records and lists replace
+their whole field value. Revision and idempotency_key are top-level inputs.
+
+Phases: lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"owner":{"enum":["character","party"],"title":"Owner","type":"string","description":"Bounded owner value accepted by inventory_change."},"action":{"enum":["add","update","remove","equip","recharge","consume_ammunition"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"owner_id":{"title":"Owner Id","type":"string","description":"Bounded owner id value accepted by inventory_change.","maxLength":256},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["owner","action","owner_id"],"title":"inventory_changeInput","type":"object"}
+```
+
+## inventory_transfer
+
+Transfer inventory with the revision contract required by every affected owner.
+
+Phases: lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"mode":{"enum":["character_to_character","party_to_character","character_to_party","character_to_ground","ground_to_character"],"title":"Mode","type":"string","description":"Bounded mode value accepted by inventory_transfer."},"payload":{"additionalProperties":true,"title":"Payload","type":"object","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["mode","payload"],"title":"inventory_transferInput","type":"object"}
+```
+
+## memory_change
+
+Add, upsert, supersede, retract, or forget an objective fact.
+
+Writes preserve immutable history. ``expected_revision`` is the campaign
+revision guard; revision UUIDs belong in ``payload.expected_revision_id``.
+Commit payloads use the same event/ActorKnowledge audience boundary as
+``campaign_event``: a DM-only event cannot back player-visible
+owner/party/player/public knowledge, including NPC conversation closes.
+
+Phases: lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"action":{"default":"add","enum":["add","upsert","revise","supersede","retract","forget","commit"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"content":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Content","description":"Bounded content value accepted by memory_change."},"kind":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Kind","description":"Bounded kind value accepted by memory_change.","maxLength":256},"subject":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Subject","description":"Bounded subject value accepted by memory_change."},"metadata":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Metadata","description":"Bounded metadata value accepted by memory_change."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id"],"title":"memory_changeInput","type":"object"}
+```
+
+## memory_query
+
+Read objective campaign memory; actor knowledge remains a separate subjective store.
+
+Phases: lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"view":{"default":"list","enum":["list","search","diagnostics"],"title":"View","type":"string","description":"Bounded view value accepted by memory_query."},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"query":{"default":"","maxLength":200,"title":"Query","type":"string","description":"Case-insensitive bounded search text."},"limit":{"default":50,"maximum":100,"minimum":1,"title":"Limit","type":"integer","description":"Maximum records to return in this bounded page (1 through 100)."},"cursor":{"anyOf":[{"maxLength":1024,"type":"string"},{"type":"null"}],"default":null,"title":"Cursor","description":"Opaque continuation cursor returned by the preceding response.","maxLength":1024}},"required":["campaign_id"],"title":"memory_queryInput","type":"object"}
+```
+
+## module_draft
+
+Build a D&D Module Pack via start, get, evidence, edit, and finalize.
+
+The public input schema exposes each action's payload shape. Reuse server-issued
+job/module ids, pass the latest import-job revision on guarded edits, and copy only
+real module_draft(evidence) source_ref receipts into play-profile decisions.
+For an installed Pack, edit(content/statblock) accepts module_id directly;
+it appends an immutable source review and does not require a draft job.
+
+Phases: lobby
+
+Shared parameters only. Before calling, read the exact action section with max_chars=20000: `module_draft (start)`, `module_draft (get)`, `module_draft (evidence)`, `module_draft (edit)`, `module_draft (finalize)`
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"action":{"enum":["start","get","evidence","edit","finalize"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Action-specific Module Pack payload; inspect the matching action branch in allOf. Server-issued job_id/module_id values come from start/get, source_ref receipts come verbatim from evidence, package edits are complete replacements, and finalize needs the stable Agent-selected pack_id plus explicit confirmation."},"principal_id":{"default":"system:local","title":"Principal","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Revision","description":"Import-job revision returned by module_draft, not the campaign revision. Pass the latest value for guarded edits; finalization rechecks the current job revision."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Request Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256},"query":{"default":"","maxLength":200,"title":"Query","type":"string","description":"Case-insensitive bounded search text."},"limit":{"default":50,"maximum":100,"minimum":1,"title":"Limit","type":"integer","description":"Maximum records to return in this bounded page (1 through 100)."},"cursor":{"anyOf":[{"maxLength":1024,"type":"string"},{"type":"null"}],"default":null,"title":"Cursor","description":"Opaque continuation cursor returned by the preceding response.","maxLength":1024}},"required":["campaign_id","action"],"title":"module_draftInput","type":"object"}
+```
+
+## module_draft (start)
+
+Input schema for action=start; preserve the shared authority guards.
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"action":{"enum":["start","get","evidence","edit","finalize"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Action-specific Module Pack payload; inspect the matching action branch in allOf. Server-issued job_id/module_id values come from start/get, source_ref receipts come verbatim from evidence, package edits are complete replacements, and finalize needs the stable Agent-selected pack_id plus explicit confirmation."},"principal_id":{"default":"system:local","title":"Principal","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Revision","description":"Import-job revision returned by module_draft, not the campaign revision. Pass the latest value for guarded edits; finalization rechecks the current job revision."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Request Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256},"query":{"default":"","maxLength":200,"title":"Query","type":"string","description":"Case-insensitive bounded search text."},"limit":{"default":50,"maximum":100,"minimum":1,"title":"Limit","type":"integer","description":"Maximum records to return in this bounded page (1 through 100)."},"cursor":{"anyOf":[{"maxLength":1024,"type":"string"},{"type":"null"}],"default":null,"title":"Cursor","description":"Opaque continuation cursor returned by the preceding response.","maxLength":1024}},"required":["campaign_id","action"],"title":"module_draftInput","type":"object","allOf":[{"if":{"properties":{"action":{"const":"start"}},"required":["action"]},"then":{"required":["payload","idempotency_key"],"properties":{"payload":{"oneOf":[{"type":"object","required":["source_path"],"properties":{"source_path":{"type":"string","minLength":1,"maxLength":65536},"title":{"type":"string","maxLength":500},"source_key":{"type":"string","maxLength":512}},"additionalProperties":false},{"type":"object","required":["name","content"],"properties":{"name":{"type":"string","minLength":1,"maxLength":512},"content":{"type":"string","minLength":1,"maxLength":65536,"description":"Complete UTF-8 Markdown module source with meaningful ATX headings so scenes and evidence chunks are indexable."},"title":{"type":"string","maxLength":500},"source_key":{"type":"string","maxLength":512}},"additionalProperties":false}]}}}}]}
+```
+
+## module_draft (get)
+
+Input schema for action=get; preserve the shared authority guards.
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"action":{"enum":["start","get","evidence","edit","finalize"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Action-specific Module Pack payload; inspect the matching action branch in allOf. Server-issued job_id/module_id values come from start/get, source_ref receipts come verbatim from evidence, package edits are complete replacements, and finalize needs the stable Agent-selected pack_id plus explicit confirmation."},"principal_id":{"default":"system:local","title":"Principal","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Revision","description":"Import-job revision returned by module_draft, not the campaign revision. Pass the latest value for guarded edits; finalization rechecks the current job revision."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Request Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256},"query":{"default":"","maxLength":200,"title":"Query","type":"string","description":"Case-insensitive bounded search text."},"limit":{"default":50,"maximum":100,"minimum":1,"title":"Limit","type":"integer","description":"Maximum records to return in this bounded page (1 through 100)."},"cursor":{"anyOf":[{"maxLength":1024,"type":"string"},{"type":"null"}],"default":null,"title":"Cursor","description":"Opaque continuation cursor returned by the preceding response.","maxLength":1024}},"required":["campaign_id","action"],"title":"module_draftInput","type":"object","allOf":[{"if":{"properties":{"action":{"const":"get"}},"required":["action"]},"then":{"properties":{"payload":{"type":["object","null"],"properties":{"job_id":{"type":"string","minLength":1,"maxLength":256},"view":{"enum":["full","package"]},"query":{"type":"string","maxLength":200},"limit":{"type":"integer","minimum":1,"maximum":100},"cursor":{"type":"string","maxLength":1024},"offset":{"type":"integer","minimum":0,"maximum":100000}},"additionalProperties":false}}}}]}
+```
+
+## module_draft (evidence)
+
+Input schema for action=evidence; preserve the shared authority guards.
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"action":{"enum":["start","get","evidence","edit","finalize"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Action-specific Module Pack payload; inspect the matching action branch in allOf. Server-issued job_id/module_id values come from start/get, source_ref receipts come verbatim from evidence, package edits are complete replacements, and finalize needs the stable Agent-selected pack_id plus explicit confirmation."},"principal_id":{"default":"system:local","title":"Principal","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Revision","description":"Import-job revision returned by module_draft, not the campaign revision. Pass the latest value for guarded edits; finalization rechecks the current job revision."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Request Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256},"query":{"default":"","maxLength":200,"title":"Query","type":"string","description":"Case-insensitive bounded search text."},"limit":{"default":50,"maximum":100,"minimum":1,"title":"Limit","type":"integer","description":"Maximum records to return in this bounded page (1 through 100)."},"cursor":{"anyOf":[{"maxLength":1024,"type":"string"},{"type":"null"}],"default":null,"title":"Cursor","description":"Opaque continuation cursor returned by the preceding response.","maxLength":1024}},"required":["campaign_id","action"],"title":"module_draftInput","type":"object","allOf":[{"if":{"properties":{"action":{"const":"evidence"}},"required":["action"]},"then":{"required":["payload"],"properties":{"payload":{"type":"object","properties":{"job_id":{"type":"string","minLength":1,"maxLength":256},"module_id":{"type":"string","minLength":1,"maxLength":256},"kind":{"enum":["chunks","page"]},"query":{"type":"string","maxLength":200},"scene_id":{"type":"string","maxLength":256},"page_number":{"type":"integer","minimum":1},"scale":{"type":"number","exclusiveMinimum":0},"include_ocr_text":{"type":"boolean"},"source_asset_id":{"type":"string","minLength":1},"limit":{"type":"integer","minimum":1,"maximum":100},"cursor":{"type":"string","maxLength":1024},"offset":{"type":"integer","minimum":0,"maximum":100000}},"anyOf":[{"required":["job_id"]},{"required":["module_id"]}],"additionalProperties":false}}}}]}
+```
+
+## module_draft (edit)
+
+Input schema for action=edit; preserve the shared authority guards.
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"action":{"enum":["start","get","evidence","edit","finalize"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Action-specific Module Pack payload; inspect the matching action branch in allOf. Server-issued job_id/module_id values come from start/get, source_ref receipts come verbatim from evidence, package edits are complete replacements, and finalize needs the stable Agent-selected pack_id plus explicit confirmation."},"principal_id":{"default":"system:local","title":"Principal","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Revision","description":"Import-job revision returned by module_draft, not the campaign revision. Pass the latest value for guarded edits; finalization rechecks the current job revision."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Request Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256},"query":{"default":"","maxLength":200,"title":"Query","type":"string","description":"Case-insensitive bounded search text."},"limit":{"default":50,"maximum":100,"minimum":1,"title":"Limit","type":"integer","description":"Maximum records to return in this bounded page (1 through 100)."},"cursor":{"anyOf":[{"maxLength":1024,"type":"string"},{"type":"null"}],"default":null,"title":"Cursor","description":"Opaque continuation cursor returned by the preceding response.","maxLength":1024}},"required":["campaign_id","action"],"title":"module_draftInput","type":"object","allOf":[{"if":{"properties":{"action":{"const":"edit"}},"required":["action"]},"then":{"required":["payload","idempotency_key"],"properties":{"payload":{"oneOf":[{"type":"object","required":["job_id","operation"],"properties":{"job_id":{"type":"string","minLength":1,"maxLength":256,"description":"Server-issued import-job id from start/get."},"operation":{"const":"package"},"note":{"type":"string","maxLength":2000},"manifest":{"type":"object","description":"Complete Module Pack manifest replacement. content_summary is an object whose counts are recomputed by the server.","required":["title","classification","compatibility","play_profile","continuity","activation","content_summary"],"properties":{"title":{"type":"string","minLength":1,"maxLength":500},"classification":{"enum":["adventure","campaign","emergent_seed","emergent_episode"],"description":"Source-reviewed D&D Module Pack classification."},"compatibility":{"type":"object","required":["editions","required_capabilities"],"properties":{"editions":{"type":"array","minItems":1,"maxItems":2,"uniqueItems":true,"items":{"enum":["2014","2024"]}},"required_capabilities":{"type":"array","maxItems":64,"items":{"type":"string","minLength":1,"maxLength":128},"examples":[["module_pack_v2"]]}},"additionalProperties":false},"play_profile":{"type":"object","description":"D&D play envelope. Level, advancement, and pregenerated-character review always need real evidence; party-size advice alone is optional and may be omitted.","required":["starting_level","expected_end_level","advancement","pregenerated_characters"],"properties":{"party_size":{"type":"object","description":"Source-backed party range. If the source gives no advice, set minimum/maximum both to null and source_refs to an empty array.","required":["minimum","maximum","source_refs"],"properties":{"minimum":{"type":["integer","null"],"minimum":1,"maximum":20},"maximum":{"type":["integer","null"],"minimum":1,"maximum":20},"source_refs":{"type":"array","maxItems":128,"items":{"type":"object","description":"Copy this real source receipt verbatim from module_draft(evidence); do not infer or retype its chunk_hash.","required":["source_key","page","chunk_hash","note"],"properties":{"source_key":{"type":"string","minLength":1,"maxLength":512,"description":"Source key from the returned evidence receipt."},"page":{"type":["integer","null"],"minimum":1,"description":"One-based source page, or null for generated Markdown."},"chunk_hash":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"Lowercase SHA-256 returned by evidence as source_ref.chunk_hash."},"note":{"type":"string","minLength":1,"maxLength":2000,"description":"Evidence note returned with or retained from the receipt."}},"additionalProperties":false},"description":"Party-size receipts; use an empty array only when both bounds are null because the source gives no party-size advice."}},"oneOf":[{"properties":{"minimum":{"type":"integer","minimum":1,"maximum":20},"maximum":{"type":"integer","minimum":1,"maximum":20},"source_refs":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"object","description":"Copy this real source receipt verbatim from module_draft(evidence); do not infer or retype its chunk_hash.","required":["source_key","page","chunk_hash","note"],"properties":{"source_key":{"type":"string","minLength":1,"maxLength":512,"description":"Source key from the returned evidence receipt."},"page":{"type":["integer","null"],"minimum":1,"description":"One-based source page, or null for generated Markdown."},"chunk_hash":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"Lowercase SHA-256 returned by evidence as source_ref.chunk_hash."},"note":{"type":"string","minLength":1,"maxLength":2000,"description":"Evidence note returned with or retained from the receipt."}},"additionalProperties":false},"description":"One or more exact module_draft(evidence) receipts."}}},{"properties":{"minimum":{"type":"null"},"maximum":{"type":"null"},"source_refs":{"type":"array","maxItems":0}}}],"additionalProperties":false},"starting_level":{"type":"object","required":["value","source_refs"],"properties":{"value":{"type":"integer","minimum":1,"maximum":20},"source_refs":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"object","description":"Copy this real source receipt verbatim from module_draft(evidence); do not infer or retype its chunk_hash.","required":["source_key","page","chunk_hash","note"],"properties":{"source_key":{"type":"string","minLength":1,"maxLength":512,"description":"Source key from the returned evidence receipt."},"page":{"type":["integer","null"],"minimum":1,"description":"One-based source page, or null for generated Markdown."},"chunk_hash":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"Lowercase SHA-256 returned by evidence as source_ref.chunk_hash."},"note":{"type":"string","minLength":1,"maxLength":2000,"description":"Evidence note returned with or retained from the receipt."}},"additionalProperties":false},"description":"One or more exact module_draft(evidence) receipts."}},"additionalProperties":false},"expected_end_level":{"type":"object","required":["value","source_refs"],"properties":{"value":{"type":"integer","minimum":1,"maximum":20},"source_refs":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"object","description":"Copy this real source receipt verbatim from module_draft(evidence); do not infer or retype its chunk_hash.","required":["source_key","page","chunk_hash","note"],"properties":{"source_key":{"type":"string","minLength":1,"maxLength":512,"description":"Source key from the returned evidence receipt."},"page":{"type":["integer","null"],"minimum":1,"description":"One-based source page, or null for generated Markdown."},"chunk_hash":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"Lowercase SHA-256 returned by evidence as source_ref.chunk_hash."},"note":{"type":"string","minLength":1,"maxLength":2000,"description":"Evidence note returned with or retained from the receipt."}},"additionalProperties":false},"description":"One or more exact module_draft(evidence) receipts."}},"additionalProperties":false},"advancement":{"type":"object","description":"Source-reviewed advancement modes; recommended must be one member of modes and unknown is not finalizable.","required":["modes","recommended","source_refs"],"properties":{"modes":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"string","minLength":1,"maxLength":80},"examples":[["milestone"],["xp"]]},"recommended":{"type":"string","minLength":1,"maxLength":80,"examples":["milestone"]},"source_refs":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"object","description":"Copy this real source receipt verbatim from module_draft(evidence); do not infer or retype its chunk_hash.","required":["source_key","page","chunk_hash","note"],"properties":{"source_key":{"type":"string","minLength":1,"maxLength":512,"description":"Source key from the returned evidence receipt."},"page":{"type":["integer","null"],"minimum":1,"description":"One-based source page, or null for generated Markdown."},"chunk_hash":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"Lowercase SHA-256 returned by evidence as source_ref.chunk_hash."},"note":{"type":"string","minLength":1,"maxLength":2000,"description":"Evidence note returned with or retained from the receipt."}},"additionalProperties":false},"description":"One or more exact module_draft(evidence) receipts."}},"additionalProperties":false},"pregenerated_characters":{"type":"object","description":"Required review of whether complete module pregenerated characters exist and are applicable; an explicit reviewed absence is valid.","required":["available","applicability","source_refs"],"properties":{"available":{"type":"boolean"},"applicability":{"type":"string","minLength":1,"maxLength":2000},"source_refs":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"object","description":"Copy this real source receipt verbatim from module_draft(evidence); do not infer or retype its chunk_hash.","required":["source_key","page","chunk_hash","note"],"properties":{"source_key":{"type":"string","minLength":1,"maxLength":512,"description":"Source key from the returned evidence receipt."},"page":{"type":["integer","null"],"minimum":1,"description":"One-based source page, or null for generated Markdown."},"chunk_hash":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"Lowercase SHA-256 returned by evidence as source_ref.chunk_hash."},"note":{"type":"string","minLength":1,"maxLength":2000,"description":"Evidence note returned with or retained from the receipt."}},"additionalProperties":false},"description":"One or more exact module_draft(evidence) receipts."}},"additionalProperties":false}},"additionalProperties":false},"continuity":{"type":"object","required":["series_id","order","continues_from","state_policy"],"properties":{"series_id":{"type":["string","null"],"maxLength":256},"order":{"type":["integer","null"],"minimum":0},"continues_from":{"type":["string","null"],"maxLength":256},"state_policy":{"type":"object","maxProperties":128}},"additionalProperties":false},"activation":{"type":"object","required":["mode","default_active"],"properties":{"mode":{"const":"campaign_attach"},"default_active":{"type":"boolean"}},"additionalProperties":false},"content_summary":{"type":"object","maxProperties":64}},"additionalProperties":false},"catalogs":{"type":"object","description":"Complete replacements for supplied native D&D catalog arrays.","minProperties":1,"properties":{"items":{"type":"array","maxItems":1000,"items":{"type":"object","maxProperties":128}},"encounters":{"type":"array","maxItems":1000,"items":{"type":"object","maxProperties":128}},"hazards":{"type":"array","maxItems":1000,"items":{"type":"object","maxProperties":128}},"handouts":{"type":"array","maxItems":1000,"items":{"type":"object","maxProperties":128}},"mechanics":{"type":"array","maxItems":1000,"items":{"type":"object","maxProperties":128}}},"additionalProperties":false},"narrative":{"type":"object","description":"Structured narrative dossiers and source-defined endings.","required":["dossiers","endings"],"properties":{"dossiers":{"type":"array","maxItems":256,"items":{"type":"object","maxProperties":128}},"endings":{"type":"array","maxItems":128,"items":{"type":"object","maxProperties":128}}},"additionalProperties":false},"dependencies":{"type":"array","description":"Immutable Pack dependencies with exact identity and checksum.","maxItems":128,"items":{"type":"object","required":["kind","id","version","checksum","optional"],"properties":{"kind":{"enum":["addon","module","preset","core_rules"]},"id":{"type":"string","minLength":1,"maxLength":300},"version":{"type":"string","minLength":1,"maxLength":100},"checksum":{"type":"string","pattern":"^[0-9a-f]{64}$"},"optional":{"type":"boolean"}},"additionalProperties":false}},"metadata":{"type":"object","maxProperties":256},"version":{"type":"string","minLength":1,"maxLength":100}},"anyOf":[{"required":["manifest"]},{"required":["catalogs"]},{"required":["narrative"]},{"required":["dependencies"]},{"required":["metadata"]},{"required":["version"]}],"additionalProperties":false},{"type":"object","required":["operation"],"properties":{"job_id":{"type":"string","minLength":1,"maxLength":256},"module_id":{"type":"string","minLength":1,"maxLength":256},"operation":{"enum":["advance","source_text","content","statblock","asset","actor","combat_grid"]}},"anyOf":[{"required":["job_id"]},{"required":["module_id"]}],"additionalProperties":true,"maxProperties":128}]}},"allOf":[{"if":{"properties":{"payload":{"type":"object","properties":{"operation":{"enum":["advance","content","statblock"]}},"required":["operation"]}}},"else":{"required":["expected_revision"]}}]}}]}
+```
+
+## module_draft (finalize)
+
+Input schema for action=finalize; preserve the shared authority guards.
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"action":{"enum":["start","get","evidence","edit","finalize"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Action-specific Module Pack payload; inspect the matching action branch in allOf. Server-issued job_id/module_id values come from start/get, source_ref receipts come verbatim from evidence, package edits are complete replacements, and finalize needs the stable Agent-selected pack_id plus explicit confirmation."},"principal_id":{"default":"system:local","title":"Principal","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Revision","description":"Import-job revision returned by module_draft, not the campaign revision. Pass the latest value for guarded edits; finalization rechecks the current job revision."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Request Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256},"query":{"default":"","maxLength":200,"title":"Query","type":"string","description":"Case-insensitive bounded search text."},"limit":{"default":50,"maximum":100,"minimum":1,"title":"Limit","type":"integer","description":"Maximum records to return in this bounded page (1 through 100)."},"cursor":{"anyOf":[{"maxLength":1024,"type":"string"},{"type":"null"}],"default":null,"title":"Cursor","description":"Opaque continuation cursor returned by the preceding response.","maxLength":1024}},"required":["campaign_id","action"],"title":"module_draftInput","type":"object","allOf":[{"if":{"properties":{"action":{"const":"finalize"}},"required":["action"]},"then":{"required":["payload","idempotency_key"],"properties":{"payload":{"type":"object","required":["job_id","pack_id","confirmation"],"properties":{"job_id":{"type":"string","minLength":1,"maxLength":256,"description":"Server-issued import-job id from start/get."},"pack_id":{"type":"string","minLength":1,"maxLength":300,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$","description":"Stable portable Agent-selected Pack identity, for example dnd5e.module.the-lantern-below; it is not a job/module id."},"confirmation":{"type":"object","description":"Explicit Agent editorial decision before immutable finalization.","required":["confirmed","note"],"properties":{"confirmed":{"const":true},"note":{"type":"string","minLength":1,"maxLength":2000}},"additionalProperties":false},"include_package":{"type":"boolean"},"manifest":{"type":"object","description":"Complete Module Pack manifest replacement. content_summary is an object whose counts are recomputed by the server.","required":["title","classification","compatibility","play_profile","continuity","activation","content_summary"],"properties":{"title":{"type":"string","minLength":1,"maxLength":500},"classification":{"enum":["adventure","campaign","emergent_seed","emergent_episode"],"description":"Source-reviewed D&D Module Pack classification."},"compatibility":{"type":"object","required":["editions","required_capabilities"],"properties":{"editions":{"type":"array","minItems":1,"maxItems":2,"uniqueItems":true,"items":{"enum":["2014","2024"]}},"required_capabilities":{"type":"array","maxItems":64,"items":{"type":"string","minLength":1,"maxLength":128},"examples":[["module_pack_v2"]]}},"additionalProperties":false},"play_profile":{"type":"object","description":"D&D play envelope. Level, advancement, and pregenerated-character review always need real evidence; party-size advice alone is optional and may be omitted.","required":["starting_level","expected_end_level","advancement","pregenerated_characters"],"properties":{"party_size":{"type":"object","description":"Source-backed party range. If the source gives no advice, set minimum/maximum both to null and source_refs to an empty array.","required":["minimum","maximum","source_refs"],"properties":{"minimum":{"type":["integer","null"],"minimum":1,"maximum":20},"maximum":{"type":["integer","null"],"minimum":1,"maximum":20},"source_refs":{"type":"array","maxItems":128,"items":{"type":"object","description":"Copy this real source receipt verbatim from module_draft(evidence); do not infer or retype its chunk_hash.","required":["source_key","page","chunk_hash","note"],"properties":{"source_key":{"type":"string","minLength":1,"maxLength":512,"description":"Source key from the returned evidence receipt."},"page":{"type":["integer","null"],"minimum":1,"description":"One-based source page, or null for generated Markdown."},"chunk_hash":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"Lowercase SHA-256 returned by evidence as source_ref.chunk_hash."},"note":{"type":"string","minLength":1,"maxLength":2000,"description":"Evidence note returned with or retained from the receipt."}},"additionalProperties":false},"description":"Party-size receipts; use an empty array only when both bounds are null because the source gives no party-size advice."}},"oneOf":[{"properties":{"minimum":{"type":"integer","minimum":1,"maximum":20},"maximum":{"type":"integer","minimum":1,"maximum":20},"source_refs":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"object","description":"Copy this real source receipt verbatim from module_draft(evidence); do not infer or retype its chunk_hash.","required":["source_key","page","chunk_hash","note"],"properties":{"source_key":{"type":"string","minLength":1,"maxLength":512,"description":"Source key from the returned evidence receipt."},"page":{"type":["integer","null"],"minimum":1,"description":"One-based source page, or null for generated Markdown."},"chunk_hash":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"Lowercase SHA-256 returned by evidence as source_ref.chunk_hash."},"note":{"type":"string","minLength":1,"maxLength":2000,"description":"Evidence note returned with or retained from the receipt."}},"additionalProperties":false},"description":"One or more exact module_draft(evidence) receipts."}}},{"properties":{"minimum":{"type":"null"},"maximum":{"type":"null"},"source_refs":{"type":"array","maxItems":0}}}],"additionalProperties":false},"starting_level":{"type":"object","required":["value","source_refs"],"properties":{"value":{"type":"integer","minimum":1,"maximum":20},"source_refs":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"object","description":"Copy this real source receipt verbatim from module_draft(evidence); do not infer or retype its chunk_hash.","required":["source_key","page","chunk_hash","note"],"properties":{"source_key":{"type":"string","minLength":1,"maxLength":512,"description":"Source key from the returned evidence receipt."},"page":{"type":["integer","null"],"minimum":1,"description":"One-based source page, or null for generated Markdown."},"chunk_hash":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"Lowercase SHA-256 returned by evidence as source_ref.chunk_hash."},"note":{"type":"string","minLength":1,"maxLength":2000,"description":"Evidence note returned with or retained from the receipt."}},"additionalProperties":false},"description":"One or more exact module_draft(evidence) receipts."}},"additionalProperties":false},"expected_end_level":{"type":"object","required":["value","source_refs"],"properties":{"value":{"type":"integer","minimum":1,"maximum":20},"source_refs":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"object","description":"Copy this real source receipt verbatim from module_draft(evidence); do not infer or retype its chunk_hash.","required":["source_key","page","chunk_hash","note"],"properties":{"source_key":{"type":"string","minLength":1,"maxLength":512,"description":"Source key from the returned evidence receipt."},"page":{"type":["integer","null"],"minimum":1,"description":"One-based source page, or null for generated Markdown."},"chunk_hash":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"Lowercase SHA-256 returned by evidence as source_ref.chunk_hash."},"note":{"type":"string","minLength":1,"maxLength":2000,"description":"Evidence note returned with or retained from the receipt."}},"additionalProperties":false},"description":"One or more exact module_draft(evidence) receipts."}},"additionalProperties":false},"advancement":{"type":"object","description":"Source-reviewed advancement modes; recommended must be one member of modes and unknown is not finalizable.","required":["modes","recommended","source_refs"],"properties":{"modes":{"type":"array","minItems":1,"maxItems":16,"items":{"type":"string","minLength":1,"maxLength":80},"examples":[["milestone"],["xp"]]},"recommended":{"type":"string","minLength":1,"maxLength":80,"examples":["milestone"]},"source_refs":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"object","description":"Copy this real source receipt verbatim from module_draft(evidence); do not infer or retype its chunk_hash.","required":["source_key","page","chunk_hash","note"],"properties":{"source_key":{"type":"string","minLength":1,"maxLength":512,"description":"Source key from the returned evidence receipt."},"page":{"type":["integer","null"],"minimum":1,"description":"One-based source page, or null for generated Markdown."},"chunk_hash":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"Lowercase SHA-256 returned by evidence as source_ref.chunk_hash."},"note":{"type":"string","minLength":1,"maxLength":2000,"description":"Evidence note returned with or retained from the receipt."}},"additionalProperties":false},"description":"One or more exact module_draft(evidence) receipts."}},"additionalProperties":false},"pregenerated_characters":{"type":"object","description":"Required review of whether complete module pregenerated characters exist and are applicable; an explicit reviewed absence is valid.","required":["available","applicability","source_refs"],"properties":{"available":{"type":"boolean"},"applicability":{"type":"string","minLength":1,"maxLength":2000},"source_refs":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"object","description":"Copy this real source receipt verbatim from module_draft(evidence); do not infer or retype its chunk_hash.","required":["source_key","page","chunk_hash","note"],"properties":{"source_key":{"type":"string","minLength":1,"maxLength":512,"description":"Source key from the returned evidence receipt."},"page":{"type":["integer","null"],"minimum":1,"description":"One-based source page, or null for generated Markdown."},"chunk_hash":{"type":"string","pattern":"^[0-9a-f]{64}$","description":"Lowercase SHA-256 returned by evidence as source_ref.chunk_hash."},"note":{"type":"string","minLength":1,"maxLength":2000,"description":"Evidence note returned with or retained from the receipt."}},"additionalProperties":false},"description":"One or more exact module_draft(evidence) receipts."}},"additionalProperties":false}},"additionalProperties":false},"continuity":{"type":"object","required":["series_id","order","continues_from","state_policy"],"properties":{"series_id":{"type":["string","null"],"maxLength":256},"order":{"type":["integer","null"],"minimum":0},"continues_from":{"type":["string","null"],"maxLength":256},"state_policy":{"type":"object","maxProperties":128}},"additionalProperties":false},"activation":{"type":"object","required":["mode","default_active"],"properties":{"mode":{"const":"campaign_attach"},"default_active":{"type":"boolean"}},"additionalProperties":false},"content_summary":{"type":"object","maxProperties":64}},"additionalProperties":false},"catalogs":{"type":"object","description":"Complete replacements for supplied native D&D catalog arrays.","minProperties":1,"properties":{"items":{"type":"array","maxItems":1000,"items":{"type":"object","maxProperties":128}},"encounters":{"type":"array","maxItems":1000,"items":{"type":"object","maxProperties":128}},"hazards":{"type":"array","maxItems":1000,"items":{"type":"object","maxProperties":128}},"handouts":{"type":"array","maxItems":1000,"items":{"type":"object","maxProperties":128}},"mechanics":{"type":"array","maxItems":1000,"items":{"type":"object","maxProperties":128}}},"additionalProperties":false},"narrative":{"type":"object","description":"Structured narrative dossiers and source-defined endings.","required":["dossiers","endings"],"properties":{"dossiers":{"type":"array","maxItems":256,"items":{"type":"object","maxProperties":128}},"endings":{"type":"array","maxItems":128,"items":{"type":"object","maxProperties":128}}},"additionalProperties":false},"dependencies":{"type":"array","description":"Immutable Pack dependencies with exact identity and checksum.","maxItems":128,"items":{"type":"object","required":["kind","id","version","checksum","optional"],"properties":{"kind":{"enum":["addon","module","preset","core_rules"]},"id":{"type":"string","minLength":1,"maxLength":300},"version":{"type":"string","minLength":1,"maxLength":100},"checksum":{"type":"string","pattern":"^[0-9a-f]{64}$"},"optional":{"type":"boolean"}},"additionalProperties":false}},"metadata":{"type":"object","maxProperties":256},"version":{"type":"string","minLength":1,"maxLength":100}},"additionalProperties":false}}}}]}
+```
+
+## module_expand
+
+Read a complete module chunk after it was selected by search.
+
+Phases: combat, lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"chunk_id":{"title":"Chunk Id","type":"string","description":"Bounded chunk id value accepted by module_expand.","maxLength":256},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256}},"required":["chunk_id"],"title":"module_expandInput","type":"object"}
+```
+
+## module_query
+
+Read installed module state; campaign_id is a top-level argument.
+
+payload by view: list {}; index {module_id?}; current {scope_id?};
+scene {scene_id, scope_id?}; progress {module_id?, scope_id?};
+preflight {scene_id, participant_manifest}; assets/candidates {module_id};
+actors {module_id, scene_id?, binding_kind?}; content {review_id} or
+{module_id, content_kind?, content_key?}. content reads materialization
+reviews, not source prose. For prose, read scene, then module_expand
+with its returned chunk_id. Copy the complete returned source_ref
+unchanged for source-bound actions; never reconstruct IDs or checksums.
+List results support top-level query, limit and cursor. scope_id defaults
+to party. A missing current scene is not permission to invent module facts.
+current selects only status="current"; progress includes in_progress
+records. Use module_set_progress(status="current") to select the actual
+current location. index has no chapter_id filter; follow its scene IDs.
+
+Phases: combat, lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"view":{"default":"list","enum":["list","index","scene","current","progress","preflight","assets","content","candidates","actors"],"title":"View","type":"string","description":"Bounded view value accepted by module_query."},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"query":{"default":"","maxLength":200,"title":"Query","type":"string","description":"Case-insensitive bounded search text."},"limit":{"default":50,"maximum":100,"minimum":1,"title":"Limit","type":"integer","description":"Maximum records to return in this bounded page (1 through 100)."},"cursor":{"anyOf":[{"maxLength":1024,"type":"string"},{"type":"null"}],"default":null,"title":"Cursor","description":"Opaque continuation cursor returned by the preceding response.","maxLength":1024}},"required":["campaign_id"],"title":"module_queryInput","type":"object"}
+```
+
+## module_search
+
+Search adventure content, optionally scoped to exact active module revisions.
+
+Phases: combat, lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"query":{"title":"Query","type":"string","description":"Case-insensitive bounded search text.","maxLength":256},"top_k":{"default":8,"title":"Top K","type":"integer","description":"Maximum ranked matches to return (1 through 100).","minimum":1,"maximum":100},"module_ids":{"anyOf":[{"items":{"type":"string"},"type":"array"},{"type":"null"}],"default":null,"title":"Module Ids","description":"Bounded module ids value accepted by module_search."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"cursor":{"anyOf":[{"maxLength":1024,"type":"string"},{"type":"null"}],"default":null,"title":"Cursor","description":"Opaque continuation cursor returned by the preceding response.","maxLength":1024}},"required":["campaign_id","query"],"title":"module_searchInput","type":"object"}
+```
+
+## module_set_progress
+
+Persist scoped progress or a source-backed visual atlas review.
+
+Requires expected_state_version from scene progress (0 for its first
+write), not the campaign revision, and idempotency_key. progress is an
+integer. Record observed play only; a progress write does not resolve an
+encounter, create actors, or prove that a scene objective was achieved.
+Set status="current" when the party actually enters this scene; only
+that status selects module_query(view="current"). "in_progress" records
+unfinished work but does not select the current scene. Read progress to
+recover a known location when no current pointer exists, then select that
+source scene explicitly. Never invent a scene because current is null.
+
+Phases: lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"scene_id":{"title":"Scene Id","type":"string","description":"Bounded scene id value accepted by module_set_progress.","maxLength":256},"scope_id":{"default":"party","title":"Scope Id","type":"string","description":"Bounded scope id value accepted by module_set_progress.","maxLength":256},"status":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Status","description":"Bounded status value accepted by module_set_progress."},"progress":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Progress","description":"Bounded progress value accepted by module_set_progress."},"state":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"State","description":"Bounded state value accepted by module_set_progress."},"current_room":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Current Room","description":"Bounded current room value accepted by module_set_progress."},"current_location_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Current Location Key","description":"Bounded current location key value accepted by module_set_progress."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_state_version":{"title":"Expected State Version","description":"Bounded expected state version value accepted by module_set_progress.","type":"integer"},"idempotency_key":{"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256,"type":"string","minLength":1},"spatial_review":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Spatial Review","description":"Bounded spatial review value accepted by module_set_progress."}},"required":["campaign_id","expected_state_version","idempotency_key","scene_id"],"title":"module_set_progressInput","type":"object"}
+```
+
+## npc_conversation
+
+Run the complete public NPC conversation workflow through one facade.
+
+For ``action='ingest'``, put the public stimulus in ``payload.event``
+with ``type`` (speech, action, scene_prompt, or resolution),
+``speaker_actor_id``, and ``content`` (not ``text``); optional fields
+include ``language``, ``delivery``, and ``declared_target_actor_ids``.
+Include ``payload.audience_facts`` with ``decision_id``,
+``resolver='agent'``, perceived/understood/response actor id lists,
+``partial_renditions``, ``basis_refs``, and a scene-specific ``reason``.
+Understood and response actors must be perceived, and response actors
+must have NPC runtimes.
+For ``action='publish'``, payload must include publication_id AND the
+same complete audience_facts object. Use partial_renditions={} when
+none. response_actor_ids schedules NPC workers, not the next player
+speaker: use [] when only PCs will reply. Put listening PCs in
+perceived_actor_ids and understood_actor_ids instead.
+All writes require payload.idempotency_key. ingest/publish/close/abort
+also require payload.conversation_id and expected_conversation_revision
+from the latest conversation receipt (not the campaign revision).
+open uses participant_actor_ids and optional scope_id inside payload.
+Pending NPC activations require a connected Host worker; close only when
+they finish. Without that Host, report the missing capability or explicitly
+abort the conversation, never fabricate NPC publications or busy-poll it.
+close may return mechanic_handoff with pending requests for the DM.
+Release workers and settle those via ordinary public mechanic tools;
+closing does not resolve them or unlock their dependent memory candidates.
+close defaults to payload.detail='summary', omitting duplicated skill
+manifests only; transcript and mechanic_handoff remain intact. Use
+detail='full' for the complete audit receipt, including on replay.
+
+Phases: play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"action":{"enum":["open","list","get","ingest","publish","close","abort"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"additionalProperties":true,"title":"Payload","type":"object","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"query":{"default":"","maxLength":200,"title":"Query","type":"string","description":"Case-insensitive bounded search text."},"limit":{"default":50,"maximum":100,"minimum":1,"title":"Limit","type":"integer","description":"Maximum records to return in this bounded page (1 through 100)."},"cursor":{"anyOf":[{"maxLength":1024,"type":"string"},{"type":"null"}],"default":null,"title":"Cursor","description":"Opaque continuation cursor returned by the preceding response.","maxLength":1024}},"required":["campaign_id","action","payload"],"title":"npc_conversationInput","type":"object"}
+```
+
+## npc_conversation_transport
+
+Host-private activation transport; never exposed to a model tool profile.
+
+Phases: Host-private; not a public MCP tool.
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"conversation_id":{"title":"Conversation Id","type":"string","description":"Bounded conversation id value accepted by npc_conversation_transport.","maxLength":256},"action":{"enum":["claim_activation","submit_proposal","cancel_activation"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"additionalProperties":true,"title":"Payload","type":"object","description":"Operation-specific bounded JSON object described by the selected action."},"host_token":{"title":"Host Token","type":"string","description":"Bounded host token value accepted by npc_conversation_transport."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256}},"required":["campaign_id","conversation_id","action","payload","host_token"],"title":"npc_conversation_transportInput","type":"object"}
+```
+
+## playthrough_manifest
+
+Read or atomically maintain the snapshot-managed full-playthrough manifest.
+
+Actions are ``get``, ``initialize``, ``replace``, ``extend_modules``,
+``configure_ending``, ``sync``, and ``verify_ending``.  ``initialize``
+requires ``payload.manifest``; mutation actions require their documented
+payload plus optimistic-concurrency fields.
+
+Phases: combat, lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"action":{"anyOf":[{"enum":["get","initialize","replace","extend_modules","configure_ending","sync","verify_ending"],"type":"string"},{"type":"null"}],"default":null,"title":"Action","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id"],"title":"playthrough_manifestInput","type":"object"}
+```
+
+## resolution_presentation
+
+Return one audience-safe, authoritative resolution bubble projection.
+
+Phases: lobby, play, combat
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"resolution_id":{"title":"Resolution Id","type":"string","description":"Bounded resolution id value accepted by resolution_presentation.","maxLength":256},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256}},"required":["campaign_id","resolution_id"],"title":"resolution_presentationInput","type":"object"}
+```
+
+## rule_expand
+
+Read one indexed chunk only when its source belongs to this campaign ruleset.
+
+Phases: combat, lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"chunk_id":{"title":"Chunk Id","type":"string","description":"Bounded chunk id value accepted by rule_expand.","maxLength":256},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256}},"required":["campaign_id","chunk_id"],"title":"rule_expandInput","type":"object"}
+```
+
+## rule_search
+
+Search rules visible to the campaign; first lookup needs only id and query.
+
+Phases: combat, lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"query":{"title":"Query","type":"string","description":"Case-insensitive bounded search text.","maxLength":256},"filters":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"description":"Optional exact evidence-backed filters: edition, locale, publications, source_ids, source_keys, or positive page. Omit for the first lookup; an empty object means unfiltered.","title":"Filters"},"top_k":{"default":8,"title":"Top K","type":"integer","description":"Maximum ranked matches to return (1 through 100).","minimum":1,"maximum":100},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"cursor":{"anyOf":[{"maxLength":1024,"type":"string"},{"type":"null"}],"default":null,"title":"Cursor","description":"Opaque continuation cursor returned by the preceding response.","maxLength":1024}},"required":["campaign_id","query"],"title":"rule_searchInput","type":"object"}
+```
+
+## rule_seed_bundled
+
+Idempotently index the complete bundled SRD corpus.
+
+Phases: lobby
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"max_files":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Max Files","description":"Bounded max files value accepted by rule_seed_bundled."}},"title":"rule_seed_bundledInput","type":"object"}
+```
+
+## rule_seed_status
+
+Return a bounded inventory of indexed D&D rule sources.
+
+Phases: lobby
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Campaign Id","description":"Authoritative campaign identifier.","maxLength":256},"edition":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Edition","description":"Bounded edition value accepted by rule_seed_status."},"query":{"default":"","title":"Query","type":"string","description":"Case-insensitive bounded search text.","maxLength":256},"limit":{"default":100,"title":"Limit","type":"integer","description":"Maximum records to return in this bounded page (1 through 100).","minimum":1,"maximum":100},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256}},"title":"rule_seed_statusInput","type":"object"}
+```
+
+## rulebook_draft
+
+Create, inspect, edit, and finalize one source-bound rulebook draft.
+
+Phases: lobby
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"action":{"enum":["start","get","evidence","edit","finalize"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Revision","description":"Authority revision guard used to reject stale mutations."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Request Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256},"query":{"default":"","maxLength":200,"title":"Query","type":"string","description":"Case-insensitive bounded search text."},"limit":{"default":50,"maximum":100,"minimum":1,"title":"Limit","type":"integer","description":"Maximum records to return in this bounded page (1 through 100)."},"cursor":{"anyOf":[{"maxLength":1024,"type":"string"},{"type":"null"}],"default":null,"title":"Cursor","description":"Opaque continuation cursor returned by the preceding response.","maxLength":1024}},"required":["campaign_id","action"],"title":"rulebook_draftInput","type":"object"}
+```
+
+## server_capabilities
+
+Describe the MCP contract and the automatic-vs-ruling combat boundary.
+
+Phases: lobby, play, combat
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{},"title":"server_capabilitiesInput","type":"object"}
+```
+
+## skill_query
+
+Discover or read installed workflow guidance in bounded pages.
+
+Start with kind=skill, action=read, identifier=dnd.full. kind=skill searches
+entry documents only. For referenced workflows and tool help, search
+kind=asset with identifier omitted, then reuse the returned asset identifier.
+Search uses a short query; follow page.next_cursor for more matches. Section requires
+an exact Markdown heading from outline, not a JSON key. For tool help,
+search generated-operations.md, then read the matching Markdown section.
+
+Phases: lobby, play, combat
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"kind":{"enum":["skill","asset"],"title":"Kind","type":"string","description":"Bounded kind value accepted by skill_query.","maxLength":256},"action":{"enum":["list","read","outline","section","search"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"identifier":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Identifier","description":"Bounded identifier value accepted by skill_query.","maxLength":256},"source":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Source","description":"Bounded source value accepted by skill_query."},"heading":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Heading","description":"Bounded heading value accepted by skill_query."},"query":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Query","description":"Case-insensitive bounded search text.","maxLength":256},"max_chars":{"default":12000,"maximum":20000,"minimum":256,"title":"Max Chars","type":"integer","description":"Bounded max chars value accepted by skill_query."},"limit":{"default":8,"maximum":100,"minimum":1,"title":"Limit","type":"integer","description":"Maximum records to return in this bounded page (1 through 100)."},"cursor":{"anyOf":[{"maxLength":1024,"type":"string"},{"type":"null"}],"default":null,"title":"Cursor","description":"Opaque continuation cursor returned by the preceding response.","maxLength":1024}},"required":["kind","action"],"title":"skill_queryInput","type":"object"}
+```
+
+## snapshot_create
+
+Save current authoritative state on the current branch.
+
+Requires campaign expected_revision, idempotency_key, and the exact
+expected_head_snapshot_id from branch_query(list); use "" only for a
+branch without a head. Returns slot (integer) and id; verify via
+snapshot_query(view="verify", payload={slot}), not snapshot_id.
+
+Phases: combat, lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"label":{"default":"","title":"Label","type":"string","description":"Bounded label value accepted by snapshot_create.","maxLength":256},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"expected_head_snapshot_id":{"default":"","title":"Expected Head Snapshot Id","type":"string","description":"Bounded expected head snapshot id value accepted by snapshot_create.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id"],"title":"snapshot_createInput","type":"object"}
+```
+
+## snapshot_query
+
+Read snapshot history, integrity, lineage, or a regenerated recap.
+
+list needs no payload. verify/core/recap require payload={slot:<integer>}
+from snapshot_create/list, not a snapshot UUID. lineage accepts slot.
+
+Phases: combat, lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"view":{"default":"list","enum":["list","verify","lineage","recap","core"],"title":"View","type":"string","description":"Bounded view value accepted by snapshot_query."},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"query":{"default":"","maxLength":200,"title":"Query","type":"string","description":"Case-insensitive bounded search text."},"limit":{"default":50,"maximum":100,"minimum":1,"title":"Limit","type":"integer","description":"Maximum records to return in this bounded page (1 through 100)."},"cursor":{"anyOf":[{"maxLength":1024,"type":"string"},{"type":"null"}],"default":null,"title":"Cursor","description":"Opaque continuation cursor returned by the preceding response.","maxLength":1024}},"required":["campaign_id"],"title":"snapshot_queryInput","type":"object"}
+```
+
+## snapshot_restore
+
+Fork from a saved integer slot, preserving existing future history.
+
+Pass current expected_revision, expected_branch_id and idempotency_key.
+After restoring, resume once and use the returned branch/revisions;
+saved revision numbers are not current concurrency tokens.
+
+Phases: combat, lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"slot":{"title":"Slot","type":"integer","description":"Bounded slot value accepted by snapshot_restore."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"expected_branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Expected Branch Id","description":"Branch guard that must match the current authoritative branch.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","slot"],"title":"snapshot_restoreInput","type":"object"}
+```
+
+## state_revision
+
+Read revision history, retrieve a known write receipt, or guarded undo/redo.
+
+receipt requires payload.idempotency_key of the original dispatched write;
+never generate a new key for a lookup. To read the current campaign revision,
+use campaign_query(view="get", payload={campaign_id}), not receipt.
+
+Phases: combat, lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"action":{"enum":["history","receipt","undo","redo"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256},"query":{"default":"","maxLength":200,"title":"Query","type":"string","description":"Case-insensitive bounded search text."},"limit":{"default":50,"maximum":100,"minimum":1,"title":"Limit","type":"integer","description":"Maximum records to return in this bounded page (1 through 100)."},"cursor":{"anyOf":[{"maxLength":1024,"type":"string"},{"type":"null"}],"default":null,"title":"Cursor","description":"Opaque continuation cursor returned by the preceding response.","maxLength":1024}},"required":["campaign_id","action"],"title":"state_revisionInput","type":"object"}
+```
+
+## storage_migrate
+
+Run the embedded SQLite schema migrations.
+
+Phases: lobby
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{},"title":"storage_migrateInput","type":"object"}
+```
+
+## storage_status
+
+Return storage health without exposing credentials or host paths.
+
+Phases: lobby, play, combat
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{},"title":"storage_statusInput","type":"object"}
+```
+
+## system_list
+
+List systems exposed by this MCP server.
+
+Phases: lobby
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{},"title":"system_listInput","type":"object"}
+```
+
+## wallet_change
+
+Adjust a wallet or transfer money through the party with all affected revisions.
+
+owner=party means owner_id is the campaign UUID, never the string party;
+owner=character means owner_id is the character UUID. adjust requires
+top-level expected_revision of that owner and idempotency_key. Use
+campaign_query(get/resume) or character_query(get) for a missing revision.
+Module-authored loot parcels use campaign_change(action="loot_acquire")
+with their exact source evidence rather than separate manual credits.
+Prefer payload={detail:"summary"} to retain wallet results and affected
+entity ids/revisions without full campaign history or character sheets.
+Omit detail or use "full" for the complete response. Detail changes only
+response projection; replaying the same idempotency key never pays twice.
+
+Phases: lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"owner":{"enum":["character","party"],"title":"Owner","type":"string","description":"Bounded owner value accepted by wallet_change."},"action":{"enum":["adjust","transfer_to_character","transfer_from_character"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"owner_id":{"title":"Owner Id","type":"string","description":"Bounded owner id value accepted by wallet_change.","maxLength":256},"denomination":{"title":"Denomination","type":"string","description":"Bounded denomination value accepted by wallet_change."},"amount":{"title":"Amount","type":"integer","description":"Bounded amount value accepted by wallet_change."},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["owner","action","owner_id","denomination","amount"],"title":"wallet_changeInput","type":"object"}
+```

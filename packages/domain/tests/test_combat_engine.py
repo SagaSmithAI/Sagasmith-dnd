@@ -1328,6 +1328,38 @@ def test_encounter_positioning_modes_are_explicit_engine_state() -> None:
         )
 
 
+@pytest.mark.parametrize("condition", ["prone", "unconscious", "paralyzed"])
+def test_agent_attack_requires_explicit_condition_distance(condition: str) -> None:
+    attacker = _actor("attacker")
+    attacker["derived"]["inventory"]["weapon_attacks"] = [{
+        "item_id": "reach-weapon", "attack_type": "melee", "reach_ft": 10,
+        "attack_bonus": 5, "damage_expression": "1d10 + 3", "damage_type": "slashing",
+    }]
+    target = _actor("target")
+    target["sheet"]["conditions"] = [condition]
+    target["derived"] = derive_character_sheet(target["sheet"])
+    attacker["initiative"] = 20
+    target["initiative"] = 10
+    encounter = start_encounter([attacker, target], positioning_mode="agent")
+    facts = {
+        "decision_id": "condition-distance", "reason": "Target is visible; distance needs ruling.",
+        "targetable": True, "in_range": True, "cover_degree": "none",
+        "attacker_can_see_target": True, "target_can_see_attacker": False,
+    }
+    action = {"weapon_id": "reach-weapon", "context": {"spatial_facts": facts}}
+    with pytest.raises(NeedsRulingError, match="target_within_5_ft"):
+        preflight_attack(attacker, target, action=action, encounter=encounter)
+    facts["target_within_5_ft"] = True
+    near = preflight_attack(attacker, target, action=action, encounter=encounter)
+    assert near["advantage"] is True
+    assert near["automatic_critical_on_hit"] is (condition != "prone")
+    facts["target_within_5_ft"] = False
+    far = preflight_attack(attacker, target, action=action, encounter=encounter)
+    assert far["automatic_critical_on_hit"] is False
+    if condition in {"prone", "unconscious"}:
+        assert "target_prone_beyond_5_ft" in far["disadvantage_sources"]
+
+
 def test_agent_positioned_attack_requires_and_consumes_structured_spatial_facts() -> None:
     attacker = _actor("attacker")
     target = _actor("target")
@@ -1373,6 +1405,15 @@ def test_agent_positioned_attack_requires_and_consumes_structured_spatial_facts(
     assert plan["status"] == "ready"
     assert plan["range"]["source"] == "agent_spatial_facts"
     assert plan["spatial_ruling"]["decision_id"] == "spatial:test-attack"
+
+    spatial_facts["target_within_5_ft"] = False
+    with pytest.raises(CombatEngineError, match="spatial facts contradict weapon reach"):
+        preflight_attack(
+            attacker,
+            target,
+            action={"weapon_id": "unarmed-strike", "context": {"spatial_facts": spatial_facts}},
+            encounter=encounter,
+        )
 
 
 def test_agent_positioned_movement_consumes_distance_and_opportunity_facts() -> None:
@@ -3373,6 +3414,18 @@ def test_spell_attack_preflight_uses_source_card_and_spellcasting_override() -> 
     assert plan["attack_bonus"] == 6
     assert plan["damage_expression"] == "2d6"
     assert plan["range"]["normal_ft"] == 60
+    assert plan["magical"] is True
+    target["sheet"]["traits"]["damage_defenses"] = [{
+        "kind": "resistance",
+        "damage_types": ["fire"],
+        "predicates": ["nonmagical_attack"],
+        "source_key": "test:nonmagical-fire-resistance",
+    }]
+    damage = apply_damage_to_sheet(
+        target["sheet"], amount=8, damage_type="fire",
+        attack_facts={"magical": plan["magical"], "materials": []},
+    )
+    assert damage["applied_amount"] == 8
 
 
 def test_preserve_life_enforces_pool_half_hp_and_creature_type() -> None:
@@ -6429,6 +6482,19 @@ def test_condition_saving_throw_effects_are_not_left_to_client_modifiers() -> No
     assert save["bonus"] == -4
 
 
+@pytest.mark.parametrize("kind", ["ability", "check", "save", "death_save"])
+def test_dead_actor_cannot_roll_checks(kind: str) -> None:
+    actor = _actor("dead-scout")
+    actor["sheet"]["conditions"] = ["dead", "prone"]
+    actor["sheet"]["combat"]["hp"]["value"] = 0
+    before = deepcopy(actor)
+    with pytest.raises(CombatEngineError, match="dead actors"):
+        resolve_actor_check(
+            actor, kind=kind, ability="dexterity", dc=10, rng=_SequenceRng()
+        )
+    assert actor == before
+
+
 def test_equipped_armor_automatically_imposes_stealth_disadvantage() -> None:
     actor = _actor("armored-scout")
     sheet, armor_id = add_inventory_item(
@@ -6461,6 +6527,22 @@ def test_equipped_armor_automatically_imposes_stealth_disadvantage() -> None:
     assert result["roll_mode"] == "disadvantage"
     assert result["disadvantage_applied"] is True
     assert result["success"] is False
+    assert result["armor_stealth_disadvantage"] is True
+
+    cancelled = resolve_actor_check(
+        actor,
+        kind="ability",
+        ability="stealth",
+        dc=10,
+        advantage=True,
+        rng=_SequenceRng(18),
+    )
+    assert cancelled["rolls"] == [18]
+    assert cancelled["roll_mode"] == "normal"
+    assert cancelled["armor_stealth_disadvantage"] is True
+    assert cancelled["equipment_disadvantage"] is False
+    assert cancelled["advantage_applied"] is False
+    assert cancelled["disadvantage_applied"] is False
 
 
 def test_death_save_persists_nat20_recovery() -> None:
@@ -6548,6 +6630,14 @@ def test_movement_and_choice_window_are_explicit() -> None:
         selection={"id": "skip"},
     )
     assert not resolved["pending"]
+
+
+@pytest.mark.parametrize("action", ["influence", "study", "utilize"])
+def test_2024_only_actions_report_edition_instead_of_missing_payment(action) -> None:
+    encounter = start_encounter([_actor("a"), _actor("b")], rng=random.Random(1))
+    current = encounter["combatants"][encounter["turn_index"]]["actor_id"]
+    with pytest.raises(CombatEngineError, match="requires the 2024 ruleset"):
+        resolve_common_action(encounter, actor_id_value=current, action=action)
 
 
 def test_common_actions_pay_action_and_keep_tactical_state_explicit() -> None:

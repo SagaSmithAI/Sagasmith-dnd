@@ -22,11 +22,9 @@ not shell `sagasmith-dnd` commands. Search or read only the task-relevant sectio
 `../../references/mcp-contract.md` and
 `../dnd-dm/references/DM_RULES.md`.
 
-Open an MCP session exposure when resuming a campaign. Search for exact tool ids
-and change the native list with `exposure(action="set")`; use Lobby tools for
-setup/import/building and Play tools only for live play. One session/principal
-has one active exposure, and reopening replaces its campaign binding. Refresh
-the native schema after every `tools/list_changed` notification.
+Resume authoritative campaign state with a trusted Host-injected identity.
+Use the stable public catalog: Lobby tools for setup/import/building and
+Play tools for live play. Runtime checks phase and permissions on every call.
 
 ## Start and Modules
 
@@ -196,7 +194,8 @@ identifier inside ordinary prose or a different scene is not the room source.
 | Ability generation | `dnd_ability_roll`, `character_ability_apply` |
 
 All live actors use `sheet v2` and `notes v2`. Read
-`../../references/character-schema-v2.md` before creation or mutation. Do not
+`dnd:full/references/character-schema-v2.md` via `skill_query(kind="asset", action="read", identifier=...)`
+before creation or mutation. Do not
 persist an unconfirmed draft. Build mode requires one stable
 `idempotency_key`; an exact retry must return the original template and campaign
 instance rather than creating another pair.

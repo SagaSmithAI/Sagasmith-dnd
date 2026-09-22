@@ -276,6 +276,12 @@ def apply_constitution_score_hit_point_change(
     combat = value.setdefault("combat", {})
     hp = combat.setdefault("hp", {})
     total_delta = modifier_delta * level
+    if level == 1 and not value.get("progression", {}).get("classes"):
+        # First-class HP already includes the final Constitution modifier.
+        # Track the adjustment separately from genuine pre-class HP bonuses.
+        combat["preclass_constitution_hp_adjustment"] = (
+            int(combat.get("preclass_constitution_hp_adjustment", 0)) + total_delta
+        )
     new_maximum = int(hp.get("max", 0) or 0) + total_delta
     current = int(hp.get("value", 0) or 0)
     if new_maximum < 1:
@@ -715,7 +721,7 @@ def initialize_base_class(
         raise CombatEngineError("base-class setup requires full lobby hit points")
     constitution_modifier = _ability_modifier(value, "constitution")
     class_hp = max(1, hit_die + constitution_modifier)
-    prior_bonus = old_max - 1
+    prior_bonus = old_max - 1 - combat.pop("preclass_constitution_hp_adjustment", 0)
     hp["max"] = class_hp + prior_bonus
     hp["value"] = hp["max"]
     combat.setdefault("hp_progression", []).append(

@@ -31,10 +31,9 @@ If the Host cannot enforce these guarantees, do not open a conversation.
 1. Call `npc_conversation(action="open")` once with explicit participants and
    an `idempotency_key`. Record `conversation_id` and
    `conversation_revision`.
-   On Host/Agent restart, establish the new native MCP session and its campaign
-   exposure binding once. Within a retained session, never call
-   `exposure(open)` as a phase/restore refresh; consume `tools/list_changed`,
-   refresh the native list, and use `exposure(search/set)` instead. Discover
+   On Host/Agent restart, establish a trusted MCP request identity and resume
+   authoritative campaign state. Cross any changed host context binding.
+   The public catalog stays stable. Discover
    current-branch public recovery handles with
    `npc_conversation(action="list", payload={})`, then `get` the selected id;
    never scrape a transcript or persist private transport state as campaign
@@ -62,6 +61,14 @@ If the Host cannot enforce these guarantees, do not open a conversation.
    continues, open a new conversation only after the mechanic commits, then
    ingest the actual result as a new stimulus. Do not carry the prior
    conversation revision or worker context across that write.
+
+`close` returns outstanding requests in the DM-only `mechanic_handoff` receipt.
+Keep that receipt until each request is settled through the ordinary mechanic
+tools. Closing preserves pending status; it does not manufacture a result.
+Candidates dependent on a pending request remain unavailable for acceptance.
+Do not ingest a fictitious resolution or label a deferred check as resolved just
+to close. The actor-visible transcript records only the outstanding count, not
+private request reasons. Release all Host workers before executing the handoff.
 
 Every write requires `expected_conversation_revision` and `idempotency_key`.
 Replay an identical request with the same key; on

@@ -588,7 +588,7 @@ class DurableTaskStore:
 
 
 class TasksExtension(Extension):
-    """SEP-2663 Tasks for ``module_draft(action='start')`` only."""
+    """SEP-2663 Tasks for module import and layout OCR recovery."""
 
     identifier = TASKS_EXTENSION_ID
 
@@ -629,7 +629,15 @@ class TasksExtension(Extension):
     @staticmethod
     def _is_long_tool(params: CallToolRequestParams) -> bool:
         arguments = dict(params.arguments or {})
-        return params.name == "module_draft" and arguments.get("action") == "start"
+        payload = arguments.get("payload")
+        return params.name == "module_draft" and (
+            arguments.get("action") == "start"
+            or (
+                arguments.get("action") == "edit"
+                and isinstance(payload, dict)
+                and payload.get("operation") == "statblock"
+            )
+        )
 
     @staticmethod
     def _tool_error(

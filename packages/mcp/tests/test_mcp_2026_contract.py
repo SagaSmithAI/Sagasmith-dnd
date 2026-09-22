@@ -107,8 +107,8 @@ def test_modern_discover_catalog_and_request_scoped_delegation(tmp_path: Path) -
                     "message": "auth context does not allow this operation",
                     "retryable": False,
                     "recovery": (
-                        "Correct the request or obtain a new audience-bound "
-                        "delegation before retrying."
+                        "Use the authenticated owner/authorized principal or obtain a fresh "
+                        "audience-bound delegation."
                     ),
                 }
             }
@@ -324,12 +324,13 @@ def test_modern_hosted_tool_policy_rejects_player_and_allows_local_dm(
 
 
 @pytest.mark.parametrize(
-    ("mode", "expected_count"),
-    [("legacy", 7), ("2026-07-28", 79)],
+    ("mode", "legacy_exposure", "expected_count"),
+    [("legacy", False, 79), ("legacy", True, 7), ("2026-07-28", True, 79)],
 )
 def test_real_stdio_legacy_modern_contract_matrix(
     tmp_path: Path,
     mode: str,
+    legacy_exposure: bool,
     expected_count: int,
 ) -> None:
     async def exercise() -> None:
@@ -338,6 +339,7 @@ def test_real_stdio_legacy_modern_contract_matrix(
             {
                 "SAGASMITH_DND_MCP_HOME": str(tmp_path / f"home-{mode}"),
                 "SAGASMITH_DND_MCP_AUTO_SEED": "0",
+                "SAGASMITH_DND_MCP_LEGACY_EXPOSURE": "1" if legacy_exposure else "0",
                 "SAGASMITH_DND_SKILLS_DIR": str(tmp_path / "dnd-skills"),
                 "SAGASMITH_MODULEGEN_SKILLS_DIR": str(tmp_path / "modulegen-skills"),
             }
@@ -356,5 +358,13 @@ def test_real_stdio_legacy_modern_contract_matrix(
             assert status.is_error is False
             assert status.content
             assert status.structured_content is not None
+            if not legacy_exposure:
+                created = await client.call_tool("campaign_create", {
+                    "name": "Stable catalog legacy client",
+                    "idempotency_key": "stable-catalog-create",
+                })
+                assert created.is_error is False
+                refreshed = await client.list_tools(cache_mode="reload")
+                assert [t.name for t in refreshed.tools] == names
 
     asyncio.run(exercise())

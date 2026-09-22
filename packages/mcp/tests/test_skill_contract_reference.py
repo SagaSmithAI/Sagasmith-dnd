@@ -3,21 +3,20 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from sagasmith_dnd_mcp.tool_profiles import CORE_TOOLS
 
-
-def test_skill_reference_core_tools_match_runtime_policy() -> None:
-    reference = (
-        Path(__file__).parents[3] / "skills" / "full" / "references" / "mcp-contract.md"
-    ).read_text(encoding="utf-8")
-    paragraph = reference.split("Every connection starts\nwith exactly ", 1)[1].split(
-        "\n\n", 1
-    )[0]
-    documented = re.findall(r"`([a-z][a-z0-9_]*)`", paragraph)
-
-    assert paragraph.startswith(f"{len(CORE_TOOLS)} core tools:")
-    assert len(documented) == len(CORE_TOOLS)
-    assert set(documented) == set(CORE_TOOLS)
+def test_modern_skill_workflows_do_not_require_legacy_negotiation() -> None:
+    skills = Path(__file__).parents[3] / "skills"
+    reference = (skills / "full/references/mcp-contract.md").read_text(encoding="utf-8")
+    assert "stable public operation catalog" in reference
+    assert "legacy-adapter.md" in reference
+    assert "trusted identity" in reference
+    legacy_instruction = re.compile(r"exposure\((?:action=|open|search|set)|tools/list_changed")
+    modern = [skills / "SKILL.md", *skills.glob("skills/**/SKILL.md")]
+    modern += list((skills / "full").rglob("*.md"))
+    for path in modern:
+        if path.name in {"legacy-adapter.md", "README.md", "README-en.md"}:
+            continue
+        assert not legacy_instruction.search(path.read_text(encoding="utf-8")), path
 
 
 def test_map_reference_uses_native_audience_safe_media_contract() -> None:

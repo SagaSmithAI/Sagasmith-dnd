@@ -274,6 +274,40 @@ def _parse_armor_equipment(
     return items, slots
 
 
+def synchronize_statblock_armor_proficiencies(
+    sheet: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, str]]]:
+    """Repair legacy imports using only their recorded, unchanged printed gear."""
+    result = deepcopy(sheet)
+    evidence = []
+    prefix = "Explicitly listed in Armor Class: "
+    for item in result["inventory"]["items"]:
+        if item.get("kind") not in {"armor", "shield"}:
+            continue
+        description = str(item.get("description") or "")
+        source_key = str(item.get("source_key") or "")
+        if not source_key or not description.startswith(prefix):
+            continue
+        recovered, _ = _parse_armor_equipment(description[len(prefix):], source_key)
+        original = next((entry for entry in recovered if entry["id"] == item["id"]), None)
+        if original is None or any(item.get(key) != original[key] for key in ("name", "kind")):
+            continue
+        if any(item.get("mechanics", {}).get(key) != value
+               for key, value in original["mechanics"].items()):
+            continue
+        evidence.append({"item_id": item["id"], "name": item["name"],
+                         "source_key": source_key, "source_excerpt": description})
+    if not evidence:
+        raise StatblockImportError("no unchanged source-recorded statblock armor or shield found")
+    proficiencies = result["traits"]["proficiencies"]["armor"]
+    existing = {name.casefold() for name in proficiencies}
+    for item in evidence:
+        if item["name"].casefold() not in existing:
+            proficiencies.append(item["name"])
+            existing.add(item["name"].casefold())
+    return result, evidence
+
+
 def _parse_speed(value: str) -> dict[str, int]:
     speeds = {"walk": 0, "fly": 0, "swim": 0, "climb": 0, "burrow": 0}
     matched_distance = False
@@ -1853,6 +1887,12 @@ def _parse_srd_statblock(
         *weapons,
     ]
     sheet["inventory"]["equipment_slots"].update(armor_slots)
+    # A monster is proficient with the equipment printed in its statblock.
+    # Grant only the explicitly recovered pieces, not every armor category.
+    sheet["traits"]["proficiencies"]["armor"] = list(dict.fromkeys([
+        *sheet["traits"]["proficiencies"]["armor"],
+        *(item["name"] for item in armor_items),
+    ]))
 
     refs = list(dict.fromkeys(str(item) for item in rule_refs if str(item)))
     if spellcasting is not None:
@@ -3294,7 +3334,9 @@ def apply_reviewed_statblock_fill(
         source_description = " ".join(str(activity.get("description") or "").split())
         if not source_excerpt or source_excerpt != source_description:
             raise StatblockImportError(
-                "reviewed multiattack source_excerpt must exactly match the source activity"
+                "reviewed multiattack source_excerpt must exactly match the source activity; "
+                f"activity_id={activity_id!r}, expected source_excerpt={source_description!r}. "
+                "Use the parsed description without the activity heading or Markdown emphasis."
             )
         reason = " ".join(str(declaration.get("reason") or "").split())
         if not reason or len(reason) > 500:

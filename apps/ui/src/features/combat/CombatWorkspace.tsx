@@ -75,8 +75,11 @@ export default function CombatWorkspace() {
     setSubmitting(true);
     try {
       const next = await submitCombatMove(campaignId, actorId, destination, distance, combat.campaign_revision, combat.branch_id);
-      setCombat(next);
-      setMessage('MCP ACCEPTED · 移动、阻挡与反应窗口已由规则引擎复核。');
+      if ('combatants' in next) setCombat(next);
+      else await load(campaignId);
+      setMessage(next.operation_status && next.operation_status !== 'committed'
+        ? '移动尚未完成，请处理当前待选事项。'
+        : '移动已确认。');
     } catch (error) {
       setMessage(`MCP REJECTED · ${error instanceof Error ? error.message : 'unknown error'}`);
       await load(campaignId);

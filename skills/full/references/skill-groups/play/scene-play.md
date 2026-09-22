@@ -18,3 +18,13 @@ validated proposal is still not a state change.
 Advance module progress and the playthrough manifest only after the fiction
 actually reaches that state. At scene close, record durable consequences and a
 checkpoint only when the recovery value justifies it.
+
+Changing the current scene does not perform travel or bypass nearby threats.
+Establish departure, the actual route, elapsed time and any source-required
+encounters or checks before recording arrival. Do not convert a defeated party's
+intent to regroup into an automatic safe return. Use checks only where the rules
+or scene create uncertainty; do not add rolls to routine, unobstructed travel.
+`module_set_progress.expected_state_version` belongs to the destination scene's
+progress for the specified scope. Read that scene's progress, not the old scene's
+version or the campaign revision, when resolving a conflict. A rejected progress
+write has not moved anyone, and fixing its version does not supply missing travel.

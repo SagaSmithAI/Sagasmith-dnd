@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 
 import pytest
+from mcp import Client
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ImageContent, TextContent
 from pypdf import PdfReader, PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
@@ -560,7 +562,7 @@ def test_module_statblock_ocr_recovery_supports_text_only_agent(
             }
         ]
         assert ocr_calls == 2
-        await finalize_and_activate_module(
+        packaged = await finalize_and_activate_module(
             _call,
             server,
             campaign["id"],
@@ -569,5 +571,55 @@ def test_module_statblock_ocr_recovery_supports_text_only_agent(
             title="Module OCR",
             portable_id="dnd5e.module.module-ocr-test",
         )
+        installed_id = packaged["imported"]["module_id"]
+        assert installed_id != module_id
+        scenes = await _call(server, "module_query", {
+            "campaign_id": campaign["id"], "view": "index",
+            "payload": {"module_id": installed_id},
+        })
+        active_layout[0] = layout
+        installed_arguments = {
+            **arguments,
+            "payload": {**arguments["payload"], "module_id": installed_id,
+                        "scene_id": scenes[0]["scene_id"]},
+            "idempotency_key": "review-installed-commoner",
+        }
+        installed_review = await _call(server, "module_draft", installed_arguments)
+        assert installed_review["review"]["id"]
+        assert await _call(server, "module_draft", installed_arguments) == installed_review
+        with pytest.raises(ToolError, match="scene must belong to the module"):
+            await _call(server, "module_draft", {
+                **installed_arguments,
+                "payload": {**installed_arguments["payload"], "scene_id": scene_id},
+                "idempotency_key": "reject-other-module-scene",
+            })
+        # The installed Pack has no authoring job. Reviewing it must not create one.
+        jobs = await _call(server, "module_draft", {
+            "campaign_id": campaign["id"], "action": "get",
+        })
+        assert len(jobs["jobs"]) == 1
+        # Source-review failures must stay actionable over the real MCP boundary,
+        # rather than collapsing into "Error executing tool module_draft".
+        async with Client(server, mode="2026-07-28") as client:
+            page = await client.call_tool("module_draft", {
+                "campaign_id": campaign["id"], "action": "evidence",
+                "payload": {"module_id": installed_id, "kind": "page",
+                            "page_number": 1, "include_ocr_text": False},
+            })
+            assert not page.is_error
+            assert any(isinstance(item, ImageContent) for item in page.content)
+            metadata = json.loads(next(
+                item.text for item in page.content if isinstance(item, TextContent)
+            ))
+            assert metadata["module_id"] == installed_id
+            assert metadata["page_number"] == 1
+            assert metadata["source_checksum"]
+            failure = await client.call_tool("module_draft", {
+                **installed_arguments,
+                "payload": {**installed_arguments["payload"], "name": "Absent Creature"},
+                "idempotency_key": "absent-source-card",
+            })
+            assert failure.is_error
+            assert "structurally unambiguous target statblock" in str(failure.content)
 
     asyncio.run(exercise())

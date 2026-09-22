@@ -1,24 +1,15 @@
-"""D&D service construction and optional dense retrieval."""
-
-from __future__ import annotations
-
-import os
-
-from sagasmith_core import BgeEmbedder, Database, VectorStore, create_embedder
-
-from sagasmith_dnd.system import DND5E
+"""Compatibility entry point; implementation lives in Runtime.bootstrap."""
 
 
-def database() -> Database:
-    value = Database(os.environ.get("DND_DATABASE_URL"))
-    value.upgrade_schema()
-    return value
+# Compatibility only: new application code imports Runtime directly.
+_RUNTIME_EXPORTS = (
+    'database',
+    'dense_components',
+)
 
+def __getattr__(name: str):
+    if name not in _RUNTIME_EXPORTS:
+        raise AttributeError(name)
+    from sagasmith_dnd._runtime_compat import runtime_attribute
 
-def dense_components() -> tuple[BgeEmbedder | None, VectorStore | None]:
-    if os.environ.get("DND5E_DENSE_ENABLED", "0") != "1":
-        return None, None
-    return (
-        create_embedder(env_prefix="DND5E"),
-        VectorStore(DND5E.id),
-    )
+    return runtime_attribute('bootstrap', name)

@@ -7,11 +7,7 @@ import json
 from dataclasses import dataclass
 from typing import Any, Callable, Literal
 
-ALIASES = {
-    "condition.add": "condition.apply",
-    "hp.heal": "healing.apply",
-    "effect.add": "effect.apply",
-}
+from .rule_primitives import ALIASES, validate_primitive
 
 
 @dataclass(frozen=True)
@@ -56,6 +52,7 @@ def lower_instruction(
 ) -> ResolutionInstruction:
     if not step_id or not source_id or not isinstance(arguments, dict):
         raise ValueError("resolution instructions require identity, source and typed arguments")
+    validate_primitive(opcode, arguments)
     targets = arguments.get("target_ids", [])
     if "target_id" in arguments:
         targets = [arguments["target_id"]]
@@ -78,7 +75,9 @@ def execute_instruction(
     execute: Callable[[str, dict[str, Any]], Any],
 ) -> Any:
     """All authoring forms cross this immutable instruction boundary before execution."""
-    return execute(instruction.opcode, instruction.arguments)
+    arguments = instruction.arguments
+    validate_primitive(instruction.opcode, arguments)
+    return execute(instruction.opcode, arguments)
 
 
 def resolve_conflicts(instructions: list[ResolutionInstruction]) -> list[ResolutionInstruction]:
