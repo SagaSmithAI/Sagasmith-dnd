@@ -215,7 +215,8 @@ class LocalSession:
                 else:
                     args, campaign_id = self.prepare(name, arguments, context.campaign_id)
                     entry = {"intent": intent, "arguments": args, "campaign_id": campaign_id,
-                             "binding": self.binding(campaign_id, args) if campaign_id else None}
+                             "binding": (self.binding(campaign_id, args)
+                                         if campaign_id and path else None)}
                     if path:
                         self._save(path, entry)
                 result = await self.runtime.execute_shared(
@@ -226,9 +227,8 @@ class LocalSession:
                     if name == "campaign_create":
                         campaign_id = campaign_id or result.get("id")
                     if campaign_id:
-                        binding = self.services.authoritative_host_context_binding
-                        result["host_context_binding"] = binding(campaign_id, self.principal, args)
                         result["local_context"] = self.context(campaign_id, args)
+                        result["host_context_binding"] = result["local_context"]["binding"]
                     result["local_execution"] = {
                         "operation_id": key,
                         "elapsed_ms": round((time.perf_counter() - started) * 1000, 3),
@@ -239,17 +239,27 @@ class LocalSession:
                     if path:
                         entry["result"] = result
                         entry["campaign_id"] = campaign_id
-                        entry["binding"] = self.binding(campaign_id, args) if campaign_id else None
+                        # Reuse only this command's freshly read post-commit scope.
+                        # Never reuse a pre-write or cross-command authorization boundary.
+                        entry["binding"] = (
+                            self._journal_binding(result["host_context_binding"])
+                            if campaign_id else None
+                        )
                         self._save(path, entry)
                 return result
 
     def binding(self, campaign_id, arguments=None):
-        campaign = self.services.campaigns.get(campaign_id)
         scope = self.services.authoritative_host_context_binding(
             campaign_id, self.principal, arguments or {},
         )
-        return {"branch_id": self.services.current_branch_id(campaign_id),
-                "timeline_epoch": campaign.timeline_epoch,
+        return self._journal_binding(scope)
+
+    @staticmethod
+    def _journal_binding(scope):
+        if scope is None:
+            raise PermissionError("local campaign access is no longer available")
+        return {"branch_id": scope["branch_id"],
+                "timeline_epoch": int(scope["timeline_epoch"]),
                 **{key: scope.get(key) for key in (
                     "authorization_fingerprint", "audience", "role", "rules_fingerprint",
                 )}}
@@ -283,8 +293,13 @@ class LocalSession:
             "binding": binding, "revision": campaign.revision,
             "actors": {key: actor.revision for key, actor in actors.items()},
         }, sort_keys=True).encode()).hexdigest()
-        selected = {current, arguments.get("actor_id"), arguments.get("target_id"),
-                    arguments.get("character_id")}
+        payload = arguments.get("payload")
+        values = {**(payload if isinstance(payload, dict) else {}), **arguments}
+        selected = {current, *(values.get(key) for key in (
+            "actor_id", "target_id", "character_id", "source_character_id", "target_character_id",
+        ))}
+        if arguments.get("owner") == "character":
+            selected.add(arguments.get("owner_id"))
         value["actors"] = [{"id": actor.id, "name": actor.name, "revision": actor.revision,
                             "sheet": {key: deepcopy(actor.sheet[key]) for key in (
                                 "combat", "abilities", "resources", "conditions", "effects",

@@ -47,6 +47,11 @@ def test_local_transfer_recovers_lost_response_after_restart(tmp_path):
             result = await runtime.execute("inventory_transfer", arguments, context=identity)
             assert result["result"]["source"]["sheet"]["inventory"]["items"][0]["quantity"] == 1
             assert result["result"]["target"]["sheet"]["inventory"]["items"][0]["quantity"] == 1
+            slices = {actor["id"]: actor for actor in result["local_context"]["actors"]}
+            assert set(slices) == {source["id"], target["id"]}
+            for actor_id in slices:
+                assert slices[actor_id]["sheet"]["inventory"]["items"][0]["quantity"] == 1
+            assert result["host_context_binding"] == result["local_context"]["binding"]
             # Simulate commit success followed by process death before journal completion.
             path = runtime.local_session.journal / (
                 hashlib.sha256(b"transfer").hexdigest() + ".json"
