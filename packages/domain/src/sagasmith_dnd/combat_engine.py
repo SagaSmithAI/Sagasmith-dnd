@@ -57,6 +57,13 @@ from sagasmith_dnd.engine import (
     roll,
     roll_d20,
 )
+from sagasmith_dnd.fighting_styles import (
+    STYLE_RULE,
+    archery_bonus,
+    great_weapon_eligible,
+    has_style,
+    roll_weapon_damage,
+)
 from sagasmith_dnd.official_item_materialization import (
     ARCANE_PROPULSION_ARM_ID,
     ARMBLADE_ID,
@@ -2280,7 +2287,7 @@ def pay_attack_action(
             *list(content.get("features") or []),
             *list(content.get("feats") or []),
         ]
-        has_two_weapon_fighting = any(
+        has_two_weapon_fighting = has_style(actor_sheet(attacker), "two-weapon fighting") or any(
             str(feature.get("name") or "").strip().casefold() == "two-weapon fighting"
             for feature in features
             if isinstance(feature, dict)
@@ -2671,6 +2678,12 @@ def preflight_attack(
             damage_bonus = int(damage_bonus_override)
     else:
         attack_bonus = int(weapon.get("attack_bonus", 0) or 0)
+    archery = archery_bonus(actor_sheet(attacker), weapon)
+    already_derived = (
+        0 if explicit_attack_ability and attack_bonus_override is not None
+        else int(weapon.get("archery_bonus", 0))
+    )
+    attack_bonus += archery - already_derived
     if dict(weapon.get("recharge") or {}):
         uses = dict(weapon.get("uses") or {})
         if int(uses.get("value", 0) or 0) < 1:
@@ -2867,7 +2880,7 @@ def preflight_attack(
             if bonus_action < 1:
                 raise CombatEngineError("the Light extra attack requires a Bonus Action")
         content = dict(actor_sheet(attacker).get("content") or {})
-        has_two_weapon_fighting = any(
+        has_two_weapon_fighting = has_style(actor_sheet(attacker), "two-weapon fighting") or any(
             str(feature.get("name") or "").strip().casefold() == "two-weapon fighting"
             for feature in [
                 *list(content.get("features") or []),
@@ -2885,6 +2898,16 @@ def preflight_attack(
     if supplied_grip and supplied_grip not in {"one_handed", "two_handed"}:
         raise CombatEngineError("weapon_grip must be one_handed or two_handed")
     weapon_grip = supplied_grip or ("two_handed" if "two_handed" in properties else "one_handed")
+    great_weapon_available = great_weapon_eligible(
+        actor_sheet(attacker), weapon, attack_mode=attack_mode, grip=weapon_grip,
+    )
+    use_great_weapon = action.get("use_great_weapon_fighting", False)
+    if type(use_great_weapon) is not bool:
+        raise CombatEngineError("use_great_weapon_fighting must be a boolean choice")
+    if use_great_weapon and not great_weapon_available:
+        raise CombatEngineError(
+            "Great Weapon Fighting requires its 2014 style and two-handed weapon"
+        )
     if weapon_grip == "one_handed" and "two_handed" in properties:
         raise CombatEngineError("this weapon requires two hands")
     if weapon_grip == "two_handed":
@@ -3381,6 +3404,8 @@ def preflight_attack(
         requested=bool(action.get("use_sneak_attack", False)),
     )
     core_boundary_ids: list[str] = []
+    if archery or use_great_weapon or dueling_bonus:
+        core_boundary_ids.append(STYLE_RULE)
     if underwater:
         core_boundary_ids.append(WATER_RULE)
     if squeezing_attacker or squeezing_target:
@@ -3427,6 +3452,9 @@ def preflight_attack(
         "attack_ability_options": list(attack_ability_options),
         "attack_bonus": attack_bonus,
         "effect_roll_bonus": effect_roll_bonus,
+        "archery_bonus": archery,
+        "great_weapon_fighting_available": great_weapon_available,
+        "use_great_weapon_fighting": use_great_weapon,
         "target_ac": target_ac,
         "cover": {
             "degree": cover_degree,
@@ -3638,6 +3666,7 @@ def roll_attack_action(
         "attack_ability_modifier": plan.get("attack_ability_modifier"),
         "attack_ability_options": list(plan.get("attack_ability_options") or []),
         "damage": None,
+        **({"protection": deepcopy(plan["protection"])} if plan.get("protection") else {}),
     }
 
 
@@ -3961,7 +3990,11 @@ def resolve_attack_damage(
         }
     if attack["hit"] and expression:
         damage_expression = _critical_expression(expression) if attack["critical"] else expression
-        damage_roll = roll(damage_expression, rng=rng)
+        damage_roll, weapon_rerolls = roll_weapon_damage(
+            damage_expression, reroll_low=bool(plan.get("use_great_weapon_fighting")), rng=rng,
+        )
+        if plan.get("use_great_weapon_fighting"):
+            result["great_weapon_fighting"] = {"used": True, "rerolls": weapon_rerolls}
         sneak_plan = dict(plan.get("sneak_attack") or {})
         sneak_roll = None
         if sneak_plan:
@@ -4509,13 +4542,7 @@ def _dueling_damage_bonus(
     weapon_grip: str,
 ) -> int:
     sheet = actor_sheet(attacker)
-    has_style = any(
-        str(item.get("name") or "").casefold() == "fighting style"
-        and str(item.get("source_key") or "").casefold() == "fighter"
-        and str(dict(item.get("choices") or {}).get("option") or "").casefold() == "dueling"
-        for item in sheet.get("content", {}).get("features", [])
-    )
-    if not has_style or attack_mode != "melee" or weapon_grip != "one_handed":
+    if not has_style(sheet, "dueling") or attack_mode != "melee" or weapon_grip != "one_handed":
         return 0
     weapon_id = str(weapon.get("item_id") or "")
     selected = next(

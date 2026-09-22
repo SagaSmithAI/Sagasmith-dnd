@@ -316,6 +316,8 @@ require a fresh DM attack_ruling={reason,source_excerpt}. Underwater
 ranged attacks also require long_range:bool in that ruling; beyond the
 weapon's normal range they automatically miss. Object profiles may
 declare fully_immersed; later water transitions use environment_change.
+weapon_grip and use_great_weapon_fighting select the same source-bound
+2014 weapon style rules as combat; they cannot change object defenses.
 Reuse the
 idempotency key on retries; a new attack requires a new key.
 
@@ -800,6 +802,12 @@ cleave_secondary_eligible. Ground them in the current scene, never invent
 coordinates to bypass a missing spatial decision. Grid mode uses its map.
 Underwater ranged weapon attacks require an explicit long_range boolean;
 true automatically misses, while false still applies weapon exceptions.
+use_great_weapon_fighting=true opts into one reroll of each qualifying
+weapon die showing 1/2. Protection returns pending_reaction before the
+roll: resolve each owner's combat_choice, then repeat the same attack
+with a new operation ID. Agent context.protection requires decision_id,
+reason, actors=[{actor_id,within_5_ft,can_see_attacker}] for every available
+shield bearer. Failed/unknown calls always retry their original ID.
 
 Phases: combat
 

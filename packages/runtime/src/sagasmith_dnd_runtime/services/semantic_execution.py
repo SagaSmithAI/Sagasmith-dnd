@@ -10,6 +10,7 @@ from sagasmith_dnd.resolution_plan import ResolutionPlanPauseError
 from sagasmith_dnd.rule_primitives import validate_primitive
 
 from .. import application_support as _support
+from . import protection
 from .sunlight import prepare_attack_action
 
 
@@ -304,6 +305,10 @@ class CombatPlanRuntime:
     def _execute_attack_resolve(self, opcode, arguments, *, step_id):
         attacker_id = str(arguments["source_actor_id"])
         target_id = str(arguments["target_actor_id"])
+        binding = {"kind": "semantic_attack", "actor_id": attacker_id, "target_id": target_id,
+                   "application_id": self.application_id, "step_id": step_id,
+                   "arguments": _support.deepcopy(arguments)}
+        self.encounter, protection_accepted = protection.resume(self.encounter, binding)
         attack_plan = _support.preflight_attack(
             self.actor(attacker_id),
             self.actor(target_id),
@@ -311,6 +316,8 @@ class CombatPlanRuntime:
                 "weapon_id": str(arguments["attack_ref"]),
                 "attack_mode": str(arguments.get("attack_mode") or "melee"),
                 "context": _support.deepcopy(arguments.get("context") or {}),
+                **{key: arguments[key] for key in ("weapon_grip", "use_great_weapon_fighting")
+                   if key in arguments},
             }, campaign_id=self.context.campaign_id, actor_id=attacker_id,
                 target_id=target_id, principal_id="", encounter=self.encounter),
             encounter=self.encounter,
@@ -324,6 +331,32 @@ class CombatPlanRuntime:
                 },
                 branch_id=self.context.resolved_branch_id,
             ),
+        )
+        if protection_accepted is None:
+            from sagasmith_dnd.fighting_styles import protection_candidates
+
+            sheets = {a["actor_id"]: self.sheet(a["actor_id"])
+                      for a in self.encounter["combatants"]}
+            for identifier, sheet in sheets.items():
+                self.context.runtime_services.sync_combatant_spaces(
+                    self.encounter, identifier, sheet,
+                )
+            facts = dict(arguments.get("context") or {}).get("protection")
+            candidates = protection_candidates(
+                self.encounter, sheets, attacker_id, target_id, facts=facts,
+            )
+            if candidates:
+                self.encounter = protection.create_windows(
+                    self.encounter, binding, candidates, facts=facts, semantic=True,
+                )
+                self.movement_receipts.extend(protection.receipts(
+                    self.context.runtime_services, self.context.campaign_id,
+                    self.context.resolved_branch_id,
+                ))
+                self.pause(self.encounter["protection_intent"]["window_ids"])
+        attack_plan = protection.apply(
+            attack_plan, protection_accepted, self.context.runtime_services,
+            self.context.campaign_id, self.context.resolved_branch_id,
         )
         attack = _support.roll_attack_action(plan=attack_plan)
         defenses = _support.available_attack_defenses(

@@ -69,6 +69,7 @@ async def setup(
     ammunition=True,
     source_description=EXCERPT,
     random_seed=None,
+    fighting_style=None,
 ):
     world = World()
     world.config = McpConfig(
@@ -176,6 +177,17 @@ async def setup(
                 "recovers_on": "manual",
                 "source_key": "test",
             }
+        if fighting_style:
+            sheet["content"]["features"] = [{
+                "id": "dnd5e.content.srd2014.feature.fighter-fighting-style",
+                "name": "Fighting Style", "choices": {"option": fighting_style},
+            }]
+            if fighting_style == "Great Weapon Fighting":
+                bow["name"] = "Greatsword"
+                bow["mechanics"].update(
+                    attack_type="melee", attack_ability="strength", damage_formula="2d6",
+                    properties=["two_handed"], ammunition_item_id=None,
+                )
         sheet["inventory"]["items"] = [
             bow,
             {"id": "arrows", "name": "Arrows", "kind": "ammunition", "quantity": 20},

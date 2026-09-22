@@ -4587,18 +4587,9 @@ def _derive_armor_class(
 
     # The 2014 class selection is a passive bonus, not a replacement AC formula.
     # A shield alone is not worn armor; repeated selections never stack.
-    defense_styles = {
-        f"dnd5e.content.srd2014.feature.{class_name}-{feature}"
-        for class_name, feature in (
-            ("fighter", "fighting-style"), ("paladin", "fighting-style"),
-            ("ranger", "fighting-style"), ("fighter", "additional-fighting-style"),
-        )
-    }
-    if value["edition"] == "2014" and armor_id and any(
-        feature["id"] in defense_styles
-        and str(feature.get("choices", {}).get("option", "")).casefold() == "defense"
-        for feature in value["content"]["features"]
-    ):
+    from .fighting_styles import has_style
+
+    if armor_id and has_style(value, "defense"):
         total += 1
         breakdown["defense_fighting_style"] = 1
 
@@ -4740,6 +4731,7 @@ def _weapon_attacks(
     spell_ability: str | None,
     active_effects: list[dict[str, Any]] | None = None,
     battle_ready: bool = False,
+    style_sheet: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     melee_reach_bonus = 0
     weapon_dice_multiplier = 1
@@ -4840,6 +4832,10 @@ def _weapon_attacks(
             attack_bonus = modifier + magic_bonus
             if proficient:
                 attack_bonus += proficiency
+        from .fighting_styles import archery_bonus
+
+        archery = archery_bonus(style_sheet or {}, mechanics)
+        attack_bonus += archery
         damage_bonus = mechanics.get("damage_bonus_override")
         if damage_bonus is None:
             damage_bonus = modifier + magic_bonus
@@ -4869,6 +4865,7 @@ def _weapon_attacks(
                 "attack_ability_options": list(attack_ability_options),
                 "proficient": proficient,
                 "attack_bonus": attack_bonus,
+                "archery_bonus": archery,
                 "attack_bonus_override": mechanics.get("attack_bonus_override"),
                 "damage_formula": damage_formula,
                 "damage_bonus": damage_bonus,
@@ -5487,6 +5484,7 @@ def derive_character_sheet(
                 spell_ability,
                 mechanical_effects,
                 battle_ready,
+                value,
             ),
         },
         "active_effects": [
@@ -5528,6 +5526,11 @@ def derive_character_sheet(
                 {*derived["unresolved_rules"], modifier["mechanic_id"]}
             )
     core_boundary_ids: list[str] = []
+    if (derived["armor_class_breakdown"].get("defense_fighting_style")
+            or any(a.get("archery_bonus") for a in derived["inventory"]["weapon_attacks"])):
+        from .fighting_styles import STYLE_RULE
+
+        core_boundary_ids.append(STYLE_RULE)
     if derived["armor_class_breakdown"].get("mode") == "unarmored":
         core_boundary_ids.append("dnd5e.core.armor_class.unarmored")
     if any(

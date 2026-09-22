@@ -2112,10 +2112,15 @@ def test_two_weapon_fighting_retains_the_light_extra_attack_modifier() -> None:
     )
 
 
-def test_2014_two_weapon_fighting_pays_light_bonus_attack() -> None:
+@pytest.mark.parametrize("source_class", [None, "fighter", "ranger"])
+def test_2014_two_weapon_fighting_pays_light_bonus_attack(source_class) -> None:
     attacker = _actor("duelist", hp=30)
     attacker["sheet"]["content"]["features"].append(
-        {"id": "two-weapon-fighting", "name": "Two-Weapon Fighting"}
+        ({"id": "two-weapon-fighting", "name": "Two-Weapon Fighting"} if source_class is None else {
+            "id": f"dnd5e.content.srd2014.feature.{source_class}-fighting-style",
+            "name": "Fighting Style", "source_key": source_class.title(),
+            "choices": {"option": "Two-Weapon Fighting"},
+        })
     )
     attacker["sheet"]["inventory"]["items"] = [
         {

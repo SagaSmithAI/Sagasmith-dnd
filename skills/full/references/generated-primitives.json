@@ -82,7 +82,9 @@
       "attack_ref",
       "context",
       "source_actor_id",
-      "target_actor_id"
+      "target_actor_id",
+      "use_great_weapon_fighting",
+      "weapon_grip"
     ],
     "execution_context": "encounter",
     "required_fields": [

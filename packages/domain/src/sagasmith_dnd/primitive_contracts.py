@@ -112,6 +112,8 @@ PLAN_FIELDS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
                 "attack_ref",
                 "attack_mode",
                 "context",
+                "weapon_grip",
+                "use_great_weapon_fighting",
             }
         ),
     ),

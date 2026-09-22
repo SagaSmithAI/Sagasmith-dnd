@@ -37,7 +37,7 @@ from sagasmith_dnd.standard_spell_ids import (
 )
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.43.0"
+PACK_VERSION = "1.44.0"
 
 _CONDITIONAL_SPECIES_SAVE_TRAITS = {
     "dwarven resilience": ("dwarven_resilience", CORE_DWARVEN_RESILIENCE_MECHANIC_ID),
@@ -967,6 +967,7 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
     if title.casefold() == "fighting style":
         options = [name for name, _ in _h4_sections(body)]
         return {
+            "mechanic_refs": ["dnd5e.core.class.fighting_styles"],
             "selection_requirements": {
                 "field": "option",
                 "count": 1,
@@ -977,6 +978,7 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
         }
     if key == ("fighter", "additional fighting style"):
         return {
+            "mechanic_refs": ["dnd5e.core.class.fighting_styles"],
             "selection_requirements": {
                 "field": "option",
                 "count": 1,

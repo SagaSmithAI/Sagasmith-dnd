@@ -27,6 +27,7 @@ def project_response(response: dict[str, Any], *, dm: bool) -> dict[str, Any]:
             "natural",
             "rolls",
             "rerolls",
+            "great_weapon_fighting",
             "total",
             "bonus",
             "advantage",

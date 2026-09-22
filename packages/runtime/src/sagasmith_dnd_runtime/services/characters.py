@@ -7268,6 +7268,8 @@ boundary.
         ranged attacks also require long_range:bool in that ruling; beyond the
         weapon's normal range they automatically miss. Object profiles may
         declare fully_immersed; later water transitions use environment_change.
+        weapon_grip and use_great_weapon_fighting select the same source-bound
+        2014 weapon style rules as combat; they cannot change object defenses.
         Reuse the
         idempotency key on retries; a new attack requires a new key.
         """
@@ -7326,6 +7328,8 @@ boundary.
                 "object_ruling",
                 "attack_ruling",
                 "sunlight",
+                "weapon_grip",
+                "use_great_weapon_fighting",
             }
             if unexpected:
                 raise ValueError(f"unsupported source object attack fields: {sorted(unexpected)}")
@@ -7344,6 +7348,8 @@ boundary.
                 object_ruling=data.get("object_ruling"),
                 attack_ruling=data.get("attack_ruling"),
                 sunlight=data.get("sunlight"),
+                weapon_grip=data.get("weapon_grip"),
+                use_great_weapon_fighting=self.facade_bool(data, "use_great_weapon_fighting"),
             )
         return self.facade_result(action, result)
 

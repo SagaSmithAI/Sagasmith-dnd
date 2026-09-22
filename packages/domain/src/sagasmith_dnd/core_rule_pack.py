@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.89.0"
+CORE_RULE_PACK_VERSION = "1.90.0"
 
 
 @dataclass(frozen=True)
@@ -778,6 +778,13 @@ BOUNDARIES = (
             "test_agent_compiled_reaction_defense_opens_after_hit_and_before_damage",
         ),
         "bundled:srd/reactions",
+    ),
+    CoreBoundary(
+        "dnd5e.core.class.fighting_styles",
+        ("2014",),
+        "fighting_styles.has_style|roll_weapon_damage|protection_candidates",
+        ("tests/test_fighting_styles.py", "packages/mcp/tests/test_fighting_styles_mcp.py"),
+        "bundled:srd2014/02_Classes/Fighter.md#fighting-style",
     ),
     CoreBoundary(
         "dnd5e.core.reaction.uncanny_dodge",

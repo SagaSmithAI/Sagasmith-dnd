@@ -6,6 +6,7 @@ from typing import Any
 
 from .. import application_support as _support
 from ..result_contracts import affected_state_slice
+from . import protection
 from .sunlight import prepare_attack_action, prepare_context
 
 
@@ -600,6 +601,12 @@ class AttacksService:
         coordinates to bypass a missing spatial decision. Grid mode uses its map.
         Underwater ranged weapon attacks require an explicit long_range boolean;
         true automatically misses, while false still applies weapon exceptions.
+        use_great_weapon_fighting=true opts into one reroll of each qualifying
+        weapon die showing 1/2. Protection returns pending_reaction before the
+        roll: resolve each owner's combat_choice, then repeat the same attack
+        with a new operation ID. Agent context.protection requires decision_id,
+        reason, actors=[{actor_id,within_5_ft,can_see_attacker}] for every available
+        shield bearer. Failed/unknown calls always retry their original ID.
         """
         return self._settle_combat_attack(
             campaign_id=campaign_id,
@@ -655,6 +662,10 @@ class AttacksService:
             "branch_id": resolved_branch_id,
         }
         scope = f"combat-attack:{campaign_id}:{resolved_branch_id}:{principal_id}"
+        protection_binding = {
+            "kind": "combat_attack", "actor_id": actor_id, "target_id": target_id,
+            "payload": _support.deepcopy(payload),
+        }
         release_fields = {}
         if spell_release:
             scope, payload = spell_release["scope"], spell_release["payload"]
@@ -679,6 +690,7 @@ class AttacksService:
         _, encounter = self.active_encounter(campaign_id)
         if spell_release:
             encounter = spell_release["encounter"]
+        encounter, protection_accepted = protection.resume(encounter, protection_binding)
         self.validate_agent_attack_context(
             campaign_id,
             action_payload,
@@ -906,6 +918,21 @@ class AttacksService:
                 ) from None
             raise
         attacker["sheet"] = settled_attacker_sheet
+        if protection_accepted is None:
+            offered = protection.offer(
+                self, campaign, encounter, protection_binding, principal_id=principal_id,
+                branch_id=resolved_branch_id, idempotency_key=idempotency_key,
+                scope=scope, payload=payload,
+                facts=dict(action_payload.get("context") or {}).get("protection"),
+                sheet_override={actor_id: settled_attacker_sheet} if spell_release else None,
+                extra_receipts=spell_release["receipts"] if spell_release else (),
+                response_fields=release_fields,
+            )
+            if offered is not None:
+                return offered
+        plan = protection.apply(
+            plan, protection_accepted, self, campaign_id, resolved_branch_id,
+        )
         if spell_resolution is not None:
             next_encounter = _support.deepcopy(encounter)
             attack_payment = {
@@ -1652,6 +1679,11 @@ class AttacksService:
         *, readied=None,
     ):
         """Settle a verified opportunity or stored Ready attack in one transaction."""
+        protection_binding = {
+            "kind": "reaction_attack", "actor_id": actor_id, "target_id": target_id,
+            "payload": _support.deepcopy(payload),
+        }
+        encounter, protection_accepted = protection.resume(encounter, protection_binding)
         ready_fields = {} if readied is None else {
             "released": True, "declaration": _support.deepcopy(readied["payload"]),
             "readied_id": readied["id"],
@@ -1660,6 +1692,9 @@ class AttacksService:
             "dnd5e.core.ready.action" if readied is not None
             else "dnd5e.core.mcp.opportunity_melee_only"
         )
+        reacting = next(a for a in encounter["combatants"] if a["actor_id"] == actor_id)
+        if int(reacting.get("turn_budget", {}).get("reaction", 0)) < 1:
+            raise _support.CombatEngineError("actor has no reaction remaining")
         self.require_campaign_actor(campaign_id, target_id)
         attacker = self.combat_actor_snapshot(actor_id)
         target = self.combat_actor_snapshot(target_id)
@@ -1731,6 +1766,19 @@ class AttacksService:
         )
         if readied is None and weapon is not None and weapon.get("attack_type") != "melee":
             raise _support.CombatEngineError("opportunity attacks require a melee attack")
+        if protection_accepted is None:
+            offered = protection.offer(
+                self, campaign, encounter, protection_binding, principal_id=principal_id,
+                branch_id=resolved_branch_id, idempotency_key=idempotency_key,
+                scope=scope, payload=payload,
+                facts=dict(action_payload.get("context") or {}).get("protection"),
+                target_position=window.get("target_position"),
+            )
+            if offered is not None:
+                return offered
+        plan = protection.apply(
+            plan, protection_accepted, self, campaign_id, resolved_branch_id,
+        )
         attack_roll = _support.roll_attack_action(plan=plan)
         defenses = self.post_hit_attack_defenses(
             campaign_id,
@@ -2504,6 +2552,8 @@ class AttacksService:
         object_ruling: dict[str, Any] | None = None,
         attack_ruling: dict[str, Any] | None = None,
         sunlight: dict[str, Any] | None = None,
+        weapon_grip: str | None = None,
+        use_great_weapon_fighting: bool = False,
     ) -> dict[str, Any]:
         """Attack a source-defined destructible scene object outside combat.
 
@@ -2518,6 +2568,8 @@ class AttacksService:
 
         if type(advantage) is not bool or type(disadvantage) is not bool:
             raise ValueError("object attack advantage and disadvantage must be booleans")
+        if type(use_great_weapon_fighting) is not bool:
+            raise ValueError("use_great_weapon_fighting must be boolean")
         current = self.characters.get(character_id)
         self.require_character_control(current, principal_id)
         self.require_outside_active_combat(current, "source object attacks")
@@ -2566,6 +2618,8 @@ class AttacksService:
             "branch_id": resolved_branch_id,
             "object_ruling": object_ruling,
             "attack_ruling": attack_ruling,
+            **({"weapon_grip": weapon_grip} if weapon_grip is not None else {}),
+            **({"use_great_weapon_fighting": True} if use_great_weapon_fighting else {}),
             **({"sunlight": _support.deepcopy(sunlight)} if sunlight is not None else {}),
         }
         scope = f"source-object-attack:{campaign_id}:{resolved_branch_id}:{principal_id}"
@@ -2647,6 +2701,8 @@ class AttacksService:
             attacker,
             effective_profile,
             weapon_id=weapon_id,
+            weapon_grip=weapon_grip,
+            use_great_weapon_fighting=use_great_weapon_fighting,
             advantage=advantage,
             disadvantage=disadvantage,
             rules=rules,
@@ -2663,6 +2719,10 @@ class AttacksService:
             attack=attack_roll,
             rules=rules,
         )
+        if "great_weapon_fighting" in settled:
+            attack_roll["great_weapon_fighting"] = _support.deepcopy(
+                settled["great_weapon_fighting"]
+            )
         next_attacker_sheet = _support.deepcopy(updated_attacker["sheet"])
         ammunition = None
         limited_use = None

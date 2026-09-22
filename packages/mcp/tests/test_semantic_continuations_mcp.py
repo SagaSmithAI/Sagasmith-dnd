@@ -3,7 +3,11 @@ import random
 from copy import deepcopy
 
 import pytest
-from sagasmith_dnd.character_schema import default_character_sheet
+from sagasmith_dnd.character_schema import (
+    add_inventory_item,
+    default_character_sheet,
+    equip_inventory_item,
+)
 from sagasmith_dnd.combat_engine import roll_attack_action
 
 from sagasmith_dnd_mcp import server as server_module
@@ -13,7 +17,8 @@ from tests.authoring_helpers import finalize_and_activate_module
 from tests.test_semantic_plan_mcp import _call, _raw
 
 
-async def prepare(tmp_path, *, reaction, movement_payment=None, mover_incapacitated=False):
+async def prepare(tmp_path, *, reaction, movement_payment=None, mover_incapacitated=False,
+                  protection=False):
     text = "Twin Strikes. Make two unarmed attacks against one adjacent visible creature."
     if movement_payment:
         text = (
@@ -67,7 +72,7 @@ async def prepare(tmp_path, *, reaction, movement_payment=None, mover_incapacita
     })
     expanded = await _call(server, "module_expand", {"chunk_id": chunks[0]["id"]})
     actors = []
-    for name in ("attacker", "target"):
+    for name in (("attacker", "target", "protector") if protection else ("attacker", "target")):
         sheet = default_character_sheet()
         if name == "target" and mover_incapacitated:
             sheet["conditions"] = ["incapacitated"]
@@ -145,6 +150,15 @@ async def prepare(tmp_path, *, reaction, movement_payment=None, mover_incapacita
                     "resolution_plan": plan,
                 }
             ]
+        elif name == "protector":
+            sheet["content"]["features"] = [{
+                "id": "dnd5e.content.srd2014.feature.fighter-fighting-style",
+                "name": "Fighting Style", "choices": {"option": "Protection"},
+            }]
+            sheet, shield = add_inventory_item(sheet, {
+                "id": "shield", "name": "Shield", "kind": "shield", "mechanics": {"ac_bonus": 2},
+            })
+            sheet = equip_inventory_item(sheet, shield, "shield")
         elif reaction:
             sheet["progression"] = {
                 "level": 5,
@@ -169,7 +183,7 @@ async def prepare(tmp_path, *, reaction, movement_payment=None, mover_incapacita
                     "mechanic_refs": ["dnd5e.core.reaction.uncanny_dodge"],
                 }
             ]
-        else:
+        elif not protection:
             sheet["abilities"]["constitution"]["score"] = 30
             sheet["effects"] = [
                 {

@@ -5,6 +5,46 @@ requires implementation and applicable validation; pending items remain open.
 Host-managed local execution must preserve Runtime authority, real choices,
 source evidence, CAS, transactions and original-key replay.
 
+## #106 - selected 2014 Fighting Styles (local batch)
+
+Canonical Fighter/Paladin/Ranger and Champion Additional Fighting Style choices
+now share one edition-bound recognizer. Archery adds +2 to ranged weapon cards
+and actual attacks once, including attack-ability/override paths. Thrown melee
+weapons and spells do not qualify. Existing Defense remains armor-dependent and
+non-stacking. Dueling now recognizes all supported classes; Two-Weapon Fighting
+accepts canonical `choices.option` as well as the existing legacy representation.
+
+Great Weapon Fighting is an explicit per-attack opt-in. It rerolls each eligible
+weapon 1/2 once, retains the replacement even when low, includes critical weapon
+dice, and excludes separate additional damage. Receipts retain original/replaced
+values and actual RNG order. Shared combat, reaction/Ready, source-plan and
+noncombat object paths enforce the selected style and two-handed prerequisites.
+
+Protection opens durable, owned choices before attack RNG, action or ammunition
+payment. Grid distance uses full footprints; Agent mode requires complete DM
+scene facts. Acceptance guards current participant cards under CAS and spends
+only the protector's reaction. Requested actor identity must match window
+ownership even when a caller controls a different actor. All choices must finish
+before the original declaration resumes; target, weapon and context substitution
+are rejected. Pending movement stays suspended through nested reactions. Paid
+semantic plans resume the same step. Released Ready spells preserve their paid
+state and return a complete resume operation to the Host. Private intents stay
+outside player/party views. As with #149, Core's unchanged character writes are
+currently used for read guards. See [the caller contract](../fighting-styles-2014.md).
+
+Validation: complete Domain/Runtime passed 2,136 cases. Complete MCP passed
+1,626 cases with 32 optional integrations skipped. After the ownership and
+resume-request hardening, all 25 focused MCP cases passed, including 13 new
+style/Protection cases and the existing Ready-spell release suite. Real seeded
+RNG, stale participant CAS rollback, restart, exact replay, owner spoofing,
+missing Agent facts, nested movement, spell/semantic continuation and separate
+damage dice are covered locally. These are temporary-database protocol tests;
+no live campaign, paid-provider or deployed-stack acceptance is claimed.
+The final 382-case Domain/Runtime regression, Ruff, publisher and whitespace
+checks also pass.
+Core is 1.90.0, SRD 2014 is 1.44.0, standard 2014 is 1.16.0, and both presets are
+2.12.0. The issue stays open until the requested combined push reaches main.
+
 ## #149 - source-correct 2014 creature spaces and squeezing (local batch)
 
 Encounter resolution projects effective actor size and the full square footprint.

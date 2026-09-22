@@ -14,7 +14,7 @@ from .combat_engine import (
     preflight_attack,
 )
 from .conditions import INCAPACITATING_STATE_IDS, condition_ids
-from .engine import roll
+from .fighting_styles import roll_weapon_damage
 from .rule_engine import ResolutionContext, apply_rule_event, context_with_facts, core_receipts
 
 OBJECT_RULE = "dnd5e.core.objects.damage"
@@ -124,6 +124,8 @@ def object_attack_plan(
     disadvantage: bool = False,
     rules: ResolutionContext | None = None,
     reviewed_long_range: bool | None = None,
+    weapon_grip: str | None = None,
+    use_great_weapon_fighting: bool = False,
 ) -> dict[str, Any]:
     """Use only the shared attack preflight; the object never enters creature settlement."""
     profile = validate_object_profile(profile)
@@ -153,6 +155,8 @@ def object_attack_plan(
         target,
         action={
             "weapon_id": weapon_id,
+            "weapon_grip": weapon_grip,
+            "use_great_weapon_fighting": use_great_weapon_fighting,
             "context": {
                 "advantage": advantage,
                 "disadvantage": disadvantage,
@@ -308,7 +312,11 @@ def resolve_object_attack(
     if attack["hit"]:
         expression = str(plan["damage_expression"])
         rolled_expression = _critical_expression(expression) if attack["critical"] else expression
-        damage_roll = roll(rolled_expression, rng=rng)
+        damage_roll, rerolls = roll_weapon_damage(
+            rolled_expression, reroll_low=bool(plan.get("use_great_weapon_fighting")), rng=rng,
+        )
+        if plan.get("use_great_weapon_fighting"):
+            result["great_weapon_fighting"] = {"used": True, "rerolls": rerolls}
         result["damage"] = {
             **apply_object_damage(
                 profile,

@@ -683,6 +683,7 @@ class CombatService:
             value.pop("participant_manifest", None)
             value.pop("semantic_state", None)
             value.pop("movement_continuation", None)
+            value.pop("protection_intent", None)
             battle_map = value.get("battle_map")
             if isinstance(battle_map, dict):
                 value["battle_map"] = {
@@ -746,6 +747,7 @@ class CombatService:
             "reinforcements",
             "participant_manifest",
             "movement_continuation",
+            "protection_intent",
         ):
             value.pop(key, None)
         battle_map = value.get("battle_map")
@@ -882,6 +884,7 @@ class CombatService:
                     }
         if self.is_dm(campaign_id, principal_id):
             return value
+        value.pop("resume_attack", None)
         result = value.get("result")
         if isinstance(result, dict):
             allowed = {
@@ -924,6 +927,8 @@ class CombatService:
                 "remaining_attacks",
                 "spell_resolution",
                 "deflect_attack",
+                "protection",
+                "great_weapon_fighting",
                 "distance_ft",
                 "dice_count",
                 "damage_roll",
@@ -4523,6 +4528,10 @@ class CombatService:
         if readied is None or readied.get("status") != "triggered":
             raise _support.CombatEngineError("choice_id is not this actor's live Ready response")
         original_response = _support.deepcopy(readied["payload"])
+        if encounter.get("protection_intent") and (
+            not release or original_response.get("action") != "attack"
+        ):
+            raise _support.CombatEngineError("finish the pending Protection attack first")
         if declaration and declaration != original_response:
             raise _support.CombatEngineError("Ready release cannot replace the original response")
         updates, receipts = [], []
@@ -8133,6 +8142,16 @@ class CombatService:
             (item for item in encounter.get("pending", []) if item.get("id") == choice_id),
             None,
         )
+        if pending_choice and pending_choice.get("trigger") in {"protection", "protection_resume"}:
+            from . import protection
+
+            return protection.resolve(
+                self, campaign, encounter, pending_choice, selection, principal_id=principal_id,
+                branch_id=resolved_branch_id, idempotency_key=idempotency_key,
+                scope=scope, payload=payload,
+            )
+        if encounter.get("protection_intent"):
+            raise _support.CombatEngineError("finish the pending Protection attack first")
         if pending_choice and pending_choice.get("trigger") == "readied_spell":
             raise _support.CombatEngineError(
                 "readied-spell windows must use combat_readied_spell_resolve"

@@ -70,6 +70,9 @@ def test_attack_creates_concentration_window_and_rolls_it_back_atomically(
         def sync_combatant_conditions(self, *args):
             pass
 
+        def sync_combatant_spaces(self, *args):
+            pass
+
     runtime = CombatPlanRuntime(CombatPlanContext(encounter, Services(),
         SimpleNamespace(revision=1), "audit", "main", plan, plan.compiled, {}))
     monkeypatch.setattr(application_support, "roll_attack_action",
