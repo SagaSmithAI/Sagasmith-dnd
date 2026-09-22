@@ -373,9 +373,13 @@
     },
     {
       "id": "dnd5e.addon.rulebook.d-d-5e-the-tortle-package.e3234de670da.addon",
-      "version": "1.0.2",
-      "checksum": "b5010b3860ee25ea80aa0ae703644e985ddc418ef81e26f658cceb8e12b3872e",
-      "archive_sha256": "37c46087480dc91db14f65b746d994c8b549bc1b48b26f35c25e6a88d7207c02",
+      "version": "1.0.3-local.clause-coverage.1",
+      "checksum": "5ec313b5acb9cec7019432f29b604ee00b26a139a320527d27c2e1fbe80cf360",
+      "archive_sha256": "b4761bbc60a8a02446f0f54b1e3b6065709f94261f313a952468d770c30f1338",
+      "local_repair": {
+        "source_archive_sha256": "37c46087480dc91db14f65b746d994c8b549bc1b48b26f35c25e6a88d7207c02",
+        "steps": ["tortle_clause_coverage"]
+      },
       "publication_id": "tortle2014",
       "title": "D&D 5E - The Tortle Package",
       "classification": "official_supplement",

@@ -317,7 +317,14 @@ def _forged_tortle_natural_armor_sheet() -> dict:
     return forged
 
 
-def test_content_authority_signature_is_bound_to_one_character(tmp_path: Path) -> None:
+@pytest.mark.parametrize(("package_version", "package_checksum"), [
+    (TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION, TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM),
+    ("1.0.2", "b5010b3860ee25ea80aa0ae703644e985ddc418ef81e26f658cceb8e12b3872e"),
+    ("1.0.1", "356cbf231ea7ecf8dab48b7cca127523d1d0bd3f5b5535899f45641f24bc5759"),
+])
+def test_content_authority_signature_is_bound_to_one_character(
+    tmp_path: Path, package_version: str, package_checksum: str,
+) -> None:
     config = _config(tmp_path)
     server = create_server(config)
     secret = (config.home / "data" / ".content-authority-key").read_bytes()
@@ -325,6 +332,8 @@ def test_content_authority_signature_is_bound_to_one_character(tmp_path: Path) -
     authority_id = "server-issued-authority"
     authority = sheet["content"]["selections"][0]["selection"][TORTLE_NATURAL_ARMOR_AUTHORITY_KEY]
     authority["authority_id"] = authority_id
+    authority["package_version"] = package_version
+    authority["package_checksum"] = package_checksum
     authority["authorization"] = server_module.sign_receipt(
         {
             "schema_version": 1,
@@ -332,8 +341,8 @@ def test_content_authority_signature_is_bound_to_one_character(tmp_path: Path) -
             "character_id": "character-a",
             "artifact_id": TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
             "package_id": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
-            "package_version": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
-            "package_checksum": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM,
+            "package_version": package_version,
+            "package_checksum": package_checksum,
             "authority_id": authority_id,
         },
         secret,

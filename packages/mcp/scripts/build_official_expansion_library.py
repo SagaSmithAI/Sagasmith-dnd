@@ -21,6 +21,7 @@ import repair_steel_defender_citation
 import repair_steel_defender_lifecycle_policy
 import repair_steel_defender_owner_binding
 import repair_subclass_grants
+import repair_tortle_clause_coverage
 from sagasmith_core.content_pack import loads_content_archive
 from sagasmith_dnd.official_expansions import (
     CONTENT_LIBRARY_INDEX_SCHEMA,
@@ -37,6 +38,7 @@ _STEPS = {
     "artificer_starting_equipment": repair_artificer_starting_equipment.repair_archive,
     "steel_defender_lifecycle_policy": repair_steel_defender_lifecycle_policy.repair_archive,
     "artificer_infusion_source": repair_artificer_infusion_source.repair_archive,
+    "tortle_clause_coverage": repair_tortle_clause_coverage.repair_archive,
 }
 
 
@@ -49,12 +51,16 @@ def _source_path(root: Path, entry: dict) -> Path:
 
 def _repair(data: bytes, target: dict) -> tuple[bytes, list[dict]]:
     recipe = target.get("local_repair")
-    source_sha = recipe["source_archive_sha256"] if recipe else target["archive_sha256"]
-    if hashlib.sha256(data).hexdigest() != source_sha:
-        raise ValueError("source archive does not match the shipped repair input")
     steps = recipe["steps"] if recipe else []
-    if recipe and (not isinstance(steps, list) or not steps):
-        raise ValueError("local repair steps must be a nonempty list")
+    if recipe and (not isinstance(steps, list) or not steps
+                   or any(not isinstance(name, str) or name not in _STEPS for name in steps)):
+        raise ValueError("local repair steps must be a known nonempty list")
+    digest = hashlib.sha256(data).hexdigest()
+    if digest == target["archive_sha256"]:
+        return data, []  # Already repaired, but still bound to the exact shipped digest.
+    source_sha = recipe["source_archive_sha256"] if recipe else target["archive_sha256"]
+    if digest != source_sha:
+        raise ValueError("source archive does not match the shipped repair input")
     reports = []
     for name in steps:
         if not isinstance(name, str) or name not in _STEPS:
@@ -94,7 +100,8 @@ def build_library(source: Path, output: Path) -> dict:
         expected = target.get("local_repair", {}).get(
             "source_archive_sha256", target["archive_sha256"]
         )
-        if hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual not in {expected, target["archive_sha256"]}:
             raise ValueError("source archive does not match the shipped repair input")
         inputs.append((target, entry, path))
     output.mkdir(parents=True, exist_ok=False)

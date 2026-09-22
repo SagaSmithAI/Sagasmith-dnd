@@ -195,7 +195,10 @@ def test_tortle_provenance_gets_the_fixed_one_hour_hold(pack_version: str) -> No
     assert begin_holding_breath(sheet)["effect"]["metadata"]["hold_remaining_rounds"] == 10
 
 
-def test_republished_tortle_provenance_gets_the_fixed_one_hour_hold() -> None:
+@pytest.mark.parametrize("inherited_species_refs", [False, True])
+def test_republished_tortle_provenance_gets_the_fixed_one_hour_hold(
+    inherited_species_refs: bool,
+) -> None:
     sheet = default_character_sheet()
     sheet["edition"] = "2014"
     source_ref = "rule-source:user.rulebook.d-d-5e-the-tortle-package.e3234de670#chunk:9"
@@ -223,6 +226,10 @@ def test_republished_tortle_provenance_gets_the_fixed_one_hour_hold() -> None:
         }
     ]
 
+    if inherited_species_refs:
+        sheet["content"]["features"][0]["mechanic_refs"] = sorted(
+            TORTLE_HOLD_BREATH_CURRENT_SELECTION_MECHANIC_REFS
+        )
     assert tortle_hold_breath_available(sheet)
     assert begin_holding_breath(sheet)["effect"]["metadata"]["hold_remaining_rounds"] == 600
 

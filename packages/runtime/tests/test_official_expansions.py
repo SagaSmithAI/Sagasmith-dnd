@@ -328,6 +328,8 @@ def test_standalone_verifier_includes_locked_core_dependencies(
     if tamper:
         with pytest.raises(ValueError, match="official support"):
             verify_official_expansion_library(tmp_path, lock=lock)
+        with pytest.raises(ValueError, match="official support"):
+            resolve_official_expansion_archives(tmp_path, lock=lock, include_support=True)
     else:
         report = verify_official_expansion_library(tmp_path, lock=lock)
         assert report["verified"] is True
@@ -335,6 +337,19 @@ def test_standalone_verifier_includes_locked_core_dependencies(
             **{key: locked[key] for key in ("id", "version", "checksum", "archive_sha256", "role")},
         }]
         assert report["coverage"]["packages"] == 1  # Expansion counts stay separate.
+        reads = []
+        original_read = official_library._read_descriptor
+
+        def read_once(path):
+            reads.append(path)
+            return original_read(path)
+
+        monkeypatch.setattr(official_library, "_read_descriptor", read_once)
+        resolved = resolve_official_expansion_archives(tmp_path, lock=lock, include_support=True)
+        assert [item.role for item in resolved][:1] == ["official_core_dependency"]
+        assert resolved[0].path == archive_path.resolve()
+        assert resolved[1].path == expansion_path.resolve()
+        assert Counter(reads) == Counter([archive_path.resolve(), expansion_path.resolve()])
 
 
 def test_cli_verifier_does_not_open_the_runtime_database(

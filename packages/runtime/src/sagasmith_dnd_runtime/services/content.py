@@ -618,6 +618,7 @@ class ContentService:
         component_results = []
         while pending:
             progressed = False
+            blocked_dependencies: dict[str, str] = {}
             for definition_id, definition in list(pending.items()):
                 manifest = _support.deepcopy(dict(definition["manifest"]))
                 applied_rebinds = []
@@ -671,9 +672,16 @@ class ContentService:
                             str(dependency["id"]), str(dependency["version"])
                         )
                     except LookupError:
+                        blocked_dependencies[definition_id] = (
+                            f"missing {dependency['id']}@{dependency['version']}"
+                        )
                         dependencies_ready = False
                         break
                     if dependency_row.status != "installed":
+                        blocked_dependencies[definition_id] = (
+                            f"{dependency['id']}@{dependency['version']} "
+                            f"is {dependency_row.status}"
+                        )
                         dependencies_ready = False
                         break
                 if not dependencies_ready:
@@ -772,7 +780,12 @@ class ContentService:
                         },
                     )
                     if draft["status"] != "validated":
-                        raise ValueError(f"content rule definition was rejected: {definition_id}")
+                        errors = dict(draft.get("validation_report") or {}).get("errors") or []
+                        detail = "; ".join(str(error) for error in errors[:5])
+                        raise ValueError(
+                            f"content rule definition was rejected: {definition_id}"
+                            + (f": {detail}" if detail else "")
+                        )
                     self.rule_packs.install(definition_id, str(definition["version"]))
                 if applied_rebinds:
                     component_equivalence.append(
@@ -799,7 +812,10 @@ class ContentService:
             if not progressed:
                 raise ValueError(
                     "content rule dependencies are unavailable or cyclic: "
-                    + ", ".join(sorted(pending))
+                    + "; ".join(
+                        f"{key} ({blocked_dependencies.get(key, 'unresolved')})"
+                        for key in sorted(pending)
+                    )
                 )
 
         actor_result = None
@@ -1155,8 +1171,7 @@ class ContentService:
                 "support_available": len(support_catalog),
                 "packages": [],
             }
-        support_archives = _support.resolve_official_expansion_support_archives(library)
-        archives = (*support_archives, *_support.resolve_official_expansion_archives(library))
+        archives = _support.resolve_official_expansion_archives(library, include_support=True)
         results = []
         for archive in archives:
             try:

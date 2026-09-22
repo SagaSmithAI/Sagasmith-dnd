@@ -500,9 +500,11 @@ from sagasmith_dnd.standard_feature_ids import (
     CORE_WATCHERS_EYE_MECHANIC_ID,
     TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
     TORTLE_NATURAL_ARMOR_AUTHORITY_KEY,
+    TORTLE_NATURAL_ARMOR_CONTENT_IDENTITIES,
     TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM,
     TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
     TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+    TORTLE_NATURAL_ARMOR_CURRENT_PACK_VERSION,
     TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
     TORTLE_NATURAL_ARMOR_LEGACY_PACK_VERSIONS,
     TORTLE_NATURAL_ARMOR_SOURCE_RULE_REF_PREFIX,
@@ -1056,7 +1058,8 @@ def _verified_tortle_natural_armor_authority(
         and str(locked.get("version") or "") == authority["package_version"]
         and str(locked.get("checksum") or "") == authority["package_checksum"]
         and pack_id == TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID
-        and pack_version in TORTLE_NATURAL_ARMOR_LEGACY_PACK_VERSIONS
+        and pack_version in (TORTLE_NATURAL_ARMOR_LEGACY_PACK_VERSIONS
+                             | {TORTLE_NATURAL_ARMOR_CURRENT_PACK_VERSION})
         and str(content_definition.get("package_id") or "") == authority["package_id"]
         and str(content_definition.get("package_version") or "") == authority["package_version"]
         and str(content_definition.get("package_checksum") or "") == authority["package_checksum"]
@@ -1098,16 +1101,18 @@ def _verified_content_authority_ids(
             )
         except ValueError:
             continue
-        if payload == {
+        identity = (authority.get("package_version"), authority.get("package_checksum"))
+        if (all(isinstance(value, str) for value in identity)
+                and identity in TORTLE_NATURAL_ARMOR_CONTENT_IDENTITIES and payload == {
             "schema_version": 1,
             "purpose": "official_content_authority",
             "character_id": character_id,
             "artifact_id": TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
             "package_id": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
-            "package_version": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
-            "package_checksum": TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM,
+            "package_version": identity[0],
+            "package_checksum": identity[1],
             "authority_id": authority_id,
-        }:
+        }):
             verified.add(authority_id)
     return frozenset(verified)
 

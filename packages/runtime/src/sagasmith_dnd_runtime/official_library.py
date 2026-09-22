@@ -204,6 +204,7 @@ def resolve_official_expansion_archives(
     path: Path,
     *,
     lock: Mapping[str, Any] | None = None,
+    include_support: bool = False,
 ) -> tuple[OfficialExpansionArchive, ...]:
     """Resolve every verified registry entry to an exact authorized local archive.
 
@@ -240,7 +241,25 @@ def resolve_official_expansion_archives(
                 path=_portable_archive_path(root, index_item.get("path")),
             )
         )
-    return tuple(sorted(resolved, key=lambda item: item.publication_id))
+    expansions = tuple(sorted(resolved, key=lambda item: item.publication_id))
+    if not include_support:
+        return expansions
+    # Full verification above has already checked these bytes and definitions.
+    # Reuse its identities within this call, never cache verification across boots.
+    support_locked = {str(item["id"]): item for item in expected.get("support_packages", [])}
+    support = tuple(
+        OfficialExpansionArchive(
+            id=item["id"], version=item["version"], checksum=item["checksum"],
+            archive_sha256=item["archive_sha256"], publication_id="phb2014",
+            title=str(support_locked[item["id"]]["title"]),
+            classification=str(support_locked[item["id"]]["classification"]),
+            editions=tuple(support_locked[item["id"]]["editions"]),
+            path=_portable_archive_path(root, indexed[item["id"]].get("path")),
+            role=item["role"],
+        )
+        for item in report["support_packages"]
+    )
+    return (*support, *expansions)
 
 
 def resolve_official_expansion_support_archives(

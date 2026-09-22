@@ -52,6 +52,19 @@ def test_local_transfer_recovers_lost_response_after_restart(tmp_path):
             for actor_id in slices:
                 assert slices[actor_id]["sheet"]["inventory"]["items"][0]["quantity"] == 1
             assert result["host_context_binding"] == result["local_context"]["binding"]
+            # An unselected actor still participates in invalidation without
+            # requiring its full sheet in the returned context.
+            observer = await call("character_create_from", mode="direct", payload={
+                "campaign_id": campaign["id"], "name": "Observer",
+            }, idempotency_key="observer")
+            before = runtime.local_session.context(campaign["id"], arguments)
+            await call("inventory_change", owner="character", action="add",
+                       owner_id=observer["id"], payload={"item": {
+                           "id": "observer-rope", "name": "Rope", "kind": "equipment",
+                       }}, idempotency_key="observer-item")
+            after = runtime.local_session.context(campaign["id"], arguments)
+            assert {actor["id"] for actor in after["actors"]} == {source["id"], target["id"]}
+            assert after["state_token"] != before["state_token"]
             # Simulate commit success followed by process death before journal completion.
             path = runtime.local_session.journal / (
                 hashlib.sha256(b"transfer").hexdigest() + ".json"

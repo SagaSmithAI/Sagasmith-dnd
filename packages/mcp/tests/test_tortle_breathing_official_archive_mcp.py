@@ -12,6 +12,7 @@ from sagasmith_dnd.standard_feature_ids import (
     TORTLE_HOLD_BREATH_LEGACY_PACK_ID,
     TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
     TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+    TORTLE_NATURAL_ARMOR_CURRENT_PACK_VERSION,
 )
 from test_official_expansions_mcp import _locked_official_library
 
@@ -115,14 +116,14 @@ def test_finalized_tortle_hold_breath_is_one_hour_and_recovers_after_restart(
             selection = applied["sheet"]["content"]["selections"][0]
             assert selection["artifact_id"] == TORTLE_HOLD_BREATH_ARTIFACT_ID
             assert selection["pack_id"] == TORTLE_HOLD_BREATH_LEGACY_PACK_ID
-            assert selection["pack_version"] == "1.0.0"
+            assert selection["pack_version"] == TORTLE_NATURAL_ARMOR_CURRENT_PACK_VERSION
             feature = next(
                 item
                 for item in applied["sheet"]["content"]["features"]
                 if item["id"] == TORTLE_HOLD_BREATH_FEATURE_ID
             )
             assert feature["pack_id"] == TORTLE_HOLD_BREATH_LEGACY_PACK_ID
-            assert feature["pack_version"] == "1.0.0"
+            assert feature["pack_version"] == TORTLE_NATURAL_ARMOR_CURRENT_PACK_VERSION
 
             underwater = await _call(
                 server,

@@ -11,6 +11,7 @@ from sagasmith_dnd.character_schema import (
 from sagasmith_dnd.standard_feature_ids import (
     TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
     TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
+    TORTLE_NATURAL_ARMOR_CURRENT_PACK_VERSION,
     TORTLE_SHELL_DEFENSE_ARTIFACT_ID,
     TORTLE_SHELL_DEFENSE_LEGACY_PACK_ID,
 )
@@ -124,7 +125,7 @@ def test_tortle_shell_defense_materializes_and_settles_atomically_across_restart
         applied_selection = applied["sheet"]["content"]["selections"][0]
         assert applied_selection["artifact_id"] == TORTLE_SHELL_DEFENSE_ARTIFACT_ID
         assert applied_selection["pack_id"] == TORTLE_SHELL_DEFENSE_LEGACY_PACK_ID
-        assert applied_selection["pack_version"] == "1.0.0"
+        assert applied_selection["pack_version"] == TORTLE_NATURAL_ARMOR_CURRENT_PACK_VERSION
         applied_feature = next(
             item
             for item in applied["sheet"]["content"]["features"]
@@ -132,7 +133,7 @@ def test_tortle_shell_defense_materializes_and_settles_atomically_across_restart
         )
         assert applied_feature["id"] == f"{TORTLE_SHELL_DEFENSE_ARTIFACT_ID}.feature.shell-defense"
         assert applied_feature["pack_id"] == TORTLE_SHELL_DEFENSE_LEGACY_PACK_ID
-        assert applied_feature["pack_version"] == "1.0.0"
+        assert applied_feature["pack_version"] == TORTLE_NATURAL_ARMOR_CURRENT_PACK_VERSION
         assert applied_feature["source_key"] == "Tortle"
         observer = await _call(
             server,

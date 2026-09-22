@@ -1,7 +1,7 @@
 # Build the locally repaired official expansion library
 
 The shipped metadata-only lock now pins repaired private packages for Eberron,
-Ravnica, Sword Coast, Tasha and Wayfinder. It does not contain or download their
+Ravnica, Sword Coast, Tasha, Tortle and Wayfinder. It does not contain or download their
 commercial text. The library source commit identifies canonical **inputs**, not
 a public release of repaired archives; each changed package records its exact
 input digest and ordered local repair steps.
@@ -15,11 +15,13 @@ python packages/mcp/scripts/build_official_expansion_library.py \
 ```
 
 The supplied canonical library must contain the exact eleven locally supplied
-inputs (ten expansions and the PHB dependency). The builder applies subclass
+inputs (ten expansions and the PHB dependency), or their exact already-repaired
+target archives. The builder applies subclass
 grants, Artificer ASI, context, the exact-hash-bound Steel Defender
 citation, owner-binding, starting-equipment, lifecycle-policy and infusion-source
 repairs in the pinned order;
-six unaffected packages retain their original bytes. Output archive hashes, package identities,
+five unaffected packages retain their original bytes. Already-repaired targets
+are verified and copied without applying their recipes twice. Output archive hashes, package identities,
 inner definition checksums and catalog counts must match the shipped lock.
 The Eberron equipment recipe binds its class contract to the exact EQUIPMENT
 normalized source chunk and existing SRD item IDs. The supplied chunk has no
@@ -49,6 +51,15 @@ unchanged. The recipe checks the exact input archive, normalized asset, section
 titles and chunk hashes; it does not repair arbitrary PDFs or add infusion-item
 settlement, structured replication choices, tool casting or optional INT attacks.
 
+The Tortle recipe accepts only the pinned 1.0.2 archive and produces
+`1.0.3-local.clause-coverage.1`. It assigns the existing Natural Armor and Shell
+Defense native mechanics to explicit source-bound kernel clauses, retaining the
+agent clause for the remaining material, and refreshes the inner 1.0.2 definition's
+provider locks and review hashes. Source blobs, citations, character cards and
+other artifacts are preserved. Previously signed Tortle capabilities remain valid
+only for the exact recognized historical package identities and actor-bound
+signatures; this does not migrate campaigns or accept arbitrary older archives.
+
 Lifecycle policy is required at creation and compared with the activated source
 and signed relation on subsequent settlement and owner-scaling refresh. Missing
 or invalid policy is not inferred from a name, numeric formula or raw prose;
@@ -65,8 +76,8 @@ After the report confirms `verification.verified`, configure the MCP host's
 existing `official_content_library` setting to this output directory and restart
 the host. Use the existing `content_pack` activation flow to select the desired
 new expansion version for a campaign. Building alone does not activate anything
-or alter a campaign lock. There is no legacy-save whitelist or automatic repair
-of old selections. Local version suffixes and provisional source-review metadata
+or alter a campaign lock. Existing signed Tortle authority continuity does not
+automatically repair old selections. Local version suffixes and provisional source-review metadata
 are retained honestly; runtime acceptance is not a vendor endorsement or a
 redistribution licence.
 
@@ -89,3 +100,10 @@ Without the private library this test explicitly skips. It checks weapon and
 armor choices, gold/background exclusion, source-bound awards and restart/replay;
 it does not certify spellcasting tools, all class features, or consumption of
 individual items described inside a bundled equipment pack.
+
+The Tortle source-preservation test additionally uses
+`SAGASMITH_DND_TEST_TORTLE_SOURCE_ARCHIVE` pointing to the original pinned 1.0.2
+archive. Run `packages/mcp/tests/test_repair_tortle_clause_coverage.py` to verify
+source preservation and the exact shipped target hash, and
+`packages/mcp/tests/test_tortle_claws_official_archive_mcp.py` with the repaired
+library to verify real import, attacks, replay and restart.

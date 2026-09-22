@@ -35,6 +35,7 @@ def test_composition_binds_input_steps_and_final_digest(monkeypatch):
         b"source repaired",
         [{"step": "fixture", "published": False}],
     )
+    assert builder._repair(b"source repaired", target) == (b"source repaired", [])
     with pytest.raises(ValueError, match="repair input"):
         builder._repair(b"tampered", target)
     target["archive_sha256"] = "0" * 64
@@ -64,7 +65,7 @@ def test_shipped_recipes_are_executable_and_explicitly_local():
     lock = load_official_expansion_lock()
     assert "Canonical input lineage only" in lock["source_commit_role"]
     targets = [p for p in lock["packages"] if "local_repair" in p]
-    assert len(targets) == 5
+    assert len(targets) == 6
     modules = {
         "subclass_grants": builder.repair_subclass_grants,
         "artificer_asi": builder.repair_artificer_asi,
@@ -73,7 +74,10 @@ def test_shipped_recipes_are_executable_and_explicitly_local():
     for target in targets:
         recipe = target["local_repair"]
         digest = recipe["source_archive_sha256"]
-        assert digest in modules[recipe["steps"][0]]._RECIPES
+        if recipe["steps"][0] == "tortle_clause_coverage":
+            assert digest == builder.repair_tortle_clause_coverage._SOURCE_SHA
+        else:
+            assert digest in modules[recipe["steps"][0]]._RECIPES
         assert digest != target["archive_sha256"]
         assert "-local." in target["version"]
         assert all(step in builder._STEPS for step in recipe["steps"])

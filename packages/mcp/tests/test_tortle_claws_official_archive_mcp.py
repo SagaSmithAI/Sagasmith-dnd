@@ -12,7 +12,7 @@ from sagasmith_dnd.combat_engine import roll_attack_action as engine_roll_attack
 from sagasmith_dnd.standard_feature_ids import (
     TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
     TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
-    TORTLE_NATURAL_ARMOR_LEGACY_PACK_VERSIONS,
+    TORTLE_NATURAL_ARMOR_CURRENT_PACK_VERSION,
 )
 
 import sagasmith_dnd_mcp.server as server_module
@@ -171,7 +171,7 @@ def test_finalized_tortle_archive_claws_are_intrinsic_and_unarmed(
                 assert claws[0]["source"] == {
                     "artifact_id": _TORTLE_ID,
                     "pack_id": _TORTLE_ID.removesuffix(".species.tortle"),
-                    "pack_version": next(iter(TORTLE_NATURAL_ARMOR_LEGACY_PACK_VERSIONS)),
+                    "pack_version": TORTLE_NATURAL_ARMOR_CURRENT_PACK_VERSION,
                     "rule_refs": claws[0]["source"]["rule_refs"],
                 }
                 assert claws[0]["source"]["rule_refs"]

@@ -50,13 +50,10 @@ from sagasmith_dnd.standard_feature_ids import (
     SRD2014_DWARF_SPEED_SOURCE_RULE_REF,
     TORTLE_NATURAL_ARMOR_ARTIFACT_ID,
     TORTLE_NATURAL_ARMOR_AUTHORITY_KEY,
-    TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM,
+    TORTLE_NATURAL_ARMOR_CONTENT_IDENTITIES,
     TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID,
-    TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION,
     TORTLE_NATURAL_ARMOR_CURRENT_PACK_VERSION,
     TORTLE_NATURAL_ARMOR_CURRENT_SELECTION_MECHANIC_REFS,
-    TORTLE_NATURAL_ARMOR_LEGACY_CONTENT_PACKAGE_CHECKSUM,
-    TORTLE_NATURAL_ARMOR_LEGACY_CONTENT_PACKAGE_VERSION,
     TORTLE_NATURAL_ARMOR_LEGACY_PACK_ID,
     TORTLE_NATURAL_ARMOR_LEGACY_PACK_VERSIONS,
     TORTLE_NATURAL_ARMOR_SOURCE_RULE_REF_PREFIX,
@@ -4318,20 +4315,10 @@ def _2014_tortle_natural_armor_sources(
         authority = dict(raw_authority)
         authority_matches = (
             authority.get("package_id") == TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_ID
-            and (
-                (
-                    authority.get("package_version")
-                    == TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_VERSION
-                    and authority.get("package_checksum")
-                    == TORTLE_NATURAL_ARMOR_CONTENT_PACKAGE_CHECKSUM
-                )
-                or (
-                    authority.get("package_version")
-                    == TORTLE_NATURAL_ARMOR_LEGACY_CONTENT_PACKAGE_VERSION
-                    and authority.get("package_checksum")
-                    == TORTLE_NATURAL_ARMOR_LEGACY_CONTENT_PACKAGE_CHECKSUM
-                )
-            )
+            and isinstance(authority.get("package_version"), str)
+            and isinstance(authority.get("package_checksum"), str)
+            and (authority.get("package_version"), authority.get("package_checksum"))
+            in TORTLE_NATURAL_ARMOR_CONTENT_IDENTITIES
         )
         selection_provenance = (
             (

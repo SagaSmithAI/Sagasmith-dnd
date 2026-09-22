@@ -278,20 +278,19 @@ class LocalSession:
         if binding["audience"] != "dm" or not self.services.is_dm(campaign_id, self.principal):
             value["state_token"] = None
             return value
-        actors = {actor.id: actor for actor in
-                  self.services.characters.list(campaign_id=campaign_id)}
+        revisions = self.services.characters.revision_index(campaign_id=campaign_id)
         encounter = campaign.state.get("combat") or {}
         combatants = encounter.get("combatants") or []
         index = encounter.get("turn_index")
         current = None
         if encounter.get("active") and type(index) is int and 0 <= index < len(combatants):
             current = combatants[index].get("actor_id")
-        elif len(actors) == 1:
-            current = next(iter(actors))
+        elif len(revisions) == 1:
+            current = next(iter(revisions))
         value["actor_id"] = current
         value["state_token"] = hashlib.sha256(json.dumps({
             "binding": binding, "revision": campaign.revision,
-            "actors": {key: actor.revision for key, actor in actors.items()},
+            "actors": revisions,
         }, sort_keys=True).encode()).hexdigest()
         payload = arguments.get("payload")
         values = {**(payload if isinstance(payload, dict) else {}), **arguments}
@@ -300,10 +299,13 @@ class LocalSession:
         ))}
         if arguments.get("owner") == "character":
             selected.add(arguments.get("owner_id"))
+        actors = self.services.characters.list(
+            campaign_id=campaign_id, character_ids=[key for key in selected if key in revisions],
+        )
         value["actors"] = [{"id": actor.id, "name": actor.name, "revision": actor.revision,
                             "sheet": {key: deepcopy(actor.sheet[key]) for key in (
                                 "combat", "abilities", "resources", "conditions", "effects",
                                 "inventory", "proficiencies", "spellcasting",
                             ) if key in actor.sheet}}
-                           for key, actor in actors.items() if key in selected]
+                           for actor in actors]
         return value

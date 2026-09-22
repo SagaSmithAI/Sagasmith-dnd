@@ -64,7 +64,16 @@ def tortle_hold_breath_available(sheet: dict[str, Any]) -> bool:
         and item.get("source_key") == "Tortle"
         and item.get("pack_id") == TORTLE_HOLD_BREATH_LEGACY_PACK_ID
         and item.get("pack_version") in TORTLE_HOLD_BREATH_LEGACY_PACK_VERSIONS
-        and item.get("mechanic_refs") == []
+        and (
+            item.get("mechanic_refs") == []
+            or (
+                # Embedded traits without their own refs inherit the exact
+                # species refs during materialization of the current archive.
+                item.get("pack_version") == "1.0.2"
+                and set(item.get("mechanic_refs") or [])
+                == set(TORTLE_HOLD_BREATH_CURRENT_SELECTION_MECHANIC_REFS)
+            )
+        )
         and isinstance(item.get("rule_refs"), list)
         and item["rule_refs"]
         and all(
