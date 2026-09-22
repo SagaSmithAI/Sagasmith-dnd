@@ -5069,6 +5069,25 @@ def test_help_grants_and_then_consumes_attack_advantage() -> None:
     assert "help" in plan["advantage_sources"]
 
 
+@pytest.mark.parametrize("payload", [None, {}, {"kind": "legacy"}])
+def test_new_help_requires_a_bound_declaration_without_spending(payload) -> None:
+    helper, aided = _actor("helper"), _actor("aided")
+    helper["initiative"], aided["initiative"] = 20, 10
+    helper["position"] = {"x": 0, "y": 0}
+    aided["position"] = {"x": 1, "y": 0}
+    encounter = _grid_encounter([helper, aided])
+    before = deepcopy(encounter)
+    with pytest.raises(CombatEngineError, match="kind=attack or kind=task"):
+        resolve_common_action(
+            encounter,
+            actor_id_value="helper",
+            action="help",
+            target_id="aided",
+            payload=payload,
+        )
+    assert encounter == before
+
+
 def test_attack_help_is_bound_to_declared_enemy_target() -> None:
     helper = _actor("helper")
     attacker = _actor("attacker")

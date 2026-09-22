@@ -9218,15 +9218,14 @@ def _normalize_help_declaration(payload: dict[str, Any] | None) -> dict[str, Any
 
     ``target_id`` on the common-action request is always the aided ally.  An
     attack declaration carries a second target in its payload; a task
-    declaration carries the check context that it may assist.  Empty payloads
-    are retained as a compatibility form for older encounter snapshots.
+    declaration carries the check context that it may assist.  This is a new
+    declaration boundary; persisted legacy flags are read separately and must
+    never be created by an untyped request.
     """
 
-    raw = deepcopy(payload or {})
+    raw = deepcopy(payload) if payload is not None else {}
     if not isinstance(raw, dict):
         raise CombatEngineError("help payload must be an object")
-    if not raw:
-        return {"kind": "legacy", "payload": {}}
     kind = str(raw.get("kind") or raw.get("mode") or "").strip().casefold().replace("-", "_")
     kind = {
         "attack_help": "attack",

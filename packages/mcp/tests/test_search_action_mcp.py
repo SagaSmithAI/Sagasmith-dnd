@@ -159,6 +159,46 @@ def test_2014_search_uses_only_source_allowed_actor_card_skills(
     asyncio.run(exercise())
 
 
+def test_new_unbound_help_fails_without_write_and_bound_help_replays(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        server, campaign_id, helper, started = await _start_combat(tmp_path, "2014")
+        aided = next(
+            item for item in started["combat"]["combatants"]
+            if item["actor_id"] != helper["id"]
+        )
+        request = {
+            "campaign_id": campaign_id,
+            "actor_id": helper["id"],
+            "action": "help",
+            "target_id": aided["actor_id"],
+            "expected_revision": started["campaign_revision"],
+            "idempotency_key": "bound-help",
+        }
+        query = {
+            "view": "get",
+            "payload": {"campaign_id": campaign_id},
+            "principal_id": "system:local",
+        }
+        before = await _call(server, "campaign_query", query)
+        for payload in (None, {}, {"kind": "legacy"}):
+            with pytest.raises(Exception, match="kind=attack or kind=task"):
+                await _raw_call(server, "combat_common_action", {**request, "payload": payload})
+            after = await _call(server, "campaign_query", query)
+            assert after["revision"] == before["revision"]
+            assert after["state"] == before["state"]
+        request["payload"] = {"kind": "task", "action": "search", "ability": "perception"}
+        settled = await _raw_call(server, "combat_common_action", request)
+        replayed = await _raw_call(server, "combat_common_action", request)
+        assert replayed == settled
+        assert settled["campaign_revision"] == started["campaign_revision"] + 1
+        with pytest.raises(Exception, match="revision conflict"):
+            await _raw_call(
+                server, "combat_common_action", {**request, "idempotency_key": "stale-help"}
+            )
+
+    asyncio.run(exercise())
+
+
 def test_2014_task_help_advantage_is_consumed_by_matching_search(tmp_path: Path) -> None:
     async def exercise() -> None:
         server, campaign_id, searcher, started = await _start_combat(tmp_path, "2014")
