@@ -402,6 +402,8 @@ class ContentService:
             if isinstance(item, str):
                 if item in chunk_key_by_id:
                     return chunk_key_by_id[item]
+                if "#chunk:" not in item and "rule-source-chunk:" not in item:
+                    return item
                 result = item
                 for local_id, stable_key in chunk_key_by_id.items():
                     result = result.replace(f"#chunk:{local_id}", f"#chunk:{stable_key}")
@@ -590,6 +592,8 @@ class ContentService:
             if isinstance(item, str):
                 if item in chunk_map:
                     return chunk_map[item]
+                if "#chunk:" not in item:
+                    return item
                 result = item
                 for stable_key, local_id in chunk_map.items():
                     result = result.replace(f"#chunk:{stable_key}", f"#chunk:{local_id}")
