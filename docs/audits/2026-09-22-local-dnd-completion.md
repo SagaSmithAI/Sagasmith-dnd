@@ -23,11 +23,58 @@ snapshot tests remain green. This is domain/MCP evidence, not a live LLM session
 
 ## Next established gaps
 
-1. #158: source-bound object statistics and damage thresholds.
+The P0 object settlement gap #158 is implemented below. The remaining P1/P2
+gameplay items in the audit still require their own implementation and evidence.
 
 Other valid gameplay and content-publication gaps remain in the
 [audited issue list](2026-09-22-local-first-issues.md). The broader Agent upstream
 roadmap and upstream Chroma advisories have their own scope and evidence gates.
+
+## #158 — source-bound 2014 scene-object settlement
+
+Object damage has a dedicated Domain resolver. It applies automatic poison and
+psychic immunity, reviewed damage-type and tool applicability, resistance then
+vulnerability, and a nonnegative threshold against the adjusted total of one
+attack/effect. Equal threshold damage applies in full. Critical dice still
+double, while objects never acquire creature death saves, concentration, target
+conditions or generic on-hit effects. Unsupported special weapon effects and
+matching attack-after extensions stop before RNG or payment. Large-or-smaller
+sections retain independent HP; the Runtime does not infer parent destruction.
+
+First use requires DM review of the complete profile with an exact active-module
+chunk and source excerpt. Runtime signs the immutable AC/maximum HP, material,
+size/resilience, threshold, defenses and applicability. A character controller
+may subsequently reference that profile but cannot replace it or self-author
+attack advantage/disadvantage. Circumstance modifiers require a fresh signed DM
+ruling bound to the exact attack. Source facts inherit across forks; mutable HP,
+CAS, RNG and operation receipts remain branch-scoped. Legacy unsigned records
+require review without resetting HP or replacing original source/AC/maximum HP.
+Player responses exclude object statistics, source excerpts, DM rulings, private
+character data and full transaction receipts. This projection also applies to
+replay after restart and after a former DM loses that role.
+
+Ammunition, Recharge uses, actor CAS, object HP, random progress and the exact
+replay response commit together. Even an attack with no resource expenditure
+checks the attacker revision inside that transaction. Local Host now supplies
+the previously missing nested campaign revision for source-object attacks, in
+addition to the actor revision, and freezes both with the original operation ID.
+
+Core 1.83.0 records the exact bundled 2014 Objects rule. The dependent built-in
+catalog/preset versions and runtime source bindings were refreshed together;
+original imported source packages and campaign locks were not rewritten.
+
+Validation: all 1,830 Domain/Runtime tests passed, including 42 focused object
+rule/authority cases. The broad MCP checkpoint passed 1,571 tests and skipped 30
+optional integrations. One Windows worker crashed in addon selection and one
+starting-equipment restart raised a TypeError during content
+loading; the complete affected files passed independently (21 and 1 tests).
+That broad run is not recorded as a clean pass. After the player projection was
+added, all 10 object MCP cases passed, including ordinary and role-downgraded
+replay, local Host lost-response recovery, and attacker CAS with and without
+resource spend.
+All 108 Runtime tests passed again after that projection change.
+Ruff, generated references, official content lock and whitespace checks passed.
+This is local contract evidence, not a live model campaign acceptance claim.
 
 ## #139 — settle the original paid Ready spell
 

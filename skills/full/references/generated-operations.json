@@ -3159,7 +3159,7 @@
     }
   },
   {
-    "description": "Commit one noncombat spell cast, activity, or source-defined object attack.\n\nattack_source_object payload requires weapon_id, reason, source_ref,\nexpected_campaign_revision, and object={id,name,scene_id,armor_class,\nhit_points,damage_immunities?}. Supply expected_revision for the actor.\nsource_ref must identify an exact managed module chunk and its checksum;\nobject statistics must follow that source. Reuse the same object id and\noriginal maximum hit_points for later attacks; Runtime tracks remaining\nHP. Each actual attack needs its own idempotency key; retries reuse it.\nOptional advantage/disadvantage require actual circumstances. Do not\nprobe write operations with invented objects or placeholder source refs.",
+    "description": "Commit one noncombat spell cast, activity, or source-defined object attack.\n\nattack_source_object requires weapon_id, reason, source_ref, object,\nexpected_campaign_revision and the actor expected_revision. First use\nrequires DM-reviewed object statistics and object_ruling={reason,\nsource_excerpt}; Runtime signs and persists the exact approved profile.\nLater attacks may reference object={id,scene_id}. AC, original HP,\nmaterial, size, resilience, defenses, threshold and applicability cannot\nbe replaced. Huge objects use separately identified Large-or-smaller\nsections. Poison/psychic immunity is automatic. Advantage/disadvantage\nrequire a fresh DM attack_ruling={reason,source_excerpt}. Reuse the\nidempotency key on retries; a new attack requires a new key.",
     "error_envelope": {
       "fields": [
         "code",

@@ -2471,8 +2471,16 @@ class AttacksService:
         expected_revision: int | None = None,
         expected_campaign_revision: int | None = None,
         idempotency_key: str | None = None,
+        object_ruling: dict[str, Any] | None = None,
+        attack_ruling: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Attack a source-defined destructible scene object outside combat."""
+        from sagasmith_dnd.objects import object_attack_plan, resolve_object_attack
+
+        from .source_objects import approved_attack_context, approved_profile, project_response
+
+        if type(advantage) is not bool or type(disadvantage) is not bool:
+            raise ValueError("object attack advantage and disadvantage must be booleans")
         current = self.characters.get(character_id)
         self.require_character_control(current, principal_id)
         self.require_outside_active_combat(current, "source object attacks")
@@ -2485,93 +2493,28 @@ class AttacksService:
         normalized_reason = str(reason).strip()
         if not normalized_reason:
             raise ValueError("source object attack requires a reason")
-        requested = _support.deepcopy(dict(object_state or {}))
-        unknown = set(requested) - {
-            "id",
-            "name",
-            "scene_id",
-            "armor_class",
-            "hit_points",
-            "damage_immunities",
-            "damage_filter",
-        }
-        if unknown:
-            raise ValueError(f"unsupported source object fields: {sorted(unknown)}")
-        object_id = str(requested.get("id") or "").strip()
-        object_name = str(requested.get("name") or "").strip()
-        scene_id = str(requested.get("scene_id") or "").strip()
-        armor_class = requested.get("armor_class")
-        hit_point_maximum = requested.get("hit_points")
-        immunities = sorted(
-            {
-                str(item).strip().casefold()
-                for item in requested.get("damage_immunities") or []
-                if str(item).strip()
-            }
-        )
-        raw_damage_filter = requested.get("damage_filter") or {}
-        if not isinstance(raw_damage_filter, dict):
-            raise ValueError("source object damage_filter must be an object")
-        damage_filter_unknown = set(raw_damage_filter) - {
-            "allowed_damage_types",
-            "required_any_weapon_traits",
-        }
-        if damage_filter_unknown:
-            raise ValueError(
-                f"unsupported source object damage_filter fields: {sorted(damage_filter_unknown)}"
-            )
-        allowed_damage_types = sorted(
-            {
-                str(item).strip().casefold()
-                for item in raw_damage_filter.get("allowed_damage_types") or []
-                if str(item).strip()
-            }
-        )
-        required_any_weapon_traits = sorted(
-            {
-                str(item).strip().casefold()
-                for item in raw_damage_filter.get("required_any_weapon_traits") or []
-                if str(item).strip()
-            }
-        )
-        invalid_damage_types = sorted(set(allowed_damage_types) - set(_support.DAMAGE_TYPES))
-        if invalid_damage_types:
-            raise ValueError(
-                f"source object damage_filter has invalid damage types: {invalid_damage_types}"
-            )
-        invalid_weapon_traits = sorted(set(required_any_weapon_traits) - {"adamantine", "magical"})
-        if invalid_weapon_traits:
-            raise ValueError(
-                "source object damage_filter has unsupported weapon traits: "
-                f"{invalid_weapon_traits}"
-            )
-        damage_filter = (
-            {
-                "allowed_damage_types": allowed_damage_types,
-                "required_any_weapon_traits": required_any_weapon_traits,
-            }
-            if allowed_damage_types or required_any_weapon_traits
-            else {}
-        )
-        if not object_id or not object_name or not scene_id:
-            raise ValueError("source object requires id, name, and scene_id")
+        if not isinstance(object_state, dict):
+            raise ValueError("source object must be an object")
+        requested = _support.deepcopy(object_state)
+        object_id = requested.get("id")
+        scene_id = requested.get("scene_id")
         if (
-            isinstance(armor_class, bool)
-            or not isinstance(armor_class, int)
-            or not 1 <= armor_class <= 30
+            not isinstance(object_id, str)
+            or not object_id.strip()
+            or not isinstance(scene_id, str)
+            or not scene_id.strip()
         ):
-            raise ValueError("source object armor_class must be an integer from 1 to 30")
-        if (
-            isinstance(hit_point_maximum, bool)
-            or not isinstance(hit_point_maximum, int)
-            or hit_point_maximum < 1
-        ):
-            raise ValueError("source object hit_points must be a positive integer")
-        _, exact_source, _ = self.managed_module_source_ref(
+            raise ValueError("source object requires id and scene_id")
+        if self.campaign_rules_edition(campaign_id) != "2014":
+            raise _support.NeedsRulingError(
+                "source objects require 2014 rules", missing=("object.edition",)
+            )
+        _, exact_source, expanded = self.managed_module_source_ref(
             campaign_id,
             source_ref,
             require_exact=True,
             expected_scene_id=scene_id,
+            require_active_module=True,
         )
         if exact_source is None:
             raise AssertionError("exact source object citations always resolve to a managed chunk")
@@ -2584,11 +2527,13 @@ class AttacksService:
             "advantage": bool(advantage),
             "disadvantage": bool(disadvantage),
             "branch_id": resolved_branch_id,
+            "object_ruling": object_ruling,
+            "attack_ruling": attack_ruling,
         }
         scope = f"source-object-attack:{campaign_id}:{resolved_branch_id}:{principal_id}"
         replay = self.replay_idempotent(scope, idempotency_key, payload)
         if replay is not None:
-            return replay
+            return project_response(replay, dm=self.is_dm(campaign_id, principal_id))
         if current.revision != expected_revision:
             raise ValueError(
                 "character revision conflict: "
@@ -2604,104 +2549,67 @@ class AttacksService:
         scene_objects = _support.deepcopy(dict(campaign.state.get("scene_objects") or {}))
         scene_state = _support.deepcopy(dict(scene_objects.get(scene_id) or {}))
         existing = _support.deepcopy(dict(scene_state.get(object_id) or {}))
+        assert expanded is not None
+        profile, approval, hit_points_before = approved_profile(
+            self,
+            campaign_id=campaign_id,
+            branch_id=resolved_branch_id,
+            principal_id=principal_id,
+            requested=requested,
+            existing=existing,
+            source_ref=exact_source,
+            expanded=expanded,
+            ruling=object_ruling,
+        )
+        if hit_points_before <= 0 or existing.get("destroyed"):
+            raise _support.CombatEngineError("source object is already destroyed")
+        context_approval = approved_attack_context(
+            self,
+            campaign_id=campaign_id,
+            branch_id=resolved_branch_id,
+            principal_id=principal_id,
+            expanded=expanded,
+            source_ref=exact_source,
+            character_id=character_id,
+            object_id=object_id,
+            weapon_id=weapon_id,
+            campaign_revision=campaign.revision,
+            character_revision=current.revision,
+            operation_id=str(idempotency_key),
+            advantage=advantage,
+            disadvantage=disadvantage,
+            ruling=attack_ruling,
+        )
         immutable = {
-            "id": object_id,
-            "name": object_name,
-            "scene_id": scene_id,
-            "armor_class": armor_class,
-            "hit_point_maximum": hit_point_maximum,
-            "damage_immunities": immunities,
-            "damage_filter": damage_filter,
+            **profile,
+            "hit_point_maximum": profile["hit_points"],
+            "profile": profile,
+            "profile_approval": approval,
             "source_ref": exact_source,
-        }
-        if existing:
-            if any(existing.get(key) != value for key, value in immutable.items()):
-                raise ValueError(
-                    "source object id already exists with different source-defined data"
-                )
-            if existing.get("destroyed"):
-                raise _support.CombatEngineError("source object is already destroyed")
-            hit_points_before = int(existing["hit_points"])
-        else:
-            hit_points_before = hit_point_maximum
-
-        campaign_edition = self.campaign_rules_edition(campaign_id)
-        object_sheet = _support.default_character_sheet()
-        object_sheet["edition"] = campaign_edition
-        object_sheet["combat"]["hp"] = {
-            "value": hit_points_before,
-            "max": hit_point_maximum,
-            "temp": 0,
-        }
-        object_sheet["combat"]["ac"]["override"] = armor_class
-        weapon = next(
-            (
-                item
-                for item in attacker["sheet"]["inventory"]["items"]
-                if str(item.get("id") or "") == str(weapon_id)
-                and str(item.get("kind") or "") == "weapon"
-            ),
-            None,
-        )
-        if weapon is None:
-            raise ValueError("source object attack weapon is absent from the actor")
-        weapon_mechanics = dict(weapon.get("mechanics") or {})
-        weapon_traits = set()
-        if (
-            str(weapon.get("attunement") or "") == "attuned"
-            or int(weapon_mechanics.get("magic_bonus", 0) or 0) != 0
-            or bool(weapon_mechanics.get("additional_damage"))
-            or bool(weapon_mechanics.get("on_hit_effect"))
-        ):
-            weapon_traits.add("magical")
-        if "adamantine" in {
-            str(item).strip().casefold() for item in weapon_mechanics.get("materials") or []
-        }:
-            weapon_traits.add("adamantine")
-        weapon_trait_requirement_met = not required_any_weapon_traits or bool(
-            weapon_traits.intersection(required_any_weapon_traits)
-        )
-        effective_immunities = set(immunities)
-        if allowed_damage_types:
-            effective_immunities.update(set(_support.DAMAGE_TYPES) - set(allowed_damage_types))
-        if not weapon_trait_requirement_met:
-            effective_immunities.update(allowed_damage_types or _support.DAMAGE_TYPES)
-        object_sheet["traits"]["immunities"] = sorted(effective_immunities)
-        target = {
-            "id": f"scene-object:{scene_id}:{object_id}",
-            "name": object_name,
-            "kind": "object",
-            "sheet": _support.validate_character_sheet(object_sheet),
-            "derived": self.derive_character_sheet(object_sheet),
-            "death_saves": False,
         }
         rules = self.effective_rule_context(
             campaign_id,
             facts={
                 "actor_id": character_id,
-                "target_kind": "source_object",
+                "target_kind": "object",
                 "target_id": object_id,
                 "scene_id": scene_id,
             },
             branch_id=resolved_branch_id,
         )
-        plan = _support.preflight_attack(
+        plan = object_attack_plan(
             attacker,
-            target,
-            action={
-                "weapon_id": weapon_id,
-                "context": {
-                    "advantage": bool(advantage),
-                    "disadvantage": bool(disadvantage),
-                },
-            },
-            require_attack_action=False,
+            profile,
+            weapon_id=weapon_id,
+            advantage=advantage,
+            disadvantage=disadvantage,
             rules=rules,
         )
         attack_roll = _support.roll_attack_action(plan=plan)
-        updated_attacker, updated_target, settled = _support.resolve_attack_damage(
+        updated_attacker, settled = resolve_object_attack(
             attacker,
-            target,
+            profile,
+            hit_points_before,
             plan=plan,
             attack=attack_roll,
             rules=rules,
@@ -2719,7 +2627,9 @@ class AttacksService:
                 next_attacker_sheet,
                 str(weapon_id),
             )
-        hit_points_after = int(updated_target["sheet"]["combat"]["hp"]["value"])
+        hit_points_after = int(
+            (settled.get("damage") or {}).get("hit_points_after", hit_points_before)
+        )
         object_after = {
             **immutable,
             "hit_points": hit_points_after,
@@ -2730,9 +2640,12 @@ class AttacksService:
                 "reason": normalized_reason,
                 "attack": _support.deepcopy(attack_roll),
                 "damage": _support.deepcopy(settled.get("damage")),
-                "damage_filter": _support.deepcopy(damage_filter),
-                "weapon_traits": sorted(weapon_traits),
-                "weapon_trait_requirement_met": weapon_trait_requirement_met,
+                "damage_filter": _support.deepcopy(profile["damage_filter"]),
+                "weapon_traits": settled["weapon_traits"],
+                "weapon_trait_requirement_met": (settled.get("damage") or {}).get(
+                    "weapon_trait_requirement_met"
+                ),
+                "context_approval": context_approval,
             },
         }
         scene_state[object_id] = object_after
@@ -2752,16 +2665,16 @@ class AttacksService:
                 "hit_points_after": hit_points_after,
             },
         ][-100:]
-        character_updates = []
-        if next_attacker_sheet != current.sheet:
-            character_updates.append(
-                _support.CharacterStateUpdate(
-                    character_id=character_id,
-                    sheet=_support.validate_character_sheet(next_attacker_sheet),
-                    notes=_support.validate_character_notes(current.notes),
-                    expected_revision=current.revision,
-                )
+        # Even a miss with no expenditure depends on this exact attacker card.
+        # Keep its CAS in the same transaction as object HP and the RNG receipt.
+        character_updates = [
+            _support.CharacterStateUpdate(
+                character_id=character_id,
+                sheet=_support.validate_character_sheet(next_attacker_sheet),
+                notes=_support.validate_character_notes(current.notes),
+                expected_revision=current.revision,
             )
+        ]
         updated_character = (
             _support.replace(
                 current,
@@ -2785,11 +2698,12 @@ class AttacksService:
                 "limited_use": limited_use,
                 "campaign_revision": campaign.revision + 1,
                 "revisions": [_support.asdict(item) for item in revisions],
+                "rule_receipts": list(settled.get("rule_receipts") or []),
             }
             stream = _support.active_random_stream()
             if stream is not None and stream.draw_count > 0:
                 response["random_stream_receipt"] = stream.receipt()
-            return response
+            return project_response(response, dm=self.is_dm(campaign_id, principal_id))
 
         revisions_result = _support.StateMutationService(self.storage.database).replace(
             campaign_id,

@@ -142,6 +142,10 @@ class LocalSession:
         for key, value in revisions.items():
             if key in properties and args.get(key) is None and value is not None:
                 args[key] = value
+        if (name == "character_action" and args.get("action") == "attack_source_object"
+                and campaign and data.get("expected_campaign_revision") is None):
+            data["expected_campaign_revision"] = campaign.revision
+            args["payload"] = data
         if name == "campaign_change":
             action = args.get("action", "update")
             if action in {"short_rest_hit_die", "item_spend", "consumable_use"}:

@@ -112,6 +112,7 @@ def test_public_character_action_attacks_and_persists_a_source_object(
                 "equipped_slot": "off_hand",
                 "attunement": "attuned",
                 "mechanics": {
+                    "magical": True,
                     "attack_type": "melee",
                     "attack_ability": "strength",
                     "damage_formula": "1d6",
@@ -151,6 +152,9 @@ def test_public_character_action_attacks_and_persists_a_source_object(
             "id": "fresco-section",
             "name": "Enthralling Fresco Section",
             "scene_id": expanded["scene"]["id"],
+            "material": "stone",
+            "size": "large",
+            "resilience": "fragile",
             "armor_class": 17,
             "hit_points": 5,
             "damage_immunities": ["poison", "psychic"],
@@ -200,6 +204,12 @@ def test_public_character_action_attacks_and_persists_a_source_object(
                 "action": "attack_source_object",
                 "payload": {
                     "object": source_object,
+                    "object_ruling": {
+                        "reason": "DM review: this fresco requires magical bludgeoning to damage.",
+                        "source_excerpt": (
+                            "The enthralling fresco section has AC 17 and 5 hit points."
+                        ),
+                    },
                     "weapon_id": "mace",
                     "source_ref": source_ref,
                     "reason": "The source-defined object is within melee reach.",
@@ -240,6 +250,12 @@ def test_public_character_action_attacks_and_persists_a_source_object(
                 "action": "attack_source_object",
                 "payload": {
                     "object": source_object,
+                    "object_ruling": {
+                        "reason": "DM review: this fresco requires magical bludgeoning to damage.",
+                        "source_excerpt": (
+                            "The enthralling fresco section has AC 17 and 5 hit points."
+                        ),
+                    },
                     "weapon_id": "magic-mace",
                     "source_ref": source_ref,
                     "reason": "The source-defined object is within melee reach.",
@@ -260,6 +276,7 @@ def test_public_character_action_attacks_and_persists_a_source_object(
         assert result["object"]["damage_filter"] == {
             "allowed_damage_types": ["bludgeoning"],
             "required_any_weapon_traits": ["magical"],
+            "allowed_weapon_ids": [],
         }
         assert result["object"]["last_attack"]["weapon_traits"] == ["magical"]
         replay = await call(server, "character_action", last_arguments)

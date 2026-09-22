@@ -1773,16 +1773,57 @@ no-write `pending_ruling`, preserving the armed choice and reaction.
 
 The held spell always requires concentration, including a spell that normally
 does not. Concentration loss, the start of the caster's next turn, or combat end
-dissipates it without effect. When a normally-concentration spell is released,
-its original concentration duration continues; otherwise the holding effect
-ends. Release returns `pending_ruling`, because targeting, spell attacks, saves,
-damage, areas, and narrative consequences still require the relevant settlement
-tools and Agent-performed DM decisions. Reaction spells and activities otherwise require an
-owned pending reaction window; they cannot be invoked merely because it is not
-the actor's turn.
+dissipates it without effect. Release executes the stored declaration through
+the shared spell resolver, using the original source, payment and duration.
+Supported effects settle with the reaction; unsupported or incomplete legacy
+records return no-write `pending_ruling` while preserving the held spell and
+reaction. Reaction spells and activities otherwise require an owned pending
+reaction window; they cannot be invoked merely because it is not the actor's turn.
 Numeric attack modifiers and damage formulas supplied by a client are ignored;
 they must come from `derived.inventory.weapon_attacks` or an explicit
 Agent-performed DM ruling.
+
+Outside combat, `character_action(action="attack_source_object")` uses a separate
+2014 object damage resolver. First use supplies `object={id,name,scene_id,
+armor_class,hit_points,material,size,resilience,damage_threshold?,
+damage_immunities?,damage_resistances?,damage_vulnerabilities?,damage_filter?,
+section_of?}` and DM-only `object_ruling={reason,source_excerpt}`. The exact
+managed `source_ref` must belong to the active campaign module and scene.
+The review authorizes all profile facts as a bounded DM ruling; a citation alone
+does not authorize caller-authored AC or HP. Runtime signs and persists the
+profile, source and reviewer in the same transaction as the first attack.
+Later attacks may use `object={id,scene_id}` and omit `object_ruling`; full repeats
+must match the original profile. Remaining HP is authoritative and never reset
+from requested maximum HP. Old unsigned records require DM review preserving
+their original source, AC, maximum and remaining HP. Forks inherit immutable
+source facts while HP, RNG, CAS and attack receipts remain branch-scoped.
+
+`size` is `tiny|small|medium|large`; `resilience` is `fragile|resilient`. Huge and
+Gargantuan objects use separate sections with `section_of={id,size:huge|gargantuan}`.
+Breaking a section does not automatically destroy its parent or neighboring
+sections. `damage_filter` accepts `allowed_damage_types`,
+`required_any_weapon_traits` (`magical|adamantine`) and `allowed_weapon_ids`.
+These are reviewed applicability facts, not guesses from material or weapon name.
+Magic/material exceptions use the effective recorded weapon mechanics, including
+attunement suppression. Objects always have poison and psychic immunity. Damage
+is adjusted by type (immunity, resistance, vulnerability), then the total of that
+single attack/effect is compared with its nonnegative threshold. Meeting the
+threshold applies the full adjusted damage, not only the excess.
+
+The attack payload also requires `weapon_id`, `reason`, `source_ref` and
+`expected_campaign_revision`; top-level `expected_revision` refers to the actor.
+Local Host fills both revisions when omitted and freezes them with the operation
+ID before dispatch. Explicit circumstance `advantage`/`disadvantage` requires a
+fresh DM `attack_ruling={reason,source_excerpt}` bound to that attack's actor,
+weapon, source, branch and revisions. Ammunition and Recharge use, object HP,
+actor revision, random progress and replay receipt commit together. The object
+never enters creature death, concentration, condition or on-hit settlement.
+Unsupported special weapon effects and matching attack-after extensions require
+an object-specific source resolver and stop before dice or expenditure.
+Player responses expose only the visible outcome, their rolls and resource spend,
+and the updated actor revision. Object AC/HP/defenses, source excerpts, DM reviews,
+private character data and full transaction receipts remain DM-only. Every replay
+uses the caller's current role, including when a former DM lost that role.
 
 Every combat write should provide `expected_revision` and `idempotency_key`.
 `combat_preflight_attack` never mutates; `combat_resolve_attack`,

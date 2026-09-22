@@ -1594,6 +1594,25 @@ and context after resolving any owned defense choices. Slots and components are
 already paid. Unsupported or legacy effects return a no-write `pending_ruling`
 while retaining the original commitment; never recast or invent a completed effect.
 
+For a 2014 destructible scene object outside combat, use
+`character_action(action="attack_source_object")`. Read the exact active module
+chunk, then supply `object={id,name,scene_id,armor_class,hit_points,material,size,
+resilience,damage_threshold?,damage_immunities?,damage_resistances?,
+damage_vulnerabilities?,damage_filter?,section_of?}` with `source_ref` and the
+DM's `object_ruling={reason,source_excerpt}`. This explicit review binds every
+statistic and applicability decision; a source citation by itself is not approval
+of an invented defense. Runtime signs the profile on the first committed attack.
+Later attacks can reference only `object={id,scene_id}` and retain remaining HP.
+Use separate Large-or-smaller section IDs for Huge/Gargantuan objects and record
+`section_of={id,size}`; narrating a collapsed parent requires a separate sourced
+consequence. Poison/psychic immunity is automatic. Resistance/vulnerability apply
+before the single-attack threshold; meeting the threshold applies full adjusted
+damage. Unsupported weapon riders stop before payment and require an
+object-specific resolver. Never apply creature death, saves or conditions to a
+scene object manually. Explicit circumstance advantage/disadvantage needs a fresh
+DM `attack_ruling={reason,source_excerpt}`. Local Host supplies both actor and
+campaign revisions and freezes the original operation ID for retries.
+
 Before a module can branch on opening hours, daylight, watches, or travel time,
 remember that `state.game_time.elapsed_ticks` is the only advancing chronology
 (one tick is six seconds); `state.world_time` is an optional calendar view. Anchor

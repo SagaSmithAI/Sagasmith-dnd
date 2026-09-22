@@ -7193,15 +7193,16 @@ boundary.
     ) -> dict[str, Any]:
         """Commit one noncombat spell cast, activity, or source-defined object attack.
 
-        attack_source_object payload requires weapon_id, reason, source_ref,
-        expected_campaign_revision, and object={id,name,scene_id,armor_class,
-        hit_points,damage_immunities?}. Supply expected_revision for the actor.
-        source_ref must identify an exact managed module chunk and its checksum;
-        object statistics must follow that source. Reuse the same object id and
-        original maximum hit_points for later attacks; Runtime tracks remaining
-        HP. Each actual attack needs its own idempotency key; retries reuse it.
-        Optional advantage/disadvantage require actual circumstances. Do not
-        probe write operations with invented objects or placeholder source refs.
+        attack_source_object requires weapon_id, reason, source_ref, object,
+        expected_campaign_revision and the actor expected_revision. First use
+        requires DM-reviewed object statistics and object_ruling={reason,
+        source_excerpt}; Runtime signs and persists the exact approved profile.
+        Later attacks may reference object={id,scene_id}. AC, original HP,
+        material, size, resilience, defenses, threshold and applicability cannot
+        be replaced. Huge objects use separately identified Large-or-smaller
+        sections. Poison/psychic immunity is automatic. Advantage/disadvantage
+        require a fresh DM attack_ruling={reason,source_excerpt}. Reuse the
+        idempotency key on retries; a new attack requires a new key.
         """
         data = self.facade_payload(payload)
         if action == "cast_spell":
@@ -7247,6 +7248,19 @@ boundary.
                 idempotency_key=idempotency_key,
             )
         else:
+            unexpected = set(data) - {
+                "object",
+                "weapon_id",
+                "source_ref",
+                "reason",
+                "advantage",
+                "disadvantage",
+                "expected_campaign_revision",
+                "object_ruling",
+                "attack_ruling",
+            }
+            if unexpected:
+                raise ValueError(f"unsupported source object attack fields: {sorted(unexpected)}")
             result = self.character_source_object_attack(
                 character_id,
                 self.required(data, "object"),
@@ -7259,6 +7273,8 @@ boundary.
                 expected_revision,
                 self.required(data, "expected_campaign_revision"),
                 idempotency_key,
+                object_ruling=data.get("object_ruling"),
+                attack_ruling=data.get("attack_ruling"),
             )
         return self.facade_result(action, result)
 
