@@ -1732,12 +1732,25 @@ transaction instead:
 1. `combat_ready(action="ready_spell")` accepts only a spell with an Action casting time. It pays
    the action and the spell slot or other casting resource immediately, replaces
    any prior concentration, and records an explicit perceivable trigger.
+   Supply the original effect declaration now: the normal spell target/area
+   declaration, `target_allocations` for Magic Missile, or
+   `declaration={attacks:[{target_id,context?}, ...]}` with one entry per ray for
+   a spell attack. The Runtime stores the paid level, source card and declaration;
+   holding the spell does not apply its damage, healing or protective effect.
 2. `combat_ready(action="trigger_spell")` is a DM/owner confirmation that the trigger has
    occurred and opens an owned reaction window. It does not infer trigger truth
    from prose.
 3. `combat_ready(action="resolve_spell")` either releases the spell and consumes the
    caster's reaction, or declines that occurrence without spending the reaction.
    Declining rearms the same held spell for a later occurrence before expiry.
+   Release accepts no replacement declaration. It revalidates the stored targets
+   and uses the same authoritative effect resolver as immediate casting without
+   paying components, slots or a casting action again. A spell attack rolls its
+   first stored ray immediately; remaining rays use the returned
+   `spell_resolution_id` with their original target/context, after any defense
+   or concentration choices. Pending defense windows remain real owned choices.
+   Unsupported effects and legacy holds without a source snapshot return an
+   explicit no-write `pending_ruling`, preserving the held spell and reaction.
 
 For a generic non-spell Ready action, use `combat_common_action(action="ready")`,
 then let the Agent acting as DM confirm the trigger with

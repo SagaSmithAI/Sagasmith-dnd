@@ -585,6 +585,31 @@ class AttacksService:
         cleave_secondary_eligible. Ground them in the current scene, never invent
         coordinates to bypass a missing spatial decision. Grid mode uses its map.
         """
+        return self._settle_combat_attack(
+            campaign_id=campaign_id,
+            actor_id=actor_id,
+            target_id=target_id,
+            action=action,
+            principal_id=principal_id,
+            branch_id=branch_id,
+            expected_revision=expected_revision,
+            idempotency_key=idempotency_key,
+        )
+
+    def _settle_combat_attack(
+        self,
+        campaign_id: str,
+        actor_id: str,
+        target_id: str,
+        action: dict[str, Any] | None = None,
+        principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
+        branch_id: str | None = None,
+        expected_revision: int | None = None,
+        idempotency_key: str | None = None,
+        *,
+        spell_release: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Settle an ordinary attack or a verified paid spell continuation atomically."""
         self.require_combat_actor_or_steel_defender_owner_control(
             campaign_id, actor_id, principal_id, branch_id=branch_id
         )
@@ -614,7 +639,11 @@ class AttacksService:
             "branch_id": resolved_branch_id,
         }
         scope = f"combat-attack:{campaign_id}:{resolved_branch_id}:{principal_id}"
-        replay = self.replay_idempotent(scope, idempotency_key, payload)
+        release_fields = {}
+        if spell_release:
+            scope, payload = spell_release["scope"], spell_release["payload"]
+            release_fields = spell_release["fields"]
+        replay = None if spell_release else self.replay_idempotent(scope, idempotency_key, payload)
         if replay is not None:
             return self.combat_response(campaign_id, principal_id, replay)
         resolution_id = (
@@ -632,6 +661,8 @@ class AttacksService:
                 f"expected {expected_revision}, found {campaign.revision}"
             )
         _, encounter = self.active_encounter(campaign_id)
+        if spell_release:
+            encounter = spell_release["encounter"]
         self.validate_agent_attack_context(
             campaign_id,
             action_payload,
@@ -660,6 +691,22 @@ class AttacksService:
                 raise _support.CombatEngineError(
                     "resolve the pending save or choice before this attack"
                 )
+            if spell_resolution.get("readied_id"):
+                index = int(spell_resolution["total_attacks"]) - int(
+                    spell_resolution["remaining_attacks"]
+                )
+                stored = spell_resolution["attacks"][index]
+                stored_action = {"context": _support.deepcopy(stored.get("context") or {})}
+                self.validate_agent_attack_context(campaign_id, stored_action, encounter=encounter)
+                if (
+                    target_id != stored["target_id"]
+                    or action_payload != stored_action
+                    or cantrip_spell_id
+                    or deflect_declaration
+                ):
+                    raise _support.CombatEngineError(
+                        "readied spell attack must use its stored target and context"
+                    )
             if str(spell_resolution.get("spell_id") or "") == "":
                 raise _support.CombatEngineError("spell attack resolution has no source spell")
         else:
@@ -681,6 +728,15 @@ class AttacksService:
         target_record = self.require_campaign_actor(campaign_id, target_id)
         attacker = self.character_view(attacker_record, rules_context=rule_context)
         target = self.character_view(target_record, rules_context=rule_context)
+        settled_attacker_sheet = (
+            _support.deepcopy(spell_release["sheet"])
+            if spell_release
+            else _support.deepcopy(attacker["sheet"])
+        )
+        if spell_resolution and spell_resolution.get("readied_id"):
+            from .readied_spells import bound_sheet
+
+            attacker["sheet"] = bound_sheet(settled_attacker_sheet, spell_resolution["spell_card"])
         prepared_deflect = self._prepare_steel_defender_deflect(
             campaign_id,
             resolved_branch_id,
@@ -714,6 +770,7 @@ class AttacksService:
                     encounter=encounter,
                     context=dict(action_payload.get("context") or {}),
                     rules=rule_context,
+                    allow_out_of_turn=bool(spell_resolution.get("readied_id")),
                 )
             elif cantrip_spell_id:
                 extra_attack_feature_id = _support.SCAG_RULE_PACK_ID + ".feature.extra-attack"
@@ -822,6 +879,7 @@ class AttacksService:
                     "attack requires Agent-as-DM adjudication"
                 ) from None
             raise
+        attacker["sheet"] = settled_attacker_sheet
         if spell_resolution is not None:
             next_encounter = _support.deepcopy(encounter)
             attack_payment = {
@@ -850,6 +908,8 @@ class AttacksService:
                 ["dnd5e.core.action.multiattack_choice"],
                 "combat.attack.payment",
             )
+        if spell_release:
+            attack_payment_receipts.extend(spell_release["receipts"])
         if deflect_activity is not None:
             assert deflect_contract is not None
             assert deflect_spatial_facts is not None
@@ -1043,7 +1103,7 @@ class AttacksService:
                 },
             ][-200:]
             updates = []
-            if updated_attacker["sheet"] != attacker["sheet"]:
+            if updated_attacker["sheet"] != attacker_record.sheet:
                 updates.append(
                     _support.CharacterStateUpdate(
                         character_id=actor_id,
@@ -1057,6 +1117,7 @@ class AttacksService:
 
             def pending_attack_response(revisions: list[Any]) -> dict[str, Any]:
                 response = {
+                    **release_fields,
                     "status": "pending_reaction",
                     "resolution_id": resolution_id,
                     "thread_id": resolution_id,
@@ -1138,6 +1199,9 @@ class AttacksService:
                 ),
                 None,
             )
+        if spell_resolution and spell_resolution.get("readied_id"):
+            held_card = spell_resolution["spell_card"]
+            witch_bolt_spell = held_card if _support.is_core_witch_bolt_spell(held_card) else None
         if witch_bolt_spell is not None:
             concentration_effect = next(
                 (
@@ -1415,6 +1479,7 @@ class AttacksService:
 
         def attack_response(revisions: list[Any]) -> dict[str, Any]:
             response = {
+                **release_fields,
                 **_support._ruling_status(
                     "pending_ruling" if pending_on_hit_ruling else "committed",
                     (

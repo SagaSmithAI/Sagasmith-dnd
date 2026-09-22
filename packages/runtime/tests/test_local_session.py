@@ -224,7 +224,7 @@ def test_local_missing_material_can_resume_same_intent_after_inventory_update(
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("ready", [False, True])
+@pytest.mark.parametrize("ready", [False, True, "spell"])
 def test_one_local_attack_commits_dice_hp_and_replays_without_reroll(tmp_path, ready):
     from sagasmith_dnd.character_schema import default_character_sheet
 
@@ -248,6 +248,28 @@ def test_one_local_attack_commits_dice_hp_and_replays_without_reroll(tmp_path, r
                 },
             }]
             sheet["inventory"]["equipment_slots"]["main_hand"] = "sword"
+            if ready == "spell":
+                from sagasmith_dnd.spell_resolution import (
+                    SPELL_RESOLUTION_MECHANIC_ID,
+                    known_spell_resolution,
+                )
+
+                sheet["abilities"]["intelligence"]["score"] = 30
+                sheet["spellcasting"]["ability"] = "intelligence"
+                sheet["spellcasting"]["spell_slots"] = {
+                    "2": {"value": 1, "max": 1, "recovers_on": "long_rest"},
+                }
+                sheet["content"]["spells"] = [{
+                    "id": "test.scorching-ray", "name": "Scorching Ray", "level": 2,
+                    "grant": {"source_type": "class", "source_key": "wizard", "method": "known"},
+                    "access": {"known": True, "prepared": True},
+                    "definition": {"casting_time": "1 action",
+                                   "range": {"kind": "distance", "normal_ft": 120},
+                                   "duration": {"kind": "instantaneous", "concentration": False},
+                                   "components": {"verbal": True, "somatic": True}},
+                    "resolution": known_spell_resolution("Scorching Ray"),
+                    "mechanic_refs": [SPELL_RESOLUTION_MECHANIC_ID],
+                }]
             created = await call("character_create_from", mode="direct", payload={
                 "campaign_id": campaign["id"], "name": "Hero", "sheet": sheet,
             }, idempotency_key="hero")
@@ -272,23 +294,38 @@ def test_one_local_attack_commits_dice_hp_and_replays_without_reroll(tmp_path, r
                          "idempotency_key": "attack"}
             operation = "combat_resolve_attack"
             if ready:
-                armed = await call("combat_common_action", campaign_id=campaign["id"],
+                if ready == "spell":
+                    armed = await call("combat_ready", campaign_id=campaign["id"],
+                                       action="ready_spell", payload={
+                                           "actor_id": hero["id"], "spell_id": "test.scorching-ray",
+                                           "trigger": "the bell rings", "declaration": {
+                                               "attacks": [{"target_id": target["id"]}] * 3,
+                                           },
+                                       }, idempotency_key="ready")
+                    armed = armed["result"]
+                else:
+                    armed = await call("combat_common_action", campaign_id=campaign["id"],
                                    action="ready", trigger="the bell rings", payload={
                                        "action": "attack", "target_id": target["id"],
                                        "attack": {"weapon_id": "sword", "attack_mode": "melee"},
                                    }, idempotency_key="ready")
                 await call("combat_end_turn", campaign_id=campaign["id"], idempotency_key="end")
                 triggered = await call("combat_ready", campaign_id=campaign["id"],
-                                       action="trigger_action", payload={
+                                       action=("trigger_spell" if ready == "spell"
+                                               else "trigger_action"),
+                                       payload={
                                            "readied_id": armed["combat"]["readied"][0]["id"],
                                            "event": "the bell rings",
                                        }, idempotency_key="trigger")
                 operation = "combat_ready"
                 choice_id = triggered["result"]["combat"]["pending"][0]["id"]
-                arguments = {"campaign_id": campaign["id"], "action": "resolve_action",
+                arguments = {"campaign_id": campaign["id"],
+                             "action": "resolve_spell" if ready == "spell" else "resolve_action",
                              "payload": {"actor_id": hero["id"],
                                          "choice_id": choice_id,
                                          "release": True}, "idempotency_key": "release"}
+                if ready == "spell":
+                    arguments["payload"].pop("actor_id")
             # Actor, revision and branch are all resolved by the local authority.
             result = await runtime.execute(operation, arguments, context=identity)
             if ready:
@@ -302,6 +339,15 @@ def test_one_local_attack_commits_dice_hp_and_replays_without_reroll(tmp_path, r
             assert result["result"] == replay["result"]
             assert result["random_stream_receipt"] == replay["random_stream_receipt"]
             assert result["affected_state"] == replay["affected_state"]
+            if ready == "spell":
+                resolution_id = result["result"]["attack_payment"]["spell_resolution_id"]
+                for index in range(2):
+                    settled = await call("combat_resolve_attack", campaign_id=campaign["id"],
+                                         target_id=target["id"], action={
+                                             "spell_resolution_id": resolution_id, "context": {},
+                                         }, idempotency_key=f"ray-{index}")
+                    assert settled["status"] == "committed"
+                assert settled["combat"]["pending"] == []
         finally:
             runtime.close()
     asyncio.run(run())

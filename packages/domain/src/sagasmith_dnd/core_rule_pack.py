@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.81.0"
+CORE_RULE_PACK_VERSION = "1.82.0"
 
 
 @dataclass(frozen=True)
@@ -968,6 +968,13 @@ BOUNDARIES = (
         ("2014", "2024"),
         "combat_engine.trigger_readied_action|resolve_readied_action_window",
         ("tests/test_combat_engine.py",),
+        "bundled:srd/ready",
+    ),
+    CoreBoundary(
+        "dnd5e.core.ready.spell_release",
+        ("2014", "2024"),
+        "spells.consume_readied_spell|apply_cast_effects",
+        ("tests/test_spells.py",),
         "bundled:srd/ready",
     ),
     CoreBoundary(

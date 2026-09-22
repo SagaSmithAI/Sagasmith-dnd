@@ -20,6 +20,7 @@ from sagasmith_dnd.spells import (
     CORE_MAGIC_MISSILE_SPELL_ID,
     CORE_SHIELD_MECHANIC_ID,
     CORE_SHIELD_SPELL_ID,
+    apply_cast_effects,
     apply_core_fly_effects,
     apply_core_invisibility_effects,
     available_shield_attack_defenses,
@@ -1240,6 +1241,27 @@ def test_only_one_action_spells_can_be_readied() -> None:
     sheet["content"]["spells"] = [spell]
     with pytest.raises(ValueError, match="one action"):
         consume_readied_spell(validate_character_sheet(sheet), spell_id="healing-word")
+
+
+def test_readied_mage_armor_does_not_apply_before_release() -> None:
+    sheet = default_character_sheet()
+    sheet["spellcasting"]["spell_slots"] = {
+        "1": {"value": 1, "max": 1, "recovers_on": "long_rest"},
+    }
+    spell = _spell(CORE_MAGE_ARMOR_SPELL_ID, level=1)
+    spell["mechanic_refs"] = ["dnd5e.core.spell.mage_armor"]
+    sheet["content"]["spells"] = [spell]
+    sheet = validate_character_sheet(sheet)
+    result = consume_readied_spell(sheet, spell_id=spell["id"])
+    assert result["automatic_effect"] is None
+    assert result["effect_id"] is None
+    assert (
+        derive_character_sheet(result["sheet"])["armor_class"]
+        == derive_character_sheet(sheet)["armor_class"]
+    )
+    released = apply_cast_effects(result["sheet"], spell=spell, duration=result["effect_duration"])
+    assert released["automatic_effect"] == "mage_armor"
+    assert released["sheet"]["spellcasting"]["spell_slots"]["1"]["value"] == 0
 
 
 def test_readied_spell_requires_recorded_action_casting_time() -> None:

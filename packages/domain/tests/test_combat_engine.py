@@ -7457,6 +7457,15 @@ def test_readied_spell_trigger_can_be_declined_then_released_with_reaction() -> 
     triggered_again = trigger_readied_spell(
         declined, readied_id=readied_id, event="the goblin moves again"
     )
+    no_reaction = deepcopy(triggered_again)
+    no_reaction["combatants"][0]["turn_budget"]["reaction"] = 0
+    before = deepcopy(no_reaction)
+    with pytest.raises(ValueError, match="no reaction"):
+        resolve_readied_spell_window(
+            no_reaction, actor_id_value="first",
+            choice_id=no_reaction["pending"][0]["id"], release=True,
+        )
+    assert no_reaction == before
     released, _ = resolve_readied_spell_window(
         triggered_again,
         actor_id_value="first",

@@ -5,11 +5,58 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from sagasmith_dnd.content_packages import content_definition_checksum
+from sagasmith_dnd.core_content import build_srd2014_content
 from sagasmith_dnd.primitive_contracts import capability_manifest
 
 from .application import create_runtime
 from .config import McpConfig
+from .services.shared import SharedService
 from .skills import SkillCatalog
+
+
+def publish_builtin_lock(workspace: Path, *, refresh: bool = False) -> None:
+    """Check source content plus its exact native provider lock before publication."""
+    path = workspace / "packages/domain/src/sagasmith_dnd/data/official-expansions.lock.json"
+    lock = json.loads(path.read_text(encoding="utf-8"))
+    manifest, artifacts = build_srd2014_content(workspace / "skills")
+    manifest, errors = SharedService().bind_native_mechanic_contract(manifest, artifacts, [])
+    if errors or not artifacts:
+        raise ValueError(f"cannot publish bundled SRD contract: {errors}")
+    definition = {
+        "id": manifest["id"],
+        "version": manifest["version"],
+        "checksum": content_definition_checksum(
+            manifest=manifest, artifacts=artifacts, mechanics=[]
+        ),
+    }
+    existing = next(d for d in lock["builtin_rule_definitions"] if d["id"] == definition["id"])
+    rebinds = [r for r in lock["dependency_rebinds"] if r["dependency_id"] == definition["id"]]
+    current = existing == definition and all(
+        r["runtime_version"] == definition["version"]
+        and r["runtime_checksum"] == definition["checksum"]
+        for r in rebinds
+    )
+    if current:
+        return
+    if not refresh:
+        raise ValueError(
+            "bundled SRD native contract lock is stale; bump affected content and preset versions "
+            "and run publish --refresh-builtin-lock"
+        )
+    if existing["version"] == definition["version"] and existing != definition:
+        raise ValueError("changed built-in content requires a new immutable content version")
+    existing.update(definition)
+    for rebind in rebinds:
+        rebind.update(
+            runtime_version=definition["version"],
+            runtime_checksum=definition["checksum"],
+            basis=(
+                f"The immutable {definition['version']} built-in catalog binds the current "
+                "Runtime native contract; original source package checksums are preserved."
+            ),
+        )
+    path.write_text(json.dumps(lock, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def main() -> None:
@@ -17,8 +64,12 @@ def main() -> None:
     parser.add_argument("--workspace", type=Path, default=Path.cwd())
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--bundle", type=Path)
+    parser.add_argument("--refresh-builtin-lock", action="store_true")
     args = parser.parse_args()
     workspace = args.workspace.resolve()
+    if args.check and args.refresh_builtin_lock:
+        parser.error("--check cannot refresh an immutable content lock")
+    publish_builtin_lock(workspace, refresh=args.refresh_builtin_lock)
     with TemporaryDirectory(prefix="sagasmith-contract-") as temporary:
         home = Path(temporary)
         runtime = create_runtime(
@@ -57,39 +108,62 @@ def main() -> None:
         encoded = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
         split_actions = len(encoded) > 12_000 and bool(schema.get("allOf"))
         base = {key: value for key, value in schema.items() if key != "allOf"}
-        action_sections = [
-            (branch["if"]["properties"]["action"]["const"], branch)
-            for branch in schema.get("allOf", [])
-        ] if split_actions else []
-        lines.extend([
-            "", f"## {row['id']}", "", row["description"], "",
-            "Phases: " + (", ".join(row["phases"]) or "Host-private; not a public MCP tool."),
-            "", (
-                "Shared parameters only. Before calling, read the exact action section with "
-                "max_chars=20000: " + ", ".join(
-                    f"`{row['id']} ({action})`" for action, _ in action_sections
-                )
-                if split_actions else "Exact input schema (copy field names and nesting):"
-            ), "", "```json",
-            json.dumps(base, ensure_ascii=False, separators=(",", ":"))
-            if split_actions else encoded,
-            "```",
-        ])
-        for action, branch in action_sections:
-            lines.extend([
-                "", f"## {row['id']} ({action})", "",
-                f"Input schema for action={action}; preserve the shared authority guards.",
-                "", "```json",
-                json.dumps({**base, "allOf": [branch]}, ensure_ascii=False, separators=(",", ":")),
+        action_sections = (
+            [
+                (branch["if"]["properties"]["action"]["const"], branch)
+                for branch in schema.get("allOf", [])
+            ]
+            if split_actions
+            else []
+        )
+        lines.extend(
+            [
+                "",
+                f"## {row['id']}",
+                "",
+                row["description"],
+                "",
+                "Phases: " + (", ".join(row["phases"]) or "Host-private; not a public MCP tool."),
+                "",
+                (
+                    "Shared parameters only. Before calling, read the exact action section with "
+                    "max_chars=20000: "
+                    + ", ".join(f"`{row['id']} ({action})`" for action, _ in action_sections)
+                    if split_actions
+                    else "Exact input schema (copy field names and nesting):"
+                ),
+                "",
+                "```json",
+                json.dumps(base, ensure_ascii=False, separators=(",", ":"))
+                if split_actions
+                else encoded,
                 "```",
-            ])
+            ]
+        )
+        for action, branch in action_sections:
+            lines.extend(
+                [
+                    "",
+                    f"## {row['id']} ({action})",
+                    "",
+                    f"Input schema for action={action}; preserve the shared authority guards.",
+                    "",
+                    "```json",
+                    json.dumps(
+                        {**base, "allOf": [branch]}, ensure_ascii=False, separators=(",", ":")
+                    ),
+                    "```",
+                ]
+            )
     generated = {
         "generated-primitives.json": json.dumps(
             capability_manifest(), ensure_ascii=False, indent=2, sort_keys=True
-        ) + "\n",
+        )
+        + "\n",
         "generated-operations.json": json.dumps(
             contract, ensure_ascii=False, indent=2, sort_keys=True
-        ) + "\n",
+        )
+        + "\n",
         "generated-operations.md": "\n".join(lines) + "\n",
     }
     for name, text in generated.items():

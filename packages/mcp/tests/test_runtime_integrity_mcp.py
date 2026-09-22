@@ -919,6 +919,7 @@ def test_readied_spell_lifecycle_is_atomic_and_rule_complete(tmp_path: Path) -> 
                     "actor_id": caster["id"],
                     "spell_id": "magic-missile",
                     "trigger": "the target moves",
+                    "declaration": {"target_id": target["id"]},
                 },
                 "principal_id": "system:local",
                 "expected_revision": started["campaign_revision"],
@@ -1000,11 +1001,18 @@ def test_readied_spell_lifecycle_is_atomic_and_rule_complete(tmp_path: Path) -> 
             },
         )
         assert released["status"] == "pending_ruling"
-        assert released["combat"]["readied"] == []
-        caster_combatant = next(
-            item for item in released["combat"]["combatants"] if item["actor_id"] == caster["id"]
+        assert released["committed"] is False
+        assert released["released"] is False
+        assert released["readied"]["id"] == readied_id
+        status = await call(
+            server,
+            "combat_query",
+            {"campaign_id": campaign["id"], "view": "status"},
         )
-        assert caster_combatant["turn_budget"]["reaction"] == 0
+        caster_combatant = next(
+            item for item in status["combatants"] if item["actor_id"] == caster["id"]
+        )
+        assert caster_combatant["turn_budget"]["reaction"] == 1
         caster_after_release = await call(
             server,
             "character_query",
@@ -1014,9 +1022,25 @@ def test_readied_spell_lifecycle_is_atomic_and_rule_complete(tmp_path: Path) -> 
                 "principal_id": "system:local",
             },
         )
-        assert not any(
+        assert any(
             effect["active"] and effect["kind"] == "readied_spell"
             for effect in caster_after_release["sheet"]["effects"]
+        )
+
+        released = await call_raw(
+            server,
+            "combat_ready",
+            {
+                "campaign_id": campaign["id"],
+                "action": "resolve_spell",
+                "payload": {
+                    "actor_id": caster["id"],
+                    "choice_id": triggered_again["choice"]["id"],
+                    "release": False,
+                },
+                "expected_revision": triggered_again["campaign_revision"],
+                "idempotency_key": "decline-unowned-release",
+            },
         )
 
         caster_turn_ended = await call_raw(

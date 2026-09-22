@@ -47,8 +47,34 @@ class LocalSession:
         if campaign_id and requested and campaign_id != requested:
             raise PermissionError("local command belongs to another campaign")
         campaign_id = requested or campaign_id
+        # An owned continuation belongs to its persisted source, even on another
+        # actor's turn. Resolve that authority before falling back to the active actor.
+        owned_actor = None
+        action = args.get("action")
+        choice_id = args.get("choice_id") or data.get("choice_id")
+        has_owned_continuation = (
+            name == "combat_resolve_attack" and isinstance(action, dict)
+            and bool(action.get("spell_resolution_id"))
+        ) or (name in {"combat_choice", "combat_reaction_attack", "combat_ready"} and choice_id)
+        if campaign_id and has_owned_continuation:
+            encounter = self.services.campaigns.get(campaign_id).state.get("combat") or {}
+            if name == "combat_resolve_attack" and isinstance(action, dict):
+                resolution = dict(encounter.get("spell_resolutions") or {}).get(
+                    action.get("spell_resolution_id")
+                )
+                if isinstance(resolution, dict):
+                    owned_actor = resolution.get("caster_id")
+            elif name in {"combat_choice", "combat_reaction_attack", "combat_ready"}:
+                window = next((item for item in encounter.get("pending", [])
+                               if choice_id and item.get("id") == choice_id), None)
+                if window:
+                    owned_actor = window.get("actor_id")
+            if (owned_actor and name == "combat_ready"
+                    and action in {"resolve_spell", "resolve_action"} and not data.get("actor_id")):
+                data["actor_id"] = owned_actor
+                args["payload"] = data
         if campaign_id and "actor_id" in properties and not args.get("actor_id"):
-            current = self.context(campaign_id, {}).get("actor_id")
+            current = owned_actor or self.context(campaign_id, {}).get("actor_id")
             if current:
                 args["actor_id"] = current
         actor_keys = ("character_id", "actor_id", "source_character_id", "target_character_id")

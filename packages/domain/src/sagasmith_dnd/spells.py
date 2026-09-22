@@ -1080,6 +1080,30 @@ def consume_spell_cast(
     rules: ResolutionContext | None = None,
 ) -> dict[str, Any]:
     """Validate access and pay a spell's canonical slot or spell-point cost."""
+    return _consume_spell_cast(
+        sheet,
+        spell_id=spell_id,
+        cast_level=cast_level,
+        ritual=ritual,
+        signature_free_cast=signature_free_cast,
+        feature_cast_source=feature_cast_source,
+        component_ruling=component_ruling,
+        rules=rules,
+    )
+
+
+def _consume_spell_cast(
+    sheet: dict[str, Any],
+    *,
+    spell_id: str,
+    cast_level: int | None = None,
+    ritual: bool = False,
+    signature_free_cast: bool = False,
+    feature_cast_source: str | None = None,
+    component_ruling: dict[str, Any] | None = None,
+    rules: ResolutionContext | None = None,
+    defer_effects: bool = False,
+) -> dict[str, Any]:
     before = apply_rule_event(sheet, "spell.before", rules)
     if before.status != "committed":
         return {
@@ -1221,7 +1245,11 @@ def consume_spell_cast(
         from .spell_components import check_components, pay_components
 
         component_receipt = check_components(
-            value, spell, components, ruling=ruling, overrides=casting_overrides,
+            value,
+            spell,
+            components,
+            ruling=ruling,
+            overrides=casting_overrides,
         )
         value = pay_components(value, component_receipt)
         spellcasting = value.setdefault("spellcasting", {})
@@ -1232,9 +1260,11 @@ def consume_spell_cast(
             missing=("source_components",),
             ruling_kind="missing_or_conflicting_source_review",
         )
-    if component_receipt is None and (
-        int(components.get("material_cost_cp", 0) or 0) > 0 or components.get("consumed")
-    ) and ruling.get("material_confirmed") is not True:
+    if (
+        component_receipt is None
+        and (int(components.get("material_cost_cp", 0) or 0) > 0 or components.get("consumed"))
+        and ruling.get("material_confirmed") is not True
+    ):
         raise NeedsRulingError(
             "a costly or consumed material component needs material_confirmed "
             "from Agent-as-DM adjudication",
@@ -1361,29 +1391,14 @@ def consume_spell_cast(
         casting_overrides.get("duration") or spell.get("definition", {}).get("duration") or {}
     )
     concentration = bool(duration.get("concentration"))
-    if concentration:
-        _apply_concentration_effect(
-            value,
-            spell_id=spell_id,
-            spell_name=str(spell.get("name") or spell_id),
-            duration=duration,
-            source="spell.cast",
-        )
-    automatic_effect = None
-    effect_id = None
-    if is_core_mage_armor_spell(spell):
-        effect_id = _apply_mage_armor_effect(
-            value,
-            spell_id=spell_id,
-            source="spell.cast",
-        )
-        automatic_effect = "mage_armor"
-    elif is_core_blade_ward_spell(spell):
-        effect_id = _apply_blade_ward_effect(
-            value,
-            spell_id=spell_id,
-        )
-        automatic_effect = "blade_ward"
+    effects = (
+        {"sheet": value, "automatic_effect": None, "effect_id": None}
+        if defer_effects
+        else apply_cast_effects(value, spell=spell, duration=duration)
+    )
+    value = effects["sheet"]
+    automatic_effect = effects["automatic_effect"]
+    effect_id = effects["effect_id"]
     after = apply_rule_event(value, "spell.after", rules)
     if after.status != "committed":
         return {
@@ -1397,8 +1412,11 @@ def consume_spell_cast(
         *(["source_components"] if source_components_unknown and component_receipt is None else []),
         *(["verbal_component"] if components.get("verbal") and component_receipt is None else []),
         *(["somatic_component"] if components.get("somatic") and component_receipt is None else []),
-        *(["material_component"]
-          if components.get("material") and component_receipt is None else []),
+        *(
+            ["material_component"]
+            if components.get("material") and component_receipt is None
+            else []
+        ),
         *(
             ["targets_and_effect"]
             if automatic_effect is None and not isinstance(spell.get("resolution"), dict)
@@ -1412,7 +1430,7 @@ def consume_spell_cast(
         "payment": paid,
         "casting_overrides_applied": casting_overrides,
         "component_receipt": component_receipt,
-        "concentration_started": concentration,
+        "concentration_started": concentration and not defer_effects,
         "automatic_effect": automatic_effect,
         "effect_id": effect_id,
         "ended_invisibility_effect_ids": ended_invisibility_effect_ids,
@@ -1425,8 +1443,11 @@ def consume_spell_cast(
                 [
                     "dnd5e.core.spell.cantrip_ritual_level",
                     "dnd5e.core.spell.material_components",
-                    *(["dnd5e.core.spell.component_eligibility"]
-                      if component_receipt is not None else []),
+                    *(
+                        ["dnd5e.core.spell.component_eligibility"]
+                        if component_receipt is not None
+                        else []
+                    ),
                     *([CORE_BLADE_WARD_MECHANIC_ID] if automatic_effect == "blade_ward" else []),
                     *(
                         ["dnd5e.core.spell.pact_magic"]
@@ -1441,6 +1462,38 @@ def consume_spell_cast(
         ],
         "ruleset_fingerprint": rules.fingerprint if rules else "",
     }
+
+
+def apply_cast_effects(
+    sheet: dict[str, Any],
+    *,
+    spell: dict[str, Any],
+    duration: dict[str, Any],
+    off_turn: bool = False,
+) -> dict[str, Any]:
+    """Settle built-in effects after payment; Ready calls this only on release."""
+    value = deepcopy(sheet)
+    spell_id = str(spell["id"])
+    if duration.get("concentration"):
+        _apply_concentration_effect(
+            value,
+            spell_id=spell_id,
+            spell_name=str(spell.get("name") or spell_id),
+            duration=duration,
+            source="spell.cast",
+        )
+    automatic_effect = None
+    effect_id = None
+    if is_core_mage_armor_spell(spell):
+        effect_id = _apply_mage_armor_effect(value, spell_id=spell_id, source="spell.cast")
+        automatic_effect = "mage_armor"
+    elif is_core_blade_ward_spell(spell):
+        effect_id = _apply_blade_ward_effect(value, spell_id=spell_id)
+        automatic_effect = "blade_ward"
+        if off_turn:
+            effect = next(item for item in value["effects"] if item["id"] == effect_id)
+            effect["duration"]["remaining"] = 1
+    return {"sheet": value, "automatic_effect": automatic_effect, "effect_id": effect_id}
 
 
 def _is_spell_mastery_choice(sheet: dict[str, Any], spell_id: str) -> bool:
@@ -1495,13 +1548,14 @@ def consume_readied_spell(
     if not (normalized_casting_time == "action" or normalized_casting_time.startswith("1 action")):
         raise CombatEngineError("only a spell with a casting time of one action can be readied")
 
-    applied = consume_spell_cast(
+    applied = _consume_spell_cast(
         sheet,
         spell_id=spell_id,
         cast_level=cast_level,
         ritual=False,
         component_ruling=component_ruling,
         rules=rules,
+        defer_effects=True,
     )
     if applied.get("status") != "committed":
         return applied
@@ -1511,19 +1565,13 @@ def consume_readied_spell(
             effect["active"] = False
             effect["ended_reason"] = "replaced_by_readied_spell"
 
-    duration = dict(spell.get("definition", {}).get("duration") or {})
+    duration = dict(
+        dict(applied.get("casting_overrides_applied") or {}).get("duration")
+        or spell.get("definition", {}).get("duration")
+        or {}
+    )
     release_concentration = bool(duration.get("concentration"))
     holding_effect = None
-    if release_concentration:
-        candidates = [
-            effect
-            for effect in value.get("effects", [])
-            if effect.get("source_spell_id") == spell_id and effect.get("concentration")
-        ]
-        if candidates:
-            holding_effect = candidates[-1]
-            holding_effect["active"] = True
-            holding_effect.pop("ended_reason", None)
     if holding_effect is None:
         holding_effect = {
             "id": f"readied-spell-{uuid4().hex}",
@@ -1538,8 +1586,15 @@ def consume_readied_spell(
             "description": "",
         }
         value.setdefault("effects", []).append(holding_effect)
-    release_duration = dict(holding_effect.get("duration") or {})
-    release_kind = str(holding_effect.get("kind") or "concentration")
+    release_duration = (
+        {
+            "period": _duration_period(str(duration.get("unit") or "")),
+            "remaining": int(duration.get("value", 0) or 0),
+        }
+        if release_concentration
+        else {"period": "manual", "remaining": 0}
+    )
+    release_kind = "concentration"
     holding_effect["duration"] = {"period": "manual", "remaining": 0}
     holding_effect["kind"] = "readied_spell"
     holding_effect["source"] = "spell.ready"
@@ -1548,9 +1603,12 @@ def consume_readied_spell(
         "sheet": value,
         "casting_time": normalized_casting_time,
         "holding_effect_id": holding_effect["id"],
+        "concentration_started": True,
+        "spell_effects_deferred": True,
         "release_concentration": release_concentration,
         "release_duration": release_duration,
         "release_effect_kind": release_kind,
+        "effect_duration": duration,
     }
 
 

@@ -903,6 +903,47 @@ class SpellsService:
         records payment and adjudication, not automatic target HP/condition changes.
         Resolve remaining source-grounded consequences through their public tools.
         """
+        return self._settle_combat_spell(
+            campaign_id=campaign_id,
+            actor_id=actor_id,
+            spell_id=spell_id,
+            cast_level=cast_level,
+            ritual=ritual,
+            signature_free_cast=signature_free_cast,
+            feature_cast_source=feature_cast_source,
+            component_ruling=component_ruling,
+            source_item_id=source_item_id,
+            choice_id=choice_id,
+            principal_id=principal_id,
+            expected_revision=expected_revision,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            target_allocations=target_allocations,
+            declaration=declaration,
+        )
+
+    def _settle_combat_spell(
+        self,
+        campaign_id: str,
+        actor_id: str,
+        spell_id: str,
+        cast_level: int | None = None,
+        ritual: _support.StrictBool = False,
+        signature_free_cast: _support.StrictBool = False,
+        feature_cast_source: str | None = None,
+        component_ruling: dict[str, Any] | None = None,
+        source_item_id: str | None = None,
+        choice_id: str | None = None,
+        principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None,
+        branch_id: str | None = None,
+        idempotency_key: str | None = None,
+        target_allocations: list[dict[str, Any]] | None = None,
+        declaration: dict[str, Any] | None = None,
+        *,
+        ready_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Validate a normal cast or settle a verified paid Ready source through one resolver."""
         ritual = _support._strict_boolean(ritual, "ritual")
         signature_free_cast = _support._strict_boolean(signature_free_cast, "signature_free_cast")
         self.access.require_actor(campaign_id, actor_id, principal_id, control=True)
@@ -923,7 +964,9 @@ class SpellsService:
             "branch_id": resolved_branch_id,
         }
         scope = f"combat-cast:{campaign_id}:{resolved_branch_id}:{principal_id}"
-        replay = self.replay_idempotent(scope, idempotency_key, payload)
+        if ready_context and not ready_context.get("validate_only"):
+            scope, payload = ready_context["scope"], ready_context["payload"]
+        replay = None if ready_context else self.replay_idempotent(scope, idempotency_key, payload)
         if replay is not None:
             return self.combat_response(campaign_id, principal_id, replay)
         if source_item_id and (signature_free_cast or feature_cast_source):
@@ -937,6 +980,25 @@ class SpellsService:
                 f"expected {expected_revision}, found {campaign.revision}"
             )
         current = self.characters.get(actor_id)
+        if ready_context:
+            from dataclasses import replace
+
+            from .readied_spells import bound_sheet
+
+            current = replace(
+                current, sheet=bound_sheet(current.sheet, ready_context["spell_card"])
+            )
+            if not ready_context.get("validate_only"):
+                encounter = ready_context["encounter"]
+        ready_fields = (
+            {}
+            if not ready_context or ready_context.get("validate_only")
+            else {
+                "released": True,
+                "readied_id": ready_context["id"],
+                "declaration": _support.deepcopy(declaration or {}),
+            }
+        )
         spell_entry = (
             _support.magic_item_spell_card(
                 current.sheet,
@@ -1020,14 +1082,14 @@ class SpellsService:
                 "target_allocations are currently executable only for source-bound Magic Missile"
             )
         agent_positioning = encounter.get("positioning_mode") == "agent"
-        if agent_positioning and (
-            magic_missile or "spatial_facts" in dict(declaration or {})
-        ):
+        if agent_positioning and (magic_missile or "spatial_facts" in dict(declaration or {})):
             self.access.require_campaign(
                 campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES
             )
-        if magic_missile and declaration and not (
-            agent_positioning and set(declaration) == {"target_spatial_facts"}
+        if (
+            magic_missile
+            and declaration
+            and not (agent_positioning and set(declaration) == {"target_spatial_facts"})
         ):
             raise _support.CombatEngineError(
                 "Magic Missile uses target_allocations, not declaration"
@@ -1379,7 +1441,22 @@ class SpellsService:
         if structured_resolution is not None:
             kind = str(structured_resolution.get("kind") or "")
             if kind == "spell_attack":
-                if declaration:
+                if ready_context:
+                    from .readied_spells import validate_attacks
+
+                    validate_attacks(
+                        self,
+                        campaign_id,
+                        encounter,
+                        actor_id,
+                        current.sheet,
+                        spell_entry,
+                        structured_resolution,
+                        int(ready_context["applied"]["cast_level"]),
+                        declaration,
+                        principal_id,
+                    )
+                elif declaration:
                     raise _support.CombatEngineError(
                         "spell attack targets are selected one attack at a time after casting"
                     )
@@ -1458,69 +1535,86 @@ class SpellsService:
             target_ids=harmful_target_ids,
             known_actor_ids=self.encounter_actor_ids(encounter),
         )
-        from .spell_components import preflight
+        if ready_context:
+            applied = _support.deepcopy(ready_context["applied"])
+            rules = self.effective_rule_context(
+                campaign_id,
+                facts={
+                    "actor_id": actor_id,
+                    "spell_id": spell_id,
+                    "cast_level": cast_level,
+                    "readied_release": True,
+                },
+            )
+        else:
+            from .spell_components import preflight
 
-        component_check = preflight(
-            self, campaign_id=campaign_id, principal_id=principal_id, sheet=current.sheet,
-            spell=spell_entry, component_ruling=component_ruling,
-            feature_cast_source=feature_cast_source, source_item_id=source_item_id,
-        )
-        perception_spell = _support.deepcopy(spell_entry)
-        if component_check.get("status") == "satisfied":
-            perception_spell.setdefault("definition", {})["components"] = (
-                component_check["required"]
-            )
-            perception_spell["custom_definition"] = {
-                key: value for key, value in dict(
-                    perception_spell.get("custom_definition") or {}
-                ).items() if key != "component_details"
-            }
-        visibility_preview = _support.deepcopy(encounter)
-        self.apply_cast_visibility_ruling(
-            visibility_preview,
-            campaign_id,
-            actor_id,
-            perception_spell,
-            component_ruling,
-            principal_id,
-        )
-        rules = self.effective_rule_context(
-            campaign_id,
-            facts={
-                "actor_id": actor_id,
-                "spell_id": spell_id,
-                "cast_level": cast_level,
-                "source_item_id": source_item_id,
-                "feature_cast_source": feature_cast_source,
-            },
-        )
-        applied = (
-            _support.consume_magic_item_spell_cast(
-                current.sheet,
-                source_item_id=source_item_id,
-                spell_id=spell_id,
-                cast_level=cast_level,
-                ritual=ritual,
-                rules=rules,
+            component_check = preflight(
+                self,
+                campaign_id=campaign_id,
+                principal_id=principal_id,
+                sheet=current.sheet,
+                spell=spell_entry,
                 component_ruling=component_ruling,
-            )
-            if source_item_id
-            else _support.consume_spell_cast(
-                current.sheet,
-                spell_id=spell_id,
-                cast_level=cast_level,
-                ritual=ritual,
-                signature_free_cast=signature_free_cast,
                 feature_cast_source=feature_cast_source,
-                component_ruling=component_ruling,
+                source_item_id=source_item_id,
+            )
+            perception_spell = _support.deepcopy(spell_entry)
+            if component_check.get("status") == "satisfied":
+                perception_spell.setdefault("definition", {})["components"] = component_check[
+                    "required"
+                ]
+                perception_spell["custom_definition"] = {
+                    key: value
+                    for key, value in dict(perception_spell.get("custom_definition") or {}).items()
+                    if key != "component_details"
+                }
+            visibility_preview = _support.deepcopy(encounter)
+            self.apply_cast_visibility_ruling(
+                visibility_preview,
+                campaign_id,
+                actor_id,
+                perception_spell,
+                component_ruling,
+                principal_id,
+            )
+            rules = self.effective_rule_context(
+                campaign_id,
+                facts={
+                    "actor_id": actor_id,
+                    "spell_id": spell_id,
+                    "cast_level": cast_level,
+                    "source_item_id": source_item_id,
+                    "feature_cast_source": feature_cast_source,
+                },
+            )
+            applied = (
+                _support.consume_magic_item_spell_cast(
+                    current.sheet,
+                    source_item_id=source_item_id,
+                    spell_id=spell_id,
+                    cast_level=cast_level,
+                    ritual=ritual,
+                    rules=rules,
+                    component_ruling=component_ruling,
+                )
+                if source_item_id
+                else _support.consume_spell_cast(
+                    current.sheet,
+                    spell_id=spell_id,
+                    cast_level=cast_level,
+                    ritual=ritual,
+                    signature_free_cast=signature_free_cast,
+                    feature_cast_source=feature_cast_source,
+                    component_ruling=component_ruling,
+                    rules=rules,
+                )
+            )
+            applied = self.settle_magic_item_last_charge(
+                applied,
+                source_item_id=source_item_id,
                 rules=rules,
             )
-        )
-        applied = self.settle_magic_item_last_charge(
-            applied,
-            source_item_id=source_item_id,
-            rules=rules,
-        )
         if applied.get("status") in _support.PENDING_RULE_RESULT_STATUSES:
             return {
                 **_support._ruling_status(
@@ -1540,7 +1634,7 @@ class SpellsService:
             payment = "bonus_action"
         elif normalized_casting_time.startswith(("reaction", "1 reaction")):
             payment = "reaction"
-        elif normalized_casting_time.startswith("1 action"):
+        elif normalized_casting_time == "action" or normalized_casting_time.startswith("1 action"):
             payment = "main_action"
         else:
             raise _support.NeedsRulingError(
@@ -1548,29 +1642,32 @@ class SpellsService:
                 missing=("casting_time",),
                 ruling_kind="source_or_scene_fact",
             )
-        if payment == "reaction":
-            window = next(
-                (
-                    item
-                    for item in encounter.get("pending", [])
-                    if item.get("id") == choice_id
-                    and item.get("kind") == "reaction"
-                    and item.get("actor_id") == actor_id
-                    and item.get("status", "pending") == "pending"
-                ),
-                None,
-            )
-            if window is None:
-                raise _support.CombatEngineError(
-                    "a reaction spell requires its owned pending reaction choice_id"
+        if not ready_context:
+            if payment == "reaction":
+                window = next(
+                    (
+                        item
+                        for item in encounter.get("pending", [])
+                        if item.get("id") == choice_id
+                        and item.get("kind") == "reaction"
+                        and item.get("actor_id") == actor_id
+                        and item.get("status", "pending") == "pending"
+                    ),
+                    None,
                 )
-            if any(
-                item.get("status", "pending") == "pending" and item.get("id") != choice_id
-                for item in encounter.get("pending", [])
-            ):
-                raise _support.CombatEngineError("resolve the earlier pending save or choice first")
-        else:
-            self.require_no_blocking_pending(encounter)
+                if window is None:
+                    raise _support.CombatEngineError(
+                        "a reaction spell requires its owned pending reaction choice_id"
+                    )
+                if any(
+                    item.get("status", "pending") == "pending" and item.get("id") != choice_id
+                    for item in encounter.get("pending", [])
+                ):
+                    raise _support.CombatEngineError(
+                        "resolve the earlier pending save or choice first"
+                    )
+            else:
+                self.require_no_blocking_pending(encounter)
 
         normalized_allocations: list[dict[str, Any]] | None = None
         if magic_missile:
@@ -1582,74 +1679,81 @@ class SpellsService:
                 target_spatial_facts=dict(declaration or {}).get("target_spatial_facts"),
             )
 
+        if ready_context and ready_context.get("validate_only"):
+            return {"status": "ready_validated"}
         spell_level = int(spell_entry.get("level", 0) or 0)
-        spent_slot = applied["payment"].get("economy") in _support.SLOT_PAYMENT_ECONOMIES
-        self.require_combat_spell_turn_legal(
-            encounter,
-            actor_id=actor_id,
-            payment=payment,
-            spell_level=spell_level,
-            casting_time=normalized_casting_time,
-            spent_slot=spent_slot,
-        )
-        next_encounter = _support.resolve_common_action(
-            encounter,
-            actor_id_value=actor_id,
-            action="cast",
-            payload={
-                "spell_id": spell_id,
-                "cast_level": cast_level,
-                "ritual": ritual,
-                "source_item_id": source_item_id,
-                **(
-                    {"agent_resolution_commitment": (semantic_plan_commitment)}
-                    if semantic_plan_commitment is not None
-                    else {}
-                ),
-                **(
-                    {"agent_ruling": _support.deepcopy(standard_spell_agent_ruling)}
-                    if standard_spell_agent_ruling is not None
-                    else {}
-                ),
-            },
-            payment=payment,
-        )
-        cast_ended_tethers = _support.newly_ended_witch_bolt_tethers(
-            encounter,
-            next_encounter,
-            source_actor_id=actor_id,
-        )
-        if cast_ended_tethers:
-            applied["sheet"] = _support.end_tether_concentrations(
-                applied["sheet"],
-                cast_ended_tethers,
-            )["sheet"]
-        self.apply_cast_visibility_ruling(
-            next_encounter,
-            campaign_id,
-            actor_id,
-            perception_spell,
-            component_ruling,
-            principal_id,
-        )
-        if payment == "reaction":
-            assert choice_id is not None
-            next_encounter = _support.resolve_choice_window(
-                next_encounter,
-                choice_id=choice_id,
-                actor_id_value=actor_id,
-                selection={"id": spell_id, "kind": "reaction_spell"},
+        if ready_context:
+            next_encounter = _support.deepcopy(encounter)
+            self.require_no_blocking_pending(next_encounter)
+        else:
+            spell_level = int(spell_entry.get("level", 0) or 0)
+            spent_slot = applied["payment"].get("economy") in _support.SLOT_PAYMENT_ECONOMIES
+            self.require_combat_spell_turn_legal(
+                encounter,
+                actor_id=actor_id,
+                payment=payment,
+                spell_level=spell_level,
+                casting_time=normalized_casting_time,
+                spent_slot=spent_slot,
             )
-        self.record_combat_spell_cast(
-            next_encounter,
-            actor_id=actor_id,
-            spell_id=spell_id,
-            spell_level=spell_level,
-            payment=payment,
-            casting_time=normalized_casting_time,
-            spent_slot=spent_slot,
-            source_item_id=source_item_id,
-        )
+            next_encounter = _support.resolve_common_action(
+                encounter,
+                actor_id_value=actor_id,
+                action="cast",
+                payload={
+                    "spell_id": spell_id,
+                    "cast_level": cast_level,
+                    "ritual": ritual,
+                    "source_item_id": source_item_id,
+                    **(
+                        {"agent_resolution_commitment": (semantic_plan_commitment)}
+                        if semantic_plan_commitment is not None
+                        else {}
+                    ),
+                    **(
+                        {"agent_ruling": _support.deepcopy(standard_spell_agent_ruling)}
+                        if standard_spell_agent_ruling is not None
+                        else {}
+                    ),
+                },
+                payment=payment,
+            )
+            cast_ended_tethers = _support.newly_ended_witch_bolt_tethers(
+                encounter,
+                next_encounter,
+                source_actor_id=actor_id,
+            )
+            if cast_ended_tethers:
+                applied["sheet"] = _support.end_tether_concentrations(
+                    applied["sheet"],
+                    cast_ended_tethers,
+                )["sheet"]
+            self.apply_cast_visibility_ruling(
+                next_encounter,
+                campaign_id,
+                actor_id,
+                perception_spell,
+                component_ruling,
+                principal_id,
+            )
+            if payment == "reaction":
+                assert choice_id is not None
+                next_encounter = _support.resolve_choice_window(
+                    next_encounter,
+                    choice_id=choice_id,
+                    actor_id_value=actor_id,
+                    selection={"id": spell_id, "kind": "reaction_spell"},
+                )
+            self.record_combat_spell_cast(
+                next_encounter,
+                actor_id=actor_id,
+                spell_id=spell_id,
+                spell_level=spell_level,
+                payment=payment,
+                casting_time=normalized_casting_time,
+                spent_slot=spent_slot,
+                source_item_id=source_item_id,
+            )
         resolved_cast_level = int(applied.get("cast_level", cast_level or spell_level) or 0)
         if fly:
             assert fly_target is not None
@@ -1743,6 +1847,7 @@ class SpellsService:
                 scope=scope,
                 payload=payload,
                 response_fields={
+                    **ready_fields,
                     "status": "committed",
                     "result": result,
                     "combat": next_encounter,
@@ -1863,6 +1968,7 @@ class SpellsService:
                 scope=scope,
                 payload=payload,
                 response_fields={
+                    **ready_fields,
                     "status": "committed",
                     "result": result,
                     "combat": next_encounter,
@@ -2111,6 +2217,7 @@ class SpellsService:
                 scope=scope,
                 payload=payload,
                 response_fields={
+                    **ready_fields,
                     "status": "committed",
                     "result": result,
                     "combat": next_encounter,
@@ -2148,6 +2255,15 @@ class SpellsService:
                     structured_resolution, cast_level=resolved_cast_level
                 )
                 resolution_id = f"spell-resolution-{_support.uuid4().hex}"
+                if ready_context:
+                    resolution_id = (
+                        "spell-resolution-"
+                        + _support.hashlib.sha256(
+                            f"{campaign_id}:{resolved_branch_id}:{ready_context['id']}:{idempotency_key}".encode(
+                                "utf-8"
+                            )
+                        ).hexdigest()[:32]
+                    )
                 resolution = {
                     "id": resolution_id,
                     "kind": "spell_attack",
@@ -2158,6 +2274,12 @@ class SpellsService:
                     "remaining_attacks": total_attacks,
                     "results": [],
                 }
+                if ready_context:
+                    resolution.update(
+                        readied_id=ready_context["id"],
+                        spell_card=_support.deepcopy(spell_entry),
+                        attacks=_support.deepcopy(declaration["attacks"]),
+                    )
                 resolutions = dict(next_encounter.get("spell_resolutions") or {})
                 resolutions[resolution_id] = resolution
                 next_encounter["spell_resolutions"] = resolutions
@@ -2183,6 +2305,29 @@ class SpellsService:
                         "attack_count": total_attacks,
                     },
                 ][-100:]
+                if ready_context:
+                    first = resolution["attacks"][0]
+                    return self._settle_combat_attack(
+                        campaign_id,
+                        actor_id,
+                        first["target_id"],
+                        action={
+                            "spell_resolution_id": resolution_id,
+                            "context": _support.deepcopy(first.get("context") or {}),
+                        },
+                        principal_id=principal_id,
+                        branch_id=resolved_branch_id,
+                        expected_revision=expected_revision,
+                        idempotency_key=idempotency_key,
+                        spell_release={
+                            "encounter": next_encounter,
+                            "sheet": applied["sheet"],
+                            "scope": scope,
+                            "payload": payload,
+                            "fields": ready_fields,
+                            "receipts": structured_receipts,
+                        },
+                    )
                 next_state = {**dict(campaign.state or {}), "combat": next_encounter}
                 response = self.commit_campaign_state(
                     campaign,
@@ -2194,6 +2339,7 @@ class SpellsService:
                     scope=scope,
                     payload=payload,
                     response_fields={
+                        **ready_fields,
                         "status": "pending_resolution",
                         "result": {
                             "kind": structured_kind,
@@ -2294,6 +2440,7 @@ class SpellsService:
                     scope=scope,
                     payload=payload,
                     response_fields={
+                        **ready_fields,
                         "status": "committed",
                         "result": result,
                         "combat": next_encounter,
@@ -2459,6 +2606,7 @@ class SpellsService:
                 scope=scope,
                 payload=payload,
                 response_fields={
+                    **ready_fields,
                     **_support._ruling_status(
                         "pending_ruling" if pending_rulings else "committed",
                         "generic_spell_effect",
@@ -2551,6 +2699,7 @@ class SpellsService:
                     scope=scope,
                     payload=payload,
                     response_fields={
+                        **ready_fields,
                         "status": "pending_reaction",
                         "result": {
                             "kind": "magic_missile",
@@ -2614,6 +2763,7 @@ class SpellsService:
                 scope=scope,
                 payload=payload,
                 response_fields={
+                    **ready_fields,
                     "status": "committed",
                     "result": {
                         **result,
@@ -2636,6 +2786,19 @@ class SpellsService:
                 ],
             )
             return self.combat_response(campaign_id, principal_id, response)
+        if (
+            ready_context
+            and not applied.get("automatic_effect")
+            and standard_spell_agent_ruling is None
+        ):
+            return {
+                **_support._ruling_status("pending_ruling", "ready_release_effect"),
+                "committed": False,
+                "released": False,
+                "readied": _support.deepcopy(ready_context["record"]),
+                "declaration": _support.deepcopy(declaration or {}),
+                "campaign_revision": campaign.revision,
+            }
         self.sync_combatant_conditions(next_encounter, actor_id, applied["sheet"])
         if compiled_spell_plan is not None:
             applied["semantic_plan"] = {
@@ -2661,6 +2824,7 @@ class SpellsService:
             scope=scope,
             payload=payload,
             response_fields={
+                **ready_fields,
                 **_support._ruling_status(
                     (
                         "committed"
@@ -2705,6 +2869,7 @@ class SpellsService:
         branch_id: str | None = None,
         idempotency_key: str | None = None,
         component_ruling: dict[str, Any] | None = None,
+        target_allocations: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Cast and hold a one-action spell, paying its action, slot, and concentration now."""
         self.access.require_actor(campaign_id, actor_id, principal_id, control=True)
@@ -2716,6 +2881,7 @@ class SpellsService:
             "trigger": trigger,
             "cast_level": cast_level,
             "component_ruling": component_ruling or {},
+            "target_allocations": target_allocations,
             "declaration": declaration or {},
             "branch_id": resolved_branch_id,
         }
@@ -2738,14 +2904,62 @@ class SpellsService:
         )
         from .spell_components import preflight
 
-        preflight(
-            self, campaign_id=campaign_id, principal_id=principal_id, sheet=current.sheet,
-            spell=spell_entry, component_ruling=component_ruling,
-        )
-        applied = _support.consume_readied_spell(
-            current.sheet, spell_id=spell_id, cast_level=cast_level,
+        component_check = preflight(
+            self,
+            campaign_id=campaign_id,
+            principal_id=principal_id,
+            sheet=current.sheet,
+            spell=spell_entry,
             component_ruling=component_ruling,
         )
+        perception_spell = _support.deepcopy(spell_entry)
+        if component_check.get("status") == "satisfied":
+            perception_spell.setdefault("definition", {})["components"] = component_check[
+                "required"
+            ]
+            perception_spell["custom_definition"] = {
+                key: value
+                for key, value in dict(perception_spell.get("custom_definition") or {}).items()
+                if key != "component_details"
+            }
+        visibility_preview = _support.deepcopy(encounter)
+        self.apply_cast_visibility_ruling(
+            visibility_preview,
+            campaign_id,
+            actor_id,
+            perception_spell,
+            component_ruling,
+            principal_id,
+        )
+        applied = _support.consume_readied_spell(
+            current.sheet,
+            spell_id=spell_id,
+            cast_level=cast_level,
+            component_ruling=component_ruling,
+            rules=self.effective_rule_context(campaign_id),
+        )
+        if applied.get("status") != "committed":
+            return {
+                **_support._ruling_status(applied["status"], "ready_cast"),
+                "committed": False,
+                "campaign_revision": campaign.revision,
+                "result": {key: item for key, item in applied.items() if key != "sheet"},
+            }
+        validation = self._settle_combat_spell(
+            campaign_id,
+            actor_id,
+            spell_id,
+            cast_level=int(applied["cast_level"]),
+            principal_id=principal_id,
+            expected_revision=expected_revision,
+            branch_id=resolved_branch_id,
+            idempotency_key=idempotency_key,
+            target_allocations=target_allocations,
+            declaration=declaration,
+            ready_context={"validate_only": True, "spell_card": spell_entry, "applied": applied},
+        )
+        if validation.get("status") != "ready_validated":
+            return {**validation, "committed": False}
         spell_level = int(spell_entry.get("level", 0) or 0)
         spent_slot = applied["payment"].get("economy") in _support.SLOT_PAYMENT_ECONOMIES
         self.require_combat_spell_turn_legal(
@@ -2773,6 +2987,22 @@ class SpellsService:
             release_duration=applied["release_duration"],
             release_effect_kind=applied["release_effect_kind"],
             declaration=declaration,
+        )
+        readied = next_encounter["readied"][-1]
+        readied.update(
+            spell_card=_support.deepcopy(spell_entry),
+            paid_cast={
+                key: _support.deepcopy(item) for key, item in applied.items() if key != "sheet"
+            },
+            target_allocations=_support.deepcopy(target_allocations),
+        )
+        self.apply_cast_visibility_ruling(
+            next_encounter,
+            campaign_id,
+            actor_id,
+            perception_spell,
+            component_ruling,
+            principal_id,
         )
         self.record_combat_spell_cast(
             next_encounter,
@@ -2940,6 +3170,8 @@ class SpellsService:
         )
         if readied is None or readied.get("actor_id") != actor_id:
             raise _support.CombatEngineError("choice_id is not this actor's readied spell")
+        if declaration is not None and declaration != readied.get("declaration", {}):
+            raise _support.CombatEngineError("release cannot replace the stored spell declaration")
         actor = self.characters.get(actor_id)
         sheet = _support.deepcopy(actor.sheet)
         holding_effect = next(
@@ -2950,7 +3182,11 @@ class SpellsService:
             ),
             None,
         )
-        if holding_effect is None or not holding_effect.get("active"):
+        if (
+            holding_effect is None
+            or not holding_effect.get("active")
+            or not holding_effect.get("concentration")
+        ):
             next_encounter = _support.deepcopy(encounter)
             expired = _support.reconcile_readied_spells(next_encounter, actor_id, sheet)
             next_state = {**dict(campaign.state or {}), "combat": next_encounter}
@@ -2974,6 +3210,15 @@ class SpellsService:
             str(item.get("id")) for item in _support.available_reactions(encounter, actor_id)
         }:
             raise _support.CombatEngineError("actor cannot take this reaction")
+        if release and (not readied.get("spell_card") or not readied.get("paid_cast")):
+            return {
+                **_support._ruling_status("pending_ruling", "ready_release_effect"),
+                "committed": False,
+                "released": False,
+                "readied": _support.deepcopy(readied),
+                "declaration": _support.deepcopy(readied.get("declaration") or {}),
+                "campaign_revision": campaign.revision,
+            }
         next_encounter, resolved = _support.resolve_readied_spell_window(
             encounter,
             actor_id_value=actor_id,
@@ -2982,23 +3227,53 @@ class SpellsService:
         )
         updates: list[_support.CharacterStateUpdate] = []
         if release:
-            if resolved.get("release_concentration"):
-                holding_effect["kind"] = resolved.get("release_effect_kind") or "concentration"
-                holding_effect["source"] = "spell.cast"
-                holding_effect["duration"] = _support.deepcopy(
-                    resolved.get("release_duration") or {}
-                )
-            else:
-                holding_effect["active"] = False
-            sheet = _support.validate_character_sheet(sheet)
-            updates.append(
-                _support.CharacterStateUpdate(
-                    character_id=actor_id,
-                    sheet=sheet,
-                    notes=_support.validate_character_notes(actor.notes),
-                    expected_revision=actor.revision,
-                )
+            from .readied_spells import release_effects
+
+            active = encounter["combatants"][int(encounter.get("turn_index", 0))]
+            applied = release_effects(sheet, resolved, off_turn=active["actor_id"] != actor_id)
+            applied["rule_receipts"] = _support.core_receipts(
+                self.effective_rule_context(campaign_id),
+                ["dnd5e.core.ready.spell_release"],
+                "combat.spell.ready.release",
             )
+            next_encounter["log"] = [
+                *list(next_encounter.get("log") or []),
+                {
+                    "type": "readied_spell_released",
+                    "actor_id": actor_id,
+                    "readied_id": resolved["id"],
+                    "spell_id": resolved["spell_id"],
+                    "declaration": _support.deepcopy(resolved.get("declaration") or {}),
+                },
+            ][-100:]
+            response = self._settle_combat_spell(
+                campaign_id,
+                actor_id,
+                resolved["spell_id"],
+                cast_level=int(applied["cast_level"]),
+                principal_id=principal_id,
+                expected_revision=expected_revision,
+                branch_id=resolved_branch_id,
+                idempotency_key=idempotency_key,
+                declaration=_support.deepcopy(resolved.get("declaration") or {}),
+                target_allocations=_support.deepcopy(resolved.get("target_allocations")),
+                ready_context={
+                    **resolved,
+                    "record": resolved,
+                    "encounter": next_encounter,
+                    "applied": applied,
+                    "scope": scope,
+                    "payload": payload,
+                },
+            )
+            if not response.get("released"):
+                response.update(
+                    committed=False,
+                    released=False,
+                    readied=_support.deepcopy(readied),
+                    declaration=_support.deepcopy(readied.get("declaration") or {}),
+                )
+            return response
         next_encounter["log"] = [
             *list(next_encounter.get("log") or []),
             {
@@ -3006,7 +3281,7 @@ class SpellsService:
                 "actor_id": actor_id,
                 "readied_id": resolved.get("id"),
                 "spell_id": resolved.get("spell_id"),
-                "declaration": declaration or {},
+                "declaration": _support.deepcopy(resolved.get("declaration") or {}),
             },
         ][-100:]
         next_state = {**dict(campaign.state or {}), "combat": next_encounter}
@@ -3026,7 +3301,7 @@ class SpellsService:
                 ),
                 "released": release,
                 "spell_id": resolved.get("spell_id"),
-                "declaration": declaration or {},
+                "declaration": _support.deepcopy(resolved.get("declaration") or {}),
                 "combat": next_encounter,
             },
             character_updates=updates,

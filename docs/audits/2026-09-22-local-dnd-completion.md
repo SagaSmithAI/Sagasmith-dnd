@@ -23,12 +23,55 @@ snapshot tests remain green. This is domain/MCP evidence, not a live LLM session
 
 ## Next established gaps
 
-1. #139: execute the original stored readied spell.
-2. #158: source-bound object statistics and damage thresholds.
+1. #158: source-bound object statistics and damage thresholds.
 
 Other valid gameplay and content-publication gaps remain in the
 [audited issue list](2026-09-22-local-first-issues.md). The broader Agent upstream
 roadmap and upstream Chroma advisories have their own scope and evidence gates.
+
+## #139 — settle the original paid Ready spell
+
+Ready stores the original source card, paid cast level, component/payment
+receipt, declaration and Magic Missile allocation. Holding energy only starts
+holding concentration; automatic protective effects are deferred until release.
+Release rejects replacement declarations and validates the stored contract
+against the current encounter through the normal spell resolver. It spends the
+reaction and settles healing, saves, native effects, or the first spell attack
+in the same transaction, without a second component/slot/action payment.
+
+Remaining rays keep their source snapshot and original target/context sequence.
+They use the normal attack resolver after real defense and concentration choices.
+The first ray's resolution ID is stable across rollback and retry. Decline
+rearms the same commitment; lost concentration, missing reactions and next-turn
+expiry retain the existing authority checks. Unsupported and legacy holds return
+an explicit no-write ruling while preserving energy, declaration and reaction.
+
+Validation includes six native/structured release paths across restart and
+replay, stale revision and declaration rejection, multi-ray target/context
+integrity, nested Shield, campaign-stream rollback, failed transaction receipt
+rollback, and a sourced Ready mechanic receipt. Existing concentration-loss,
+decline/retrigger and expiry coverage remains in the integrity suite.
+The real local Runtime Host also executes all three stored Scorching Ray attacks
+off turn with caller actor/revision/branch fields omitted, and replays the same
+random and affected-state receipts. Owned continuations select their persisted
+caster/window owner instead of accidentally selecting the other active actor.
+The combined domain/Runtime checkpoint passed 1,787 tests; after the Host
+continuation addition, all 101 Runtime tests passed. The final affected domain
+suites passed 322 tests and all 12 Ready spell MCP cases passed. The broader MCP
+run passed 1,561 tests and skipped 30 unavailable optional integrations; its one
+new save-test failure was a nondeterministic fixture assumption, corrected before
+the final 12-case rerun. This is not a claim of one clean final full-MCP run.
+
+The preceding component commit's remote CI also exposed an out-of-date bundled
+SRD dependency checksum after the Core version changed. Catalogs now receive
+new immutable versions (SRD 2014 1.36.0, SRD 2024 1.6.0, standard 2014 1.8.0;
+presets 2.4.0). Original expansion package/source checksums are unchanged.
+`publish --check` checks this exact native binding before the long CI suites;
+`publish --refresh-builtin-lock` requires a new content version for changed
+content. Existing campaign locks still require an explicit relock.
+
+This is local automated authority/transaction evidence, not real-LLM campaign
+acceptance or a claim that the remaining audited issues are finished.
 
 ## #107 / #110 — interruptible movement and weapon reach
 

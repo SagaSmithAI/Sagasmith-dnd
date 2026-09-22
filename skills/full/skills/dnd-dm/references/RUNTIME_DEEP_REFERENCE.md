@@ -1584,10 +1584,15 @@ trigger occurred with `combat_ready(action="trigger_spell")`. The caster then us
 `combat_ready(action="resolve_spell")` to release the spell with its reaction or decline
 that occurrence without spending the reaction; declining leaves the spell armed.
 Losing concentration, reaching the caster's next turn, or ending combat makes the
-held spell dissipate without effect. A released spell returns `pending_ruling`:
-resolve its targets, attack, save, damage, area, and narrative consequences with
-the appropriate combat tools and Agent-performed DM ruling rather than treating release as the
-spell's complete effect.
+held spell dissipate without effect. Declare the original target/area at Ready
+time. Spell attacks require `declaration={attacks:[{target_id,context?}, ...]}`
+for every ray; Magic Missile uses `target_allocations`. Release cannot replace
+these choices. Runtime executes the stored source through the ordinary spell
+resolver and spends only the reaction. For multiple attacks, the first ray rolls
+on release; finish the returned `spell_resolution_id` using each stored target
+and context after resolving any owned defense choices. Slots and components are
+already paid. Unsupported or legacy effects return a no-write `pending_ruling`
+while retaining the original commitment; never recast or invent a completed effect.
 
 Before a module can branch on opening hours, daylight, watches, or travel time,
 remember that `state.game_time.elapsed_ticks` is the only advancing chronology

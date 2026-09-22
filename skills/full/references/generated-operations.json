@@ -10302,6 +10302,22 @@
                     "title": "Spell Id",
                     "type": "string"
                   },
+                  "target_allocations": {
+                    "anyOf": [
+                      {
+                        "items": {
+                          "additionalProperties": true,
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Target Allocations"
+                  },
                   "trigger": {
                     "title": "Trigger",
                     "type": "string"

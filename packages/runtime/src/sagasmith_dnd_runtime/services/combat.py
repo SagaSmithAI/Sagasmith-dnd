@@ -8771,6 +8771,7 @@ class CombatService:
                 branch_id,
                 idempotency_key,
                 component_ruling=data.get("component_ruling"),
+                target_allocations=data.get("target_allocations"),
             )
         elif action == "trigger_spell":
             result = self.combat_readied_spell_trigger(

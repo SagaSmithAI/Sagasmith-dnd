@@ -3449,6 +3449,7 @@ def preflight_spell_attack(
     encounter: dict[str, Any] | None = None,
     context: dict[str, Any] | None = None,
     rules: ResolutionContext | None = None,
+    allow_out_of_turn: bool = False,
 ) -> dict[str, Any]:
     """Build an attack only from the spell card's reviewed resolution contract."""
     sheet = actor_sheet(attacker)
@@ -3524,6 +3525,7 @@ def preflight_spell_attack(
         },
         encounter=encounter,
         require_attack_action=False,
+        allow_out_of_turn=allow_out_of_turn,
         rules=rules,
     )
     plan.update(
