@@ -5,6 +5,34 @@ requires implementation and applicable validation; pending items remain open.
 Host-managed local execution must preserve Runtime authority, real choices,
 source evidence, CAS, transactions and original-key replay.
 
+## #112 - source-bound 2014 Bardic Inspiration (local batch)
+
+The selected Bard feature grants another creature one die, with exact class-level
+scaling, hearing/range facts, Charisma uses and Font of Inspiration recovery.
+Combat grants spend a bonus action. A private campaign ledger binds the recipient,
+source, die, spent state and canonical expiry; copied or reset effects cannot
+authorize a roll. Gifts expire after 100 six-second ticks.
+
+Checks, initiative, attacks and saves pause after the d20 for an owned decision.
+The projection withholds outcome/DC/AC; accepting rolls one die and consumes it
+even on failure, while declining retains it. Natural 1/20 rules remain intact.
+Group/contest, object, reaction, concentration, death-save and semantic paths use
+the same settlement. A still-failed save can subsequently offer Legendary
+Resistance without rerolling earlier dice. Core savepoints support suspension
+inside phase transitions; final use, roll effects, receipts and CAS commit
+together. The resolving player receives their own settled roll without the DM's
+private operation reply. See [the caller contract](../bardic-inspiration-2014.md).
+
+Validation: all 2,161 Domain/Runtime cases and 1,655 MCP cases passed; 32 optional
+MCP integrations were skipped. The final recipient-result projection also passes
+the focused Bardic Inspiration and Legendary Resistance suites. Coverage includes
+public creation and source selection, scaling/rest, combat budgets, expiry, exact
+replay, restart, ownership/privacy, sequential choices and injected CAS failures.
+Ruff and publisher consistency pass. This is local temporary-database protocol
+evidence; live-model campaigns and deployed-stack acceptance are not claimed.
+Core is 1.92.0, SRD 2014 is 1.46.0, standard 2014 is 1.18.0, and both presets are
+2.14.0. The issue remains open until the requested combined push reaches main.
+
 ## #104 - source-bound 2014 Legendary Resistance (local batch)
 
 All 23 bundled leaf statblocks with the exact reviewed trait import their printed

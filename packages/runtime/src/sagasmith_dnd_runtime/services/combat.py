@@ -2577,6 +2577,11 @@ class CombatService:
         updated_state, source_start_updates, start_fields = self.reconcile_unconscious_inventory(
             campaign, updated_state, source_start_updates, {"combat": encounter}
         )
+        from .saving_throws import finalize
+
+        updated_state, source_start_updates, start_fields, start_receipts = finalize(
+            self, campaign, updated_state, source_start_updates, start_fields, start_receipts,
+        )
         self.validate_inventory_custody_update(campaign, updated_state, source_start_updates)
         encounter = updated_state["combat"]
 
@@ -2776,6 +2781,11 @@ class CombatService:
         )
         next_state, character_updates, join_fields = self.reconcile_unconscious_inventory(
             campaign, next_state, character_updates, {"combat": next_encounter}
+        )
+        from .saving_throws import finalize
+
+        next_state, character_updates, join_fields, receipts = finalize(
+            self, campaign, next_state, character_updates, join_fields, receipts,
         )
         self.validate_inventory_custody_update(campaign, next_state, character_updates)
         next_encounter = next_state["combat"]
@@ -3213,6 +3223,12 @@ class CombatService:
             branch_id=resolved_branch_id,
         )
         assert next_state is not None
+
+        from .saving_throws import finalize
+
+        next_state, combat_updates, steel_defender_lifecycle, rule_receipts = finalize(
+            self, campaign, next_state, combat_updates, steel_defender_lifecycle, rule_receipts,
+        )
 
         def turn_end_response(revisions: list[Any]) -> dict[str, Any]:
             response = {
@@ -4820,7 +4836,20 @@ class CombatService:
         branch_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Pay an activity and settle supported Core outcomes; return rulings for the rest."""
+        """Pay an activity and settle supported Core outcomes; return rulings for the rest.
+
+        2014 Bardic Inspiration requires declaration={target_id,scene_facts:{
+        decision_id,reason,target_can_hear:bool,within_60_ft:bool}} from the DM.
+        Grid combat derives range and requires within_60_ft to be omitted.
+        The target must be another creature; this spends one use and bonus action.
+        """
+        from .inspiration import bardic, grant
+
+        if activity_id == bardic.FEATURE:
+            actor = self.require_campaign_actor(campaign_id, actor_id)
+            return grant(self, actor, declaration, principal_id, None, idempotency_key,
+                         combat=True, branch_id=branch_id,
+                         expected_campaign_revision=expected_revision)
         self.require_combat_actor_or_steel_defender_owner_control(
             campaign_id, actor_id, principal_id, branch_id=branch_id
         )

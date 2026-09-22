@@ -304,6 +304,10 @@ Exact input schema (copy field names and nesting):
 
 Commit one noncombat spell cast, activity, or source-defined object attack.
 
+use_activity for 2014 Bardic Inspiration requires activity_id and
+declaration={target_id,scene_facts:{decision_id,reason,target_can_hear:bool,
+within_60_ft:bool}} from the DM. The target must be another creature.
+
 attack_source_object requires weapon_id, reason, source_ref, object,
 expected_campaign_revision and the actor expected_revision. First use
 requires DM-reviewed object statistics and object_ruling={reason,
@@ -512,7 +516,7 @@ source_traits is DM-only, outside combat, for existing non-PC actors:
 languages?:["Common"],damage_immunities?:[],damage_vulnerabilities?:[],
 condition_immunities?:[]}}. Each supplied trait replaces that trait only;
 copy the full source-supported list. It preserves HP, conditions and resources.
-legendary_resistance resolves an owned failed-save choice in or out of combat:
+legendary_resistance and bardic_inspiration resolve an owned roll choice in any phase:
 payload={choice_id,accept:bool}. It resumes the saved command with its recorded dice.
 statblock_proficiency_sync is DM-only for legacy 2014 non-PC imports:
 payload={reason}. It derives armor training from unchanged recorded source gear,
@@ -523,7 +527,7 @@ Phases: combat, lobby, play
 Exact input schema (copy field names and nesting):
 
 ```json
-{"additionalProperties":false,"properties":{"character_id":{"title":"Character Id","type":"string","description":"Authoritative player character or NPC identifier.","maxLength":256},"action":{"enum":["effect_add","effect_remove","resource_set","exhaustion_set","damage","heal","death_save","stabilize","revive","level_advance","resource_sync","source_state","source_traits","statblock_proficiency_sync","stand","knock_prone","breathing_transition","legendary_resistance"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["character_id","action"],"title":"character_state_changeInput","type":"object"}
+{"additionalProperties":false,"properties":{"character_id":{"title":"Character Id","type":"string","description":"Authoritative player character or NPC identifier.","maxLength":256},"action":{"enum":["effect_add","effect_remove","resource_set","exhaustion_set","damage","heal","death_save","stabilize","revive","level_advance","resource_sync","source_state","source_traits","statblock_proficiency_sync","stand","knock_prone","breathing_transition","legendary_resistance","bardic_inspiration"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["character_id","action"],"title":"character_state_changeInput","type":"object"}
 ```
 
 ## chase
@@ -859,6 +863,11 @@ Exact input schema (copy field names and nesting):
 ## combat_use_activity
 
 Pay an activity and settle supported Core outcomes; return rulings for the rest.
+
+2014 Bardic Inspiration requires declaration={target_id,scene_facts:{
+decision_id,reason,target_can_hear:bool,within_60_ft:bool}} from the DM.
+Grid combat derives range and requires within_60_ft to be omitted.
+The target must be another creature; this spends one use and bonus action.
 
 Phases: combat
 

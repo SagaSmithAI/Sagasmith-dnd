@@ -295,8 +295,11 @@ class CampaignsService:
         from .saving_throws import STATE_KEY, public_choice
 
         pending = value["state"].pop(STATE_KEY, None)
+        value["state"].pop("bardic_inspiration_grants", None)
         if pending:
-            value["pending_save"] = public_choice(
+            field = ("pending_roll" if pending["decisions"][-1].get("kind") == "bardic_inspiration"
+                     else "pending_save")
+            value[field] = public_choice(
                 self, campaign_id, principal_id, pending["decisions"][-1],
             )
         value["effective_game_phase"] = _support.campaign_phase(campaign.state)

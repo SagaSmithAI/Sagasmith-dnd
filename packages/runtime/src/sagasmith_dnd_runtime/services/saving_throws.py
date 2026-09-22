@@ -6,10 +6,12 @@ it never rewinds the campaign stream or accepts replacement action arguments.
 """
 
 from collections import Counter
+from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
 from dataclasses import replace
 
+from sagasmith_dnd import bardic_inspiration as bardic
 from sagasmith_dnd.legendary_resistance import (
     MECHANIC,
     SaveDecisionRequiredError,
@@ -22,12 +24,29 @@ from .. import application_support as s
 
 STATE_KEY = "_saving_throw_continuation"
 _ACTIVE = ContextVar("dnd_save_command", default=None)
-SAVE_COMMANDS = frozenset({
-    "character_check", "character_state_change", "combat_check", "combat_cast_spell",
-    "combat_concentration_check", "combat_resolve_attack", "combat_reaction_attack",
-    "combat_ready", "combat_choice", "combat_use_activity", "combat_hp_change",
-    "combat_end_turn", "combat_use_official_item",
-})
+SAVE_COMMANDS = frozenset(
+    {
+        "character_check",
+        "character_state_change",
+        "character_action",
+        "combat_check",
+        "combat_cast_spell",
+        "combat_concentration_check",
+        "combat_resolve_attack",
+        "combat_reaction_attack",
+        "combat_ready",
+        "combat_choice",
+        "combat_use_activity",
+        "combat_hp_change",
+        "combat_end_turn",
+        "combat_use_official_item",
+        "combat_start",
+        "combat_join",
+        "combat_common_action",
+        "combat_resolve_hide",
+        "combat_movement",
+    }
+)
 
 
 def _campaign_id(service, arguments):
@@ -50,7 +69,8 @@ def _request(service, campaign, principal, arguments):
     return {
         "arguments": deepcopy(arguments),
         "authorization_fingerprint": service.access.authorization_fingerprint(
-            campaign.id, principal,
+            campaign.id,
+            principal,
         ),
         "branch_id": service.current_branch_id(campaign.id),
         "timeline_epoch": campaign.timeline_epoch,
@@ -72,12 +92,18 @@ def guard_request(service, campaign_id, name, arguments):
         return
     if name in {"access_grant", "access_revoke"}:
         return
-    if name == "character_state_change" and arguments.get("action") == "legendary_resistance":
+    if name == "character_state_change" and arguments.get("action") in {
+        "legendary_resistance",
+        "bardic_inspiration",
+    }:
         return
-    if (name == pending["name"] and arguments.get("idempotency_key")
-            == pending["arguments"].get("idempotency_key")):
+    if name == pending["name"] and arguments.get("idempotency_key") == pending["arguments"].get(
+        "idempotency_key"
+    ):
         return
-    raise s.CombatEngineError("resolve the owned Legendary Resistance decision first")
+    raise s.CombatEngineError(
+        "resolve the owned Legendary Resistance/Bardic Inspiration decision first"
+    )
 
 
 def run(service, name, function, arguments, *, read_only=False):
@@ -95,7 +121,10 @@ def run(service, name, function, arguments, *, read_only=False):
     principal = arguments.get("principal_id") or arguments.get("by_principal_id")
     principal = principal or s.LOCAL_SYSTEM_PRINCIPAL_ID
     pending = (campaign.state or {}).get(STATE_KEY)
-    choice = name == "character_state_change" and arguments.get("action") == "legendary_resistance"
+    choice = name == "character_state_change" and arguments.get("action") in {
+        "legendary_resistance",
+        "bardic_inspiration",
+    }
     if choice:
         if s.active_random_stream() is None:
             with service.campaign_random_context(cid, name, arguments):
@@ -110,24 +139,55 @@ def run(service, name, function, arguments, *, read_only=False):
             service.access.require_campaign(cid, principal)
             return deepcopy(cached.response)
     if pending and name not in {"access_grant", "access_revoke"}:
-        raise s.CombatEngineError("resolve the owned Legendary Resistance decision first")
+        raise s.CombatEngineError(
+            "resolve the owned Legendary Resistance/Bardic Inspiration decision first"
+        )
     if name not in SAVE_COMMANDS:
         return function(**arguments)
     records = service.characters.list(campaign_id=cid)
-    if not any(feature(record.sheet) for record in records):
+    from .inspiration import verify_grants
+
+    verify_grants(campaign, records)
+    if not any(feature(record.sheet) or bardic.held(record.sheet) for record in records):
         return function(**arguments)
     if not key:
         raise ValueError("saving throws require an idempotency key")
-    command = {"name": name, "arguments": deepcopy(arguments), "principal_id": principal,
-               "branch_id": service.current_branch_id(cid), "decisions": [], "draws": []}
+    command = {
+        "name": name,
+        "arguments": deepcopy(arguments),
+        "principal_id": principal,
+        "branch_id": service.current_branch_id(cid),
+        "decisions": [],
+        "draws": [],
+    }
     if s.active_random_stream() is None:
         # The embedded legacy MCP test/caller path has no transport request
         # context. It still uses the same authoritative campaign dice stream.
         with service.campaign_random_context(cid, name, arguments):
-            return _attempt(service, campaign, records, command, function, arguments,
-                            scope=scope, key=key, public_arguments=request, caller=principal)
-    return _attempt(service, campaign, records, command, function, arguments,
-                    scope=scope, key=key, public_arguments=request, caller=principal)
+            return _attempt(
+                service,
+                campaign,
+                records,
+                command,
+                function,
+                arguments,
+                scope=scope,
+                key=key,
+                public_arguments=request,
+                caller=principal,
+            )
+    return _attempt(
+        service,
+        campaign,
+        records,
+        command,
+        function,
+        arguments,
+        scope=scope,
+        key=key,
+        public_arguments=request,
+        caller=principal,
+    )
 
 
 class _Command:
@@ -136,6 +196,8 @@ class _Command:
         self.index = 0
         self.spent = Counter()
         self.applied = Counter()
+        self.inspired = set()
+        self.inspiration_applied = set()
         self.finalized = False
 
     def save(self, actor_id, sheet, result, entry):
@@ -148,8 +210,14 @@ class _Command:
         else:
             if int(entry["uses"]["value"]) <= self.spent[actor_id] - self.applied[actor_id]:
                 return result
-            recorded = {**deepcopy(identity), "id": s.uuid4().hex, "accept": None,
-                        "source_key": entry["source_key"], "rule_refs": entry["rule_refs"]}
+            recorded = {
+                **deepcopy(identity),
+                "id": s.uuid4().hex,
+                "accept": None,
+                "kind": "legendary_resistance",
+                "source_key": entry["source_key"],
+                "rule_refs": entry["rule_refs"],
+            }
             decisions.append(recorded)
         self.index += 1
         if recorded["accept"] is None:
@@ -158,15 +226,76 @@ class _Command:
             self.spent[actor_id] += 1
             value = succeed(result, sheet)
             value["legendary_resistance"].update(
-                choice_id=recorded["id"], source_key=entry["source_key"],
+                choice_id=recorded["id"],
+                source_key=entry["source_key"],
                 rule_refs=deepcopy(entry["rule_refs"]),
             )
             return value
         return result
 
+    def inspire(self, actor_id, sheet, result, effect, rng):
+        if effect["id"] in self.inspired:
+            return result
+        identity = {
+            "actor_id": actor_id,
+            "feature_id": effect["id"],
+            "result": result,
+            "kind": "bardic_inspiration",
+        }
+        decisions = self.value["decisions"]
+        if self.index < len(decisions):
+            recorded = decisions[self.index]
+            if any(recorded.get(k) != identity[k] for k in identity):
+                raise ValueError(
+                    "saved inspiration roll no longer matches its authoritative inputs"
+                )
+        else:
+            recorded = {
+                **deepcopy(identity),
+                "id": s.uuid4().hex,
+                "accept": None,
+                "source_key": effect["source"],
+                "rule_refs": effect["metadata"]["rule_refs"],
+                "die_size": effect["metadata"]["die_size"],
+            }
+            decisions.append(recorded)
+        self.index += 1
+        if recorded["accept"] is None:
+            raise bardic.InspirationDecisionRequiredError(actor_id, sheet, result)
+        if recorded["accept"]:
+            self.inspired.add(effect["id"])
+            result = bardic.add_die(result, sheet, effect, rng=rng)
+        recorded["settled_result"] = deepcopy(result)
+        return result
 
-def _attempt(service, campaign, records, command, function, arguments, *, scope, key,
-             public_arguments, caller):
+
+@contextmanager
+def _speculative_work(database):
+    """Roll back an offered decision without poisoning an outer phase transition."""
+    decision = None
+    with database.unit_of_work(immediate=True) as work:
+        try:
+            with database.savepoint(work):
+                yield
+        except SaveDecisionRequiredError as error:
+            decision = error
+    if decision is not None:
+        raise decision
+
+
+def _attempt(
+    service,
+    campaign,
+    records,
+    command,
+    function,
+    arguments,
+    *,
+    scope,
+    key,
+    public_arguments,
+    caller,
+):
     state = _Command(command)
     stream = s.active_random_stream()
     stream.replay_prefix = deepcopy(command["draws"])
@@ -178,14 +307,17 @@ def _attempt(service, campaign, records, command, function, arguments, *, scope,
     token = _ACTIVE.set(state)
     try:
         try:
-            with service.storage.database.transaction(immediate=True):
+            with _speculative_work(service.storage.database):
                 if service.campaigns.get(campaign.id).revision != campaign.revision:
                     raise ValueError("campaign revision conflict before saving throw settlement")
                 if {r.id: r.revision for r in service.characters.list(campaign_id=campaign.id)} != {
                     r.id: r.revision for r in records
                 }:
                     raise ValueError("actor revision conflict before saving throw settlement")
-                with saving_throw_decisions(state.save):
+                with (
+                    saving_throw_decisions(state.save),
+                    bardic.inspiration_decisions(state.inspire),
+                ):
                     result = function(**arguments)
                 if stream.replay_index != len(stream.replay_prefix):
                     raise ValueError("saved command did not consume its complete random prefix")
@@ -194,15 +326,43 @@ def _attempt(service, campaign, records, command, function, arguments, *, scope,
                 if not state.finalized and state.value["decisions"]:
                     raise RuntimeError("saving throw command returned without an atomic settlement")
                 if command["decisions"]:
-                    result = {"status": "committed",
-                              "resolved_save": command["decisions"][-1]["id"],
-                              "campaign_revision": service.campaigns.get(campaign.id).revision,
-                              **({"operation_result": result} if (
-                                  caller == command["principal_id"]
-                                  or service.is_dm(campaign.id, caller)
-                              ) else {})}
-                    service.idempotency.remember(scope, key, public_arguments, result,
-                                                 campaign_id=campaign.id)
+                    resolved = state.value["decisions"][len(command["decisions"]) - 1]
+                    result = {
+                        "status": "committed",
+                        "resolved_save": command["decisions"][-1]["id"],
+                        **(
+                            {
+                                "resolved_roll": {
+                                    k: deepcopy(v)
+                                    for k, v in resolved["settled_result"].items()
+                                    if k
+                                    in {
+                                        "kind",
+                                        "natural",
+                                        "rolls",
+                                        "rerolls",
+                                        "total",
+                                        "roll_mode",
+                                        "bardic_inspiration",
+                                    }
+                                }
+                            }
+                            if resolved.get("kind") == "bardic_inspiration"
+                            else {}
+                        ),
+                        "campaign_revision": service.campaigns.get(campaign.id).revision,
+                        **(
+                            {"operation_result": result}
+                            if (
+                                caller == command["principal_id"]
+                                or service.is_dm(campaign.id, caller)
+                            )
+                            else {}
+                        ),
+                    }
+                    service.idempotency.remember(
+                        scope, key, public_arguments, result, campaign_id=campaign.id
+                    )
                 return result
         except SaveDecisionRequiredError:
             # The entire attempted settlement, including nested Core writes and
@@ -219,48 +379,91 @@ def _attempt(service, campaign, records, command, function, arguments, *, scope,
     state.value["random_position"] = stream.position
     state.value["random_seed"] = stream.seed
     next_state = {**deepcopy(campaign.state), STATE_KEY: state.value}
-    guards = [s.CharacterStateUpdate(character_id=r.id, sheet=r.sheet, notes=r.notes,
-                                     expected_revision=r.revision) for r in records]
+    guards = [
+        s.CharacterStateUpdate(
+            character_id=r.id, sheet=r.sheet, notes=r.notes, expected_revision=r.revision
+        )
+        for r in records
+    ]
     service.replay_idempotent(scope, key, public_arguments)
     pending = state.value["decisions"][-1]
     response = service.commit_campaign_state(
-        campaign, next_state, operation="save.legendary_resistance.offer",
-        principal_id=caller, branch_id=command["branch_id"], idempotency_key=key,
-        scope=scope, payload=public_arguments, character_updates=guards,
-        rule_receipts=_receipts(service, campaign.id, command["branch_id"]),
-        response_fields={"status": "pending_save", "choice": public_choice(service, campaign.id,
-                                                                                 caller, pending)},
+        campaign,
+        next_state,
+        operation="save.legendary_resistance.offer",
+        principal_id=caller,
+        branch_id=command["branch_id"],
+        idempotency_key=key,
+        scope=scope,
+        payload=public_arguments,
+        character_updates=guards,
+        rule_receipts=_receipts(service, campaign.id, command["branch_id"], state.value),
+        response_fields={
+            "status": (
+                "pending_roll" if pending.get("kind") == "bardic_inspiration" else "pending_save"
+            ),
+            "choice": public_choice(service, campaign.id, caller, pending),
+        },
     )
     return response
 
 
 def public_choice(service, campaign_id, principal, pending):
-    value = {"id": pending["id"], "actor_id": pending["actor_id"],
-             "kind": "legendary_resistance", "status": "pending"}
+    value = {
+        "id": pending["id"],
+        "actor_id": pending["actor_id"],
+        "kind": pending.get("kind", "legendary_resistance"),
+        "status": "pending",
+    }
     try:
         service.access.require_actor(campaign_id, pending["actor_id"], principal, control=True)
     except s.AccessDeniedError:
         return value
-    value.update(result=deepcopy(pending["result"]), source_key=pending["source_key"],
-                 rule_refs=deepcopy(pending["rule_refs"]),
-                 resolve={"tool": "character_state_change", "character_id": pending["actor_id"],
-                          "action": "legendary_resistance",
-                          "payload": {"choice_id": pending["id"], "accept": True},
-                          "alternatives": [{"accept": True}, {"accept": False}]})
+    result = deepcopy(pending["result"])
+    if value["kind"] == "bardic_inspiration":
+        # Deliberately exclude DC/AC, success/hit, death counters, conditions,
+        # targets and other actors' private facts until the player decides.
+        result = {
+            k: result[k]
+            for k in ("kind", "natural", "rolls", "rerolls", "total", "roll_mode")
+            if k in result
+        }
+        value["die_size"] = pending["die_size"]
+    value.update(
+        result=result,
+        source_key=pending["source_key"],
+        rule_refs=deepcopy(pending["rule_refs"]),
+        resolve={
+            "tool": "character_state_change",
+            "character_id": pending["actor_id"],
+            "action": value["kind"],
+            "payload": {"choice_id": pending["id"], "accept": True},
+            "alternatives": [{"accept": True}, {"accept": False}],
+        },
+    )
     return value
 
 
-def resolve(service, actor, payload, principal, expected_revision, key):
+def resolve(
+    service, actor, payload, principal, expected_revision, key, *, kind="legendary_resistance"
+):
     service.require_character_control(actor, principal)
     service.require_write_contract(expected_revision, key)
     if set(payload) != {"choice_id", "accept"} or type(payload["accept"]) is not bool:
-        raise ValueError("Legendary Resistance requires choice_id and a boolean accept")
+        raise ValueError("owned roll decision requires choice_id and a boolean accept")
     cid = actor.campaign_id
     campaign = service.campaigns.get(cid)
-    public_arguments = _request(service, campaign, principal, {
-        "character_id": actor.id, "payload": payload, "expected_revision": expected_revision,
-    })
-    scope = _scope(cid, principal, "legendary_resistance")
+    public_arguments = _request(
+        service,
+        campaign,
+        principal,
+        {
+            "character_id": actor.id,
+            "payload": payload,
+            "expected_revision": expected_revision,
+        },
+    )
+    scope = _scope(cid, principal, kind)
     replay = service.replay_idempotent(scope, key, public_arguments)
     if replay is not None:
         return replay
@@ -268,6 +471,8 @@ def resolve(service, actor, payload, principal, expected_revision, key):
     if not command:
         raise ValueError("no pending Legendary Resistance decision")
     pending = command["decisions"][-1]
+    if pending.get("kind", "legendary_resistance") != kind:
+        raise ValueError("roll decision kind does not match its owned choice")
     if pending["id"] != payload["choice_id"] or pending["actor_id"] != actor.id:
         raise ValueError("Legendary Resistance choice belongs to another actor or save")
     if actor.revision != expected_revision:
@@ -298,20 +503,40 @@ def resolve(service, actor, payload, principal, expected_revision, key):
     if "expected_revision" in arguments:
         arguments["expected_revision"] = (
             service.characters.get(arguments["character_id"]).revision
-            if name == "character_state_change" and arguments.get("character_id")
+            if name in {"character_state_change", "character_action"}
+            and arguments.get("character_id")
             else campaign.revision
         )
     if "expected_campaign_revision" in arguments:
         arguments["expected_campaign_revision"] = campaign.revision
+    if "expected_campaign_revision" in (arguments.get("payload") or {}):
+        arguments["payload"]["expected_campaign_revision"] = campaign.revision
     arguments["idempotency_key"] = key
     function = service.mcp.operations[name].function
-    return _attempt(service, campaign, records, command, function, arguments,
-                    scope=scope, key=key, public_arguments=public_arguments, caller=principal)
+    return _attempt(
+        service,
+        campaign,
+        records,
+        command,
+        function,
+        arguments,
+        scope=scope,
+        key=key,
+        public_arguments=public_arguments,
+        caller=principal,
+    )
 
 
-def _receipts(service, cid, branch):
-    return s.core_receipts(service.effective_rule_context(cid, branch_id=branch),
-                           [MECHANIC], "save.legendary_resistance")
+def _receipts(service, cid, branch, command):
+    mechanics = {
+        bardic.MECHANIC if d.get("kind") == "bardic_inspiration" else MECHANIC
+        for d in command["decisions"]
+    }
+    return s.core_receipts(
+        service.effective_rule_context(cid, branch_id=branch),
+        sorted(mechanics),
+        "roll.owned_decision",
+    )
 
 
 def finalize(service, campaign, campaign_state, updates, response, receipts):
@@ -338,15 +563,70 @@ def finalize(service, campaign, campaign_state, updates, response, receipts):
             shown = feature(card["sheet"])
             if shown:
                 shown["uses"]["value"] = entry["uses"]["value"]
-        updated = (replace(existing, sheet=sheet) if existing else s.CharacterStateUpdate(
-            character_id=actor_id, sheet=sheet, notes=actor.notes, expected_revision=actor.revision,
-        ))
+        updated = (
+            replace(existing, sheet=sheet)
+            if existing
+            else s.CharacterStateUpdate(
+                character_id=actor_id,
+                sheet=sheet,
+                notes=actor.notes,
+                expected_revision=actor.revision,
+            )
+        )
         rows = [row for row in rows if row.character_id != actor_id] + [updated]
         command.applied[actor_id] = count
     state = deepcopy(campaign_state if campaign_state is not None else campaign.state)
+    for decision in command.value["decisions"]:
+        if (
+            decision.get("kind") != "bardic_inspiration"
+            or not decision.get("accept")
+            or decision["feature_id"] not in command.inspired
+            or decision["feature_id"] in command.inspiration_applied
+        ):
+            continue
+        actor_id = decision["actor_id"]
+        existing = next((row for row in rows if row.character_id == actor_id), None)
+        actor = service.characters.get(actor_id)
+        sheet = deepcopy(existing.sheet if existing else actor.sheet)
+        effect = next(
+            (e for e in sheet.get("effects", []) if e["id"] == decision["feature_id"]), None
+        )
+        original_effect = bardic.held(actor.sheet)
+        if effect is None or original_effect is None or original_effect["id"] != effect["id"]:
+            raise ValueError("Bardic Inspiration die no longer available")
+        effect.update(active=False, ended_reason="bardic_inspiration_spent")
+        state["bardic_inspiration_grants"][actor_id]["spent"] = True
+        updated = (
+            replace(existing, sheet=sheet)
+            if existing
+            else s.CharacterStateUpdate(
+                character_id=actor_id,
+                sheet=sheet,
+                notes=actor.notes,
+                expected_revision=actor.revision,
+            )
+        )
+        rows = [row for row in rows if row.character_id != actor_id] + [updated]
+        command.inspiration_applied.add(decision["feature_id"])
+        card = response.get("character")
+        if isinstance(card, dict) and card.get("id") == actor_id and card.get("sheet"):
+            for shown in card["sheet"].get("effects", []):
+                if shown["id"] == effect["id"]:
+                    shown.update(active=False, ended_reason="bardic_inspiration_spent")
     state.pop(STATE_KEY, None)
     command.finalized = True
-    response = {**response, "legendary_resistance": deepcopy(command.value["decisions"])}
-    return state, rows, response, [
-        *list(receipts or []), *_receipts(service, campaign.id, command.value["branch_id"]),
-    ]
+    for kind in ("legendary_resistance", "bardic_inspiration"):
+        decisions = [
+            d for d in command.value["decisions"] if d.get("kind", "legendary_resistance") == kind
+        ]
+        if decisions:
+            response[kind] = deepcopy(decisions)
+    return (
+        state,
+        rows,
+        response,
+        [
+            *list(receipts or []),
+            *_receipts(service, campaign.id, command.value["branch_id"], command.value),
+        ],
+    )

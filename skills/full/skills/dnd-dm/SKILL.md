@@ -88,6 +88,10 @@ section through `skill_query` instead.
 - A complete ordinary attack uses `combat_resolve_attack` directly; its internal
   preflight, dice, damage and commit do not require separate model calls. Preserve
   real pending reactions, choices and source rulings.
+- On `pending_roll` or `pending_save`, preserve the recipient's owned decision.
+  For Bardic Inspiration show only the returned d20 and current total; do not
+  announce success or failure before the owner chooses. Resume using the returned
+  choice contract, and replay any unknown write with its original operation ID.
 - Let `combat_start` and `combat_end` own Combat phase transitions.
 - Use server dice and the campaign random stream.
 - Snapshot meaningful boundaries and branches, not every roll or turn.

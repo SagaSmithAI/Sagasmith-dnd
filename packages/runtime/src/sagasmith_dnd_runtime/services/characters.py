@@ -1078,8 +1078,16 @@ class CharactersService:
             },
         ][-100:]
 
+        from .saving_throws import finalize
+
+        next_state, updates, choice_fields, check_receipts = finalize(
+            self, campaign, next_state, check_updates([actor_snapshot], settlement_facts),
+            {}, list(result.get("rule_receipts") or []),
+        )
+
         def check_response(revisions: list[Any]) -> dict[str, Any]:
             response = {
+                **choice_fields,
                 "status": "committed",
                 "resolution_id": resolution_id,
                 "thread_id": resolution_id,
@@ -1100,7 +1108,7 @@ class CharactersService:
             campaign_state=_support.validate_party_state(next_state),
             expected_campaign_revision=campaign.revision,
             operation=f"character.{kind}",
-            character_updates=check_updates([actor_snapshot], settlement_facts),
+            character_updates=updates,
             actor=principal_id,
             branch_id=resolved_branch_id,
             idempotency_key=idempotency_key,
@@ -1109,7 +1117,7 @@ class CharactersService:
                 payload=payload,
                 response=check_response,
             ),
-            rule_receipts=list(result.get("rule_receipts") or []),
+            rule_receipts=check_receipts,
         )
         return check_response(list(revisions_result or []))
 
@@ -1560,8 +1568,18 @@ class CharactersService:
             },
         ][-100:]
 
+        from .saving_throws import finalize
+
+        receipts = [*list(result.get("rule_receipts") or []), *[
+            r for p in result["participants"] for r in p["check"].get("rule_receipts", [])
+        ]]
+        next_state, updates, choice_fields, receipts = finalize(
+            self, campaign, next_state, check_updates(snapshots, settlement_facts), {}, receipts,
+        )
+
         def group_check_response(revisions: list[Any]) -> dict[str, Any]:
             response = {
+                **choice_fields,
                 "status": "committed",
                 "result": result,
                 "campaign_revision": campaign.revision + 1,
@@ -1577,7 +1595,7 @@ class CharactersService:
             campaign_state=_support.validate_party_state(next_state),
             expected_campaign_revision=campaign.revision,
             operation="character.ability_group_check",
-            character_updates=check_updates(snapshots, settlement_facts),
+            character_updates=updates,
             actor=principal_id,
             branch_id=resolved_branch_id,
             idempotency_key=idempotency_key,
@@ -1586,14 +1604,7 @@ class CharactersService:
                 payload=payload,
                 response=group_check_response,
             ),
-            rule_receipts=[
-                *list(result.get("rule_receipts") or []),
-                *[
-                    receipt
-                    for participant in result["participants"]
-                    for receipt in participant["check"].get("rule_receipts") or []
-                ],
-            ],
+            rule_receipts=receipts,
         )
         return group_check_response(list(revisions_result or []))
 
@@ -1745,8 +1756,17 @@ class CharactersService:
             *list(result["target_check"].get("rule_receipts") or []),
         ]
 
+        from .saving_throws import finalize
+
+        next_state, updates, choice_fields, rule_receipts = finalize(
+            self, campaign, next_state,
+            check_updates([source_snapshot, target_snapshot], source_facts, target_facts),
+            {}, rule_receipts,
+        )
+
         def contest_response(revisions: list[Any]) -> dict[str, Any]:
             response = {
+                **choice_fields,
                 "status": "committed",
                 "result": result,
                 "campaign_revision": campaign.revision + 1,
@@ -1762,9 +1782,7 @@ class CharactersService:
             campaign_state=_support.validate_party_state(next_state),
             expected_campaign_revision=campaign.revision,
             operation="character.contest",
-            character_updates=check_updates(
-                [source_snapshot, target_snapshot], source_facts, target_facts
-            ),
+            character_updates=updates,
             actor=principal_id,
             branch_id=resolved_branch_id,
             idempotency_key=idempotency_key,
@@ -2847,6 +2865,11 @@ class CharactersService:
     ) -> dict[str, Any]:
         """Consume one non-combat structured card use without fabricating its narrative result."""
         current = self.characters.get(character_id)
+        from .inspiration import bardic, grant
+
+        if activity_id == bardic.FEATURE:
+            return grant(self, current, declaration, principal_id,
+                         expected_revision, idempotency_key)
         self.require_character_control(current, principal_id)
         self.require_outside_active_combat(current, "activity use")
         if current.campaign_id is None:
@@ -6740,6 +6763,7 @@ boundary.
             "knock_prone",
             "breathing_transition",
             "legendary_resistance",
+            "bardic_inspiration",
         ],
         payload: dict[str, Any] | None = None,
         principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
@@ -6762,7 +6786,7 @@ boundary.
         languages?:["Common"],damage_immunities?:[],damage_vulnerabilities?:[],
         condition_immunities?:[]}}. Each supplied trait replaces that trait only;
         copy the full source-supported list. It preserves HP, conditions and resources.
-        legendary_resistance resolves an owned failed-save choice in or out of combat:
+        legendary_resistance and bardic_inspiration resolve an owned roll choice in any phase:
         payload={choice_id,accept:bool}. It resumes the saved command with its recorded dice.
         statblock_proficiency_sync is DM-only for legacy 2014 non-PC imports:
         payload={reason}. It derives armor training from unchanged recorded source gear,
@@ -6783,10 +6807,11 @@ boundary.
             if field in data:
                 self.required_boolean(data, field)
         current = self.characters.get(character_id)
-        if action == "legendary_resistance":
+        if action in {"legendary_resistance", "bardic_inspiration"}:
             from .saving_throws import resolve
 
-            return resolve(self, current, data, principal_id, expected_revision, idempotency_key)
+            return resolve(self, current, data, principal_id, expected_revision, idempotency_key,
+                           kind=action)
         if (current.campaign_id is not None
                 and self.authoritative_phase(current.campaign_id) == "combat"
                 and action != "statblock_proficiency_sync"):
@@ -7263,6 +7288,10 @@ boundary.
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Commit one noncombat spell cast, activity, or source-defined object attack.
+
+        use_activity for 2014 Bardic Inspiration requires activity_id and
+        declaration={target_id,scene_facts:{decision_id,reason,target_can_hear:bool,
+        within_60_ft:bool}} from the DM. The target must be another creature.
 
         attack_source_object requires weapon_id, reason, source_ref, object,
         expected_campaign_revision and the actor expected_revision. First use

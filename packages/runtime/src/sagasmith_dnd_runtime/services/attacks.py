@@ -1168,6 +1168,15 @@ class AttacksService:
                     )
                 )
 
+            from .saving_throws import finalize
+
+            pending_receipts = _support.core_receipts(
+                rule_context, ["dnd5e.core.reaction.post_hit_defense"], "attack.hit.before_damage",
+            ) + attack_payment_receipts
+            next_state, updates, release_fields, pending_receipts = finalize(
+                self, campaign, next_state, updates, release_fields, pending_receipts,
+            )
+
             def pending_attack_response(revisions: list[Any]) -> dict[str, Any]:
                 response = {
                     **release_fields,
@@ -1204,12 +1213,7 @@ class AttacksService:
                     payload=payload,
                     response=pending_attack_response,
                 ),
-                rule_receipts=_support.core_receipts(
-                    rule_context,
-                    ["dnd5e.core.reaction.post_hit_defense"],
-                    "attack.hit.before_damage",
-                )
-                + attack_payment_receipts,
+                rule_receipts=pending_receipts,
             )
             return self.combat_response(
                 campaign_id,
@@ -1530,6 +1534,13 @@ class AttacksService:
                 )
             )
 
+        from .saving_throws import finalize
+
+        next_state, updates, release_fields, attack_receipts = finalize(
+            self, campaign, next_state, updates, release_fields,
+            list(result.get("rule_receipts") or []),
+        )
+
         def attack_response(revisions: list[Any]) -> dict[str, Any]:
             response = {
                 **release_fields,
@@ -1573,7 +1584,7 @@ class AttacksService:
                     payload=payload,
                     response=attack_response,
                 ),
-                rule_receipts=list(result.get("rule_receipts") or []),
+                rule_receipts=attack_receipts,
             )
         except ValueError as error:
             # Two identical requests can pass the read-side replay check before
@@ -2800,10 +2811,17 @@ class AttacksService:
         )
         updated_character_view = self.character_view(updated_character)
 
+        from .saving_throws import finalize
+
+        next_campaign_state, character_updates, choice_fields, object_receipts = finalize(
+            self, campaign, next_campaign_state, character_updates,
+            {"character": updated_character_view}, list(settled.get("rule_receipts") or []),
+        )
+
         def source_object_response(revisions: list[Any]) -> dict[str, Any]:
             response = {
                 "status": "committed",
-                "character": updated_character_view,
+                **choice_fields,
                 "object": object_after,
                 "attack": attack_roll,
                 "damage": settled.get("damage"),
@@ -2811,7 +2829,7 @@ class AttacksService:
                 "limited_use": limited_use,
                 "campaign_revision": campaign.revision + 1,
                 "revisions": [_support.asdict(item) for item in revisions],
-                "rule_receipts": list(settled.get("rule_receipts") or []),
+                "rule_receipts": object_receipts,
             }
             stream = _support.active_random_stream()
             if stream is not None and stream.draw_count > 0:
@@ -2832,6 +2850,6 @@ class AttacksService:
                 payload=payload,
                 response=source_object_response,
             ),
-            rule_receipts=list(settled.get("rule_receipts") or []),
+            rule_receipts=object_receipts,
         )
         return source_object_response(list(revisions_result or []))

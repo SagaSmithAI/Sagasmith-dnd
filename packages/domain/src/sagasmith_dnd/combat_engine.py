@@ -1224,7 +1224,14 @@ def start_encounter(
                 )
                 if initiative_group_id is not None:
                     group_rolls[initiative_group_id] = deepcopy(die)
-            initiative = die["natural"] + initiative_bonus
+            from .bardic_inspiration import settle_roll
+
+            inspired = settle_roll(identifier, sheet, {
+                **die, "kind": "initiative", "total": die["natural"] + initiative_bonus,
+            }, rng=rng)
+            initiative = inspired["total"]
+            if "bardic_inspiration" in inspired:
+                die["bardic_inspiration"] = inspired["bardic_inspiration"]
         else:
             initiative = int(supplied)
         combatants.append(
@@ -3441,7 +3448,10 @@ def preflight_attack(
         core_boundary_ids.append("dnd5e.core.weapon.mastery")
     if mastery_followup and str(mastery_followup.get("kind") or "") in {"cleave", "nick"}:
         core_boundary_ids.append("dnd5e.core.weapon.mastery")
+    from .bardic_inspiration import held
+
     return {
+        "bardic_inspiration": deepcopy(held(actor_sheet(attacker))),
         "status": "ready",
         "kind": "attack",
         "attacker_id": actor_id(attacker),
@@ -3656,6 +3666,12 @@ def roll_attack_action(
             reroll_ones=bool(plan.get("halfling_lucky")),
             rng=rng,
         )
+    if plan.get("bardic_inspiration"):
+        from .bardic_inspiration import settle_roll
+
+        attack = settle_roll(str(plan["attacker_id"]), {
+            "edition": "2014", "effects": [plan["bardic_inspiration"]],
+        }, attack, rng=rng)
     if attack["hit"] and plan.get("automatic_critical_on_hit"):
         attack["critical"] = True
     return {
@@ -5476,9 +5492,10 @@ def resolve_death_save_to_sheet(
         rng=rng,
         recovery_allowed=not breathing_locked,
     )
+    from .bardic_inspiration import settle_roll
     from .legendary_resistance import settle_save
 
-    result = settle_save(actor_id_value, value, result)
+    result = settle_save(actor_id_value, value, settle_roll(actor_id_value, value, result, rng=rng))
     # Suffocation prevents recovery/stabilization after reaching 0 HP, but it
     # does not prevent death-save rolls.  Suppress only the two recovery
     # outcomes while the actor remains unable to breathe.
@@ -8524,8 +8541,10 @@ def resolve_actor_check(
             *extension.receipts,
         ]
         result["ruleset_fingerprint"] = rules.fingerprint if rules else ""
+        from .bardic_inspiration import settle_roll
         from .legendary_resistance import settle_save
 
+        result = settle_roll(actor_id(actor), sheet, result, rng=rng)
         return settle_save(actor_id(actor), sheet, result)
 
     abilities = dict(sheet.get("abilities") or {})
