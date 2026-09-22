@@ -1207,14 +1207,14 @@ def test_official_expansion_lock_matches_seeded_core_content(tmp_path: Path) -> 
                 SRD2014_PRESET_PACK_VERSION,
                 CORE_CONTENT_PACK_ID,
                 CORE_CONTENT_PACK_VERSION,
-                "2.8.0",
+                "2.9.0",
             ),
             (
                 SRD2024_PRESET_PACK_ID,
                 SRD2024_PRESET_PACK_VERSION,
                 server_module.CORE_2024_CONTENT_PACK_ID,
                 server_module.CORE_2024_CONTENT_PACK_VERSION,
-                "2.8.0",
+                "2.9.0",
             ),
         ):
             assert version == expected_version

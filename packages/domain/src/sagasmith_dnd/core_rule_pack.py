@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.86.0"
+CORE_RULE_PACK_VERSION = "1.87.0"
 
 
 @dataclass(frozen=True)
@@ -448,6 +448,13 @@ BOUNDARIES = (
         "combat_engine.resolve_actor_check|engine.resolve_check",
         ("tests/test_passive_checks.py",),
         "bundled:srd2014/06_Gameplay/Using_Ability_Scores.md#passive-checks",
+    ),
+    CoreBoundary(
+        "dnd5e.core.check.working_together",
+        ("2014",),
+        "working_together.resolve_working_together",
+        ("tests/test_working_together.py",),
+        "bundled:srd2014/06_Gameplay/Using_Ability_Scores.md#working-together",
     ),
     CoreBoundary(
         "dnd5e.core.weapon.reach",

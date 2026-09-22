@@ -5,6 +5,39 @@ requires implementation and applicable validation; pending items remain open.
 Host-managed local execution must preserve Runtime authority, real choices,
 source evidence, CAS, transactions and original-key replay.
 
+## #165 — source-correct 2014 Working Together (local batch)
+
+`character_check(action="working_together")` binds every participant to one
+exact active-module task. The DM records productive collaboration and the task's
+tool, skill and feature prerequisites; Runtime checks eligibility from current
+cards instead of accepting supplied bonuses, proficiency or helper eligibility.
+Incapacitated helpers and unavailable required senses fail before any roll.
+The declared leader, or the unique highest applicable ability modifier, makes
+one aided check. A tied selection remains a player/DM choice. Different-ability
+skills preserve proficiency; tool checks derive proficiency/expertise from the
+card without stacking it. The shared ordinary-check pipeline still owns current
+conditions, effects, source sunlight and advantage/disadvantage cancellation.
+
+Leader/helper cards, campaign state, engine RNG, source/rule receipts and the
+original-key response commit in one transaction. Injected stale leader/helper
+revisions and receipt failure roll back the complete operation, including its
+random position. Retrying recovers the same dice; restart recovers the exact
+committed result even after a helper's condition changes. A subsequent new
+attempt uses the changed card. No noncombat action budget is spent, and combat
+requests must use the paid Help task procedure. No unreviewed 2024 behavior is
+enabled. DM guidance and generated operation contracts describe both this
+procedure and the separate group/passive procedures.
+
+Validation: 2,022 Domain/Runtime cases passed. Four focused public protocol cases
+passed, including 2024 rejection and local Host Drow perception with visual and
+nonvisual tasks, invisible metadata binding, RNG receipts and restart replay.
+The full MCP suite passed 1,597 cases with 32 optional integrations skipped.
+Ruff, immutable lock/generated-reference consistency and whitespace checks pass.
+Core is 1.87.0, SRD 2014 is 1.41.0, SRD 2024 is 1.11.0, standard 2014 is 1.13.0,
+and both preset packs are 2.9.0. These results are local contract/protocol proof;
+paid-model and live-campaign acceptance remain separate. The implementation is
+committed locally on main for the requested batch, without a new issue/PR or push.
+
 ## #164 — authoritative 2014 passive checks (local batch)
 
 `character_check(action="passive")` resolves an exact active-module task with

@@ -3368,7 +3368,7 @@
     }
   },
   {
-    "description": "Resolve a check or bounded source feature in the Play phase.\n\ncheck payload: {actor_id, kind, ability, dc?, bonus?, advantage?,\ndisadvantage?, proficient?, rule_facts?}. For skills use ability=\"stealth\"\n(or another skill name), not ability=\"dexterity\" plus a skill field.\nFor a skill check use kind=\"check\" and ability=\"stealth\" (for example).\nkind is ability/check/save/death_save, never skill. Skill\nproficiency/expertise comes from the actor; do not add it manually.\nRequires campaign revision, branch_id and idempotency_key.\npassive payload: {actor_id, ability, skill_ability?, secret? (default true),\nrule_facts?, task:{mode, source_ref, source_excerpt, reason, dc?, opponent?,\nadvantage?, disadvantage?, relies_on_sight?, relies_on_hearing?}}.\nSensory reliance is required for blinded/deafened observers; a check that\nrequires the unavailable sense fails automatically. mode is\nrepeated_task/exploration/trap_detection\nor opposed. Opposed tasks require opponent={actor_id,ability,skill_ability?,\nrule_facts?} instead of dc; ties leave the situation unchanged. Copy an exact\nactive module source_ref and excerpt; reason records the DM's task/variant\nclassification. Optional skill_ability changes the ability for a skill.\nAll totals/proficiency come from actor cards; no dice are drawn. Secret\nchecks are visible only to the DM, including their persisted presentation.\nscene_save resolves a DM-classified module hazard with exact active\nsource_ref/source_excerpt, reason, save_source_kind, save_effect_conditions\nand save_against_poison. source_ref is the complete object returned by\nmodule_expand (including chunk_id, checksum and location fields), not a\nstring. Copy it verbatim; do not guess hashes or rebuild a partial object.\nsource_excerpt must be a contiguous verbatim passage from that chunk;\npreserve OCR spelling and parenthetical text. Use the shortest passage\ncontaining the save clause. save_effect_conditions is a list of D&D\ncondition IDs, e.g. [\"restrained\"] or [], never outcome prose or damage.\nIt rolls the save only; settle its consequences\nseparately. Spell/card saves must use their paid source executor.",
+    "description": "Resolve a check or bounded source feature in the Play phase.\n\ncheck payload: {actor_id, kind, ability, dc?, bonus?, advantage?,\ndisadvantage?, proficient?, rule_facts?}. For skills use ability=\"stealth\"\n(or another skill name), not ability=\"dexterity\" plus a skill field.\nFor a skill check use kind=\"check\" and ability=\"stealth\" (for example).\nkind is ability/check/save/death_save, never skill. Skill\nproficiency/expertise comes from the actor; do not add it manually.\nRequires campaign revision, branch_id and idempotency_key.\npassive payload: {actor_id, ability, skill_ability?, secret? (default true),\nrule_facts?, task:{mode, source_ref, source_excerpt, reason, dc?, opponent?,\nadvantage?, disadvantage?, relies_on_sight?, relies_on_hearing?}}.\nSensory reliance is required for blinded/deafened observers; a check that\nrequires the unavailable sense fails automatically. mode is\nrepeated_task/exploration/trap_detection\nor opposed. Opposed tasks require opponent={actor_id,ability,skill_ability?,\nrule_facts?} instead of dc; ties leave the situation unchanged. Copy an exact\nactive module source_ref and excerpt; reason records the DM's task/variant\nclassification. Optional skill_ability changes the ability for a skill.\nAll totals/proficiency come from actor cards; no dice are drawn. Secret\nchecks are visible only to the DM, including their persisted presentation.\nworking_together payload: {actor_ids, ability, leader_id?, skill_ability?,\ntool?, rule_facts?, task:{source_ref,source_excerpt,reason,dc,productive,\nrequirements:{tools:[],skills:[],features:[]},relies_on_sight?,relies_on_hearing?}}.\nInclude every participant once. The DM reviews productive collaboration\nand all source prerequisites; Runtime derives each participant's eligibility\nfrom their current card. Omit leader_id to choose the highest applicable\nability modifier; tied leaders require an explicit choice. tool applies\nonly to base-ability checks and derives proficiency/expertise from the card.\nOne aided check commits with all observed cards under CAS. No supplied\nmodifiers/eligibility/advantage. In combat use the paid Help task action.\nscene_save resolves a DM-classified module hazard with exact active\nsource_ref/source_excerpt, reason, save_source_kind, save_effect_conditions\nand save_against_poison. source_ref is the complete object returned by\nmodule_expand (including chunk_id, checksum and location fields), not a\nstring. Copy it verbatim; do not guess hashes or rebuild a partial object.\nsource_excerpt must be a contiguous verbatim passage from that chunk;\npreserve OCR spelling and parenthetical text. Use the shortest passage\ncontaining the save clause. save_effect_conditions is a list of D&D\ncondition IDs, e.g. [\"restrained\"] or [], never outcome prose or damage.\nIt rolls the save only; settle its consequences\nseparately. Spell/card saves must use their paid source executor.",
     "error_envelope": {
       "fields": [
         "code",
@@ -3384,6 +3384,106 @@
     "input_schema": {
       "additionalProperties": false,
       "allOf": [
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "working_together"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "additionalProperties": false,
+                "properties": {
+                  "ability": {
+                    "title": "Ability",
+                    "type": "string"
+                  },
+                  "actor_ids": {
+                    "items": {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "title": "Actor Ids",
+                    "type": "array"
+                  },
+                  "leader_id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Leader Id"
+                  },
+                  "rule_facts": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": true,
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Rule Facts"
+                  },
+                  "skill_ability": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Skill Ability"
+                  },
+                  "task": {
+                    "additionalProperties": true,
+                    "title": "Task",
+                    "type": "object"
+                  },
+                  "tool": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Tool"
+                  }
+                },
+                "required": [
+                  "actor_ids",
+                  "ability",
+                  "task"
+                ],
+                "title": "WorkingTogetherCheck",
+                "type": "object"
+              }
+            },
+            "required": [
+              "payload"
+            ]
+          }
+        },
         {
           "if": {
             "properties": {
@@ -3960,6 +4060,7 @@
           "enum": [
             "check",
             "passive",
+            "working_together",
             "scene_save",
             "group",
             "contest",

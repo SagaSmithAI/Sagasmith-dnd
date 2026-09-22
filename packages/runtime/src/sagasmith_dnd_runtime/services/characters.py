@@ -4951,7 +4951,8 @@ boundary.
         self,
         campaign_id: str,
         action: Literal[
-            "check", "passive", "scene_save", "group", "contest", "reroll", "source_feature",
+            "check", "passive", "working_together", "scene_save", "group", "contest", "reroll",
+            "source_feature",
         ] = "check",
         payload: dict[str, Any] | None = None,
         principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
@@ -4980,6 +4981,16 @@ boundary.
         classification. Optional skill_ability changes the ability for a skill.
         All totals/proficiency come from actor cards; no dice are drawn. Secret
         checks are visible only to the DM, including their persisted presentation.
+        working_together payload: {actor_ids, ability, leader_id?, skill_ability?,
+        tool?, rule_facts?, task:{source_ref,source_excerpt,reason,dc,productive,
+        requirements:{tools:[],skills:[],features:[]},relies_on_sight?,relies_on_hearing?}}.
+        Include every participant once. The DM reviews productive collaboration
+        and all source prerequisites; Runtime derives each participant's eligibility
+        from their current card. Omit leader_id to choose the highest applicable
+        ability modifier; tied leaders require an explicit choice. tool applies
+        only to base-ability checks and derives proficiency/expertise from the card.
+        One aided check commits with all observed cards under CAS. No supplied
+        modifiers/eligibility/advantage. In combat use the paid Help task action.
         scene_save resolves a DM-classified module hazard with exact active
         source_ref/source_excerpt, reason, save_source_kind, save_effect_conditions
         and save_against_poison. source_ref is the complete object returned by
@@ -5001,6 +5012,14 @@ boundary.
             raise _support.CombatEngineError(
                 "close or abort the active NPC conversation before resolving "
                 "an authoritative character check"
+            )
+        if action == "working_together":
+            from .working_together import working_together_check
+
+            return working_together_check(
+                self, campaign_id, self.facade_payload(payload), principal_id=principal_id,
+                expected_revision=expected_revision, branch_id=branch_id,
+                idempotency_key=idempotency_key,
             )
         if action == "passive":
             from .passive_checks import resolve_passive_scene_check

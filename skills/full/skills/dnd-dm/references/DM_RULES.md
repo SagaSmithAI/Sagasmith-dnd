@@ -31,6 +31,12 @@
    模板可通过 `character_create_from(mode="template")` 实例化。PC 车卡使用
    `character_create_from(mode="build")` 创建模板和实例。
 
+2014 协作任务使用 `character_check(action="working_together")`，绑定全部参与者、
+原文和 DM 对协作是否有效及资格要求的判断。熟练、专精、条件和效果由当前角色卡计算，
+不能用裸 `advantage` 代替帮助者。未指定领队时按相关属性调整值选取，平手交回玩家或 DM。
+战斗中使用消耗动作的 Help。重复或秘密观察使用 `action="passive"`，不掷骰；秘密 DC
+和回执留在 DM 受众，失明或失聪时明确任务所需感官。发现陷阱不等于触发或解除陷阱。
+
 准备法术列表必须按版本和职业处理。车卡或升级阶段用
 `character_spell_prepare(mode="replace_all")` 一次提交完整列表；游戏中只能把完整
 `prepared_spell_ids` 随 `campaign_change(action="party_rest")` 中对应成员的长休选择一起原子提交，禁止连续切换单个法术来

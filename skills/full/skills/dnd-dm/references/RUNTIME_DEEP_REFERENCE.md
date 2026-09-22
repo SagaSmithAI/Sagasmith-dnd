@@ -125,6 +125,20 @@ the campaign.
    threshold: the 2014 Core engine rolls every actor and succeeds the group
    when at least half succeed. Do not use a group check for surprise, where
    each observer and hidden creature must be compared separately.
+   For a 2014 task aided by another character, use
+   `character_check(action="working_together")`. Supply the exact active module
+   source and a DM review of productive collaboration and every prerequisite
+   (`requirements.tools`, `.skills`, `.features`, including explicit empty lists).
+   Runtime checks all participant cards before one aided roll. Pick `leader_id`
+   explicitly or allow the highest applicable ability modifier to lead; return
+   a tied choice to its owner. Never simulate help with a bare advantage flag.
+   A tool check names the tool and base ability; tool proficiency and expertise
+   come from the card. During combat, use the paid Help task action instead.
+   For repeated or secret source-defined tasks, use
+   `character_check(action="passive")`: it shares ordinary modifiers and draws
+   no dice. Default secret receipts and hidden DCs remain DM-only. Supply sensory
+   reliance when blindness/deafness matters; unresolved context is not a numeric
+   score. Passive trap detection does not itself trigger or disarm the trap.
    Before a module table roll with external modifiers, build a branch-local
    modifier ledger from the complete expanded procedure. Keep every modifier
    source in its own entry with a stable id, numeric value, applicability,

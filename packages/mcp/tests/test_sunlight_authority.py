@@ -297,6 +297,48 @@ def test_passive_sunlight_reuses_source_authority_and_local_replay(tmp_path, loc
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("sight", [True, False])
+def test_local_working_together_binds_drow_context_and_replays(tmp_path, sight):
+    async def run():
+        world = await drow_world(tmp_path, local=True)
+        try:
+            args = {
+                "campaign_id": world.cid, "action": "working_together",
+                "idempotency_key": "work-together", "payload": {
+                    "actor_ids": [world.aid, world.target], "leader_id": world.aid,
+                    "ability": "perception",
+                    "rule_facts": {"sunlight_by_actor": {
+                        world.aid: await sunlight(world, sight=sight, local=True),
+                    }},
+                    "task": {
+                        "source_ref": world.source, "source_excerpt": SUNLIGHT_EXCERPT,
+                        "reason": "DM allows two observers to compare courtyard observations.",
+                        "dc": 10, "productive": True, "relies_on_sight": sight,
+                        "requirements": {"tools": [], "skills": [], "features": []},
+                    },
+                },
+            }
+            result = await invoke(world, "character_check", args)
+            assert result["status"] == "committed"
+            check = result["result"]["check"]
+            assert check["roll_mode"] == ("normal" if sight else "advantage")
+            assert len(check["rolls"]) == (1 if sight else 2)
+            assert "random_stream_receipt" in result
+            after = await world.snapshot()
+            world.close()
+            world.runtime = create_runtime(world.config)
+            replay = await invoke(world, "character_check", args)
+            assert {key: replay[key] for key in result if key != "local_execution"} == {
+                key: value for key, value in result.items() if key != "local_execution"
+            }
+            assert replay["local_execution"]["replayed"] is True
+            assert await world.snapshot() == after
+        finally:
+            world.close()
+
+    asyncio.run(run())
+
+
 def test_sunlight_authority_rejects_forgery_and_expires_after_movement(tmp_path):
     async def run():
         world = await drow_world(tmp_path, combat=True)

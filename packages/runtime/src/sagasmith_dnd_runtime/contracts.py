@@ -43,6 +43,11 @@ _release = _payload(
 
 ACTION_PAYLOADS: dict[str, dict[str, type[Payload]]] = {
     "character_check": {
+        "working_together": _payload(
+            "WorkingTogetherCheck", actor_ids=(list[Identifier], ...), ability=(str, ...),
+            task=(dict[str, Any], ...), leader_id=_optional(Identifier),
+            skill_ability=_optional(str), tool=_optional(str), rule_facts=_optional(dict[str, Any]),
+        ),
         "passive": _payload(
             "PassiveSceneCheck", actor_id=(Identifier, ...), ability=(str, ...),
             task=(dict[str, Any], ...), skill_ability=_optional(str),
