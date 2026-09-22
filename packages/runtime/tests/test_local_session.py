@@ -146,7 +146,8 @@ finally:
     subprocess.run([sys.executable, "-c", program, str(tmp_path)], check=True, timeout=60)
 
 
-def test_one_local_attack_commits_dice_hp_and_replays_without_reroll(tmp_path):
+@pytest.mark.parametrize("ready", [False, True])
+def test_one_local_attack_commits_dice_hp_and_replays_without_reroll(tmp_path, ready):
     from sagasmith_dnd.character_schema import default_character_sheet
 
     async def run():
@@ -191,12 +192,35 @@ def test_one_local_attack_commits_dice_hp_and_replays_without_reroll(tmp_path):
             arguments = {"campaign_id": campaign["id"], "target_id": target["id"],
                          "action": {"weapon_id": "sword", "attack_mode": "melee"},
                          "idempotency_key": "attack"}
+            operation = "combat_resolve_attack"
+            if ready:
+                armed = await call("combat_common_action", campaign_id=campaign["id"],
+                                   action="ready", trigger="the bell rings", payload={
+                                       "action": "attack", "target_id": target["id"],
+                                       "attack": {"weapon_id": "sword", "attack_mode": "melee"},
+                                   }, idempotency_key="ready")
+                await call("combat_end_turn", campaign_id=campaign["id"], idempotency_key="end")
+                triggered = await call("combat_ready", campaign_id=campaign["id"],
+                                       action="trigger_action", payload={
+                                           "readied_id": armed["combat"]["readied"][0]["id"],
+                                           "event": "the bell rings",
+                                       }, idempotency_key="trigger")
+                operation = "combat_ready"
+                choice_id = triggered["result"]["combat"]["pending"][0]["id"]
+                arguments = {"campaign_id": campaign["id"], "action": "resolve_action",
+                             "payload": {"actor_id": hero["id"],
+                                         "choice_id": choice_id,
+                                         "release": True}, "idempotency_key": "release"}
             # Actor, revision and branch are all resolved by the local authority.
-            result = await runtime.execute("combat_resolve_attack", arguments, context=identity)
+            result = await runtime.execute(operation, arguments, context=identity)
+            if ready:
+                result = {**result, **result["result"]}
             assert result["status"] == "committed"
             assert result["random_stream_receipt"]
             assert result["affected_state"]["campaign_revision"] == result["campaign_revision"]
-            replay = await runtime.execute("combat_resolve_attack", arguments, context=identity)
+            replay = await runtime.execute(operation, arguments, context=identity)
+            if ready:
+                replay = {**replay, **replay["result"]}
             assert result["result"] == replay["result"]
             assert result["random_stream_receipt"] == replay["random_stream_receipt"]
             assert result["affected_state"] == replay["affected_state"]

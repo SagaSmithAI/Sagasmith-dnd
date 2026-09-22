@@ -1112,8 +1112,8 @@ def _create_application(config: McpConfig | None = None, *, resources) -> DndRun
         "combat_readied_action_trigger", "combat_readied_action_trigger"
     )
 
-    _services.combat_readied_action_resolve = _services.bind(
-        "combat_readied_action_resolve", "combat_readied_action_resolve"
+    _services.combat_readied_action_resolve = _support._agent_ruling_boundary(
+        _services.bind("combat_readied_action_resolve", "combat_readied_action_resolve")
     )
 
     _services.combat_use_official_item = _services.public_tool()(

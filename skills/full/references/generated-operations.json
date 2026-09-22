@@ -7104,7 +7104,7 @@
     }
   },
   {
-    "description": "Settle a common action atomically. In 2014 combat, draw_weapon uses\npayload={item_id, slot: main_hand|off_hand}; stow_weapon uses {item_id}.\nRequires an owned weapon, empty destination hand, and current actor turn.\nPays the free object interaction, otherwise an available action. Do not\nprepay interact_object or use inventory_change(equip) during combat.",
+    "description": "Settle a common action atomically. In 2014 combat, draw_weapon uses\npayload={item_id, slot: main_hand|off_hand}; stow_weapon uses {item_id}.\nRequires an owned weapon, empty destination hand, and current actor turn.\nPays the free object interaction, otherwise an available action. Do not\nprepay interact_object or use inventory_change(equip) during combat.\nready requires trigger and a fixed payload: {action: dash|dodge|disengage},\n{action: help, target_id?, payload: structured_help},\n{action: attack, target_id, attack: {weapon_id, attack_mode?, context?}},\nor {action: move, distance, destination?|path?|spatial_facts?}. An unsupported\nresponse needs {action: ruling, response, source, question}; it stays\npending without spending the reaction until adjudicated.",
     "error_envelope": {
       "fields": [
         "code",

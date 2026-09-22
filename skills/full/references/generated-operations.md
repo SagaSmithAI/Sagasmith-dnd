@@ -570,6 +570,12 @@ payload={item_id, slot: main_hand|off_hand}; stow_weapon uses {item_id}.
 Requires an owned weapon, empty destination hand, and current actor turn.
 Pays the free object interaction, otherwise an available action. Do not
 prepay interact_object or use inventory_change(equip) during combat.
+ready requires trigger and a fixed payload: {action: dash|dodge|disengage},
+{action: help, target_id?, payload: structured_help},
+{action: attack, target_id, attack: {weapon_id, attack_mode?, context?}},
+or {action: move, distance, destination?|path?|spatial_facts?}. An unsupported
+response needs {action: ruling, response, source, question}; it stays
+pending without spending the reaction until adjudicated.
 
 Phases: combat
 

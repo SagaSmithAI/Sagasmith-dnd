@@ -63,3 +63,13 @@ For unregistered module or homebrew mechanics, the Agent reads exact source,
 compiles one bounded source-bound solution, and executes it through the current
 choice/application transaction. Do not accumulate special-case engine branches
 for individual monsters.
+
+Generic Ready fixes its response when armed. Use the supported structured action
+or movement payload; the later trigger confirmation only opens the choice to
+release or ignore it. Release executes that saved response and pays the reaction
+in one transaction. Do not substitute a new target, weapon, action or route.
+Readied attacks still wait for genuine defense/damage choices, and readied
+movement still pauses at every hostile reach exit. An ignored trigger rearms
+the same response until the actor's next turn. If a response needs a source-specific
+ruling, record `{action: ruling, response, source, question}`; its release preserves
+the original pending request and spends nothing while the ruling is unresolved.

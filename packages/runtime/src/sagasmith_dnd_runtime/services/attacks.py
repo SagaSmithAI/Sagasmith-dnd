@@ -1550,6 +1550,25 @@ class AttacksService:
                 raise _support.CombatEngineError(
                     "the selected weapon did not produce this opportunity-attack boundary"
                 )
+        return self.settle_reaction_attack(
+            campaign_id, campaign, encounter, actor_id, target_id, action_payload,
+            choice_id, window, principal_id, resolved_branch_id, idempotency_key, scope, payload,
+        )
+
+    def settle_reaction_attack(
+        self, campaign_id, campaign, encounter, actor_id, target_id, action_payload,
+        choice_id, window, principal_id, resolved_branch_id, idempotency_key, scope, payload,
+        *, readied=None,
+    ):
+        """Settle a verified opportunity or stored Ready attack in one transaction."""
+        ready_fields = {} if readied is None else {
+            "released": True, "declaration": _support.deepcopy(readied["payload"]),
+            "readied_id": readied["id"],
+        }
+        reaction_receipt_id = (
+            "dnd5e.core.ready.action" if readied is not None
+            else "dnd5e.core.mcp.opportunity_melee_only"
+        )
         self.require_campaign_actor(campaign_id, target_id)
         attacker = self.combat_actor_snapshot(actor_id)
         target = self.combat_actor_snapshot(target_id)
@@ -1615,7 +1634,7 @@ class AttacksService:
             ),
             None,
         )
-        if weapon is not None and weapon.get("attack_type") != "melee":
+        if readied is None and weapon is not None and weapon.get("attack_type") != "melee":
             raise _support.CombatEngineError("opportunity attacks require a melee attack")
         attack_roll = _support.roll_attack_action(plan=plan)
         defenses = self.post_hit_attack_defenses(
@@ -1643,12 +1662,16 @@ class AttacksService:
                     ammunition_item_id=str(plan.get("ammunition_item_id") or "") or None,
                 )
                 updated_attacker["sheet"] = updated_sheet
-        next_encounter = _support.resolve_choice_window(
-            encounter,
-            choice_id=choice_id,
-            actor_id_value=actor_id,
-            selection={"id": "opportunity_attack"},
-        )
+        if readied is None:
+            next_encounter = _support.resolve_choice_window(
+                encounter, choice_id=choice_id, actor_id_value=actor_id,
+                selection={"id": "opportunity_attack"},
+            )
+        else:
+            next_encounter, _ = _support.resolve_readied_action_window(
+                encounter, actor_id_value=actor_id, choice_id=choice_id,
+                release=True, _spend_reaction=False,
+            )
         consumed_attack_advantage = self.consume_next_attack_advantage(
             next_encounter,
             plan,
@@ -1665,6 +1688,11 @@ class AttacksService:
             raise _support.CombatEngineError("actor has no reaction remaining")
         budget["reaction"] = int(budget["reaction"]) - 1
         combatant["turn_budget"] = budget
+        if readied is not None:
+            next_encounter.setdefault("log", []).append({
+                "type": "readied_action_released", "actor_id": actor_id,
+                "readied_id": readied["id"], "declaration": _support.deepcopy(readied["payload"]),
+            })
         if plan.get("attacker_was_hidden"):
             self.reveal_attacker_to_target(next_encounter, actor_id, target_id)
         if plan.get("helped_by"):
@@ -1684,7 +1712,7 @@ class AttacksService:
             attack_payment = {
                 "kind": "reaction_attack",
                 "payment": "reaction",
-                "trigger": "opportunity_attack",
+                "trigger": "readied_action" if readied is not None else "opportunity_attack",
             }
             result = {
                 **attack_roll,
@@ -1741,7 +1769,8 @@ class AttacksService:
             response = self.commit_campaign_state(
                 campaign,
                 next_state,
-                operation="combat.reaction.attack.roll",
+                operation=("combat.ready.action.release" if readied is not None
+                           else "combat.reaction.attack.roll"),
                 principal_id=principal_id,
                 branch_id=resolved_branch_id,
                 idempotency_key=idempotency_key,
@@ -1750,6 +1779,7 @@ class AttacksService:
                 response_fields={
                     "status": "pending_reaction",
                     "result": result,
+                    **ready_fields,
                     "choice": defense_window,
                     "combat": next_encounter,
                 },
@@ -1757,10 +1787,11 @@ class AttacksService:
                 rule_receipts=_support.core_receipts(
                     rule_context,
                     [
-                        "dnd5e.core.mcp.opportunity_melee_only",
+                        reaction_receipt_id,
                         "dnd5e.core.reaction.post_hit_defense",
                     ],
-                    "reaction.opportunity_attack.hit",
+                    ("reaction.opportunity_attack.hit" if readied is None
+                     else "reaction.ready.attack"),
                 ),
             )
             return self.combat_response(campaign_id, principal_id, response)
@@ -1819,7 +1850,8 @@ class AttacksService:
         response = self.commit_campaign_state(
             campaign,
             next_state,
-            operation="combat.reaction.attack",
+            operation=("combat.ready.action.release" if readied is not None
+                       else "combat.reaction.attack"),
             principal_id=principal_id,
             branch_id=resolved_branch_id,
             idempotency_key=idempotency_key,
@@ -1831,6 +1863,7 @@ class AttacksService:
                     "source_or_scene_fact",
                 ),
                 "result": result,
+                **ready_fields,
                 "combat": next_encounter,
             },
             character_updates=[
@@ -1851,8 +1884,8 @@ class AttacksService:
                 *list(result.get("rule_receipts") or []),
                 *_support.core_receipts(
                     self.effective_rule_context(campaign_id),
-                    ["dnd5e.core.mcp.opportunity_melee_only"],
-                    "reaction.opportunity_attack",
+                    [reaction_receipt_id],
+                    "reaction.opportunity_attack" if readied is None else "reaction.ready.attack",
                 ),
             ],
         )

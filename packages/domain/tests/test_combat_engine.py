@@ -6687,7 +6687,8 @@ def test_common_actions_pay_action_and_keep_tactical_state_explicit() -> None:
         actor_id_value=current,
         action="ready",
         trigger="the foe enters reach",
-        payload={"action": "attack"},
+        payload={"action": "attack", "target_id": "b" if current == "a" else "a",
+                 "attack": {"weapon_id": "unarmed-strike"}},
     )
     assert readied["readied"][0]["status"] == "armed"
 

@@ -3436,6 +3436,12 @@ class CombatService:
         Requires an owned weapon, empty destination hand, and current actor turn.
         Pays the free object interaction, otherwise an available action. Do not
         prepay interact_object or use inventory_change(equip) during combat.
+        ready requires trigger and a fixed payload: {action: dash|dodge|disengage},
+        {action: help, target_id?, payload: structured_help},
+        {action: attack, target_id, attack: {weapon_id, attack_mode?, context?}},
+        or {action: move, distance, destination?|path?|spatial_facts?}. An unsupported
+        response needs {action: ruling, response, source, question}; it stays
+        pending without spending the reaction until adjudicated.
         """
         if action in {"drop_held", "pickup_ground", "draw_weapon", "stow_weapon"}:
             if target_id is not None or trigger is not None:
@@ -4010,6 +4016,12 @@ class CombatService:
                 "object_description": object_description,
                 "interaction": interaction,
             }
+        if normalized_action == "ready":
+            from .ready_actions import prepare_response
+
+            engine_payload = prepare_response(
+                self, campaign_id, encounter, actor_id, payload or {}, principal_id
+            )
         next_encounter = _support.resolve_common_action(
             encounter,
             actor_id_value=actor_id,
@@ -4359,7 +4371,7 @@ class CombatService:
         branch_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Spend a reaction for a generic Ready action; settle its declared effect by ruling."""
+        """Release or ignore the original Ready response; replacement declarations are rejected."""
         self.access.require_actor(campaign_id, actor_id, principal_id, control=True)
         self.require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = self.require_current_branch(campaign_id, branch_id)
@@ -4384,16 +4396,54 @@ class CombatService:
             str(item.get("id")) for item in _support.available_reactions(encounter, actor_id)
         }:
             raise _support.CombatEngineError("actor cannot take this reaction")
-        next_encounter, readied = _support.resolve_readied_action_window(
-            encounter, actor_id_value=actor_id, choice_id=choice_id, release=release
-        )
+        window = next((item for item in encounter.get("pending", [])
+                       if item.get("id") == choice_id and item.get("actor_id") == actor_id
+                       and item.get("trigger") == "readied_action"), None)
+        readied = next((item for item in encounter.get("readied", [])
+                        if window and item.get("id") == window.get("readied_id")), None)
+        if readied is None or readied.get("status") != "triggered":
+            raise _support.CombatEngineError("choice_id is not this actor's live Ready response")
+        original_response = _support.deepcopy(readied["payload"])
+        if declaration and declaration != original_response:
+            raise _support.CombatEngineError("Ready release cannot replace the original response")
+        updates, receipts = [], []
+        if release:
+            from sagasmith_dnd.ready_actions import validate_response
+
+            response = validate_response(original_response)
+            if response["action"] == "ruling":
+                return self.combat_response(campaign_id, principal_id, {
+                    **_support._ruling_status("pending_ruling", "ready_release_effect"),
+                    "released": False, "committed": False,
+                    "declaration": original_response, "readied_id": readied["id"],
+                    "campaign_revision": campaign.revision, "combat": encounter,
+                })
+            if response["action"] == "attack":
+                action_payload = self.sanitize_attack_action(
+                    campaign_id, principal_id, response["attack"]
+                )
+                self.validate_agent_attack_context(campaign_id, action_payload, encounter=encounter)
+                return self.settle_reaction_attack(
+                    campaign_id, campaign, encounter, actor_id, response["target_id"],
+                    action_payload, choice_id, window, principal_id, resolved_branch_id,
+                    idempotency_key, scope, payload, readied=readied,
+                )
+            from .ready_actions import settle_non_attack
+
+            next_encounter, readied, updates, receipts = settle_non_attack(
+                self, campaign_id, encounter, actor_id, choice_id
+            )
+        else:
+            next_encounter, readied = _support.resolve_readied_action_window(
+                encounter, actor_id_value=actor_id, choice_id=choice_id, release=False
+            )
         next_encounter["log"] = [
             *list(next_encounter.get("log") or []),
             {
                 "type": "readied_action_released" if release else "readied_action_declined",
                 "actor_id": actor_id,
                 "readied_id": readied.get("id"),
-                "declaration": declaration or {},
+                "declaration": original_response,
             },
         ][-100:]
         next_state = {**dict(campaign.state or {}), "combat": next_encounter}
@@ -4408,13 +4458,16 @@ class CombatService:
             payload=payload,
             response_fields={
                 **_support._ruling_status(
-                    "pending_ruling" if release else "armed",
+                    ("pending_reaction" if next_encounter.get("movement_continuation")
+                     else "committed") if release else "armed",
                     "ready_release_effect",
                 ),
                 "released": release,
-                "declaration": declaration or {},
+                "declaration": original_response,
                 "combat": next_encounter,
             },
+            character_updates=updates,
+            rule_receipts=receipts,
         )
         return self.combat_response(campaign_id, principal_id, response)
 

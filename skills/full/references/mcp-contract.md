@@ -1742,9 +1742,21 @@ transaction instead:
 For a generic non-spell Ready action, use `combat_common_action(action="ready")`,
 then let the Agent acting as DM confirm the trigger with
 `combat_ready(action="trigger_action")`
-and let the actor release or decline with `combat_ready(action="resolve_action")`. Releasing pays
-the reaction and returns `pending_ruling`; it never fabricates the declared
-effect.
+and let the actor release or decline with `combat_ready(action="resolve_action")`.
+At Ready time persist one complete response: `{action: dash|dodge|disengage}`, a
+structured Help response, `{action: attack, target_id, attack: {weapon_id,
+attack_mode?, context?}}`, or `{action: move, distance, destination?|path?|
+spatial_facts?}`. Attacks bind one target and one weapon attack; Extra Attack does
+not create additional reaction attacks. Movement uses its own up-to-speed
+allowance and follows the normal interruptible movement/reaction flow.
+Release revalidates and executes the saved response atomically with reaction
+payment. It accepts no replacement action, target, route or parameters. Omit
+`declaration`; an exact repeat remains compatible. Missing eligibility or invalid
+targets fail without a write or random progress. A decline rearms the same
+response without spending its reaction; the actor's next turn expires it.
+Unsupported effects require the explicit stored contract `{action: ruling,
+response, source, question}`. Release returns that original contract as a
+no-write `pending_ruling`, preserving the armed choice and reaction.
 
 The held spell always requires concentration, including a spell that normally
 does not. Concentration loss, the start of the caster's next turn, or combat end

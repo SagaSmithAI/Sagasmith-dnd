@@ -23,7 +23,7 @@ snapshot tests remain green. This is domain/MCP evidence, not a live LLM session
 
 ## Next established gaps
 
-1. #133 / #139: execute the original stored Ready response and readied spell.
+1. #139: execute the original stored readied spell.
 2. #116: resolve ordinary spell component eligibility before resource/RNG spend.
 3. #158: source-bound object statistics and damage thresholds.
 
@@ -83,3 +83,28 @@ dependent steps waiting until movement settles. Existing push/pull and
 teleportation public tests passed. Ruff and generated references were checked.
 This establishes the generic source-bound mechanism, not automation of every
 spell that can cause movement or a live model campaign.
+
+## #133 — execute the stored non-spell Ready response
+
+New Ready requests validate a complete supported response or an explicit ruling
+contract. Release binds the original action, target, weapon and movement route;
+a replacement declaration is rejected before payment or dice. Dash, Dodge,
+Disengage, structured Help, one weapon attack and up-to-speed movement execute
+with the reaction in one mutation. Attack settlement shares the existing
+ammunition, damage, source receipts and nested defense path. Movement uses the
+source grant mechanism and retains every opportunity boundary. Unsupported
+source-specific effects preserve their exact ruling contract and reaction in a
+no-write pending state.
+
+Ignoring a trigger now correctly rearms the persisted record rather than a
+discarded copy. Reaction loss and next-turn expiry are enforced; readied
+Disengage expires at the end of the triggering turn.
+
+Validation: 1,761 domain/Runtime cases and 58 existing MCP regression cases passed
+at the broad checkpoint. Seven new public MCP cases passed, including stored
+Dash/Attack/movement/ruling responses, decline/retrigger, no-write replacement
+and invalid-range rejection, restart/replay, dice rollback with the campaign
+stream, and nested Shield. Two local Host attack cases (ordinary and Ready)
+passed with Host-managed revisions/branches and persisted dice receipts. Ruff,
+generated references and whitespace checks passed. This does not close the
+separate readied-spell issue #139 or claim live LLM campaign acceptance.

@@ -6290,6 +6290,7 @@ def resolve_common_action(
     trigger: str | None = None,
     payload: dict[str, Any] | None = None,
     payment: str | None = None,
+    _readied_response: bool = False,
 ) -> dict[str, Any]:
     """Settle the non-attack actions that have deterministic action-economy effects.
 
@@ -6343,7 +6344,7 @@ def resolve_common_action(
         if not target_id:
             raise CombatEngineError("command_dependent requires a Steel Defender target")
         commanded_dependent = _controlled_dependent(value, actor_id_value, target_id)
-    out_of_turn_reaction = action == "cast" and payment == "reaction"
+    out_of_turn_reaction = (action == "cast" or _readied_response) and payment == "reaction"
     if not out_of_turn_reaction and (current is None or current.get("actor_id") != actor_id_value):
         raise CombatEngineError("it is not this actor's turn")
     initial_budget = dict(combatant.get("turn_budget") or {})
@@ -6432,6 +6433,7 @@ def resolve_common_action(
         )
     elif action == "disengage":
         flags["disengaged"] = True
+        flags["disengaged_turn_token"] = _combat_turn_token(value)
     elif action == "dodge":
         flags.pop("dodge_ended", None)
         flags["dodging"] = True
@@ -6567,6 +6569,11 @@ def resolve_common_action(
                 "readying a spell is not supported by the generic Ready action; "
                 "it requires spell-slot and concentration settlement"
             )
+        from .ready_actions import validate_response
+
+        ready_payload = validate_response(ready_payload)
+        if any(item.get("actor_id") == actor_id_value for item in value.get("readied", [])):
+            raise CombatEngineError("actor already has a readied action")
         value["readied"] = [
             *list(value.get("readied") or []),
             {
@@ -6716,9 +6723,10 @@ def trigger_readied_action(
 
 
 def resolve_readied_action_window(
-    encounter: dict[str, Any], *, actor_id_value: str, choice_id: str, release: bool
+    encounter: dict[str, Any], *, actor_id_value: str, choice_id: str, release: bool,
+    _spend_reaction: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Spend a reaction; the generic effect returns to Agent-as-DM adjudication."""
+    """Consume the original Ready window; Runtime settles its stored response."""
     value = deepcopy(encounter)
     window = next((item for item in value.get("pending", []) if item.get("id") == choice_id), None)
     if (
@@ -6739,14 +6747,18 @@ def resolve_readied_action_window(
         actor_id_value=actor_id_value,
         selection={"id": "release" if release else "decline"},
     )
+    readied = next(item for item in value["readied"] if item.get("id") == readied["id"])
     if release:
         combatant = next(
             item for item in value.get("combatants", []) if item.get("actor_id") == actor_id_value
         )
         budget = dict(combatant.get("turn_budget") or {})
+        if _condition_set(combatant.get("conditions")) & INCAPACITATING_STATE_IDS:
+            raise CombatEngineError("actor cannot take a reaction under its current conditions")
         if int(budget.get("reaction", 0) or 0) <= 0:
             raise CombatEngineError("actor has no reaction remaining")
-        budget["reaction"] = int(budget["reaction"]) - 1
+        if _spend_reaction:
+            budget["reaction"] = int(budget["reaction"]) - 1
         combatant["turn_budget"] = budget
         value["readied"] = [
             item for item in value.get("readied", []) if item.get("id") != readied["id"]
@@ -8804,6 +8816,11 @@ def end_turn(
     if any(item.get("status", "pending") == "pending" for item in value.get("pending", [])):
         raise CombatEngineError("pending choice or save must be resolved before ending the turn")
     current_turn_token = _combat_turn_token(value)
+    for combatant in value.get("combatants", []):
+        flags = combatant.get("turn_flags", {})
+        if flags.get("disengaged_turn_token") == current_turn_token:
+            flags.pop("disengaged", None)
+            flags.pop("disengaged_turn_token", None)
     if any(
         dict(dict(combatant.get("turn_flags") or {}).get("legendary_weapon_attack") or {}).get(
             "turn_token"
