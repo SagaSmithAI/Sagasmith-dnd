@@ -4117,6 +4117,7 @@ class CharactersService:
         applied = _support.resolve_death_save_to_sheet(
             current.sheet,
             ruleset=ruleset,
+            actor_id_value=current.id,
         )
         rule_receipts: list[dict[str, Any]] = []
         if elapsed_tick is not None:
@@ -6738,6 +6739,7 @@ boundary.
             "stand",
             "knock_prone",
             "breathing_transition",
+            "legendary_resistance",
         ],
         payload: dict[str, Any] | None = None,
         principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
@@ -6760,6 +6762,8 @@ boundary.
         languages?:["Common"],damage_immunities?:[],damage_vulnerabilities?:[],
         condition_immunities?:[]}}. Each supplied trait replaces that trait only;
         copy the full source-supported list. It preserves HP, conditions and resources.
+        legendary_resistance resolves an owned failed-save choice in or out of combat:
+        payload={choice_id,accept:bool}. It resumes the saved command with its recorded dice.
         statblock_proficiency_sync is DM-only for legacy 2014 non-PC imports:
         payload={reason}. It derives armor training from unchanged recorded source gear,
         accepts no supplied proficiencies, and preserves active combat and all actor state.
@@ -6779,6 +6783,10 @@ boundary.
             if field in data:
                 self.required_boolean(data, field)
         current = self.characters.get(character_id)
+        if action == "legendary_resistance":
+            from .saving_throws import resolve
+
+            return resolve(self, current, data, principal_id, expected_revision, idempotency_key)
         if (current.campaign_id is not None
                 and self.authoritative_phase(current.campaign_id) == "combat"
                 and action != "statblock_proficiency_sync"):

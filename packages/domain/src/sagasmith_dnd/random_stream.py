@@ -138,6 +138,10 @@ class CampaignRandomStream:
             raise ValueError("campaign random stream revision must be a non-negative integer")
         self.start_position = self.position
         self.persisted_position = self.position
+        self.recorded_draws: list[dict[str, int]] = []
+        self.capture_draws = False
+        self.replay_prefix: list[dict[str, int]] = []
+        self.replay_index = 0
 
     @classmethod
     def from_campaign_state(
@@ -175,6 +179,13 @@ class CampaignRandomStream:
             raise ValueError("random interval bounds must be integers")
         if end < start:
             raise ValueError("random interval end must be greater than or equal to start")
+        if self.replay_index < len(self.replay_prefix):
+            saved = self.replay_prefix[self.replay_index]
+            if (start, end) != (saved["start"], saved["end"]):
+                raise ValueError("saved command random intervals no longer match")
+            self.replay_index += 1
+            self.recorded_draws.append(dict(saved))
+            return saved["value"]
         span = end - start + 1
         rejection_limit = _UINT256_RANGE - (_UINT256_RANGE % span)
         while True:
@@ -183,7 +194,10 @@ class CampaignRandomStream:
             digest = hashlib.sha256(f"{ALGORITHM}\0{self.seed}\0{counter}".encode("utf-8")).digest()
             sample = int.from_bytes(digest, "big")
             if sample < rejection_limit:
-                return start + sample % span
+                value = start + sample % span
+                if self.capture_draws:
+                    self.recorded_draws.append({"start": start, "end": end, "value": value})
+                return value
 
     def receipt(self) -> dict[str, Any]:
         return {

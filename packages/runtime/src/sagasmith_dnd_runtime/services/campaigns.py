@@ -108,6 +108,12 @@ class CampaignsService:
     ) -> dict[str, Any]:
         """Commit one public state result and its exact retry response atomically."""
 
+        from .saving_throws import finalize
+
+        campaign_state, character_updates, response_fields, rule_receipts = finalize(
+            self, campaign, campaign_state, character_updates, response_fields, rule_receipts,
+        )
+
         campaign_state, character_updates, response_fields = self.reconcile_steel_defender_deaths(
             campaign,
             campaign_state,
@@ -286,6 +292,13 @@ class CampaignsService:
         membership = self.access.require_campaign(campaign_id, principal_id)
         campaign = self.campaigns.get(campaign_id)
         value = _support.asdict(campaign)
+        from .saving_throws import STATE_KEY, public_choice
+
+        pending = value["state"].pop(STATE_KEY, None)
+        if pending:
+            value["pending_save"] = public_choice(
+                self, campaign_id, principal_id, pending["decisions"][-1],
+            )
         value["effective_game_phase"] = _support.campaign_phase(campaign.state)
         if membership.role in _support.CAMPAIGN_DM_ROLES:
             return value

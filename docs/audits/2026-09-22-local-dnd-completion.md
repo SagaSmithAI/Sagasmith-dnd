@@ -5,6 +5,37 @@ requires implementation and applicable validation; pending items remain open.
 Host-managed local execution must preserve Runtime authority, real choices,
 source evidence, CAS, transactions and original-key replay.
 
+## #104 - source-bound 2014 Legendary Resistance (local batch)
+
+All 23 bundled leaf statblocks with the exact reviewed trait import their printed
+X/Day pool, source references and engine capability. The 2014 Limited Usage rule
+restores that pool on a completed long rest. A failed ordinary, automatic, death,
+concentration, spell or source-plan saving throw can now suspend its command for
+an owned choice. Acceptance changes failure to success without a reroll or an
+action/reaction cost; declining retains the original failure.
+
+The attempted command rolls back before failed-save effects settle. Only its
+private declaration, recorded dice, guarded revisions and owned decision commit.
+Resumption replays the immutable declaration and exact dice prefix, supports
+multiple targets and reserves accepted uses until atomic final settlement.
+Current authorization, branch, actor revisions and campaign RNG are rechecked;
+a current DM can finish a declaration after its former DM loses access. Public
+views exclude private continuations and other callers' original operation replies.
+See [the caller contract](../legendary-resistance-2014.md).
+
+Validation: all 2,148 Domain/Runtime cases passed, followed by 38 focused Domain
+cases covering the final automatic-failure correction. The broad MCP run passed
+1,634 cases with 32 optional integrations skipped and five failures. Those five
+exposed early entity lookup masking existing parameter/random-stream validation;
+the corrected lookup order passes all 29 affected and Legendary Resistance MCP
+cases. These include real bundled rulebook import, deterministic RNG, restart,
+exact replay, ownership, revoked access, death saves, concentration, two-target
+Fireball/Hypnotic Pattern, source-plan continuation and injected CAS rollback.
+Ruff, publisher consistency and whitespace checks pass. Evidence is local
+temporary-database protocol validation, not live-model campaign acceptance.
+Core is 1.91.0, SRD 2014 is 1.45.0, standard 2014 is 1.17.0, and both presets are
+2.13.0. The issue remains open until the requested combined push reaches main.
+
 ## #106 - selected 2014 Fighting Styles (local batch)
 
 Canonical Fighter/Paladin/Ranger and Champion Additional Fighting Style choices

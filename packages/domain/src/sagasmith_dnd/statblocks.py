@@ -1941,8 +1941,12 @@ def _parse_srd_statblock(
             weapon["mechanics"]["magical"] = True
 
     for section, entry_name, description in descriptive:
+        from .legendary_resistance import MECHANIC as RESISTANCE_MECHANIC
+        from .legendary_resistance import source_contract
+
         recharge = _recharge_contract(entry_name)
         daily_uses = _daily_uses_contract(entry_name)
+        resistance = source_contract(entry_name, description) if edition == "2014" else None
         normalized_description = " ".join(description.split())
         orc_aggressive = (
             edition == "2014"
@@ -2007,7 +2011,11 @@ def _parse_srd_statblock(
                     "dnd5e.core.activity.legendary_action",
                 }
             )
-        if orc_aggressive:
+        if resistance:
+            entry["choices"] = {"legendary_resistance": resistance}
+            entry["mechanic_refs"] = [RESISTANCE_MECHANIC]
+            entry["uses"] = {**daily_uses, "source_key": source_key}
+        elif orc_aggressive:
             entry["choices"] = {
                 "standard_resolution": {
                     "kind": "aggressive_movement",
@@ -2050,7 +2058,7 @@ def _parse_srd_statblock(
             elif daily_uses is not None:
                 entry["uses"] = {**daily_uses, "source_key": source_key}
         sheet["content"]["activities" if activation != "passive" else "features"].append(entry)
-        if legendary_action is None and not orc_aggressive:
+        if legendary_action is None and not orc_aggressive and not resistance:
             warnings.append(
                 f"{entry_name}: Multiattack composition requires a DM ruling"
                 if entry_name in unresolved_multiattacks

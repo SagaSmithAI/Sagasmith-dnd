@@ -590,6 +590,9 @@ class SharedService:
                 f"Tool {tool_id!r} targets campaign {mismatched[0]!r}, but this exposure is "
                 f"bound to {campaign_id!r}. Use a separate request for that campaign."
             )
+        from .saving_throws import guard_request
+
+        guard_request(self, campaign_id, tool_id, arguments)
 
     def allowed_tools_for_exposure(self, exposure: _support.Exposure, phase: str) -> set[str]:
         """Return tools the bound principal may still load in the current phase."""

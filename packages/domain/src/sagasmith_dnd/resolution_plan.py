@@ -529,7 +529,9 @@ def execute_resolution_plan(
             raise
     except Exception as error:
         runtime.rollback()
-        if isinstance(error, ResolutionPlanExecutionError):
+        from .legendary_resistance import SaveDecisionRequiredError
+
+        if isinstance(error, (ResolutionPlanExecutionError, SaveDecisionRequiredError)):
             raise
         raise ResolutionPlanExecutionError(
             f"resolution plan {plan.compiled.id} failed atomically: {error}"

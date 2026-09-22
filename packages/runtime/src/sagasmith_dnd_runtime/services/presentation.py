@@ -160,7 +160,11 @@ class PresentationService:
                 def guarded(*args: Any, **kwargs: Any) -> Any:
                     try:
                         validate_payload(args, kwargs)
-                        return function(*args, **kwargs)
+                        from .saving_throws import run
+
+                        bound = signature.bind(*args, **kwargs)
+                        bound.apply_defaults()
+                        return run(self, name, function, dict(bound.arguments), read_only=read_only)
                     except _support.ToolError:
                         raise
                     except anticipated as exc:

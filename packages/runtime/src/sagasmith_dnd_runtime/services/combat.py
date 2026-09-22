@@ -6849,6 +6849,7 @@ class CombatService:
             ruleset = self.encounter_rules_edition(campaign_id, encounter)
             updated = _support.resolve_death_save_to_sheet(
                 actor["sheet"],
+                actor_id_value=actor_id,
                 advantage=advantage,
                 disadvantage=disadvantage,
                 ruleset=ruleset,

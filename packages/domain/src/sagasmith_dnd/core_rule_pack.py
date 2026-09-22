@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.90.0"
+CORE_RULE_PACK_VERSION = "1.91.0"
 
 
 @dataclass(frozen=True)
@@ -273,6 +273,14 @@ BOUNDARIES = (
             "test_generic_legendary_weapon_action_is_structured",
         ),
         "bundled:srd2014/10_Monsters/Monsters.md#legendary-actions",
+    ),
+    CoreBoundary(
+        "dnd5e.core.save.legendary_resistance",
+        ("2014",),
+        "legendary_resistance.settle_save|statblocks.parse_2014_statblock",
+        ("tests/test_legendary_resistance.py",
+         "packages/mcp/tests/test_legendary_resistance_mcp.py"),
+        "bundled:srd2014/10_Monsters/Monsters_Each/Adult_Black_Dragon_(Chromatic).md",
     ),
     CoreBoundary(
         "dnd5e.core.activity.recharge",

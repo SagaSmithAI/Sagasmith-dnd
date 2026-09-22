@@ -5536,7 +5536,7 @@
     }
   },
   {
-    "description": "Apply a character transition; expected_revision is the actor revision.\n\ndamage payload={parts:[{amount:1,damage_type:\"bludgeoning\"}],\ncritical?:bool,knock_out?:bool,melee?:bool}. Do not use a top-level amount\nfor damage or open combat just to settle a trap/fall. heal uses {amount}.\neffect_add uses {effect}; effect_remove uses {effect_id}; resource_set\nuses {resource,value}; exhaustion_set uses {value}. Keep one stable\nidempotency_key per intended transition and copy its new actor revision.\nlevel_advance requires {class_name,hp_method,reason,source_ref,target_level}.\ntarget_level is the intended TOTAL character level, exactly current + 1.\nRead progression before advancing; never repeat a completed milestone.\nsource_traits is DM-only, outside combat, for existing non-PC actors:\n{source_ref,reason,traits:{damage_resistances?:[\"fire\"],darkvision_ft?:60,\nlanguages?:[\"Common\"],damage_immunities?:[],damage_vulnerabilities?:[],\ncondition_immunities?:[]}}. Each supplied trait replaces that trait only;\ncopy the full source-supported list. It preserves HP, conditions and resources.\nstatblock_proficiency_sync is DM-only for legacy 2014 non-PC imports:\npayload={reason}. It derives armor training from unchanged recorded source gear,\naccepts no supplied proficiencies, and preserves active combat and all actor state.",
+    "description": "Apply a character transition; expected_revision is the actor revision.\n\ndamage payload={parts:[{amount:1,damage_type:\"bludgeoning\"}],\ncritical?:bool,knock_out?:bool,melee?:bool}. Do not use a top-level amount\nfor damage or open combat just to settle a trap/fall. heal uses {amount}.\neffect_add uses {effect}; effect_remove uses {effect_id}; resource_set\nuses {resource,value}; exhaustion_set uses {value}. Keep one stable\nidempotency_key per intended transition and copy its new actor revision.\nlevel_advance requires {class_name,hp_method,reason,source_ref,target_level}.\ntarget_level is the intended TOTAL character level, exactly current + 1.\nRead progression before advancing; never repeat a completed milestone.\nsource_traits is DM-only, outside combat, for existing non-PC actors:\n{source_ref,reason,traits:{damage_resistances?:[\"fire\"],darkvision_ft?:60,\nlanguages?:[\"Common\"],damage_immunities?:[],damage_vulnerabilities?:[],\ncondition_immunities?:[]}}. Each supplied trait replaces that trait only;\ncopy the full source-supported list. It preserves HP, conditions and resources.\nlegendary_resistance resolves an owned failed-save choice in or out of combat:\npayload={choice_id,accept:bool}. It resumes the saved command with its recorded dice.\nstatblock_proficiency_sync is DM-only for legacy 2014 non-PC imports:\npayload={reason}. It derives armor training from unchanged recorded source gear,\naccepts no supplied proficiencies, and preserves active combat and all actor state.",
     "error_envelope": {
       "fields": [
         "code",
@@ -5571,7 +5571,8 @@
             "statblock_proficiency_sync",
             "stand",
             "knock_prone",
-            "breathing_transition"
+            "breathing_transition",
+            "legendary_resistance"
           ],
           "maxLength": 256,
           "title": "Action",

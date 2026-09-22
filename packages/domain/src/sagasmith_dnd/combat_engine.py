@@ -5450,6 +5450,7 @@ def resolve_death_save_to_sheet(
     bonus: int = 0,
     ruleset: str | None = None,
     rng: Any = None,
+    actor_id_value: str | None = None,
 ) -> dict[str, Any]:
     """Resolve and persist one death save, including natural-20 recovery."""
     value = deepcopy(sheet)
@@ -5475,6 +5476,9 @@ def resolve_death_save_to_sheet(
         rng=rng,
         recovery_allowed=not breathing_locked,
     )
+    from .legendary_resistance import settle_save
+
+    result = settle_save(actor_id_value, value, result)
     # Suffocation prevents recovery/stabilization after reaching 0 HP, but it
     # does not prevent death-save rolls.  Suppress only the two recovery
     # outcomes while the actor remains unable to breathe.
@@ -8520,7 +8524,9 @@ def resolve_actor_check(
             *extension.receipts,
         ]
         result["ruleset_fingerprint"] = rules.fingerprint if rules else ""
-        return result
+        from .legendary_resistance import settle_save
+
+        return settle_save(actor_id(actor), sheet, result)
 
     abilities = dict(sheet.get("abilities") or {})
     ability_scores = effective_ability_scores(sheet)

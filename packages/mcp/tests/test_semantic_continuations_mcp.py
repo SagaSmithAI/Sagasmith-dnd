@@ -18,13 +18,16 @@ from tests.test_semantic_plan_mcp import _call, _raw
 
 
 async def prepare(tmp_path, *, reaction, movement_payment=None, mover_incapacitated=False,
-                  protection=False):
+                  protection=False, legendary_resistance=False):
     text = "Twin Strikes. Make two unarmed attacks against one adjacent visible creature."
     if movement_payment:
         text = (
             f"Commanded March. Another creature uses its {movement_payment} to move up to "
             "its speed, even outside its turn. After it finishes moving, it becomes prone."
         )
+    if legendary_resistance:
+        text = ("Dread Pulse. One target must make a DC 30 Wisdom saving throw, "
+                "taking 1d6 force damage on failure and no damage on success.")
     source = tmp_path / "room.md"
     source.write_text(f"# Room\n\n## Encounter\n\n{text}\n", encoding="utf8")
     config = McpConfig(
@@ -68,12 +71,18 @@ async def prepare(tmp_path, *, reaction, movement_payment=None, mover_incapacita
         portable_id="dnd5e.module.continuations-test",
     )
     chunks = await _call(server, "module_search", {
-        "campaign_id": cid, "query": "Commanded March" if movement_payment else "Twin Strikes",
+        "campaign_id": cid,
+        "query": ("Dread Pulse" if legendary_resistance else
+                  "Commanded March" if movement_payment else "Twin Strikes"),
     })
     expanded = await _call(server, "module_expand", {"chunk_id": chunks[0]["id"]})
     actors = []
     for name in (("attacker", "target", "protector") if protection else ("attacker", "target")):
         sheet = default_character_sheet()
+        if name == "target" and legendary_resistance:
+            from tests.test_legendary_resistance_mcp import dragon_sheet
+
+            sheet = dragon_sheet()
         if name == "target" and mover_incapacitated:
             sheet["conditions"] = ["incapacitated"]
         sheet["combat"]["hp"].update(value=100, max=100)
@@ -139,6 +148,22 @@ async def prepare(tmp_path, *, reaction, movement_payment=None, mover_incapacita
                     "source_actor_id": {"$slot": "source"},
                     "target_ids": [{"$slot": "target"}], "exclude_self": True,
                 }})
+            if legendary_resistance:
+                plan["steps"] = [
+                    {"id": "target", "op": "target.validate", "args": {
+                        "source_actor_id": {"$slot": "source"},
+                        "target_ids": [{"$slot": "target"}], "exclude_self": True,
+                    }},
+                    {"id": "save", "op": "check.save", "args": {
+                        "target_ids": [{"$slot": "target"}], "ability": "wisdom", "dc": 30,
+                        "success_damage": "none", "source": text,
+                    }},
+                    {"id": "damage", "op": "damage.apply", "args": {
+                        "target_ids": [{"$slot": "target"}], "expression": "1d6",
+                        "damage_type": "force", "source": text,
+                        "reduction": {"$result": "save.damage_reduction_by_actor_id"},
+                    }},
+                ]
             sheet["content"]["activities"] = [
                 {
                     "id": "twin",
@@ -183,7 +208,7 @@ async def prepare(tmp_path, *, reaction, movement_payment=None, mover_incapacita
                     "mechanic_refs": ["dnd5e.core.reaction.uncanny_dodge"],
                 }
             ]
-        elif not protection:
+        elif not protection and not legendary_resistance:
             sheet["abilities"]["constitution"]["score"] = 30
             sheet["effects"] = [
                 {
