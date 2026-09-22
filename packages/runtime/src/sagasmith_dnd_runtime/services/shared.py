@@ -2898,7 +2898,9 @@ class SharedService:
         if relation["relation_key"] != _support.STEEL_DEFENDER_RELATION_KEY:
             raise ValueError("relation is not a Steel Defender relation")
         binding = dict(relation["template_binding"])
-        if binding["reviewed_expression_hash"] != _support.STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH:
+        if binding["reviewed_expression_hash"] not in (
+            _support.STEEL_DEFENDER_REVIEWED_EXPRESSION_HASHES
+        ):
             raise ValueError("Steel Defender relation has a stale reviewed hash")
         owner_id = relation["owner_character_id"]
         dependent_id = relation["dependent_actor_id"]

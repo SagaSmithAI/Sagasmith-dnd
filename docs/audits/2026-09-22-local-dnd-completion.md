@@ -5,6 +5,57 @@ requires implementation and applicable validation; pending items remain open.
 Host-managed local execution must preserve Runtime authority, real choices,
 source evidence, CAS, transactions and original-key replay.
 
+## #173 — exact Tasha Battle Smith source and lifecycle
+
+The immutable local Tasha repair verifies its input archive, normalized source
+asset, section and chunk hashes, and preserves the original assets byte for byte.
+It separates the merged Tool Proficiency records, binds Smith's Tools and martial
+weapons, normalizes all five always-prepared spell thresholds, and restores the
+3/5/9/15 feature levels and Extra Attack grant. Battle Ready recognizes only the
+reviewed Eberron or Tasha feature/package identity; direct actor ingress cannot
+forge either grant. The source cards for Arcane Jolt and Improved Defender retain
+their explicit Agent ruling contract. This does not certify new native executors
+for those abilities.
+
+The reviewed Tasha Defender uses the owner's spell attack modifier and its own
+PB expressions. Scalar save, skill and passive totals are evaluated without
+collapsing damage/healing dice or joining source fields. Its source Hit Dice grant
+survives the HP expression parser and tracks Artificer level; owner advancement
+preserves spent Hit Dice, current HP and daily resources. Runtime accepts the
+exact reviewed Tasha template hash while keeping source receipts, owner
+entitlement, branch authorization and the independently reviewed Eberron policy.
+Tasha owner death perishes the Defender; the older Eberron policy stays independent.
+
+The real catalog acceptance also exposed a missing SRD Component Pouch inventory
+contract. The catalog compiler now binds that exact item to the reviewed material
+role. Purchasing it through public content application enables ordinary material
+components; a mundane pouch still cannot substitute, and cost/consumption and
+hand constraints remain in the shared component resolver.
+
+These changes version Core at 1.85.0, SRD 2014 at 1.39.0, SRD 2024 at 1.9.0,
+standard 2014 content at 1.11.0 and both preset packs at 2.7.0. The new private
+Tasha archive is 1.0.2-local.battle-smith.1; the official lock and deterministic
+builder compose its source repair. No commercial archive is committed here.
+
+The exact-source acceptance explicitly combines the locked Eberron base Artificer
+class and PHB spell source with the Tasha subclass: the Tasha archive has no class
+artifact. Private-library tests must pass separately from public synthetic tests;
+neither category is paid-provider or live-campaign acceptance.
+
+Validation: the two real private-library protocol cases passed. They cover
+missing class choices, exact 3/5/9/15 grants and all spell thresholds through
+level 17, full subclass-before/after-level card parity with distinct equipment
+identities, mundane/magic Battle Ready weapons, entitlement and duplicate
+Defender rejection, scaling, initiative/command/Dodge, Rend/Repair/Deflect,
+Mending, rest/revival, long-rest replacement, injected receipt-failure rollback,
+same-rest rejection, owner death, stale revisions, original-key replay, restart
+and snapshot integrity. Failed harness attempts remain separate from this final
+fresh-database lifecycle pass; no database edits or authority bypass were used.
+All 1,879 Domain/Runtime cases are covered by the full run plus the corrected
+version-assertion suite (8 passed). Full MCP regression passed 1,586 cases with
+32 optional integrations skipped. Ruff, immutable lock/generated references and
+whitespace checks passed. Private source and test databases remain local.
+
 ## #168 — source-bound player Drow Sunlight Sensitivity
 
 The standard 2014 Drow build grants a passive reviewed mechanic with the PHB
@@ -45,6 +96,10 @@ no failures/errors. The final focused Domain suite passed 28 cases, including
 unseen and reviewed Pack Tactics advantage cancellation. Ruff, generated
 references, immutable content lock and whitespace checks passed.
 This evidence does not represent paid-model or live campaign acceptance.
+
+The exact pushed commit `eaad5c4b02f32d7b7d58d1f5c6f83420732b3fce`
+also passed all four jobs in [CI run 35741122085](https://github.com/SagaSmithAI/Sagasmith-dnd/actions/runs/35741122085),
+including locked Python 3.11, compatibility Python 3.12, Skills and UI.
 
 ## Completed
 

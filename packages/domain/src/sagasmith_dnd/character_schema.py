@@ -170,6 +170,15 @@ EBERRON_ARTIFICER_BATTLE_READY_PACK_ID = (
 EBERRON_ARTIFICER_BATTLE_READY_FEATURE_ID = (
     EBERRON_ARTIFICER_BATTLE_READY_PACK_ID + ".feature.battle-ready"
 )
+TASHA_ARTIFICER_BATTLE_READY_PACK_ID = (
+    "dnd5e.addon.rulebook.d-d-5e-tasha-s-cauldron-of-everything.89a729b37a4b"
+)
+BATTLE_READY_SOURCES = {
+    EBERRON_ARTIFICER_BATTLE_READY_PACK_ID: EBERRON_ARTIFICER_BATTLE_READY_FEATURE_ID,
+    TASHA_ARTIFICER_BATTLE_READY_PACK_ID: (
+        TASHA_ARTIFICER_BATTLE_READY_PACK_ID + ".feature.battle-ready"
+    ),
+}
 
 STANDARD_WEAPON_MATERIALS = {
     "club": ["wood"],
@@ -5199,9 +5208,9 @@ def _has_2014_artificer_battle_ready(sheet: dict[str, Any]) -> bool:
     for feature in dict(sheet.get("content") or {}).get("features", []):
         if not isinstance(feature, dict):
             continue
-        if feature.get("id") != EBERRON_ARTIFICER_BATTLE_READY_FEATURE_ID:
-            continue
-        if feature.get("pack_id") != EBERRON_ARTIFICER_BATTLE_READY_PACK_ID:
+        if feature.get("pack_id") not in BATTLE_READY_SOURCES or feature.get("id") != (
+            BATTLE_READY_SOURCES[feature["pack_id"]]
+        ):
             continue
         pack_version = feature.get("pack_version")
         rule_refs = feature.get("rule_refs")

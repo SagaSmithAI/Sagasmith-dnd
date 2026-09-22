@@ -5995,6 +5995,21 @@ def materialize_parameterized_statblock_source(
             flags=re.IGNORECASE,
         )
     if "owner_proficiency_bonus" in normalized_parameters:
+        # Resolve printed scalar totals before replacing the remaining PB operands.
+        # The token boundary excludes dice such as 1d8 + PB: dice are preserved
+        # for the attack/healing resolvers, never collapsed into scalar totals.
+        def scalar_pb_total(match: re.Match[str]) -> str:
+            base = match.group("base")
+            total = int(base) + normalized_parameters["owner_proficiency_bonus"] * int(
+                match.group("factor") or 1
+            )
+            return f"{total:+d}" if base.startswith(("+", "-")) else str(total)
+
+        rendered = re.sub(
+            r"(?<![\w])(?P<base>[+-]?\d{1,3})[ \t]+(?:plus|\+)[ \t]*\(?[ \t]*PB"
+            r"(?:[ \t]*(?:x|×|\*)[ \t]*(?P<factor>[1-9]\d?))?[ \t]*\)?",
+            scalar_pb_total, rendered,
+        )
         rendered = re.sub(
             # Keep the printed ``Proficiency Bonus (PB)`` label intact while
             # resolving PB operands in saves, attacks, damage, and healing.

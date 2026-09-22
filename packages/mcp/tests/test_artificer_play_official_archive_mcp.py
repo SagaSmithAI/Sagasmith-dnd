@@ -177,7 +177,10 @@ def test_protocol_combat_uses_and_persists_campaign_random_stream(tmp_path: Path
     asyncio.run(exercise())
 
 
-async def _exercise_defender_combat(server, campaign_id: str, owner: dict, defender: dict):
+async def _exercise_defender_combat(
+    server, campaign_id: str, owner: dict, defender: dict, *, attack_bonus=4,
+    source_prefix=_PREFIX, rule_version=_RULE_VERSION,
+):
     """Exercise existing public combat contracts; also reusable for local failure diagnosis."""
     async def current() -> dict:
         return await _call(server, "campaign_query", {
@@ -256,9 +259,9 @@ async def _exercise_defender_combat(server, campaign_id: str, owner: dict, defen
     assert dodging["turn_budget"]["reaction"] == 1
     rend = next(item for item in defender["sheet"]["inventory"]["items"]
                 if item["name"] == "Force-Empowered Rend")
-    # This exact archive contains the old Eberron printing, not the revised
-    # spell-attack-modifier statblock. Never substitute the errata formula here.
-    assert rend["mechanics"]["attack_bonus_override"] == 4
+    # The caller supplies its exact reviewed source expectation: the old
+    # Eberron printing uses +4; the Tasha owner's spell attack bonus is +5.
+    assert rend["mechanics"]["attack_bonus_override"] == attack_bonus
     assert rend["mechanics"]["damage_bonus_override"] == 2
     attack_action = {
         "weapon_id": rend["id"], "attack_mode": "melee", "context": {"spatial_facts": {
@@ -292,7 +295,7 @@ async def _exercise_defender_combat(server, campaign_id: str, owner: dict, defen
         key: value for key, value in attack_request.items()
         if key not in {"expected_revision", "idempotency_key"}
     })
-    assert preflight["attack_bonus"] == 4
+    assert preflight["attack_bonus"] == attack_bonus
     assert await current() == before
     attack_response = await server.call_tool("combat_resolve_attack", attack_request)
     assert await server.call_tool("combat_resolve_attack", attack_request) == attack_response
@@ -300,7 +303,8 @@ async def _exercise_defender_combat(server, campaign_id: str, owner: dict, defen
     assert json.loads(attack_response[0][0].text) == attack_response[1]
     attack = attack_response[1]["result"]
     assert attack["weapon_id"] == rend["id"]
-    assert attack["natural"] == 19 and attack["total"] == 23 and attack["hit"] is True
+    assert attack["natural"] == 19 and attack["total"] == 19 + attack_bonus
+    assert attack["hit"] is True
     assert attack["damage"]["applied_amount"] == 5
     assert attack["damage"]["damage_type"] == "force"
     assert attack["damage"]["before_hp"] == 50 and attack["damage"]["after_hp"] == 45
@@ -315,11 +319,15 @@ async def _exercise_defender_combat(server, campaign_id: str, owner: dict, defen
     await end(defender["id"], "defender-rend-end")
     deflect_request, deflected = await _exercise_deflect_attack(
         server, campaign_id, owner, defender, target,
+        source_prefix=source_prefix, rule_version=rule_version,
     )
     return repair_request, repaired, attack_request, attack_response, deflect_request, deflected
 
 
-async def _exercise_deflect_attack(server, campaign_id, owner, defender, attacker):
+async def _exercise_deflect_attack(
+    server, campaign_id, owner, defender, attacker, *, source_prefix=_PREFIX,
+    rule_version=_RULE_VERSION,
+):
     """Use the real materialized reaction, without injecting a synthetic activity."""
     async def snapshot():
         campaign = await _call(server, "campaign_query", {
@@ -392,8 +400,8 @@ async def _exercise_deflect_attack(server, campaign_id, owner, defender, attacke
                    if item["mechanic_id"] == STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID)
     assert receipt["event"] == "attack.before_roll.steel_defender_deflect"
     assert receipt["citations"] == [{
-        "source_artifact_id": _DEFENDER, "source_pack_id": _PREFIX,
-        "source_pack_version": _RULE_VERSION,
+        "source_artifact_id": source_prefix + ".statblock.steel-defender",
+        "source_pack_id": source_prefix, "source_pack_version": rule_version,
         "reviewed_expression_hash": relation["template_binding"]["reviewed_expression_hash"],
     }]
     assert receipt["facts"]["committed"] is True

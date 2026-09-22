@@ -4,6 +4,7 @@ import pytest
 
 from sagasmith_dnd.character_schema import add_inventory_item, default_character_sheet
 from sagasmith_dnd.dependent_actor_refresh import (
+    TASHA_STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH,
     materialize_dependent_actor_owner_scaling,
     refresh_dependent_actor_sheet,
 )
@@ -77,6 +78,50 @@ def _reviewed_steel_defender_baseline() -> dict:
         "Melee Weapon Attack: +4 to hit. Hit: 1d8 + 2 force damage."
     )
     return sheet
+
+
+@pytest.mark.parametrize("level", [3, 5, 9, 15, 17, 20])
+def test_tasha_materialization_retains_source_hit_dice_and_rendered_pb(level: int) -> None:
+    baseline = _authoritative(hp_max=2 + 3 + 5 * level, pb=3, spell_attack=6)
+    result = materialize_dependent_actor_owner_scaling(
+        baseline, _params(3, 6, level), relation_key="steel_defender",
+        reviewed_expression_hash=TASHA_STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH,
+    )
+    assert result["combat"]["hit_dice"]["d8"]["max"] == level
+    assert result["combat"]["hit_dice"]["d8"]["value"] == level
+    assert result["inventory"] == baseline["inventory"]
+    assert result["abilities"] == baseline["abilities"]
+    assert baseline["combat"]["hit_dice"] == {}
+
+
+@pytest.mark.parametrize("level", [True, 0, 21, 3.5, "3", None])
+def test_tasha_materialization_rejects_invalid_owner_level(level) -> None:
+    with pytest.raises(ValueError, match="class level"):
+        materialize_dependent_actor_owner_scaling(
+            _authoritative(hp_max=20, pb=2, spell_attack=5), _params(2, 5, level),
+            relation_key="steel_defender",
+            reviewed_expression_hash=TASHA_STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH,
+        )
+
+
+def test_tasha_refresh_keeps_spent_hit_dice_and_current_damage() -> None:
+    def materialize(level, pb):
+        return materialize_dependent_actor_owner_scaling(
+            _authoritative(hp_max=5 + 5 * level, pb=pb, spell_attack=pb + 3),
+            _params(pb, pb + 3, level), relation_key="steel_defender",
+            reviewed_expression_hash=TASHA_STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH,
+        )
+    old, new = materialize(3, 2), materialize(5, 3)
+    current = deepcopy(old)
+    current["combat"]["hit_dice"]["d8"]["value"] = 1
+    current["combat"]["hp"]["value"] = 7
+    result = refresh_dependent_actor_sheet(current, old, new, _params(2, 5, 3), _params(3, 6, 5))
+    assert result["sheet"]["combat"]["hit_dice"]["d8"]["value"] == 3
+    assert result["sheet"]["combat"]["hit_dice"]["d8"]["max"] == 5
+    assert result["sheet"]["combat"]["hp"]["value"] == 7
+    assert result["sheet"]["combat"]["hp"]["max"] == 30
+    assert "combat.hit_dice.d8.value" in result["changed_paths"]
+    assert current["combat"]["hit_dice"]["d8"]["value"] == 1
 
 
 def test_materialize_steel_defender_might_of_the_master_from_reviewed_baseline() -> None:

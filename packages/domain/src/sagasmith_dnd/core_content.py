@@ -37,7 +37,7 @@ from sagasmith_dnd.standard_spell_ids import (
 )
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.38.0"
+PACK_VERSION = "1.39.0"
 
 _CONDITIONAL_SPECIES_SAVE_TRAITS = {
     "dwarven resilience": ("dwarven_resilience", CORE_DWARVEN_RESILIENCE_MECHANIC_ID),
@@ -1964,6 +1964,13 @@ def _inventory_template(
         template["kind"] = "ammunition"
         template["quantity"] = amount
         template["weight_oz"] = weight_oz / amount if amount else 0
+    elif table == "adventuring gear" and name.casefold() == "component pouch":
+        # Only this exact bundled catalog record has the reviewed role. Ordinary
+        # pouches and caller-supplied names do not confer component eligibility.
+        template["mechanics"]["spell_component"] = {
+            "kind": "pouch",
+            "source": "bundled:srd2014/04_Equipment/Adventuring_Gear.md#Component-Pouch",
+        }
     return template
 
 

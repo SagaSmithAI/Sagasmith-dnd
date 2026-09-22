@@ -21,6 +21,7 @@ import repair_steel_defender_citation
 import repair_steel_defender_lifecycle_policy
 import repair_steel_defender_owner_binding
 import repair_subclass_grants
+import repair_tasha_battle_smith
 import repair_tortle_clause_coverage
 from sagasmith_core.content_pack import loads_content_archive
 from sagasmith_dnd.official_expansions import (
@@ -31,6 +32,7 @@ from sagasmith_dnd_runtime.official_library import verify_official_expansion_lib
 
 _STEPS = {
     "subclass_grants": repair_subclass_grants.repair_archive,
+    "tasha_battle_smith": repair_tasha_battle_smith.repair_archive,
     "artificer_asi": repair_artificer_asi.repair_archive,
     "artificer_context": repair_artificer_context.repair_archive,
     "steel_defender_citation": repair_steel_defender_citation.repair_archive,
@@ -68,7 +70,10 @@ def _repair(data: bytes, target: dict) -> tuple[bytes, list[dict]]:
         data, report = _STEPS[name](data)
         reports.append({"step": name, **report})
     if hashlib.sha256(data).hexdigest() != target["archive_sha256"]:
-        raise ValueError("composed archive does not match the shipped target lock")
+        raise ValueError(
+            "composed archive does not match the shipped target lock: "
+            f"{target.get('id', '<unspecified>')}"
+        )
     return data, reports
 
 

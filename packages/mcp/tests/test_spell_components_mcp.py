@@ -1,5 +1,6 @@
 import asyncio
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -141,6 +142,37 @@ async def _prepare(server, sheet, combat):
 async def _cast(server, tool, args):
     _, result = await server.call_tool(tool, args)
     return result["result"] if tool == "character_action" else result
+
+
+@pytest.mark.parametrize("slug,eligible", [("component-pouch", True), ("pouch", False)])
+def test_bundled_catalog_item_binds_only_reviewed_component_pouch(tmp_path, slug, eligible):
+    async def exercise():
+        server = create_server(replace(
+            _config(tmp_path), dnd_skills_dir=Path(__file__).resolve().parents[3] / "skills",
+        ))
+        campaign_id, actor_id, tool, args = await _prepare(server, _caster("missing"), False)
+        assert (await _cast(server, tool, args))["status"] == "pending_ruling"
+        request = {
+            "character_id": actor_id,
+            "artifact_id": "dnd5e.content.srd2014.item." + slug,
+            "expected_revision": args["expected_revision"],
+            "idempotency_key": "catalog-item",
+        }
+        actor = await _call(server, "character_content_apply", request)
+        assert await _call(server, "character_content_apply", request) == actor
+        args["expected_revision"] = actor["revision"]
+        before = await _campaign_actor_snapshot(server, campaign_id, [actor_id])
+        result = await _cast(server, tool, args)
+        assert result["status"] == ("committed" if eligible else "pending_ruling")
+        if eligible:
+            item = actor["sheet"]["inventory"]["items"][0]
+            assert item["mechanics"]["spell_component"]["kind"] == "pouch"
+            assert item["source_key"] == request["artifact_id"]
+            assert await _cast(server, tool, args) == result
+        else:
+            assert await _campaign_actor_snapshot(server, campaign_id, [actor_id]) == before
+
+    asyncio.run(exercise())
 
 
 @pytest.mark.parametrize("combat", [False, True])

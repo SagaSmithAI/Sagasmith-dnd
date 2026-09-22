@@ -12196,7 +12196,7 @@ class ContentService:
                 owner_binding is not None
                 and owner_binding["relation_key"] == _support.STEEL_DEFENDER_RELATION_KEY
                 and template_binding["reviewed_expression_hash"]
-                == _support.STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH
+                in _support.STEEL_DEFENDER_REVIEWED_EXPRESSION_HASHES
             ):
                 actor_snapshot["dependent_turn"] = {
                     "kind": _support.STEEL_DEFENDER_TURN_KIND,

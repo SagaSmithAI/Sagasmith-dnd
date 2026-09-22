@@ -203,7 +203,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     manifest, artifacts = build_srd2014_content(workspace / "skills")
     counts = Counter(item["kind"] for item in artifacts)
 
-    assert manifest["version"] == PACK_VERSION == "1.38.0"
+    assert manifest["version"] == PACK_VERSION == "1.39.0"
     assert "dnd5e.core.spell.structured_resolution" in manifest["native_mechanic_refs"]
     registered = {boundary.id for boundary in get_core_rule_pack("2014").boundaries}
     assert set(manifest["native_mechanic_refs"]) <= registered
@@ -319,6 +319,17 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     arrows = next(item for item in artifacts if item["id"] == "dnd5e.content.srd2014.item.arrows")
     assert arrows["card"]["inventory_template"]["kind"] == "ammunition"
     assert arrows["card"]["inventory_template"]["quantity"] == 20
+    pouch = next(
+        item for item in artifacts if item["id"] == "dnd5e.content.srd2014.item.component-pouch"
+    )
+    assert pouch["card"]["inventory_template"]["mechanics"]["spell_component"] == {
+        "kind": "pouch",
+        "source": "bundled:srd2014/04_Equipment/Adventuring_Gear.md#Component-Pouch",
+    }
+    ordinary_pouch = next(
+        item for item in artifacts if item["id"] == "dnd5e.content.srd2014.item.pouch"
+    )
+    assert "spell_component" not in ordinary_pouch["card"]["inventory_template"]["mechanics"]
     assert any(item["card"].get("name") == "Dungeoneer's Pack" for item in ordinary_items)
 
     fireball = next(

@@ -236,6 +236,32 @@ def test_materialization_preserves_proficiency_label_and_scaling_condition() -> 
     assert "Hit: 1d8 + 2 force damage" in rendered
 
 
+@pytest.mark.parametrize("pb", [2, 3, 4, 5, 6])
+def test_parameterized_scalar_pb_totals_preserve_dice_and_field_boundaries(pb: int) -> None:
+    source = (
+        "# Test Construct\n\n"
+        "**Armor Class** 15\n"
+        "**Hit Points** 5 + five times your artificer level\n"
+        "**Proficiency Bonus (PB)** equals your bonus\n"
+        "**Saving Throws** Dex +1 plus PB, Con +2 + PB\n"
+        "**Skills** Athletics +2 plus PB, Perception +0 plus PB x2\n"
+        "**Senses** passive Perception 10 + (PB x2)\n"
+        "***Strike.*** Hit: 1d8 + PB force damage.\n"
+        "***Repair.*** Regain 2d8 + PB hit points.\n"
+    )
+    requirement = parameterized_statblock_requirements(source)
+    assert requirement is not None
+    rendered, _ = materialize_parameterized_statblock_source(
+        source, requirement,
+        numeric_parameters={"owner_class_level": 7, "owner_proficiency_bonus": pb},
+    )
+    assert f"Dex +{1 + pb}, Con +{2 + pb}\n**Skills**" in rendered
+    assert f"Athletics +{2 + pb}, Perception +{2 * pb}\n**Senses**" in rendered
+    assert f"passive Perception {10 + 2 * pb}\n***Strike" in rendered
+    assert f"Hit: 1d8 + {pb} force damage" in rendered
+    assert f"Regain 2d8 + {pb} hit points" in rendered
+
+
 def test_parameterized_statblock_requirements_accept_bounded_flat_pdf_fields() -> None:
     requirement = parameterized_statblock_requirements(
         "Tiny construct, neutral Armor Class 13 (natural armor) "

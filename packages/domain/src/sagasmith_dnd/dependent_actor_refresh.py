@@ -20,10 +20,23 @@ _RUNTIME_PATHS = {
     ("combat", "hp", "value"),
     ("combat", "hp", "temp"),
     ("combat", "death_saves"),
+    ("combat", "hit_dice", "d8", "value"),
 }
 STEEL_DEFENDER_RELATION_KEY = "steel_defender"
 STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH = (
     "539cc387391b58fce93a7f0268910b66615db8a42006ab1913378222f1216e8c"
+)
+TASHA_STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH = (
+    "437cccd3dfe258dc91c1f9c4e05d1ce94833ae8b660e761e034f8d3b50931d30"
+)
+STEEL_DEFENDER_REVIEWED_EXPRESSION_HASHES = frozenset(
+    {
+        STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH,
+        # Tasha uses a literal Constitution contribution and the owner's spell attack
+        # modifier. Its PB expressions are materialized directly, not via the older
+        # Eberron Might of the Master baseline adjustment below.
+        TASHA_STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH,
+    }
 )
 _STEEL_DEFENDER_BASE_PROFICIENCY_BONUS = 2
 
@@ -51,7 +64,7 @@ def materialize_dependent_actor_owner_scaling(
     relation_key: str,
     reviewed_expression_hash: str,
 ) -> dict[str, Any]:
-    """Apply the exact 2014 Steel Defender Might of the Master progression.
+    """Apply the exact source's additional Steel Defender scaling fields.
 
     The reviewed card is printed at proficiency bonus +2.  Its trait says the
     listed saves, skills, Rend numbers, and Repair healing each increase by one
@@ -62,6 +75,18 @@ def materialize_dependent_actor_owner_scaling(
     result = validate_character_sheet(deepcopy(dict(sheet)))
     if _normalized_name(relation_key) != STEEL_DEFENDER_RELATION_KEY:
         return result
+    if reviewed_expression_hash == TASHA_STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH:
+        # This clause is inside the reviewed HP expression and is removed when
+        # rendering its numeric HP total. Preserve its separate Hit Dice grant.
+        level = numeric_parameters.get("owner_class_level")
+        if isinstance(level, bool) or not isinstance(level, int) or not 1 <= level <= 20:
+            raise ValueError("Steel Defender owner class level is outside the 2014 range")
+        if result["combat"]["hit_dice"]:
+            raise ValueError("Tasha Steel Defender template has unexpected printed Hit Dice")
+        result["combat"]["hit_dice"] = {
+            "d8": {"value": level, "max": level, "recovers_on": "long_rest"},
+        }
+        return validate_character_sheet(result)
     if reviewed_expression_hash != STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH:
         return result
     raw_pb = numeric_parameters.get("owner_proficiency_bonus")
@@ -210,6 +235,7 @@ def _steel_defender_paths(
 ) -> set[tuple[str | int, ...]]:
     paths: set[tuple[str | int, ...]] = {
         ("combat", "hp", "max"),
+        ("combat", "hit_dice", "d8", "max"),
         ("abilities", "dexterity", "bonus"),
         ("abilities", "constitution", "bonus"),
         ("skills", "athletics", "bonus"),
@@ -349,6 +375,14 @@ def refresh_dependent_actor_sheet(
 
     # Validation also rejects a lower new maximum that would invalidate the
     # current HP.  In particular, this deliberately does not clamp current HP.
+    if "combat.hit_dice.d8.max" in changed_paths:
+        old_pool = old_authoritative["combat"]["hit_dice"]["d8"]
+        current_pool = current["combat"]["hit_dice"]["d8"]
+        pool = refreshed["combat"]["hit_dice"]["d8"]
+        spent = old_pool["max"] - current_pool["value"]
+        pool["value"] = max(0, pool["max"] - spent)
+        if pool["value"] != current_pool["value"]:
+            changed_paths.append("combat.hit_dice.d8.value")
     refreshed = validate_character_sheet(refreshed)
     return {
         "sheet": refreshed,
@@ -360,6 +394,8 @@ def refresh_dependent_actor_sheet(
 __all__ = [
     "STEEL_DEFENDER_RELATION_KEY",
     "STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH",
+    "STEEL_DEFENDER_REVIEWED_EXPRESSION_HASHES",
+    "TASHA_STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH",
     "materialize_dependent_actor_owner_scaling",
     "refresh_dependent_actor_sheet",
 ]

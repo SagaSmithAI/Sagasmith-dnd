@@ -6,8 +6,7 @@ from typing import Any
 import pytest
 
 from sagasmith_dnd.character_schema import (
-    EBERRON_ARTIFICER_BATTLE_READY_FEATURE_ID,
-    EBERRON_ARTIFICER_BATTLE_READY_PACK_ID,
+    BATTLE_READY_SOURCES,
     add_effect,
     add_inventory_item,
     adjust_wallet,
@@ -237,8 +236,9 @@ def test_weapon_attacks_derive_actor_proficiency_and_finesse_ability() -> None:
     {"additional_damage": [{"damage_formula": "1d6", "damage_type": "poison"}]},
     {"versatile_additional_damage": [{"damage_formula": "1d6", "damage_type": "poison"}]},
 ])
+@pytest.mark.parametrize("pack_id,feature_id", BATTLE_READY_SOURCES.items())
 def test_2014_battle_ready_uses_intelligence_for_active_magic_weapons_only(
-    extra: dict[str, Any],
+    extra: dict[str, Any], pack_id: str, feature_id: str,
 ) -> None:
     sheet = default_character_sheet()
     sheet["abilities"]["strength"]["score"] = 8
@@ -247,9 +247,9 @@ def test_2014_battle_ready_uses_intelligence_for_active_magic_weapons_only(
     sheet["traits"]["proficiencies"]["weapons"] = ["martial weapons"]
     sheet["content"]["features"] = [
         {
-            "id": EBERRON_ARTIFICER_BATTLE_READY_FEATURE_ID,
+            "id": feature_id,
             "name": "Battle Ready",
-            "pack_id": EBERRON_ARTIFICER_BATTLE_READY_PACK_ID,
+            "pack_id": pack_id,
             "pack_version": "1.0.8-local.infusion-source.2",
             "rule_refs": ["eberron-rising-from-the-last-war#battle-ready"],
         }
@@ -314,6 +314,17 @@ def test_2014_battle_ready_uses_intelligence_for_active_magic_weapons_only(
         attack_facts={"magical": attacks[mundane_id]["magical"], "materials": []},
     )
     assert damage["applied_amount"] == 4
+
+    for field, invalid in (("id", "caller.feature.battle-ready"), ("pack_id", "caller"),
+                           ("pack_version", ""), ("rule_refs", [])):
+        mismatched = deepcopy(sheet)
+        mismatched["content"]["features"][0][field] = invalid
+        rejected = derive_character_sheet(mismatched)["inventory"]["weapon_attacks"]
+        assert next(a for a in rejected if a["item_id"] == magic_id)["attack_ability"] == "strength"
+    incompatible = deepcopy(sheet)
+    incompatible["edition"] = "2024"
+    rejected = derive_character_sheet(incompatible)["inventory"]["weapon_attacks"]
+    assert next(a for a in rejected if a["item_id"] == magic_id)["attack_ability"] == "strength"
 
 
 @pytest.mark.parametrize(

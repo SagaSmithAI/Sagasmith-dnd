@@ -127,6 +127,7 @@ from sagasmith_dnd.campaign_state import (
 )
 from sagasmith_dnd.character_import import inspect_character_document
 from sagasmith_dnd.character_schema import (
+    BATTLE_READY_SOURCES,
     CHARACTER_SPELL_CARD_FIELDS,
     EBERRON_ARTIFICER_BATTLE_READY_FEATURE_ID,
     EBERRON_ARTIFICER_BATTLE_READY_PACK_ID,
@@ -310,6 +311,7 @@ from sagasmith_dnd.dependent_actor_lifecycle import dependent_actor_lifecycle_po
 from sagasmith_dnd.dependent_actor_refresh import (
     STEEL_DEFENDER_RELATION_KEY,
     STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH,
+    STEEL_DEFENDER_REVIEWED_EXPRESSION_HASHES,
     materialize_dependent_actor_owner_scaling,
     refresh_dependent_actor_sheet,
 )
@@ -774,8 +776,8 @@ def _battle_ready_provenance(sheet: Mapping[str, Any] | None) -> list[dict[str, 
         deepcopy(item)
         for item in content.get("features", [])
         if isinstance(item, Mapping)
-        and item.get("id") == EBERRON_ARTIFICER_BATTLE_READY_FEATURE_ID
-        and item.get("pack_id") == EBERRON_ARTIFICER_BATTLE_READY_PACK_ID
+        and item.get("pack_id") in BATTLE_READY_SOURCES
+        and item.get("id") == BATTLE_READY_SOURCES[item["pack_id"]]
     ]
 
 
@@ -5443,6 +5445,7 @@ __all__ = [
     "STEEL_DEFENDER_DEFLECT_ATTACK_MECHANIC_ID",
     "STEEL_DEFENDER_RELATION_KEY",
     "STEEL_DEFENDER_REVIEWED_EXPRESSION_HASH",
+    "STEEL_DEFENDER_REVIEWED_EXPRESSION_HASHES",
     "STEEL_DEFENDER_TURN_KIND",
     "SagaSmithStorage",
     "SkillCatalog",

@@ -106,14 +106,14 @@ def test_shipped_lock_covers_every_current_official_expansion_artifact() -> None
         catalog_only.update(package["catalog_only"])
 
     assert len(lock["packages"]) == 10
-    assert sum(content.values()) == 2008
-    assert sum(ready.values()) == 1131
+    assert sum(content.values()) == 2009
+    assert sum(ready.values()) == 1132
     assert sum(catalog_only.values()) == 877
     assert ready == {
         "background": 51,
         "class": 1,
         "feat": 71,
-        "feature": 501,
+        "feature": 502,
         "item": 156,
         "species": 106,
         "spell": 168,
