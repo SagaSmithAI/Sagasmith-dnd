@@ -17,6 +17,7 @@ from uuid import uuid4
 from sagasmith_dnd import native_registry as _native
 from sagasmith_dnd import native_stances as _stances
 from sagasmith_dnd import steel_defender as _steel_defender
+from sagasmith_dnd.abilities import ABILITY_NAMES
 from sagasmith_dnd.activity_identity import is_multiattack_activity
 from sagasmith_dnd.breathing import breathing_blocks_recovery
 from sagasmith_dnd.character_schema import (
@@ -7049,7 +7050,7 @@ def settle_hide(
     actor: dict[str, Any],
     actor_id_value: str,
     observer_ids: Iterable[str],
-    observer_passive_perceptions: Mapping[str, int],
+    observer_passive_perceptions: Mapping[str, int | None],
     can_hide: bool,
     ruling_reason: str,
     rules: ResolutionContext | None = None,
@@ -7122,9 +7123,12 @@ def settle_hide(
         raise CombatEngineError("Hide observers must be living encounter participants")
     if set(normalized_observers) != set(observer_passive_perceptions):
         raise CombatEngineError("Hide observer passive Perception values must match observer IDs")
-    passives: dict[str, int] = {}
+    passives: dict[str, int | None] = {}
     for observer_id in normalized_observers:
         value_for_observer = observer_passive_perceptions[observer_id]
+        if value_for_observer is None:
+            passives[observer_id] = None  # authoritative sensory automatic failure
+            continue
         if isinstance(value_for_observer, bool) or not isinstance(value_for_observer, int):
             raise CombatEngineError("Hide observer passive Perception must be an integer")
         passives[observer_id] = int(value_for_observer)
@@ -7170,7 +7174,8 @@ def settle_hide(
         {
             "observer_id": observer_id,
             "passive_perception": passives[observer_id],
-            "detected": stealth_total < passives[observer_id],
+            "detected": passives[observer_id] is not None and stealth_total < passives[observer_id],
+            **({"automatic_failure": True} if passives[observer_id] is None else {}),
         }
         for observer_id in normalized_observers
     ]
@@ -7956,6 +7961,7 @@ def _sheet_check_modifiers(
     kind: str,
     ability: str,
     save_purpose: str | None = None,
+    skill_ability: str | None = None,
 ) -> tuple[int, bool, bool]:
     """Nonrolling modifiers shared by ordinary checks and 2014 initiative.
 
@@ -7970,7 +7976,9 @@ def _sheet_check_modifiers(
         if save_purpose == "concentration":
             effect_bonus += concentration_bonus
     normalized_ability = str(ability).strip().casefold().replace(" ", "_")
-    check_ability = SKILL_ABILITIES.get(normalized_ability, _long_ability_name(ability))
+    check_ability = skill_ability or SKILL_ABILITIES.get(
+        normalized_ability, _long_ability_name(ability)
+    )
     equipment_penalties = dict(derived.get("equipment_penalties") or {})
     penalty_field = (
         "save_disadvantage_abilities" if kind == "save" else "check_disadvantage_abilities"
@@ -8005,21 +8013,51 @@ def resolve_actor_check(
     ruleset: str | None = None,
     rules: ResolutionContext | None = None,
     rng: Any = None,
+    passive: bool = False,
+    skill_ability: str | None = None,
 ) -> dict[str, Any]:
     if kind not in ACTOR_CHECK_KINDS:
         raise CombatEngineError("unsupported check kind")
     sheet = actor_sheet(actor)
     derived = actor_derived(actor)
     normalized_ruleset = _normalize_ruleset(ruleset or sheet.get("edition"))
+    normalized_ability = str(ability).strip().casefold().replace(" ", "_")
+    if passive and (normalized_ruleset != "2014" or kind not in ABILITY_CHECK_KINDS):
+        raise CombatEngineError("passive checks require a 2014 ability check")
+    if passive and (
+        normalized_ability not in SKILL_ABILITIES
+        and _long_ability_name(ability) not in ABILITY_NAMES
+    ):
+        raise CombatEngineError("passive checks require a known ability or skill")
+    if skill_ability is not None:
+        skill_ability = _long_ability_name(skill_ability)
+        if (kind not in ABILITY_CHECK_KINDS or normalized_ability not in SKILL_ABILITIES
+                or skill_ability not in ABILITY_NAMES):
+            raise CombatEngineError("skill_ability requires a skill and a valid ability")
     conditions = _condition_set(sheet.get("conditions"))
     exhaustion = int(sheet.get("combat", {}).get("exhaustion", 0) or 0)
     if "dead" in conditions:
         raise CombatEngineError("dead actors cannot make checks or saving throws")
+    passive_sense_failure = []
+    if passive:
+        facts = dict(rules.facts) if rules else {}
+        for condition, reliance in (("blinded", "relies_on_sight"),
+                                    ("deafened", "relies_on_hearing")):
+            if condition not in conditions:
+                continue
+            if type(facts.get(reliance)) is not bool:
+                raise NeedsRulingError(
+                    "a passive check requires its sensory task classification",
+                    missing=(reliance,), ruling_kind="source_or_scene_fact",
+                )
+            if facts[reliance]:
+                passive_sense_failure.append(condition)
     modifier_save_purpose = save_purpose
     if modifier_save_purpose is None and rules is not None:
         modifier_save_purpose = str(dict(rules.facts).get("save_purpose") or "") or None
     effect_roll_bonus, equipment_disadvantage, poisoned = _sheet_check_modifiers(
-        sheet, derived, kind=kind, ability=ability, save_purpose=modifier_save_purpose
+        sheet, derived, kind=kind, ability=ability, save_purpose=modifier_save_purpose,
+        skill_ability=skill_ability,
     )
     effect_advantage, _effect_disadvantage = active_effect_roll_advantage(
         sheet, kind, key=str(ability).strip().casefold().replace(" ", "_")
@@ -8069,7 +8107,7 @@ def resolve_actor_check(
     )
     if armor_stealth_disadvantage:
         disadvantage = True
-    boundary_ids = []
+    boundary_ids = ["dnd5e.core.check.passive"] if passive else []
     dodge_advantage = kind == "save" and encounter_dodge_save_advantage(
         encounter,
         actor_id(actor),
@@ -8286,6 +8324,11 @@ def resolve_actor_check(
             boundary_ids.append("dnd5e.core.check.help")
 
     def with_rule_receipts(result: dict[str, Any]) -> dict[str, Any]:
+        if passive_sense_failure:
+            result.update(
+                passive_score=result["total"], total=None, success=False,
+                automatic_failure=True, reason=", ".join(passive_sense_failure),
+            )
         result["effect_roll_bonus"] = effect_roll_bonus
         result["equipment_disadvantage"] = equipment_disadvantage
         result["armor_stealth_disadvantage"] = armor_stealth_disadvantage
@@ -8336,9 +8379,13 @@ def resolve_actor_check(
     )
     roll_bonus = int(exhaustion_adjustment["bonus"])
     disadvantage = bool(exhaustion_adjustment["disadvantage"])
+    if passive and normalized_ability == "perception":
+        roll_bonus += int(derived.get("passive_perception_bonus", dict(
+            dict(sheet.get("traits") or {}).get("senses") or {}
+        ).get("passive_perception_bonus", 0)))
     derived_skills = dict(derived.get("skills") or {})
     if kind in ABILITY_CHECK_KINDS and normalized_ability in derived_skills:
-        score_ability = SKILL_ABILITIES[normalized_ability]
+        score_ability = skill_ability or SKILL_ABILITIES[normalized_ability]
         entry = dict(sheet.get("abilities", {}).get(score_ability) or {})
         score = int(ability_scores.get(score_ability, entry.get("score", 10)))
         proficiency_value = proficiency_bonus(level)
@@ -8360,6 +8407,7 @@ def resolve_actor_check(
                 kind="ability",
                 reroll_ones=_has_halfling_lucky(sheet),
                 rng=rng,
+                passive=passive,
             )
         )
     entry = abilities.get(ability) or abilities.get(_long_ability_name(ability)) or {}
@@ -8411,6 +8459,7 @@ def resolve_actor_check(
             kind="save" if kind == "save" else "ability",
             reroll_ones=_has_halfling_lucky(sheet),
             rng=rng,
+            passive=passive,
         )
     )
 

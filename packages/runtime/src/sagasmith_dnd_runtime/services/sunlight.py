@@ -195,6 +195,8 @@ def bind_local_contexts(services: Any, name: str, args: dict[str, Any], campaign
         "character_check",
         "character_action",
         "combat_ready",
+        "combat_resolve_hide",
+        "chase",
     }:
         return
     data = args.get("payload") if isinstance(args.get("payload"), dict) else {}
@@ -223,6 +225,20 @@ def bind_local_contexts(services: Any, name: str, args: dict[str, Any], campaign
             per_actor = facts.get("sunlight_by_actor") or {}
             if isinstance(per_actor, dict):
                 candidates.extend((value, key) for key, value in per_actor.items())
+    opponent = dict(dict(data.get("task") or {}).get("opponent") or {})
+    candidates.append((dict(opponent.get("rule_facts") or {}).get("sunlight"),
+                       opponent.get("actor_id")))
+    for mapping in (
+        data.get("passive_rule_facts"),
+        dict(args.get("ruling") or {}).get("observer_rule_facts"),
+    ):
+        if isinstance(mapping, dict):
+            for identifier, facts in mapping.items():
+                if isinstance(facts, dict):
+                    candidates.append((facts.get("sunlight"), identifier))
+                    per_actor = facts.get("sunlight_by_actor") or {}
+                    if isinstance(per_actor, dict):
+                        candidates.extend((value, key) for key, value in per_actor.items())
     for raw, owner in candidates:
         if isinstance(raw, dict) and "receipt" not in raw and "binding" not in raw and owner:
             raw["binding"] = state_binding(services, campaign_id, owner)

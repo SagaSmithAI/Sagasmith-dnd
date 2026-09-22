@@ -124,6 +124,7 @@ def resolve_check(
     kind: str = "ability",
     reroll_ones: bool = False,
     rng: RandomSource | None = None,
+    passive: bool = False,
 ) -> dict:
     """Resolve an ability check or saving throw.
 
@@ -133,6 +134,21 @@ def resolve_check(
     """
     if kind not in {"ability", "save"}:
         raise ValueError("resolve_check kind must be ability or save")
+    if passive:
+        if kind != "ability":
+            raise ValueError("only ability checks can be passive")
+        modifier = ability_modifier(ability_score)
+        proficiency = proficiency_bonus(level) if proficient else 0
+        adjustment = 5 * (int(bool(advantage)) - int(bool(disadvantage)))
+        total = 10 + modifier + proficiency + bonus + adjustment
+        return {
+            "kind": "passive", "dc": dc, "natural": None, "rolls": [],
+            "critical": False, "fumble": False, "roll_mode": "passive",
+            "ability_modifier": modifier, "proficiency_bonus": proficiency,
+            "bonus": bonus, "passive_base": 10, "passive_adjustment": adjustment,
+            "advantage_applied": adjustment > 0, "disadvantage_applied": adjustment < 0,
+            "total": total, "success": total >= dc,
+        }
     die = roll_d20(
         advantage=advantage,
         disadvantage=disadvantage,

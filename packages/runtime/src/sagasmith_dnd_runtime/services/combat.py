@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Annotated, Any, Literal
 
 from .. import application_support as _support
+from .passive_checks import chase_passive_contexts
 from .sunlight import check_updates, prepare_check_facts
 
 
@@ -1356,6 +1357,7 @@ class CombatService:
         branch_id: str | None = None,
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
+        passive_rule_facts: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Start a source-reviewed 2014 chase without creating a combat map."""
         self.access.require_campaign(campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES)
@@ -1477,6 +1479,8 @@ class CombatService:
             "branch_id": resolved_branch_id,
         }
         scope = f"chase-start:{campaign_id}:{resolved_branch_id}:{principal_id}"
+        if passive_rule_facts:
+            payload["passive_rule_facts"] = passive_rule_facts
         replay = self.replay_idempotent(scope, idempotency_key, payload)
         if replay is not None:
             return replay
@@ -1526,6 +1530,12 @@ class CombatService:
             actor_snapshots.append(snapshot)
         chase = _support.start_chase(
             actor_snapshots,
+            rules=rules_context,
+            pursuer_rules=chase_passive_contexts(
+                self, campaign_id, resolved_branch_id, principal_id,
+                [identifier for identifier in participant_ids if identifier not in quarry_ids],
+                passive_rule_facts,
+            ),
             quarry_ids=quarry_ids,
             initial_distance_ft=initial_distance_ft,
             ruleset=self.campaign_rules_edition(campaign.id),
@@ -1561,6 +1571,12 @@ class CombatService:
             campaign_state=_support.validate_party_state(next_state),
             expected_campaign_revision=expected_revision,
             operation="chase.start",
+            character_updates=[
+                _support.CharacterStateUpdate(
+                    character_id=snapshot["id"], sheet=snapshot["sheet"], notes=snapshot["notes"],
+                    expected_revision=snapshot["revision"],
+                ) for snapshot in actor_snapshots
+            ],
             actor=principal_id,
             branch_id=resolved_branch_id,
             idempotency_key=idempotency_key,
@@ -1608,6 +1624,7 @@ class CombatService:
         expected_revision: int | None = None,
         expected_actor_revision: int | None = None,
         idempotency_key: str | None = None,
+        passive_rule_facts: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Settle one ordered chase turn and the DMG urban complication stream."""
         self.access.require_campaign(campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES)
@@ -1624,6 +1641,8 @@ class CombatService:
             "branch_id": resolved_branch_id,
         }
         scope = f"chase-turn:{campaign_id}:{resolved_branch_id}:{principal_id}"
+        if passive_rule_facts:
+            payload["passive_rule_facts"] = passive_rule_facts
         replay = self.replay_idempotent(scope, idempotency_key, payload)
         if replay is not None:
             return replay
@@ -1664,6 +1683,12 @@ class CombatService:
                 "action": action,
             },
         )
+        all_characters = self.characters.list(campaign_id=campaign_id)
+        participant_records = {record.id: record for record in all_characters}
+        participant_records[current_actor.id] = current_actor
+        chase_participant_ids = {str(item["actor_id"]) for item in chase.get("participants", [])}
+        if not chase_participant_ids.issubset(participant_records):
+            raise ValueError("chase participants require current campaign actor cards")
         settled = _support.advance_chase_turn(
             chase,
             self.character_view(current_actor, rules_context=rules_context),
@@ -1674,13 +1699,27 @@ class CombatService:
             quarry_visibility=normalized_quarry_visibility,
             quarry_actors={
                 str(identifier): self.character_view(
-                    self.require_campaign_actor(campaign_id, str(identifier)),
+                    participant_records[str(identifier)],
                     rules_context=rules_context,
                 )
                 for identifier in chase.get("quarry_ids", [])
             },
+            pursuer_actors={
+                str(item["actor_id"]): self.character_view(
+                    participant_records[str(item["actor_id"])],
+                    rules_context=rules_context,
+                )
+                for item in chase.get("participants", [])
+                if item.get("role") == "pursuer" and item.get("active", True)
+            },
             death_saves=current_actor.character_type == "pc",
             rules=rules_context,
+            pursuer_rules=chase_passive_contexts(
+                self, campaign_id, resolved_branch_id, principal_id,
+                [str(item["actor_id"]) for item in chase.get("participants", [])
+                 if item.get("role") == "pursuer" and item.get("active", True)],
+                passive_rule_facts,
+            ),
         )
         next_state = _support.validate_party_state(_support.deepcopy(campaign.state))
         next_state["chase"] = settled["chase"]
@@ -1714,7 +1753,6 @@ class CombatService:
         expired: dict[str, list[str]] = {}
         advanced: dict[str, list[str]] = {}
         receipts: list[dict[str, Any]] = []
-        all_characters = self.characters.list(campaign_id=campaign_id)
         for character in all_characters:
             sheet = settled["sheet"] if character.id == current_actor.id else character.sheet
             actor_advanced: list[str] = []
@@ -1749,7 +1787,7 @@ class CombatService:
                 )
                 sheet = duration_extension.sheet
                 receipts.extend(duration_extension.receipts)
-            if sheet != character.sheet:
+            if sheet != character.sheet or character.id in chase_participant_ids:
                 character_updates.append(
                     _support.CharacterStateUpdate(
                         character_id=character.id,
@@ -6139,9 +6177,9 @@ class CombatService:
         self.require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = self.require_current_branch(campaign_id, branch_id)
         raw_ruling = dict(ruling or {})
-        if set(raw_ruling) - {"can_hide", "reason", "observers"}:
+        if set(raw_ruling) - {"can_hide", "reason", "observers", "observer_rule_facts"}:
             raise _support.CombatEngineError(
-                "Hide ruling accepts only can_hide, reason, and optional observers"
+                "Hide ruling accepts can_hide, reason, observers and observer_rule_facts"
             )
         can_hide = raw_ruling.get("can_hide")
         if not isinstance(can_hide, bool):
@@ -6179,6 +6217,16 @@ class CombatService:
             "reason": reason,
             "observers": list(normalized_observer_ids),
         }
+        observer_facts = raw_ruling.get("observer_rule_facts", {})
+        if (
+            not isinstance(observer_facts, dict)
+            or set(observer_facts) - set(normalized_observer_ids)
+        ):
+            raise ValueError("observer_rule_facts must identify only the reviewed Hide observers")
+        observer_facts = {key: self.checked_rule_facts(value)
+                          for key, value in observer_facts.items()}
+        if observer_facts:
+            normalized_ruling["observer_rule_facts"] = observer_facts
         payload = {
             "actor_id": actor_id,
             "ruling": normalized_ruling,
@@ -6232,17 +6280,31 @@ class CombatService:
         self.require_no_blocking_pending(encounter)
         self.require_encounter_combatant(encounter, actor_id, role="Hide actor")
         actor = self.combat_actor_snapshot(actor_id)
-        observer_passive_perceptions: dict[str, int] = {}
+        observer_passive_perceptions: dict[str, int | None] = {}
+        passive_receipts: list[dict[str, Any]] = []
+        hide_snapshots = {actor_id: actor}
         for observer_id in normalized_observer_ids:
             self.require_encounter_combatant(encounter, observer_id, role="Hide observer")
             observer = self.require_campaign_actor(campaign_id, observer_id)
             observer_snapshot = self.combat_actor_snapshot(observer.id)
-            passive = dict(observer_snapshot.get("derived") or {}).get("passive_perception")
-            if isinstance(passive, bool) or not isinstance(passive, int):
-                raise _support.CombatEngineError(
-                    f"observer {observer_id} has no authoritative passive Perception"
-                )
-            observer_passive_perceptions[observer_id] = int(passive)
+            hide_snapshots[observer_id] = observer_snapshot
+            passive = _support.resolve_actor_check(
+                observer_snapshot, kind="check", ability="perception", dc=0, passive=True,
+                encounter=encounter,
+                rules=self.effective_rule_context(
+                    campaign_id, branch_id=resolved_branch_id,
+                    facts={
+                        **prepare_check_facts(
+                            self, observer_facts.get(observer_id, {}), campaign_id=campaign_id,
+                            actor_id=observer_id, principal_id=principal_id,
+                        ),
+                        "actor_id": observer_id, "kind": "check", "ability": "perception",
+                        "passive": True, "action": "observe_hide",
+                    },
+                ),
+            )
+            observer_passive_perceptions[observer_id] = passive["total"]
+            passive_receipts.extend(passive.get("rule_receipts") or [])
         hide_rules = self.effective_rule_context(
             campaign_id,
             facts={
@@ -6269,6 +6331,7 @@ class CombatService:
         stealth_check = dict(hide_effect.get("stealth_check") or {})
         receipts = [
             *list(stealth_check.get("rule_receipts") or []),
+            *passive_receipts,
             *_support.core_receipts(
                 hide_rules,
                 ["dnd5e.core.activity.cunning_action"],
@@ -6332,6 +6395,12 @@ class CombatService:
                 "result": result,
                 "combat": next_encounter,
             },
+            character_updates=[
+                _support.CharacterStateUpdate(
+                    character_id=snapshot["id"], sheet=snapshot["sheet"], notes=snapshot["notes"],
+                    expected_revision=snapshot["revision"],
+                ) for snapshot in hide_snapshots.values()
+            ],
             rule_receipts=receipts,
         )
         return self.combat_response(campaign_id, principal_id, response)
@@ -8355,7 +8424,12 @@ class CombatService:
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Run the source-reviewed 2014 chase procedure only during Play."""
+        """Run the source-reviewed 2014 chase procedure only during Play.
+
+        start/take_turn payloads accept passive_rule_facts keyed by pursuer ID for
+        source-bound Perception context such as sunlight. All active pursuers'
+        passive scores are recomputed from their current cards on every turn.
+        """
         self.require_facade_phase(campaign_id, f"chase({action})", _support.PROFILE_PLAY)
         if action == "query":
             data = self.facade_payload(payload)
@@ -8379,6 +8453,7 @@ class CombatService:
                 branch_id,
                 expected_revision,
                 idempotency_key,
+                passive_rule_facts=data.get("passive_rule_facts"),
             )
         elif action == "take_turn":
             data = self.facade_payload(payload)
@@ -8399,6 +8474,7 @@ class CombatService:
                 expected_revision,
                 data.get("expected_actor_revision"),
                 idempotency_key,
+                passive_rule_facts=data.get("passive_rule_facts"),
             )
         else:
             data = self.facade_payload(payload)

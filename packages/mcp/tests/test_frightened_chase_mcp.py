@@ -121,6 +121,9 @@ def test_public_chase_preserves_fear_rulings_without_partial_settlement(
             if operation != "start":
                 started = await _call(server, "chase", arguments)
                 assert started["status"] == "committed"
+                actor = await _call(server, "character_query", {
+                    "view": "get", "payload": {"character_id": actor["id"]},
+                })
                 before = await snapshot()
                 arguments = {
                     "campaign_id": campaign_id, "action": "take_turn", "payload": {

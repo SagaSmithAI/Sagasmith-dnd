@@ -2694,8 +2694,10 @@ def test_cunning_action_dash_uses_bonus_action_and_current_effective_speed(
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize("observer_condition", ["none", "poisoned", "exhaustion", "blinded"])
 def test_cunning_action_hide_resolves_paid_declaration_with_passive_perception(
     tmp_path: Path,
+    observer_condition: str,
 ) -> None:
     async def exercise() -> None:
         config = _config(tmp_path)
@@ -2734,6 +2736,12 @@ def test_cunning_action_hide_resolves_paid_declaration_with_passive_perception(
         ]
         observer_sheet = default_character_sheet()
         observer_sheet["traits"]["senses"]["passive_perception_bonus"] = 5
+        if observer_condition == "poisoned":
+            observer_sheet["conditions"] = ["poisoned"]
+        elif observer_condition == "exhaustion":
+            observer_sheet["combat"]["exhaustion"] = 1
+        elif observer_condition == "blinded":
+            observer_sheet["conditions"] = ["blinded"]
         low_observer_sheet = default_character_sheet()
 
         async def create(name: str, sheet: dict) -> dict:
@@ -2820,6 +2828,7 @@ def test_cunning_action_hide_resolves_paid_declaration_with_passive_perception(
                     "can_hide": True,
                     "reason": "The rogue is obscured behind the larger ally.",
                     "observers": [observer["id"], low_observer["id"]],
+                    "observer_rule_facts": {observer["id"]: {"relies_on_sight": True}},
                 },
                 "expected_revision": paid["campaign_revision"],
                 "idempotency_key": "hide-settlement",
@@ -2828,6 +2837,13 @@ def test_cunning_action_hide_resolves_paid_declaration_with_passive_perception(
         assert settled["status"] == "committed"
         effect = settled["result"]["core_effect"]
         assert effect["stealth_check"]["kind"] == "ability"
+        passives = {entry["observer_id"]: entry["passive_perception"]
+                    for entry in effect["observers"]}
+        assert passives == {
+            observer["id"]: (None if observer_condition == "blinded"
+                             else 15 if observer_condition == "none" else 10),
+            low_observer["id"]: 10,
+        }
         assert len(effect["stealth_check"]["rolls"]) == 1
         assert settled["result"]["payment"]["already_paid"] is True
         assert "hide_declared" not in settled["combat"]["combatants"][0].get("turn_flags", {})
@@ -2843,6 +2859,7 @@ def test_cunning_action_hide_resolves_paid_declaration_with_passive_perception(
                     "can_hide": True,
                     "reason": "The rogue is obscured behind the larger ally.",
                     "observers": [observer["id"], low_observer["id"]],
+                    "observer_rule_facts": {observer["id"]: {"relies_on_sight": True}},
                 },
                 "expected_revision": paid["campaign_revision"],
                 "idempotency_key": "hide-settlement",

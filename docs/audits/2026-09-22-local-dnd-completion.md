@@ -5,6 +5,57 @@ requires implementation and applicable validation; pending items remain open.
 Host-managed local execution must preserve Runtime authority, real choices,
 source evidence, CAS, transactions and original-key replay.
 
+## #164 — authoritative 2014 passive checks (local batch)
+
+`character_check(action="passive")` resolves an exact active-module task with
+the ordinary actor check modifier pipeline, without consuming RNG. It supports
+all six abilities, all skills, DM-reviewed different-ability skill variants,
+proficiency/expertise/half proficiency and Jack of All Trades, equipment,
+exhaustion, conditions, active effects and locked rule-pack modifiers. Net
+advantage/disadvantage contributes +5/-5 and cancels normally. The task carries
+its source excerpt, reason, DC or opposing actor; caller-computed totals and
+proficiency/bonus overrides are rejected. Opposed ties preserve the situation.
+Blinded/deafened observers require explicit sensory task facts; reliance on the
+unavailable sense fails automatically instead of producing a numeric comparison.
+
+Secret checks default to a DM-only resolution receipt and presentation. Player
+campaign views omit the resolution, source and hidden DC. The campaign, all
+observed actor revisions, audit and retry response commit atomically. The same
+original key recovers the result after restart; a stale card or receipt failure
+rolls the entire transaction back. Passive checks cannot bypass combat procedures.
+
+Derived passive Perception, paid Hide observers and chase pursuers use the same
+resolver. Context-dependent card values are explicitly unresolved rather than
+invented. Chase scores refresh from current actor cards, including exhaustion;
+an unknown passive score only blocks an actual unseen-quarry escape comparison.
+Automatic sensory failures are distinguished from missing facts. Source-bound
+sunlight context is accepted for Hide/chase and its local revision metadata is
+filled by the Host. The generic sourced task also covers trap detection; trap
+trigger, damage and disarming automation remain the separate open #161 scope.
+
+The shared effect reader also fixes a suffix bug that treated a disadvantage
+effect as advantage. Empty effect lists no longer trigger repeated full-sheet
+validation in each modifier reader. A local 100-card cProfile probe dropped from
+700 to 400 sheet validations (1.643 s to 1.029 s); this is a synthetic microprobe,
+not a paid-model or live-campaign latency claim.
+
+Core is 1.86.0, SRD 2014 is 1.40.0, SRD 2024 is 1.10.0, standard 2014 is 1.12.0,
+and both preset packs are 2.8.0. Immutable catalog locks and generated operation
+contracts are refreshed. Changes are retained locally for the user-requested
+batch; no new issue/PR or individual push is part of this work. CI is not a
+completion gate for this batch.
+
+Validation: all 1,998 Domain/Runtime cases passed. The full MCP run passed 1,589
+cases with 32 optional integrations skipped and one existing save-damage test
+double failing because it assumed every actor check was a target saving throw.
+Scoping that double to saving throws restored its focused regression. Three
+additional public Drow passive-check cases passed, including local Host metadata
+binding, nonvisual checks and restart replay. The final passive Domain suite also
+covers automatic escape when every pursuer's sourced perception task fails due
+to an unavailable sense. Ruff, publisher consistency and whitespace checks pass.
+These are local protocol and contract results, not paid-provider or live-session
+acceptance.
+
 ## #173 — exact Tasha Battle Smith source and lifecycle
 
 The immutable local Tasha repair verifies its input archive, normalized source

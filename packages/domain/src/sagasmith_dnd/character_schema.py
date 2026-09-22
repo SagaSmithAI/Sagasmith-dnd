@@ -5079,6 +5079,8 @@ def active_effect_roll_bonus(sheet: dict[str, Any], kind: str) -> int:
     }
     if normalized not in paths:
         raise ValueError(f"unsupported effect roll kind: {kind}")
+    if not sheet.get("effects"):
+        return 0
     path = paths[normalized]
     bonus = 0
     for effect in validate_character_sheet(sheet)["effects"]:
@@ -5109,6 +5111,8 @@ def active_effect_roll_advantage(
         prefix = "rolls.attack"
     else:
         raise ValueError(f"unsupported effect roll kind: {kind}")
+    if not sheet.get("effects"):
+        return False, False
     advantage = disadvantage = False
     normalized_key = str(key or "").casefold().replace("-", "_").replace(" ", "_")
     for effect in validate_character_sheet(sheet)["effects"]:
@@ -5126,7 +5130,7 @@ def active_effect_roll_advantage(
                 continue
             if change["mode"] != "set" or not isinstance(change["value"], bool):
                 raise ValueError(f"active {change['path']} effect modifier is malformed")
-            if change["path"].endswith("advantage"):
+            if change["path"].endswith(".advantage"):
                 advantage = advantage or change["value"]
             else:
                 disadvantage = disadvantage or change["value"]
@@ -5404,6 +5408,7 @@ def derive_character_sheet(
         "passive_perception": 10
         + skills["perception"]
         + value["traits"]["senses"]["passive_perception_bonus"],
+        "passive_perception_bonus": value["traits"]["senses"]["passive_perception_bonus"],
         "armor_class": armor_class,
         "armor_class_breakdown": armor_class_breakdown,
         "armor_proficiency": armor_proficiency,
@@ -5504,6 +5509,8 @@ def derive_character_sheet(
         target = str(modifier.get("target") or "")
         if target in DERIVED_STAT_MODIFIER_TARGETS:
             derived[target] = int(derived[target]) + int(modifier.get("value", 0) or 0)
+            if target == "passive_perception":
+                derived["passive_perception_bonus"] += int(modifier.get("value", 0) or 0)
         else:
             derived["unresolved_rules"] = sorted(
                 {*derived["unresolved_rules"], modifier["mechanic_id"]}
@@ -5531,6 +5538,35 @@ def derive_character_sheet(
         *extension.receipts,
     ]
     derived["ruleset_fingerprint"] = rules.fingerprint if rules else ""
+    if value["edition"] == "2014":
+        # The complete derived slice prevents recursion. Context-dependent checks
+        # remain unresolved on the card until a consumer supplies scene facts.
+        from sagasmith_dnd.combat_engine import (
+            CombatEngineError,
+            NeedsRulingError,
+            resolve_actor_check,
+        )
+        from sagasmith_dnd.rule_engine import context_with_facts
+
+        try:
+            passive = resolve_actor_check(
+                {"id": str(dict(rules.facts).get("actor_id") or "card") if rules else "card",
+                 "sheet": value, "derived": derived},
+                kind="check", ability="perception", dc=0, passive=True,
+                rules=context_with_facts(rules, kind="check", ability="perception"),
+            )
+            derived["passive_perception"] = passive["total"]
+        except NeedsRulingError as exc:
+            derived["passive_perception"] = None
+            derived["ruling_requirements"].append({
+                "mechanic_id": "dnd5e.core.check.passive",
+                "reason": str(exc), "missing": list(exc.missing),
+                "default_resolver": "agent", "ruling_kind": exc.ruling_kind,
+            })
+        except CombatEngineError:
+            if "dead" not in condition_ids(value.get("conditions")):
+                raise
+            derived["passive_perception"] = None
     return derived
 
 

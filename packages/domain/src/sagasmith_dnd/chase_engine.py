@@ -15,6 +15,7 @@ from uuid import uuid4
 from sagasmith_dnd.character_schema import effective_ability_modifier, set_exhaustion_level
 from sagasmith_dnd.combat_engine import (
     CombatEngineError,
+    NeedsRulingError,
     actor_derived,
     actor_id,
     actor_sheet,
@@ -76,13 +77,21 @@ def current_chase_participant(chase: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
-def _actor_passive_perception(actor: dict[str, Any]) -> int:
-    recorded = actor_derived(actor).get("passive_perception")
-    if recorded is None:
-        return 10
-    if isinstance(recorded, bool) or not isinstance(recorded, int):
-        raise CombatEngineError("chase passive Perception must be an integer")
-    return recorded
+def _actor_passive_perception(
+    actor: dict[str, Any], rules: ResolutionContext | None = None,
+) -> dict[str, Any]:
+    try:
+        result = resolve_actor_check(
+            actor, kind="check", ability="perception", dc=0, passive=True,
+            rules=context_with_facts(rules, actor_id=actor_id(actor), kind="check",
+                                     ability="perception", passive=True),
+        )
+        return {"passive_perception": result["total"],
+                "passive_automatic_failure": bool(result.get("automatic_failure"))}
+    except NeedsRulingError:
+        # A chase can begin or continue while the quarry is plainly visible.
+        # Missing passive context blocks only an actual escape comparison.
+        return {"passive_perception": None, "passive_automatic_failure": False}
 
 
 def _active_pursuer_passive_perception_max(
@@ -94,15 +103,19 @@ def _active_pursuer_passive_perception_max(
     recorded: list[int] = []
     missing: list[str] = []
     for participant in active_pursuers:
+        if participant.get("passive_automatic_failure"):
+            continue
         if "passive_perception" not in participant:
             missing.append(str(participant.get("actor_id") or ""))
             continue
         passive_perception = participant["passive_perception"]
+        if passive_perception is None:
+            return None
         if isinstance(passive_perception, bool) or not isinstance(passive_perception, int):
             raise CombatEngineError("chase participant passive Perception must be an integer")
         recorded.append(passive_perception)
     if not missing:
-        return max(recorded)
+        return max(recorded) if recorded else None
 
     active_ids = {str(item.get("actor_id") or "") for item in active_pursuers}
     original_pursuer_ids = {str(item) for item in chase.get("pursuer_ids") or []}
@@ -129,6 +142,8 @@ def start_chase(
     name: str = "Chase",
     close_transition: dict[str, Any] | None = None,
     rng: Any = None,
+    rules: ResolutionContext | None = None,
+    pursuer_rules: dict[str, ResolutionContext] | None = None,
 ) -> dict[str, Any]:
     """Roll initiative and create a theater-of-the-mind chase state."""
     if not participants:
@@ -196,7 +211,11 @@ def start_chase(
         if speed_adjustment and not speed_source_excerpt:
             raise CombatEngineError("a chase speed adjustment requires its reviewed source excerpt")
         role = "quarry" if identifier in quarry_set else "pursuer"
-        passive_perception = _actor_passive_perception(actor)
+        passive = (
+            _actor_passive_perception(actor, (pursuer_rules or {}).get(identifier, rules))
+            if role == "pursuer" else {"passive_perception": actor_derived(actor).get(
+                "passive_perception"), "passive_automatic_failure": False}
+        )
         chase_participants.append(
             {
                 "actor_id": identifier,
@@ -210,7 +229,7 @@ def start_chase(
                 "speed_adjustment_ft": speed_adjustment,
                 "speed_source_excerpt": speed_source_excerpt,
                 "speed_ft": speed,
-                "passive_perception": passive_perception,
+                **passive,
                 "position_ft": int(initial_distance_ft) if role == "quarry" else 0,
                 "dash_count": 0,
                 "free_dash_limit": max(
@@ -237,10 +256,8 @@ def start_chase(
         "turn_index": 0,
         "quarry_ids": normalized_quarry_ids,
         "pursuer_ids": pursuer_ids,
-        "pursuer_passive_perception_max": max(
-            item["passive_perception"]
-            for item in chase_participants
-            if item["role"] == "pursuer"
+        "pursuer_passive_perception_max": _active_pursuer_passive_perception_max(
+            {}, [item for item in chase_participants if item["role"] == "pursuer"],
         ),
         "participants": chase_participants,
         "pending_complication": None,
@@ -527,6 +544,8 @@ def advance_chase_turn(
     stand_from_prone: bool = True,
     quarry_visibility: dict[str, bool] | None = None,
     quarry_actors: dict[str, dict[str, Any]] | None = None,
+    pursuer_actors: dict[str, dict[str, Any]] | None = None,
+    pursuer_rules: dict[str, ResolutionContext] | None = None,
     death_saves: bool = True,
     rules: ResolutionContext | None = None,
     rng: Any = None,
@@ -700,6 +719,23 @@ def advance_chase_turn(
         for item in participants_list
         if item.get("role") == "quarry" and item.get("active", True)
     ]
+    if pursuer_actors is not None:
+        for pursuer in active_pursuers:
+            identifier = str(pursuer["actor_id"])
+            current_pursuer = dict(pursuer_actors.get(identifier) or {})
+            if not current_pursuer:
+                raise CombatEngineError("each active pursuer requires a current actor snapshot")
+            if identifier == actor_id_value:
+                current_pursuer["sheet"] = sheet
+            pursuer.update(_actor_passive_perception(
+                current_pursuer, (pursuer_rules or {}).get(identifier, rules),
+            ))
+    elif participant.get("role") == "pursuer" and participant.get("active", True):
+        # Standalone callers can at least refresh the acting pursuer after a
+        # complication or exhaustion change. Runtime always supplies all cards.
+        participant.update(_actor_passive_perception(
+            {**actor, "sheet": sheet}, rules,
+        ))
     passive_ceiling = _active_pursuer_passive_perception_max(value, active_pursuers)
     value["pursuer_passive_perception_max"] = passive_ceiling
     distance = _distance_summary(value)
@@ -773,7 +809,21 @@ def advance_chase_turn(
                 )
                 continue
             if passive_ceiling is None:
-                raise CombatEngineError("an unseen quarry requires an active pursuer")
+                if active_pursuers and all(
+                    item.get("passive_automatic_failure") for item in active_pursuers
+                ):
+                    escape_checks.append({
+                        "quarry_id": quarry_id, "visible_to_lead_pursuer": False,
+                        "automatic_success": True, "escaped": True,
+                        "reason": "all pursuer perception checks fail automatically",
+                    })
+                    quarry["active"] = False
+                    quarry["dropped_reason"] = "escaped"
+                    continue
+                raise NeedsRulingError(
+                    "an unseen quarry requires resolved passive Perception for every pursuer",
+                    missing=("chase.passive_perception",), ruling_kind="source_or_scene_fact",
+                )
             quarry_actor = dict(quarry_actors or {}).get(quarry_id)
             if quarry_actor is None:
                 raise CombatEngineError(

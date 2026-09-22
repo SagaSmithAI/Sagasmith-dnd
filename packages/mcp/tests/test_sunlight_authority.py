@@ -254,6 +254,49 @@ def test_local_host_binds_object_sunlight_without_model_metadata(tmp_path):
     asyncio.run(run())
 
 
+@pytest.mark.parametrize("local,sight", [(False, True), (True, True), (True, False)])
+def test_passive_sunlight_reuses_source_authority_and_local_replay(tmp_path, local, sight):
+    async def run():
+        world = await drow_world(tmp_path, local=local)
+        try:
+            campaign, _ = await world.snapshot()
+            args = {
+                "campaign_id": world.cid, "action": "passive", "idempotency_key": "passive-sun",
+                "payload": {
+                    "actor_id": world.aid, "ability": "perception",
+                    "rule_facts": {"sunlight": await sunlight(world, sight=sight, local=local)},
+                    "task": {"mode": "exploration", "source_ref": world.source,
+                             "source_excerpt": SUNLIGHT_EXCERPT,
+                             "reason": "DM compares passive observation in the reviewed courtyard.",
+                             "dc": 10},
+                },
+            }
+            if not local:
+                args["expected_revision"] = campaign["revision"]
+            result = await invoke(world, "character_check", args)
+            assert result["status"] == "committed"
+            assert result["result"]["passive_adjustment"] == (-5 if sight else 0)
+            assert result["result"]["rolls"] == []
+            assert "random_stream_receipt" not in result
+            after, _ = await world.snapshot()
+            assert after["state"]["random_stream"] == campaign["state"]["random_stream"]
+            world.close()
+            world.runtime = create_runtime(world.config)
+            replay = await invoke(world, "character_check", args)
+            # Local timing/queue metrics describe this dispatch, while every
+            # committed game-state and audience field stays byte-for-byte equal.
+            assert {key: replay[key] for key in result if key != "local_execution"} == {
+                key: value for key, value in result.items() if key != "local_execution"
+            }
+            if local:
+                assert replay["local_execution"]["replayed"] is True
+                assert replay["receipt_is_current"] is True
+        finally:
+            world.close()
+
+    asyncio.run(run())
+
+
 def test_sunlight_authority_rejects_forgery_and_expires_after_movement(tmp_path):
     async def run():
         world = await drow_world(tmp_path, combat=True)

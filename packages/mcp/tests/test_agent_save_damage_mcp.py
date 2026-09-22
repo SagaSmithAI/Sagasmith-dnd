@@ -58,6 +58,8 @@ def test_agent_save_damage_requires_one_paid_immutable_action_and_replays(
 
     def forced_check(target_actor, **kwargs):
         result = original_check(target_actor, **kwargs)
+        if kwargs.get("kind") != "save":
+            return result
         success = target_outcomes[str(target_actor["id"])]
         result["success"] = success
         result["total"] = int(kwargs["dc"]) if success else int(kwargs["dc"]) - 1
