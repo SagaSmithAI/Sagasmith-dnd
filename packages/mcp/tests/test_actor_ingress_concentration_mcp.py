@@ -22,6 +22,7 @@ from test_structured_spell_mcp import _invisibility, _slot
 
 from sagasmith_dnd_mcp.random_state import RandomStateMutationService
 from sagasmith_dnd_mcp.server import close_server, create_server
+from tests.component_helpers import with_component_pouch
 
 
 @pytest.mark.fresh_database
@@ -180,7 +181,7 @@ def test_sheet_replacement_reconciles_real_invisibility_target(
                     "idempotency_key": "campaign",
                 },
             )
-            caster_sheet = default_character_sheet()
+            caster_sheet = with_component_pouch()
             caster_sheet["spellcasting"].update(ability="intelligence", spell_slots=_slot(2))
             caster_sheet["content"]["spells"] = [_invisibility()]
             actors = []

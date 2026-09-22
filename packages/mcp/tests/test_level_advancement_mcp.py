@@ -16,6 +16,7 @@ from sagasmith_dnd_mcp.server import (
     SUPPORTED_FEATURE_SELECTION_REQUIREMENT_FIELDS,
     create_server,
 )
+from tests.component_helpers import with_component_pouch
 
 CORE_ADVANCEMENT_RULE_REF = "bundled:srd2014/03_Characterization/Beyond_1st_Level.md"
 
@@ -1655,7 +1656,7 @@ def test_signature_spells_are_always_prepared_and_use_explicit_free_resources(
                 "idempotency_key": "campaign",
             },
         )
-        sheet = default_character_sheet()
+        sheet = with_component_pouch()
         sheet["progression"].update(
             {
                 "level": 20,

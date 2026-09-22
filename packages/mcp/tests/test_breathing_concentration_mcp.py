@@ -7,6 +7,7 @@ from sagasmith_dnd.standard_spell_ids import CORE_FLY_SPELL_ID, CORE_INVISIBILIT
 from test_structured_spell_mcp import _call, _config, _fly, _invisibility
 
 from sagasmith_dnd_mcp.server import close_server, create_server
+from tests.component_helpers import with_component_pouch
 
 
 @pytest.mark.parametrize(
@@ -32,7 +33,7 @@ def test_breathing_expiry_reconciles_real_concentration_target(
             "campaign_create",
             {"name": "Breathing concentration", "edition": "2014", "idempotency_key": "campaign"},
         )
-        caster_sheet = default_character_sheet()
+        caster_sheet = with_component_pouch()
         caster_sheet["spellcasting"].update(
             ability="intelligence",
             spell_slots={

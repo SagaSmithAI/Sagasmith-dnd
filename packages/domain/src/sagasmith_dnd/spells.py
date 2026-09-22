@@ -424,6 +424,7 @@ def consume_magic_item_spell_cast(
     cast_level: int | None = None,
     ritual: bool = False,
     rules: ResolutionContext | None = None,
+    component_ruling: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Pay one held magic item's charges and settle supported self-defense spells."""
     before = apply_rule_event(sheet, "spell.before", rules)
@@ -448,6 +449,22 @@ def consume_magic_item_spell_cast(
     level = int(card.get("level", 0) or 0)
     if cast_level is not None and int(cast_level) != level:
         raise CombatEngineError("magic item spell cast_level must match its bound spell card")
+    from .spell_components import check_components, pay_components
+
+    effective_card = magic_item_spell_card(
+        value, source_item_id=source_item_id, spell_id=spell_id,
+    )
+    component_receipt = check_components(
+        value, effective_card, effective_card.get("definition", {}).get("components", {}),
+        ruling=component_ruling,
+        overrides={"ignore_components": True} if dict(
+            item.get("mechanics", {}).get("spellcasting") or {}
+        ).get("components_required") is False else None,
+    )
+    value = pay_components(value, component_receipt)
+    item, specification, card = _magic_item_spell_binding(
+        value, source_item_id=source_item_id, spell_id=spell_id,
+    )
     charge_cost = int(specification.get("charge_cost", 0) or 0)
     if charge_cost <= 0:
         raise CombatEngineError("magic item spell charge_cost must be positive")
@@ -471,6 +488,8 @@ def consume_magic_item_spell_cast(
     effect_id = None
     automatic_effect = None
     mechanic_ids = [CORE_MAGIC_ITEM_SPELL_MECHANIC_ID]
+    if component_receipt.get("status") == "satisfied":
+        mechanic_ids.append("dnd5e.core.spell.component_eligibility")
     if is_core_mage_armor_spell(card):
         effect_id = _apply_mage_armor_effect(
             value,
@@ -522,6 +541,7 @@ def consume_magic_item_spell_cast(
         },
         "source_item_id": source_item_id,
         "effect_id": effect_id,
+        "component_receipt": component_receipt,
         "automatic_effect": automatic_effect,
         "last_charge_expended": last_charge_expended,
         "last_charge_rule": last_charge_rule,
@@ -1196,14 +1216,23 @@ def consume_spell_cast(
     source_components_unknown = (
         custom_definition.get("component_details") == "not_repeated_in_statblock"
     )
-    if source_components_unknown and ruling.get("source_components_confirmed") is not True:
+    component_receipt = None
+    if str(value.get("edition") or "2014") == "2014":
+        from .spell_components import check_components, pay_components
+
+        component_receipt = check_components(
+            value, spell, components, ruling=ruling, overrides=casting_overrides,
+        )
+        value = pay_components(value, component_receipt)
+        spellcasting = value.setdefault("spellcasting", {})
+    elif source_components_unknown and ruling.get("source_components_confirmed") is not True:
         raise NeedsRulingError(
             "a source-bound spell whose components were not repeated in the statblock "
             "needs source_components_confirmed from reviewed source evidence",
             missing=("source_components",),
             ruling_kind="missing_or_conflicting_source_review",
         )
-    if (
+    if component_receipt is None and (
         int(components.get("material_cost_cp", 0) or 0) > 0 or components.get("consumed")
     ) and ruling.get("material_confirmed") is not True:
         raise NeedsRulingError(
@@ -1365,10 +1394,11 @@ def consume_spell_cast(
             "pending": list(after.pending),
         }
     ruling_required = [
-        *(["source_components"] if source_components_unknown else []),
-        *(["verbal_component"] if components.get("verbal") else []),
-        *(["somatic_component"] if components.get("somatic") else []),
-        *(["material_component"] if components.get("material") else []),
+        *(["source_components"] if source_components_unknown and component_receipt is None else []),
+        *(["verbal_component"] if components.get("verbal") and component_receipt is None else []),
+        *(["somatic_component"] if components.get("somatic") and component_receipt is None else []),
+        *(["material_component"]
+          if components.get("material") and component_receipt is None else []),
         *(
             ["targets_and_effect"]
             if automatic_effect is None and not isinstance(spell.get("resolution"), dict)
@@ -1381,6 +1411,7 @@ def consume_spell_cast(
         "cast_level": level,
         "payment": paid,
         "casting_overrides_applied": casting_overrides,
+        "component_receipt": component_receipt,
         "concentration_started": concentration,
         "automatic_effect": automatic_effect,
         "effect_id": effect_id,
@@ -1394,6 +1425,8 @@ def consume_spell_cast(
                 [
                     "dnd5e.core.spell.cantrip_ritual_level",
                     "dnd5e.core.spell.material_components",
+                    *(["dnd5e.core.spell.component_eligibility"]
+                      if component_receipt is not None else []),
                     *([CORE_BLADE_WARD_MECHANIC_ID] if automatic_effect == "blade_ward" else []),
                     *(
                         ["dnd5e.core.spell.pact_magic"]
@@ -1447,6 +1480,8 @@ def consume_readied_spell(
     *,
     spell_id: str,
     cast_level: int | None = None,
+    component_ruling: dict[str, Any] | None = None,
+    rules: ResolutionContext | None = None,
 ) -> dict[str, Any]:
     """Cast an action spell now and replace current concentration with held energy."""
     spell = next(
@@ -1465,7 +1500,11 @@ def consume_readied_spell(
         spell_id=spell_id,
         cast_level=cast_level,
         ritual=False,
+        component_ruling=component_ruling,
+        rules=rules,
     )
+    if applied.get("status") != "committed":
+        return applied
     value = applied["sheet"]
     for effect in value.get("effects", []):
         if effect.get("active") and effect.get("concentration"):

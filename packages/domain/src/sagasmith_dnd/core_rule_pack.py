@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.80.0"
+CORE_RULE_PACK_VERSION = "1.81.0"
 
 
 @dataclass(frozen=True)
@@ -1121,8 +1121,16 @@ BOUNDARIES = (
         "dnd5e.core.spell.material_components",
         ("2014", "2024"),
         "spells.consume_spell_cast",
-        ("tests/test_spells.py::test_costly_material_component_requires_dm_confirmation",),
+        ("tests/test_spells.py::"
+         "test_costly_material_component_requires_reviewed_inventory_not_confirmation",),
         "bundled:srd/components",
+    ),
+    CoreBoundary(
+        "dnd5e.core.spell.component_eligibility",
+        ("2014",),
+        "spell_components.check_components",
+        ("tests/test_spell_components.py", "packages/mcp/tests/test_spell_components_mcp.py"),
+        "bundled:srd2014/07_Spells/Spellcasting.md#components",
     ),
     CoreBoundary(
         "dnd5e.core.spell.preparation",

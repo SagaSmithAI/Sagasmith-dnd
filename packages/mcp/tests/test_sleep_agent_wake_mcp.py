@@ -11,6 +11,7 @@ from sagasmith_dnd.standard_spell_ids import CORE_SLEEP_SPELL_ID
 from test_official_expansions_mcp import _call, _config
 
 from sagasmith_dnd_mcp.server import close_server, create_server
+from tests.component_helpers import with_component_pouch
 
 
 @pytest.mark.fresh_database
@@ -44,7 +45,7 @@ def test_agent_sleep_wake_requires_contact_facts_and_one_helper_action(tmp_path:
                 if item["id"] == CORE_SLEEP_SPELL_ID
             )
 
-            caster_sheet = default_character_sheet()
+            caster_sheet = with_component_pouch()
             caster_sheet["progression"].update(
                 level=3,
                 classes=[{"name": "Bard", "level": 3, "subclass": "", "hit_die": 8}],

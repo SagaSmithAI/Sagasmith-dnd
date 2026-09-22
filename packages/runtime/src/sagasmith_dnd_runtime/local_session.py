@@ -195,7 +195,16 @@ class LocalSession:
                     if (campaign_id and entry["binding"] != current_binding and not restore_replay):
                         raise OperationError("pending operation belongs to an invalidated timeline",
                                              code="stale_local_operation")
-                    if "result" in entry:
+                    if "result" in entry and self._no_write_ruling(entry["result"]):
+                        # A confirmed no-write ruling can be reconsidered after
+                        # its missing facts change. Unknown writes still keep
+                        # their exact original arguments and revision below.
+                        args, campaign_id = self.prepare(name, arguments, context.campaign_id)
+                        entry = {"intent": intent, "arguments": args, "campaign_id": campaign_id,
+                                 "binding": (self.binding(campaign_id, args)
+                                             if campaign_id else None)}
+                        self._save(path, entry)
+                    elif "result" in entry:
                         result = deepcopy(entry["result"])
                         if campaign_id:
                             current = self.context(campaign_id, args)
@@ -236,7 +245,9 @@ class LocalSession:
                         "database": database_metrics,
                         "protocol_inputs_managed": True,
                     }
-                    if path:
+                    if path and self._no_write_ruling(result):
+                        path.unlink(missing_ok=True)
+                    elif path:
                         entry["result"] = result
                         entry["campaign_id"] = campaign_id
                         # Reuse only this command's freshly read post-commit scope.
@@ -247,6 +258,17 @@ class LocalSession:
                         )
                         self._save(path, entry)
                 return result
+
+    @staticmethod
+    def _no_write_ruling(result):
+        value = result
+        while isinstance(value, dict):
+            if value.get("status") not in {None, "pending_ruling"}:
+                return False
+            if "committed" in value:
+                return value.get("status") == "pending_ruling" and value["committed"] is False
+            value = value.get("result")
+        return False
 
     def binding(self, campaign_id, arguments=None):
         scope = self.services.authoritative_host_context_binding(

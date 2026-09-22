@@ -1458,12 +1458,29 @@ class SpellsService:
             target_ids=harmful_target_ids,
             known_actor_ids=self.encounter_actor_ids(encounter),
         )
+        from .spell_components import preflight
+
+        component_check = preflight(
+            self, campaign_id=campaign_id, principal_id=principal_id, sheet=current.sheet,
+            spell=spell_entry, component_ruling=component_ruling,
+            feature_cast_source=feature_cast_source, source_item_id=source_item_id,
+        )
+        perception_spell = _support.deepcopy(spell_entry)
+        if component_check.get("status") == "satisfied":
+            perception_spell.setdefault("definition", {})["components"] = (
+                component_check["required"]
+            )
+            perception_spell["custom_definition"] = {
+                key: value for key, value in dict(
+                    perception_spell.get("custom_definition") or {}
+                ).items() if key != "component_details"
+            }
         visibility_preview = _support.deepcopy(encounter)
         self.apply_cast_visibility_ruling(
             visibility_preview,
             campaign_id,
             actor_id,
-            spell_entry,
+            perception_spell,
             component_ruling,
             principal_id,
         )
@@ -1485,6 +1502,7 @@ class SpellsService:
                 cast_level=cast_level,
                 ritual=ritual,
                 rules=rules,
+                component_ruling=component_ruling,
             )
             if source_item_id
             else _support.consume_spell_cast(
@@ -1610,7 +1628,7 @@ class SpellsService:
             next_encounter,
             campaign_id,
             actor_id,
-            spell_entry,
+            perception_spell,
             component_ruling,
             principal_id,
         )
@@ -1701,6 +1719,7 @@ class SpellsService:
                 "concentration_effect_id": str(concentration_effect["id"]),
                 "dependencies": dependencies,
                 "payment": _support.deepcopy(applied.get("payment") or {}),
+                "component_receipt": _support.deepcopy(applied.get("component_receipt")),
             }
             next_encounter["log"] = [
                 *list(next_encounter.get("log") or []),
@@ -1820,6 +1839,7 @@ class SpellsService:
                 "concentration_effect_id": str(concentration_effect["id"]),
                 "dependencies": dependencies,
                 "payment": _support.deepcopy(applied.get("payment") or {}),
+                "component_receipt": _support.deepcopy(applied.get("component_receipt")),
             }
             next_encounter["log"] = [
                 *list(next_encounter.get("log") or []),
@@ -1926,6 +1946,7 @@ class SpellsService:
                 "area": sleep_target,
                 "targets": settled_sleep["targets"],
                 "payment": _support.deepcopy(applied.get("payment") or {}),
+                "component_receipt": _support.deepcopy(applied.get("component_receipt")),
             }
             next_encounter["log"] = [
                 *list(next_encounter.get("log") or []),
@@ -2066,6 +2087,7 @@ class SpellsService:
                 "targets": target_results,
                 "concentration_effect_id": str(concentration_effect["id"]),
                 "payment": _support.deepcopy(applied.get("payment") or {}),
+                "component_receipt": _support.deepcopy(applied.get("component_receipt")),
             }
             next_encounter["log"] = [
                 *list(next_encounter.get("log") or []),
@@ -2181,6 +2203,9 @@ class SpellsService:
                             "attack_count": total_attacks,
                             "remaining_attacks": total_attacks,
                             "payment": _support.deepcopy(applied.get("payment") or {}),
+                            "component_receipt": _support.deepcopy(
+                                applied.get("component_receipt")
+                            ),
                         },
                         "combat": next_encounter,
                     },
@@ -2252,6 +2277,7 @@ class SpellsService:
                     "rolled_amount": rolled_amount,
                     "healing": {key: item for key, item in healed.items() if key != "sheet"},
                     "payment": _support.deepcopy(applied.get("payment") or {}),
+                    "component_receipt": _support.deepcopy(applied.get("component_receipt")),
                 }
                 next_encounter["log"] = [
                     *list(next_encounter.get("log") or []),
@@ -2416,6 +2442,7 @@ class SpellsService:
                 "targets": target_results,
                 "pending_rulings": pending_rulings,
                 "payment": _support.deepcopy(applied.get("payment") or {}),
+                "component_receipt": _support.deepcopy(applied.get("component_receipt")),
             }
             next_encounter["log"] = [
                 *list(next_encounter.get("log") or []),
@@ -2532,6 +2559,9 @@ class SpellsService:
                             "dart_count": sum(item["darts"] for item in normalized_allocations),
                             "allocations": normalized_allocations,
                             "payment": _support.deepcopy(applied.get("payment") or {}),
+                            "component_receipt": _support.deepcopy(
+                                applied.get("component_receipt")
+                            ),
                         },
                         "choices": defense_windows,
                         "combat": next_encounter,
@@ -2588,6 +2618,7 @@ class SpellsService:
                     "result": {
                         **result,
                         "payment": _support.deepcopy(applied.get("payment") or {}),
+                        "component_receipt": _support.deepcopy(applied.get("component_receipt")),
                     },
                     "combat": next_encounter,
                 },
@@ -2673,6 +2704,7 @@ class SpellsService:
         expected_revision: int | None = None,
         branch_id: str | None = None,
         idempotency_key: str | None = None,
+        component_ruling: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Cast and hold a one-action spell, paying its action, slot, and concentration now."""
         self.access.require_actor(campaign_id, actor_id, principal_id, control=True)
@@ -2683,6 +2715,7 @@ class SpellsService:
             "spell_id": spell_id,
             "trigger": trigger,
             "cast_level": cast_level,
+            "component_ruling": component_ruling or {},
             "declaration": declaration or {},
             "branch_id": resolved_branch_id,
         }
@@ -2698,15 +2731,20 @@ class SpellsService:
                 f"found {campaign.revision}"
             )
         current = self.characters.get(actor_id)
-        applied = _support.consume_readied_spell(
-            current.sheet,
-            spell_id=spell_id,
-            cast_level=cast_level,
-        )
         spell_entry = next(
             item
             for item in current.sheet.get("content", {}).get("spells", [])
             if item.get("id") == spell_id
+        )
+        from .spell_components import preflight
+
+        preflight(
+            self, campaign_id=campaign_id, principal_id=principal_id, sheet=current.sheet,
+            spell=spell_entry, component_ruling=component_ruling,
+        )
+        applied = _support.consume_readied_spell(
+            current.sheet, spell_id=spell_id, cast_level=cast_level,
+            component_ruling=component_ruling,
         )
         spell_level = int(spell_entry.get("level", 0) or 0)
         spent_slot = applied["payment"].get("economy") in _support.SLOT_PAYMENT_ECONOMIES
@@ -3204,6 +3242,13 @@ class SpellsService:
         )
         if spell_entry is None:
             raise _support.CombatEngineError("spell is not recorded on the caster card")
+        from .spell_components import preflight
+
+        preflight(
+            self, campaign_id=current.campaign_id, principal_id=principal_id,
+            sheet=current.sheet, spell=spell_entry, component_ruling=component_ruling,
+            feature_cast_source=feature_cast_source, source_item_id=source_item_id,
+        )
         fly = _support.is_core_fly_spell(spell_entry)
         invisibility = _support.is_core_invisibility_spell(spell_entry)
         sleep = spell_entry.get(
@@ -3566,6 +3611,7 @@ class SpellsService:
                 cast_level=cast_level,
                 ritual=ritual,
                 rules=rules,
+                component_ruling=component_ruling,
             )
             if source_item_id
             else _support.consume_spell_cast(

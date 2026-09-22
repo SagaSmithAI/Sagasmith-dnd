@@ -901,6 +901,17 @@ def _normalize_resource_scaling(value: Any, field: str) -> dict[str, Any]:
 
 
 def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, Any]:
+    from .spell_components import normalize_component_item
+
+    mechanics = dict(_object(value or {}, field))
+    component = mechanics.pop("spell_component", None)
+    result = _normalize_item_base_mechanics(kind, mechanics, field)
+    if component is not None:
+        result["spell_component"] = normalize_component_item(component)
+    return result
+
+
+def _normalize_item_base_mechanics(kind: str, value: Any, field: str) -> dict[str, Any]:
     mechanics = _object(value or {}, field)
     if kind == "weapon":
         _reject_unknown(
@@ -2520,6 +2531,14 @@ def _normalize_effect(value: Any, field: str) -> dict[str, Any]:
         "description": _text(effect.get("description"), f"{field}.description", maximum=1200),
         "metadata": _object(effect.get("metadata") or {}, f"{field}.metadata"),
     }
+    if "spell_component_constraints" in normalized["metadata"]:
+        from .spell_components import normalize_component_constraints
+
+        if not normalized["source"].strip():
+            raise ValueError(f"{field} component constraints require source evidence")
+        normalized["metadata"]["spell_component_constraints"] = normalize_component_constraints(
+            normalized["metadata"]["spell_component_constraints"]
+        )
     dependency = _text(
         effect.get("dependency"),
         f"{field}.dependency",

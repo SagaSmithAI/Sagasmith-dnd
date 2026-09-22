@@ -1356,10 +1356,16 @@ printed tactic, pay the action twice, or convert the ruling into a reusable
 Core mechanic.
 For a source-bound statblock spell marked with components not repeated in its
 reviewed card, have the Agent acting as DM confirm the components from the exact
-source and pass
-`component_ruling.source_components_confirmed=true` before casting. The engine
-checks this before paying the action, slot, or concentration. Never spend first
-and ask for the component ruling afterward.
+source and pass `component_ruling.source_components` with explicit V/S/M booleans
+and any material cost/consumption, plus `component_ruling.source`. A confirmation
+boolean alone does not establish the requirements. The 2014 engine checks
+speech, usable hands, equipped items and reviewed inventory components before
+paying the action, slot, item, or concentration. Material roles belong on
+`mechanics.spell_component`; a costly/consumed component needs its exact spell
+binding and value, and a consumed unit commits with the cast. `material_confirmed`
+cannot replace a missing object. Source-bound active effects use
+`metadata.spell_component_constraints` for speech or hand prevention. Never spend
+first and ask for the component ruling afterward.
 If a hidden caster uses a spell with verbal, somatic, or source-unknown
 components, include `component_ruling.casting_perception` before casting. It must
 contain exactly one `{observer_id, perceived, reason?}` entry for every living

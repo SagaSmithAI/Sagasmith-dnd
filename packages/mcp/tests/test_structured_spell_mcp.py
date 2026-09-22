@@ -40,6 +40,17 @@ def _config(tmp_path: Path) -> McpConfig:
     )
 
 
+def _equipped_caster() -> dict:
+    sheet = default_character_sheet()
+    sheet["inventory"]["items"].append({
+        "id": "component-pouch", "name": "Component pouch", "kind": "equipment",
+        "mechanics": {"spell_component": {
+            "kind": "pouch", "source": "SRD 2014 Equipment: component pouch",
+        }},
+    })
+    return sheet
+
+
 async def _call(server, name: str, arguments: dict):
     _, result = await server.call_tool(name, arguments)
     return result.get("result", result) if isinstance(result, dict) else result
@@ -354,7 +365,7 @@ def test_healing_word_cast_roll_and_feature_bonus_commit_once(tmp_path: Path, mo
 
     async def exercise() -> None:
         server = create_server(_config(tmp_path))
-        caster = default_character_sheet()
+        caster = _equipped_caster()
         caster["abilities"]["wisdom"]["score"] = 16
         caster["spellcasting"].update(ability="wisdom", spell_slots=_slot(1))
         spell = _spell("Healing Word", 1, casting_time="1 bonus action", range_ft=60)
@@ -435,7 +446,7 @@ def test_charmed_caster_cannot_target_charmer_with_harmful_save_spell(
 
     async def exercise() -> None:
         server = create_server(_config(tmp_path))
-        caster = default_character_sheet()
+        caster = _equipped_caster()
         caster["abilities"]["intelligence"]["score"] = 18
         caster["spellcasting"].update(ability="intelligence", spell_slots=_slot(3))
         fireball = _spell("Fireball", 3, casting_time="1 action", range_ft=150)
@@ -646,7 +657,7 @@ def test_sight_required_spell_rejects_blinded_caster_without_writes(
 
     async def exercise() -> None:
         server = create_server(_config(tmp_path))
-        caster = default_character_sheet()
+        caster = _equipped_caster()
         caster["conditions"] = ["blinded"]
         caster["spellcasting"].update(ability="wisdom", spell_slots=_slot(1, 2))
         healing_word = _spell("Healing Word", 1, casting_time="1 bonus action", range_ft=60)
@@ -746,7 +757,7 @@ def test_sight_required_spell_honors_authoritative_visibility_acl(
 
     async def exercise() -> None:
         server = create_server(_config(tmp_path))
-        caster = default_character_sheet()
+        caster = _equipped_caster()
         caster["spellcasting"].update(ability="wisdom", spell_slots=_slot(1))
         healing_word = _spell("Healing Word", 1, casting_time="1 bonus action", range_ft=60)
         caster["content"]["spells"] = [healing_word]
@@ -854,7 +865,7 @@ def test_scorching_ray_cast_locks_then_settles_each_source_bound_attack(
 
     async def exercise() -> None:
         server = create_server(_config(tmp_path))
-        caster = default_character_sheet()
+        caster = _equipped_caster()
         caster["abilities"]["intelligence"]["score"] = 18
         caster["spellcasting"].update(ability="intelligence", spell_slots=_slot(2))
         spell = _spell("Scorching Ray", 2, casting_time="1 action", range_ft=120)
@@ -950,7 +961,7 @@ def test_guiding_bolt_commits_locked_on_hit_effect_without_agent_ruling(
 
     async def exercise() -> None:
         server = create_server(_config(tmp_path))
-        caster = default_character_sheet()
+        caster = _equipped_caster()
         caster["abilities"]["wisdom"]["score"] = 18
         caster["spellcasting"].update(ability="wisdom", spell_slots=_slot(1))
         spell = _spell("Guiding Bolt", 1, casting_time="1 action", range_ft=120)
@@ -1011,7 +1022,7 @@ def test_witch_bolt_hard_runtime_tethers_sustains_and_breaks_on_range(
 
     async def exercise() -> None:
         server = create_server(_config(tmp_path))
-        caster = default_character_sheet()
+        caster = _equipped_caster()
         caster["abilities"]["intelligence"]["score"] = 18
         caster["combat"]["hp"] = {"value": 100, "max": 100, "temp": 0}
         caster["spellcasting"].update(
@@ -1190,7 +1201,7 @@ def test_blade_ward_cast_uses_hard_standard_mechanic_without_agent_fill(
 ) -> None:
     async def exercise() -> None:
         server = create_server(_config(tmp_path))
-        caster = default_character_sheet()
+        caster = _equipped_caster()
         blade_ward = _standard_spell(CORE_BLADE_WARD_SPELL_ID)
         caster["content"]["spells"] = [blade_ward]
         target = default_character_sheet()
@@ -1247,7 +1258,7 @@ def test_noncombat_fly_commits_willing_targets_and_reconciles_replacement(
                 "idempotency_key": "fly-campaign",
             },
         )
-        caster_sheet = default_character_sheet()
+        caster_sheet = _equipped_caster()
         caster_sheet["spellcasting"].update(
             ability="intelligence",
             spell_slots={
@@ -1487,7 +1498,7 @@ def test_combat_fly_uses_touch_range_and_encounter_dependency(
 ) -> None:
     async def exercise() -> None:
         server = create_server(_config(tmp_path))
-        caster = default_character_sheet()
+        caster = _equipped_caster()
         caster["spellcasting"].update(
             ability="intelligence",
             spell_slots=_slot(3),
@@ -1547,7 +1558,7 @@ def test_noncombat_invisibility_commits_targets_and_reconciles_replacement(
                 "idempotency_key": "invisibility-campaign",
             },
         )
-        caster_sheet = default_character_sheet()
+        caster_sheet = _equipped_caster()
         caster_sheet["spellcasting"].update(
             ability="charisma",
             spell_slots={
@@ -1675,7 +1686,7 @@ def test_combat_invisibility_uses_touch_range_and_encounter_dependency(
 ) -> None:
     async def exercise() -> None:
         server = create_server(_config(tmp_path))
-        caster = default_character_sheet()
+        caster = _equipped_caster()
         caster["spellcasting"].update(
             ability="charisma",
             spell_slots=_slot(2),
@@ -1730,7 +1741,7 @@ def test_witch_bolt_stale_tether_ends_without_spending_action(
 
     async def exercise() -> None:
         server = create_server(_config(tmp_path))
-        caster = default_character_sheet()
+        caster = _equipped_caster()
         caster["abilities"]["intelligence"]["score"] = 18
         caster["combat"]["hp"] = {"value": 100, "max": 100, "temp": 0}
         caster["spellcasting"].update(
@@ -1836,7 +1847,7 @@ def test_scorching_ray_reuses_shield_reaction_before_each_damage_roll(
 
     async def exercise() -> None:
         server = create_server(_config(tmp_path))
-        caster = default_character_sheet()
+        caster = _equipped_caster()
         caster["abilities"]["intelligence"]["score"] = 18
         caster["spellcasting"].update(ability="intelligence", spell_slots=_slot(2))
         ray = _spell("Scorching Ray", 2, casting_time="1 action", range_ft=120)
@@ -1921,7 +1932,7 @@ def test_fireball_settles_saves_and_area_enumeration(tmp_path: Path, monkeypatch
 
     async def exercise() -> None:
         server = create_server(_config(tmp_path))
-        caster = default_character_sheet()
+        caster = _equipped_caster()
         caster["abilities"]["wisdom"]["score"] = 18
         caster["spellcasting"].update(ability="wisdom", spell_slots=_slot(3))
         fireball = _spell("Fireball", 3, casting_time="1 action", range_ft=150)
@@ -2094,7 +2105,7 @@ def test_exact_srd_lightning_bolt_id_uses_engine_contract_for_line(
 
     async def exercise() -> None:
         server = create_server(_config(tmp_path))
-        caster = default_character_sheet()
+        caster = _equipped_caster()
         caster["abilities"]["intelligence"]["score"] = 18
         caster["spellcasting"].update(
             ability="intelligence",
@@ -2183,7 +2194,7 @@ def test_hypnotic_pattern_hard_settles_cube_saves_and_every_end_condition(
 ) -> None:
     async def exercise() -> None:
         server = create_server(_config(tmp_path))
-        caster = default_character_sheet()
+        caster = _equipped_caster()
         caster["abilities"]["charisma"]["score"] = 30
         caster["spellcasting"].update(
             ability="charisma",
@@ -2356,7 +2367,7 @@ def test_sacred_flame_direct_save_needs_no_manual_damage_step(
 
     async def exercise() -> None:
         server = create_server(_config(tmp_path))
-        caster = default_character_sheet()
+        caster = _equipped_caster()
         caster["abilities"]["wisdom"]["score"] = 18
         caster["spellcasting"]["ability"] = "wisdom"
         sacred_flame = _spell("Sacred Flame", 0, casting_time="1 action", range_ft=60)

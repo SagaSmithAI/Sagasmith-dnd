@@ -58,6 +58,7 @@ from sagasmith_dnd_mcp.server import (
     create_server,
 )
 from tests.authoring_helpers import import_and_activate_addon_fixture
+from tests.component_helpers import with_component_pouch
 
 
 def test_active_addon_options_extend_selector_without_granting_extra_choices() -> None:
@@ -1274,7 +1275,7 @@ def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
                 source_key_override=fixture_source_key,
                 source_chunks_override=[fixture_source_text],
             )
-            base_sheet = default_character_sheet()
+            base_sheet = with_component_pouch()
             base_sheet["progression"]["level"] = 3
             base_sheet["progression"]["classes"] = [
                 {"name": "Artificer", "level": 3, "subclass": "Battle Smith", "hit_die": 8}

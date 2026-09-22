@@ -12,6 +12,7 @@ from sagasmith_dnd.standard_spell_ids import CORE_SLEEP_SPELL_ID
 from test_official_expansions_mcp import _call, _config
 
 from sagasmith_dnd_mcp.server import close_server, create_server
+from tests.component_helpers import with_component_pouch
 
 
 @pytest.mark.fresh_database
@@ -43,7 +44,7 @@ def test_sleep_noncombat_missing_agent_spatial_facts_is_pending_without_payment(
                 },
             )
             sleep = next(item for item in spells if item["id"] == CORE_SLEEP_SPELL_ID)
-            sheet = default_character_sheet()
+            sheet = with_component_pouch()
             sheet["progression"]["level"] = 3
             sheet["progression"]["classes"] = [
                 {"name": "Bard", "level": 3, "subclass": "", "hit_die": 8}
@@ -227,7 +228,7 @@ def test_sleep_noncombat_agent_self_target_replay_and_incapacitated_guard(
                 )
                 if item["id"] == CORE_SLEEP_SPELL_ID
             )
-            sheet = default_character_sheet()
+            sheet = with_component_pouch()
             sheet["progression"].update(
                 level=3, classes=[{"name": "Bard", "level": 3, "subclass": "", "hit_die": 8}]
             )
@@ -401,7 +402,7 @@ def test_sleep_agent_combat_coordinate_free_partition_commits_and_replays(tmp_pa
                 },
             )
             sleep = next(item for item in catalog if item["id"] == CORE_SLEEP_SPELL_ID)
-            sheet = default_character_sheet()
+            sheet = with_component_pouch()
             sheet["progression"].update(
                 level=3, classes=[{"name": "Bard", "level": 3, "subclass": "", "hit_die": 8}]
             )

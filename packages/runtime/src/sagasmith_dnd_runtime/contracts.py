@@ -103,6 +103,7 @@ ACTION_PAYLOADS: dict[str, dict[str, type[Payload]]] = {
             trigger=(str, ...),
             cast_level=_optional(int),
             declaration=_optional(dict[str, Any]),
+            component_ruling=_optional(dict[str, Any]),
         ),
         "trigger_spell": _trigger,
         "trigger_action": _trigger,

@@ -2039,19 +2039,65 @@ above 0 HP may then use `character_state_change(action="stand")`; this narrowly
 clears Prone under the Core movement boundary and does not permit arbitrary
 condition edits.
 
-Except for source-bound spell workflows such as Core Fly and Magic Missile,
-`character_action(action="cast_spell")` and `combat_cast_spell` settle only timing, casting
-resources, concentration, and recorded components. Generic spells return
-`pending_ruling` for targets and effects. Cantrips and rituals cannot be upcast; a ritual cannot
-complete in active combat. Costly or consumed material components require
-`component_ruling.material_confirmed=true` before resources are spent. Pact Magic
-uses the recorded `pact_magic.slot_level` and is counted as a slot expenditure.
-A custom source-bound statblock spell whose component details were not present in
-the reviewed card requires `component_ruling.source_components_confirmed=true`
-before it pays an action, slot, or concentration. Confirm this only from an
-explicit Agent-performed DM ruling or an active exact spell rule; the later
-`pending_ruling`
-still covers targets and effects.
+`character_action(action="cast_spell")`, `combat_cast_spell`, reaction spells and
+`combat_ready(action="ready_spell")` check 2014 V/S/M eligibility before paying
+resources. Noncombat checks also run before the casting clock advances, so a
+current Silence effect cannot expire during an otherwise illegal cast. Reviewed
+item/feature component waivers come from the bound card. A caller cannot provide
+`ignore_components` or use `material_confirmed=true` as a bypass.
+
+Active effects may record source-bound `metadata.spell_component_constraints`:
+`{"can_speak": false}` for silence/gagging or `{"usable_hands": 0}` for bound
+hands. The effect requires a nonempty `source`; normal duration/concentration
+cleanup removes its restriction. Restrained alone does not remove hand use.
+Hand eligibility combines these restrictions, functional anatomy and the current
+main-hand/off-hand/shield slots. No item is silently stowed. A held material or
+legal focus can share its hand with S for an S+M spell; holding a focus does not
+satisfy an S-only spell. A pouch requires a free hand to access it.
+
+Material roles live on reviewed inventory cards under `mechanics.spell_component`:
+
+```json
+{"kind":"pouch","source":"SRD 2014 Equipment: Component Pouch"}
+{"kind":"focus","focus_type":"arcane","source":"SRD 2014 Equipment: Arcane Focus"}
+{"kind":"material","spell_ids":["exact-spell-id"],"source":"reviewed exact component entry"}
+```
+
+Supported 2014 focus types are `arcane` (sorcerer/warlock/wizard), `druidic`
+(druid), `holy_symbol` (cleric/paladin), and `musical_instrument` (bard). The
+spell's own class grant supplies eligibility, not another class's spell list.
+A focus must be held; a reviewed holy symbol can instead specify
+`presentation="worn"` (visibly worn) or `"shield"`. A worn symbol does not itself
+supply a somatic hand. Unsupported source-specific focus rules require an exact
+reviewed material instead of inventing eligibility.
+
+Use `component_ruling.material_item_id` to select a particular item; otherwise
+the first eligible inventory item is used. Costly or consumed components require
+a specific `material` whose `spell_ids` bind this spell and whose unit `price_cp`
+meets the component cost. One inventory unit represents one complete casting's
+listed material set. A consumed unit and the spell payment commit atomically;
+the final unit is removed with its equipment references. Gold in a wallet is not
+silently converted into diamonds or other required objects. The returned
+`component_receipt` records the exact item, source, amount and hand eligibility.
+
+For a statblock marked `component_details="not_repeated_in_statblock"`, an
+Agent-as-DM source review must supply `component_ruling.source_components` with
+explicit boolean `verbal`, `somatic`, and `material` plus any cost/consumption
+details, and a nonempty `source`. A confirmation boolean alone is insufficient.
+This establishes requirements; it does not waive the physical eligibility check.
+The separate hidden-casting observer matrix remains under
+`component_ruling.casting_perception`, using the effective components after the
+reviewed casting-source override.
+
+Missing component facts return a no-write `pending_ruling` with
+`committed=false`. Local Host does not cache that as a terminal commit: after
+facts are supplied, it can prepare current revisions for the same intent. An
+unknown write still replays the original operation and revision. Generic spells
+may separately return a paid `pending_ruling` for targets/effects; those paid
+receipts are preserved. Cantrips and rituals cannot be upcast; a ritual cannot
+complete in active combat. Pact Magic uses its recorded slot level. This new
+component gate is explicitly 2014; the existing 2024 casting path remains
+edition-separated.
 
 The exact 2014 SRD Fly card is engine-owned. A noncombat cast supplies equal
 `target_character_ids` and `willing_target_ids` in the `character_action`

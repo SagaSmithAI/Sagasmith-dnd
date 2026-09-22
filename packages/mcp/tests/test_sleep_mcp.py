@@ -12,6 +12,7 @@ from test_conditional_species_saves_mcp import _selection
 from test_official_expansions_mcp import _call, _config
 
 from sagasmith_dnd_mcp.server import close_server, create_server
+from tests.component_helpers import with_component_pouch
 
 
 @pytest.mark.fresh_database
@@ -86,7 +87,7 @@ def test_real_2014_sleep_area_pool_and_replay(tmp_path: Path, cast_level: int) -
                     },
                 )
 
-            caster_sheet = default_character_sheet()
+            caster_sheet = with_component_pouch()
             caster_sheet["progression"]["level"] = 3
             caster_sheet["progression"]["classes"] = [
                 {"name": "Bard", "level": 3, "subclass": "", "hit_die": 8}

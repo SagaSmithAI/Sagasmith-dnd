@@ -23,6 +23,7 @@ from test_structured_spell_mcp import _invisibility, _slot
 from sagasmith_dnd_mcp.random_state import RandomStateMutationService
 from sagasmith_dnd_mcp.server import close_server, create_server
 from tests.authoring_helpers import finalize_and_activate_module
+from tests.component_helpers import with_component_pouch
 
 
 @pytest.mark.fresh_database
@@ -221,6 +222,7 @@ def test_source_unconscious_combat_entry_settles_posture_and_inventory(
             held_sheet = equip_inventory_item(held_sheet, sword_id, "main_hand")
             held_sheet["spellcasting"].update(ability="intelligence", spell_slots=_slot(2))
             held_sheet["content"]["spells"] = [_invisibility()]
+            held_sheet = with_component_pouch(held_sheet)
             actors = []
             for name, sheet in (("Hero", default_character_sheet()), ("Guard", held_sheet)):
                 actors.append(

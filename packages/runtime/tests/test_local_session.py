@@ -146,6 +146,84 @@ finally:
     subprocess.run([sys.executable, "-c", program, str(tmp_path)], check=True, timeout=60)
 
 
+@pytest.mark.parametrize("legacy_cache", [False, True])
+@pytest.mark.parametrize("native_effect", [False, True])
+def test_local_missing_material_can_resume_same_intent_after_inventory_update(
+    tmp_path, legacy_cache, native_effect,
+):
+    from sagasmith_dnd.character_schema import default_character_sheet
+    from sagasmith_dnd.spells import CORE_MAGE_ARMOR_SPELL_ID
+
+    spell_id = CORE_MAGE_ARMOR_SPELL_ID if native_effect else "source:unresolved-effect"
+
+    async def run():
+        runtime = create_runtime(config(tmp_path))
+        identity = RequestIdentity("system:local")
+
+        async def call(operation, **args):
+            return await runtime.execute(operation, args, context=identity)
+
+        try:
+            campaign = await call("campaign_create", name="Components", edition="2014",
+                                  idempotency_key="campaign")
+            sheet = default_character_sheet()
+            sheet["spellcasting"]["spell_slots"] = {
+                "1": {"value": 1, "max": 1, "recovers_on": "long_rest"},
+            }
+            sheet["content"]["spells"] = [{
+                "id": spell_id, "name": "Reviewed spell", "level": 1,
+                "access": {"known": True},
+                "definition": {"casting_time": "1 action", "components": {
+                    "verbal": True, "somatic": True, "material": True,
+                }},
+            }]
+            actor = await call("character_create_from", mode="direct", payload={
+                "campaign_id": campaign["id"], "name": "Caster", "sheet": sheet,
+            }, idempotency_key="caster")
+            actor = actor["result"]
+            args = {"character_id": actor["id"], "action": "cast_spell",
+                    "payload": {"spell_id": spell_id},
+                    "idempotency_key": "cast"}
+            pending = await call("character_action", **args)
+            assert pending["result"]["status"] == "pending_ruling"
+            assert pending["result"]["committed"] is False
+            journal_path = runtime.local_session.journal / (
+                hashlib.sha256(b"cast").hexdigest() + ".json"
+            )
+            assert not journal_path.exists()
+            if legacy_cache:
+                prepared, campaign_id = runtime.local_session.prepare(
+                    "character_action", args, None,
+                )
+                runtime.local_session._save(journal_path, {
+                    "intent": {"operation": "character_action", "arguments": args,
+                               "campaign_id": None, "principal_id": "system:local"},
+                    "arguments": prepared, "campaign_id": campaign_id,
+                    "binding": runtime.local_session.binding(campaign_id, prepared),
+                    "result": pending,
+                })
+            await call("inventory_change", owner="character", owner_id=actor["id"],
+                       action="add", payload={"item": {
+                           "id": "pouch", "name": "Component pouch", "kind": "equipment",
+                           "mechanics": {"spell_component": {
+                               "kind": "pouch", "source": "SRD 2014 Equipment: component pouch",
+                           }},
+                       }}, idempotency_key="pouch")
+            committed = await call("character_action", **args)
+            assert committed["result"]["status"] == (
+                "committed" if native_effect else "pending_ruling"
+            )
+            assert journal_path.exists()  # A paid effect ruling is a durable receipt.
+            assert committed["result"]["result"]["component_receipt"]["status"] == "satisfied"
+            assert committed["local_context"]["actors"][0]["sheet"]["spellcasting"][
+                "spell_slots"
+            ]["1"]["value"] == 0
+            assert (await call("character_action", **args))["result"] == committed["result"]
+        finally:
+            runtime.close()
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize("ready", [False, True])
 def test_one_local_attack_commits_dice_hp_and_replays_without_reroll(tmp_path, ready):
     from sagasmith_dnd.character_schema import default_character_sheet

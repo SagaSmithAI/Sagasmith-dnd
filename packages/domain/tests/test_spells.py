@@ -1128,7 +1128,7 @@ def test_mystic_arcanum_spends_its_own_long_rest_resource() -> None:
         consume_spell_cast(result["sheet"], spell_id="mass-suggestion")
 
 
-def test_costly_material_component_requires_dm_confirmation() -> None:
+def test_costly_material_component_requires_reviewed_inventory_not_confirmation() -> None:
     sheet = default_character_sheet()
     sheet["spellcasting"]["spell_slots"] = {
         "1": {"label": "1st", "value": 1, "max": 1, "recovers_on": "long_rest", "source_key": ""}
@@ -1145,10 +1145,23 @@ def test_costly_material_component_requires_dm_confirmation() -> None:
         consume_spell_cast(sheet, spell_id="chromatic-orb")
     assert raised.value.ruling_kind == "source_or_scene_fact"
     assert raised.value.missing == ("material_component",)
+    with pytest.raises(NeedsRulingError, match="material_confirmed"):
+        consume_spell_cast(
+            sheet, spell_id="chromatic-orb", component_ruling={"material_confirmed": True}
+        )
+    sheet["inventory"]["items"].append({
+        "id": "diamond", "name": "Diamond", "kind": "loot", "price_cp": 5000,
+        "mechanics": {"spell_component": {
+            "kind": "material", "source": "review:Chromatic Orb components",
+            "spell_ids": ["chromatic-orb"],
+        }},
+    })
+    sheet = validate_character_sheet(sheet)
     result = consume_spell_cast(
-        sheet, spell_id="chromatic-orb", component_ruling={"material_confirmed": True}
+        sheet, spell_id="chromatic-orb", component_ruling={"material_item_id": "diamond"}
     )
-    assert "material_component" in result["ruling_required"]
+    assert "material_component" not in result["ruling_required"]
+    assert result["component_receipt"]["material"]["item_id"] == "diamond"
     assert {item["default_resolver"] for item in result["ruling_requirements"]} == {"agent"}
     assert {item["ruling_kind"] for item in result["ruling_requirements"]} == {
         "generic_spell_effect"
@@ -1177,17 +1190,14 @@ def test_source_bound_spell_with_unknown_components_requires_confirmation_before
     result = consume_spell_cast(
         sheet,
         spell_id="source-ray",
-        component_ruling={"source_components_confirmed": True},
+        component_ruling={
+            "source_components": {"verbal": True, "somatic": True, "material": False},
+            "source": "review:source-ray casting components",
+        },
     )
     assert result["sheet"]["spellcasting"]["spell_slots"]["1"]["value"] == 0
-    assert "source_components" in result["ruling_required"]
-    assert next(
-        item for item in result["ruling_requirements"] if item["kind"] == "source_components"
-    ) == {
-        "kind": "source_components",
-        "default_resolver": "agent",
-        "ruling_kind": "generic_spell_effect",
-    }
+    assert "source_components" not in result["ruling_required"]
+    assert result["component_receipt"]["required"]["verbal"] is True
 
 
 def test_readied_spell_pays_now_and_replaces_existing_concentration() -> None:

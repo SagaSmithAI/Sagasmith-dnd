@@ -10270,6 +10270,19 @@
                     "default": null,
                     "title": "Cast Level"
                   },
+                  "component_ruling": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": true,
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Component Ruling"
+                  },
                   "declaration": {
                     "anyOf": [
                       {

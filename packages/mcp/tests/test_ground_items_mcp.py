@@ -16,6 +16,7 @@ from sagasmith_dnd.standard_spell_ids import CORE_SLEEP_SPELL_ID
 from test_official_expansions_mcp import _call, _config
 
 from sagasmith_dnd_mcp.server import close_server, create_server
+from tests.component_helpers import with_component_pouch
 
 
 async def _raw(server, name: str, arguments: dict):
@@ -95,7 +96,7 @@ def test_sleep_drops_held_items_to_ground_without_automatic_pickup(tmp_path: Pat
                 },
             )
             sleep = next(item for item in spells if item["id"] == CORE_SLEEP_SPELL_ID)
-            caster_sheet = default_character_sheet()
+            caster_sheet = with_component_pouch()
             caster_sheet["progression"]["level"] = 3
             caster_sheet["progression"]["classes"] = [
                 {"name": "Bard", "level": 3, "subclass": "", "hit_die": 8}

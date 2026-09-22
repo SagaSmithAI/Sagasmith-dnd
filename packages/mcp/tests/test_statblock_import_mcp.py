@@ -1334,7 +1334,10 @@ def test_statblock_spellcasting_binds_slots_and_active_content(tmp_path: Path) -
                 "action": "cast_spell",
                 "payload": {
                     "spell_id": ray_id,
-                    "component_ruling": {"source_components_confirmed": True},
+                    "component_ruling": {
+                        "source_components": {"verbal": True, "somatic": True, "material": False},
+                        "source": "review:Ray of Sickness verbal and somatic components",
+                    },
                 },
                 "principal_id": "system:local",
                 "expected_revision": actor["revision"],
@@ -1350,7 +1353,8 @@ def test_statblock_spellcasting_binds_slots_and_active_content(tmp_path: Path) -
             "level": 1,
             "ritual": False,
         }
-        assert "source_components" in cast["result"]["ruling_required"]
+        assert "source_components" not in cast["result"]["ruling_required"]
+        assert cast["result"]["component_receipt"]["required"]["verbal"] is True
         after_cast = await _call(
             server,
             "campaign_query",

@@ -52,6 +52,12 @@ def _spell_card(spell_id: str) -> dict:
 
 def _caster_with_spell(spell_id: str, *, slot_level: int | None = None) -> dict:
     sheet = default_character_sheet()
+    sheet["inventory"]["items"].append({
+        "id": "component-pouch", "name": "Component pouch", "kind": "equipment",
+        "mechanics": {"spell_component": {
+            "kind": "pouch", "source": "SRD 2014 Equipment: component pouch",
+        }},
+    })
     sheet["content"]["spells"] = [_spell_card(spell_id)]
     if slot_level is not None:
         sheet["spellcasting"]["spell_slots"] = {
@@ -150,7 +156,8 @@ def test_blade_ward_resists_only_weapon_attack_bps_until_next_turn_end() -> None
 
     assert cast["automatic_effect"] == "blade_ward"
     assert cast["concentration_started"] is False
-    assert cast["ruling_required"] == ["verbal_component", "somatic_component"]
+    assert cast["ruling_required"] == []
+    assert cast["component_receipt"]["status"] == "satisfied"
     active = next(item for item in cast["sheet"]["effects"] if item["id"] == cast["effect_id"])
     assert active["source"] == CORE_BLADE_WARD_MECHANIC_ID
     weapon = apply_damage_to_sheet(

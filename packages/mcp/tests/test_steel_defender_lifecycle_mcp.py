@@ -9,13 +9,14 @@ import pytest
 import sagasmith_core.idempotency as idempotency_module
 from mcp import Client
 from mcp.server.mcpserver.exceptions import ToolError
-from sagasmith_dnd.character_schema import add_inventory_item, default_character_sheet
+from sagasmith_dnd.character_schema import add_inventory_item
 from sagasmith_dnd.standard_spell_ids import CORE_MENDING_MECHANIC_ID, CORE_MENDING_SPELL_ID
 
 from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.server import close_server, create_server
 from scripts.regression_official_expansions import _ProtocolTools
 from tests.authoring_helpers import import_and_activate_addon_fixture
+from tests.component_helpers import with_component_pouch
 from tests.test_addon_selection_contracts_mcp import _bound_defender_fixture_artifacts
 from tests.test_official_expansions_mcp import _call
 
@@ -41,7 +42,7 @@ async def _create_bound_defender(
         expected_revision=campaign["revision"], request_key="addon",
         source_key_override=source_key, source_chunks_override=[source_text],
     )
-    sheet = default_character_sheet()
+    sheet = with_component_pouch()
     sheet["progression"]["level"] = 3
     sheet["progression"]["classes"] = [
         {"name": "Artificer", "level": 3, "subclass": "Battle Smith", "hit_die": 8},
@@ -63,7 +64,7 @@ async def _create_bound_defender(
                 "verbal": True, "somatic": True, "material": True,
                 "material_description": "two lodestones",
             },
-            "effect": "Mending fixture; component completeness is outside this test.",
+            "effect": "Mending fixture with a reviewed component pouch.",
         },
         "pack_id": "dnd5e.content.srd2014", "pack_version": "1.16.0",
         "rule_refs": ["bundled:srd2014/07_Spells/Spells_Each/Mending.md"],

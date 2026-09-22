@@ -18,6 +18,7 @@ from test_structured_spell_mcp import (
 
 import sagasmith_dnd_mcp.server as server_module
 from sagasmith_dnd_mcp.server import close_server, create_server
+from tests.component_helpers import with_component_pouch
 
 
 def _selection(requirements: dict) -> dict:
@@ -435,7 +436,7 @@ def test_real_2014_gnome_cunning_enters_native_wisdom_save(tmp_path: Path) -> No
             )
             gnome = applied["sheet"]
             gnome["abilities"]["wisdom"]["score"] = 1
-            caster = default_character_sheet()
+            caster = with_component_pouch()
             caster["abilities"]["charisma"]["score"] = 30
             caster["spellcasting"].update(ability="charisma", spell_slots=_slot(3))
             hypnotic = _hypnotic_pattern()

@@ -24,8 +24,7 @@ snapshot tests remain green. This is domain/MCP evidence, not a live LLM session
 ## Next established gaps
 
 1. #139: execute the original stored readied spell.
-2. #116: resolve ordinary spell component eligibility before resource/RNG spend.
-3. #158: source-bound object statistics and damage thresholds.
+2. #158: source-bound object statistics and damage thresholds.
 
 Other valid gameplay and content-publication gaps remain in the
 [audited issue list](2026-09-22-local-first-issues.md). The broader Agent upstream
@@ -108,3 +107,42 @@ stream, and nested Shield. Two local Host attack cases (ordinary and Ready)
 passed with Host-managed revisions/branches and persisted dice receipts. Ruff,
 generated references and whitespace checks passed. This does not close the
 separate readied-spell issue #139 or claim live LLM campaign acceptance.
+
+## #116 — 2014 components before casting payment
+
+Ordinary, item, reaction and readied casting now check effective V/S/M before
+payment. Noncombat preflight also precedes elapsed time, so an existing silence
+restriction cannot expire during the attempted illegal cast. Source-bound active
+effect metadata records speech/hand prevention; functional anatomy and equipped
+hand/shield slots determine remaining hand use. Restrained alone does not imply
+bound hands. S+M can share its material hand; an S-only spell cannot use a hand
+occupied by a focus. The edition-specific Core boundary is published in 1.81.0.
+
+Reviewed inventory roles bind component pouches, class-appropriate 2014 SRD
+focuses and exact spell materials. Cost/value and consumed exceptions require
+the real inventory item. One casting's component unit is removed in the same
+transaction as the slot/use/action and effect, with equipment references cleaned
+when the stack is exhausted. Wallet money is never substituted for an object.
+Source-unknown statblocks require an explicit DM-reviewed component definition;
+confirmation booleans cannot bypass inventory or source checks. Existing reviewed
+innate/feature/item waivers remain authoritative. Unsupported source-specific
+focus types are not inferred from an item name. Hidden-casting perception stays
+separate and uses the effective components after the source waiver. The 2024
+confirmation path remains explicitly separate.
+
+Local Host now distinguishes a confirmed no-write ruling from a paid effect
+ruling. The former can be reconsidered with current revisions after the missing
+facts are supplied; the latter remains a durable replay receipt. Unknown writes
+still replay their exact original arguments/revision. Legacy cached no-write
+rulings are recovered with the same authorization/timeline checks.
+
+Validation: all 1,786 domain/Runtime cases passed. The broad MCP pass covered
+1,578 cases (30 environment-gated skips); its 32 failures were obsolete caster
+fixtures or confirmation expectations, and all 32 passed after explicit fixture
+updates. All 18 component-specific public MCP cases passed, including combat and
+noncombat rejection, stale revision, source forgery, material/slot/effect rollback,
+restart/replay, corrected-request retry, Ready, and item component waivers.
+The domain/Runtime suite includes real Local Authority execution, cached-ruling
+recovery, paid-ruling replay and existing lost-response/dice recovery. Ruff,
+generated references and whitespace checks passed. This is local executable
+contract evidence, not live LLM campaign acceptance.

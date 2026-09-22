@@ -8770,6 +8770,7 @@ class CombatService:
                 expected_revision,
                 branch_id,
                 idempotency_key,
+                component_ruling=data.get("component_ruling"),
             )
         elif action == "trigger_spell":
             result = self.combat_readied_spell_trigger(
