@@ -1194,6 +1194,9 @@ def test_existing_legacy_dwarf_selection_survives_core_content_upgrade(
             receipt["mechanic_id"] for receipt in upgraded_character["derived"]["rule_receipts"]
         }
         tampered_sheet = deepcopy(upgraded_character["sheet"])
+        # Direct creation cannot copy this engine-owned application receipt.
+        # Keep this fixture focused on rejecting the forged dwarf speed source.
+        tampered_sheet["combat"].pop("preclass_constitution_hp_adjustment", None)
         tampered_species = next(
             selection
             for selection in tampered_sheet["content"]["selections"]
