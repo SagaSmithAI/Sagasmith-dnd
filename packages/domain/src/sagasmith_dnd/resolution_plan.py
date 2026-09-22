@@ -779,6 +779,18 @@ def _validate_step_template(
         prior_step_ids=prior_step_ids,
         used_slots=used_slots,
     )
+    if opcode == "movement.move":
+        # Source mechanics cannot be replaced with caller-selected payment,
+        # volition or distance allowances when the plan is bound.
+        for field in ("payment", "distance_limit", "voluntary"):
+            if field in arguments and isinstance(arguments[field], (dict, list)):
+                raise ResolutionPlanCompilationError(
+                    f"movement {field} must be fixed by the source template"
+                )
+        try:
+            _validate_movement_contract(arguments)
+        except ResolutionPlanBindingError as error:
+            raise ResolutionPlanCompilationError(f"plan step {step_id}: {error}") from error
     if opcode == "attack.ac_bonus":
         try:
             _validate_common_concrete_arguments(opcode, arguments, index=index)
@@ -875,6 +887,24 @@ def _validate_concrete_step(
     _validate_common_concrete_arguments(opcode, arguments, index=index)
 
 
+def _validate_movement_contract(arguments: dict[str, Any]) -> None:
+    payment = arguments.get("payment")
+    if payment is None:
+        if "distance_limit" in arguments or "voluntary" in arguments:
+            raise ResolutionPlanBindingError("source movement requires its fixed payment")
+        return
+    if payment not in {"movement", "action", "reaction"}:
+        raise ResolutionPlanBindingError("movement payment must be movement, action or reaction")
+    limit = arguments.get("distance_limit")
+    if not (
+        limit in ("speed", "half_speed")
+        or isinstance(limit, int) and not isinstance(limit, bool) and limit > 0
+    ):
+        raise ResolutionPlanBindingError("source movement requires a bounded distance_limit")
+    if not isinstance(arguments.get("voluntary", True), bool):
+        raise ResolutionPlanBindingError("movement voluntary must be a boolean")
+
+
 def _validate_common_concrete_arguments(
     opcode: str,
     arguments: dict[str, Any],
@@ -882,6 +912,8 @@ def _validate_common_concrete_arguments(
     index: int,
 ) -> None:
     del index
+    if opcode == "movement.move":
+        _validate_movement_contract(arguments)
     for field in (
         "actor_id",
         "controller_actor_id",

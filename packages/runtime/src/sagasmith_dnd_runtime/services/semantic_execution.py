@@ -41,6 +41,12 @@ class CombatPlanRuntime:
     def begin(self, plan: _support.BoundResolutionPlan) -> None:
         if plan.fingerprint != self.context.bound_plan.fingerprint:
             raise _support.CombatEngineError("semantic plan runtime fingerprint mismatch")
+        movement = self.encounter.get("movement_continuation")
+        if self.continuation and movement:
+            raise _support.NeedsRulingError(
+                "finish the source movement and its reactions before resuming the plan",
+                missing=(str(movement["choice_id"]),), ruling_kind="player_owned_choice",
+            )
         waiting = set(self.continuation.get("waiting_ids", []))
         if any(item.get("id") in waiting and item.get("status", "pending") == "pending"
                for item in self.encounter.get("pending", [])):
@@ -124,6 +130,16 @@ class CombatPlanRuntime:
     def execute(self, opcode, arguments, *, step_id, prior_results):
         del prior_results
         if step_id in self.completed:
+            cached = self.completed[step_id]
+            if opcode == "movement.move" and cached.get("movement_status") == "paused":
+                final = next((entry for entry in reversed(self.encounter.get("log", []))
+                              if entry.get("type") == "source_movement_finished"
+                              and entry.get("grant_id") == cached.get("movement_id")), None)
+                if final:
+                    cached.update(
+                        movement_status=final["status"], position=final["position"],
+                        turn_budget=final["turn_budget"],
+                    )
             return _support.deepcopy(self.completed[step_id])
         validate_primitive(opcode, arguments)
         spec = PRIMITIVES.get(opcode)
@@ -590,13 +606,33 @@ class CombatPlanRuntime:
     def _execute_movement_move(self, opcode, arguments, *, step_id):
         actor_id = str(arguments["actor_id"])
         before_movement = _support.deepcopy(self.encounter)
-        self.encounter = _support.spend_movement(
-            self.encounter,
-            actor_id,
-            int(arguments.get("distance_ft", 0) or 0),
-            destination=arguments.get("destination"),
-            path=arguments.get("path"),
-        )
+        request = {
+            "destination": arguments.get("destination"), "path": arguments.get("path"),
+            "travel_mode": arguments.get("travel_mode", "walk"),
+            "crawl": arguments.get("crawl", False),
+            "spatial_facts": self.context.runtime_services.validate_agent_movement_facts(
+                self.encounter, arguments.get("spatial_facts")
+            ),
+        }
+        distance = int(arguments.get("distance_ft", 0) or 0)
+        if arguments.get("payment") is None:
+            self.encounter = _support.spend_movement(self.encounter, actor_id, distance, **request)
+        else:
+            from sagasmith_dnd.movement_continuations import spend_source_movement
+
+            self.encounter = spend_source_movement(
+                self.encounter, actor_id, distance,
+                payment=arguments["payment"], distance_limit=arguments["distance_limit"],
+                voluntary=arguments.get("voluntary", True),
+                source={
+                    "id": self.context.compiled_plan.id, "step_id": step_id,
+                    "application_id": self.application_id,
+                    "source_card_id": self.context.compiled_plan.source_card_id,
+                    "plan_fingerprint": self.context.compiled_plan.fingerprint,
+                    "bound_plan_fingerprint": self.context.bound_plan.fingerprint,
+                },
+                **request,
+            )
         ended_tether_ids = self.reconcile_movement_tethers(
             before_movement,
         )
@@ -609,6 +645,16 @@ class CombatPlanRuntime:
             "actor_id": actor_id,
             "position": _support.deepcopy(combatant.get("position")),
             "turn_budget": _support.deepcopy(combatant.get("turn_budget")),
+            "movement_payment": arguments.get("payment", "movement"),
+            "movement_id": next((
+                entry["grant_id"] for entry in reversed(self.encounter.get("log", []))
+                if entry.get("type") == "source_movement_payment"
+                and entry.get("source", {}).get("application_id") == self.application_id
+                and entry.get("source", {}).get("step_id") == step_id
+            ), None),
+            "movement_status": (
+                "paused" if self.encounter.get("movement_continuation") else "completed"
+            ),
             "ended_witch_bolt_tether_ids": ended_tether_ids,
         }
 

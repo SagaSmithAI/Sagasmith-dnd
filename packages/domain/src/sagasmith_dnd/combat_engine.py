@@ -5463,6 +5463,7 @@ def _spend_movement_uninterrupted(
     crawl: bool = False,
     spatial_facts: dict[str, Any] | None = None,
     _intermediate_destination: bool = False,
+    _source_movement_id: str | None = None,
 ) -> dict[str, Any]:
     """Apply movement with a separate reason and travel-speed mode.
 
@@ -5526,7 +5527,15 @@ def _spend_movement_uninterrupted(
     current = current_combatant(value)
     if current is None:
         raise CombatEngineError("combat has no current actor")
-    if willing_movement and current.get("actor_id") != actor_id_value:
+    source_grant = dict(combatant.get("source_movement") or {}) if _source_movement_id else None
+    if source_grant is not None and (
+        source_grant.get("id") != _source_movement_id
+        or source_grant.get("turn_token") != _combat_turn_token(value)
+        or not willing_movement or uses_aggressive_grant
+    ):
+        raise CombatEngineError("source movement requires its active source-bound grant")
+    voluntary = willing_movement and (source_grant or {}).get("voluntary", True)
+    if willing_movement and source_grant is None and current.get("actor_id") != actor_id_value:
         raise CombatEngineError("it is not this actor's turn")
     flags = dict(combatant.get("turn_flags") or {})
     aggressive_grant: dict[str, Any] | None = None
@@ -5578,6 +5587,7 @@ def _spend_movement_uninterrupted(
     if (
         willing_movement
         and not uses_aggressive_grant
+        and (source_grant is None or source_grant["payment"] == "movement")
         and _remaining_movement_ft(combatant, travel_mode) <= 0
     ):
         raise CombatEngineError("actor has no movement remaining at its current speed")
@@ -5595,6 +5605,15 @@ def _spend_movement_uninterrupted(
         if uses_aggressive_grant
         else _remaining_movement_ft(combatant, travel_mode)
     )
+    if source_grant is not None:
+        available = int(source_grant["remaining"])
+        source_limit = source_grant.get("distance_limit")
+        if source_limit in {"speed", "half_speed"}:
+            spent = int(source_grant["allowance_ft"]) - available
+            current_limit = selected_speed if source_limit == "speed" else selected_speed // 2
+            available = min(available, max(0, current_limit - spent))
+        if source_grant["payment"] == "movement":
+            available = min(available, _remaining_movement_ft(combatant, travel_mode))
     origin = _position(combatant.get("position"))
     waypoints: list[tuple[float, float]] = []
     if path is not None:
@@ -5706,7 +5725,7 @@ def _spend_movement_uninterrupted(
             bool(item.get("can_share_space")) for item in occupants
         )
         if occupants and not sharing_allowed:
-            if willing_movement:
+            if voluntary:
                 if not _intermediate_destination:
                     raise CombatEngineError(
                         "an actor cannot willingly end movement in another creature's space"
@@ -5717,7 +5736,7 @@ def _spend_movement_uninterrupted(
                     missing=("occupied_destination_resolution",),
                 )
     turning = dict(combatant.get("turned") or {})
-    if willing_movement and "turned" in conditions and agent_facts is not None:
+    if voluntary and "turned" in conditions and agent_facts is not None:
         if agent_facts.get("moves_farther_from_turn_source") is not True:
             raise CombatEngineError(
                 "a turned creature must voluntarily move farther from the turning source"
@@ -5727,7 +5746,7 @@ def _spend_movement_uninterrupted(
                 "a turned creature cannot willingly move within 30 feet of the turning source"
             )
     if (
-        willing_movement
+        voluntary
         and "turned" in conditions
         and origin is not None
         and target_position is not None
@@ -5758,7 +5777,7 @@ def _spend_movement_uninterrupted(
                 "a turned creature cannot willingly move within 30 feet of the turning source"
             )
     if (
-        willing_movement
+        voluntary
         and "frightened" in conditions
         and origin is not None
         and target_position is not None
@@ -5801,7 +5820,7 @@ def _spend_movement_uninterrupted(
                     "a frightened creature cannot willingly move closer to its visible fear source"
                 )
     if (
-        willing_movement
+        voluntary
         and "frightened" in conditions
         and agent_facts is not None
         and agent_facts.get("moves_closer_to_visible_fear_source") is True
@@ -5814,9 +5833,18 @@ def _spend_movement_uninterrupted(
         aggressive_grant["remaining"] = available - movement_cost
         flags["aggressive_movement"] = aggressive_grant
         combatant["turn_flags"] = flags
-    elif willing_movement:
+    elif willing_movement and (source_grant is None or source_grant["payment"] == "movement"):
         budget["travel_mode"] = travel_mode
         _update_movement_accounting(combatant, budget, spent_delta=movement_cost)
+    if source_grant is not None:
+        source_grant["remaining"] -= movement_cost
+        combatant["source_movement"] = source_grant
+        value["log"] = [*value.get("log", []), {
+            "type": "source_movement_prefix", "actor_id": actor_id_value,
+            "grant_id": source_grant["id"], "payment": source_grant["payment"],
+            "distance_ft": distance, "cost_ft": movement_cost,
+            "source": deepcopy(source_grant["source"]),
+        }][-100:]
     if destination is not None:
         from sagasmith_dnd.spatial import validate_position
 

@@ -37,6 +37,20 @@ Use its returned position/budget/continuation; do not resubmit the remaining
 distance as a second move. Incapacitation, changed geometry or insufficient
 remaining speed can cancel the continuation at the committed boundary.
 
+Off-turn movement is not automatically forced movement. When the exact source
+makes a creature use its movement, action or reaction, its reviewed semantic
+plan uses `movement.move` with fixed `payment` (`movement`, `action`, `reaction`),
+`distance_limit` (`speed`, `half_speed`, or a positive feet allowance), and
+`voluntary` (default true). These fields belong to the source template, never
+Agent-filled slots. The mover's payment is separate from the source actor's
+activation; settle any source-specific optional player choice before executing
+the selected response. Runtime validates availability, charges once, retains
+the source/plan fingerprint and resumes through every hostile reach exit.
+Action/reaction grants do not consume the mover's ordinary turn movement pool.
+External push/pull and teleportation remain exempt; do not use those labels for
+a creature's self-powered movement. A paused movement must finish or cancel
+before later steps of the semantic plan can execute.
+
 Do not use `combat_end_turn`, combat restart, or an enemy's inaction to recover
 from a tool/schema error or unfinished content compilation. Keep the current
 turn while repairing the request; if implementation work is needed, preserve it

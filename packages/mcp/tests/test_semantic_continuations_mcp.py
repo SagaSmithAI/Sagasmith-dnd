@@ -13,8 +13,13 @@ from tests.authoring_helpers import finalize_and_activate_module
 from tests.test_semantic_plan_mcp import _call, _raw
 
 
-async def prepare(tmp_path, *, reaction):
+async def prepare(tmp_path, *, reaction, movement_payment=None, mover_incapacitated=False):
     text = "Twin Strikes. Make two unarmed attacks against one adjacent visible creature."
+    if movement_payment:
+        text = (
+            f"Commanded March. Another creature uses its {movement_payment} to move up to "
+            "its speed, even outside its turn. After it finishes moving, it becomes prone."
+        )
     source = tmp_path / "room.md"
     source.write_text(f"# Room\n\n## Encounter\n\n{text}\n", encoding="utf8")
     config = McpConfig(
@@ -57,11 +62,15 @@ async def prepare(tmp_path, *, reaction):
         title="Room",
         portable_id="dnd5e.module.continuations-test",
     )
-    chunks = await _call(server, "module_search", {"campaign_id": cid, "query": "Twin Strikes"})
+    chunks = await _call(server, "module_search", {
+        "campaign_id": cid, "query": "Commanded March" if movement_payment else "Twin Strikes",
+    })
     expanded = await _call(server, "module_expand", {"chunk_id": chunks[0]["id"]})
     actors = []
     for name in ("attacker", "target"):
         sheet = default_character_sheet()
+        if name == "target" and mover_incapacitated:
+            sheet["conditions"] = ["incapacitated"]
         sheet["combat"]["hp"].update(value=100, max=100)
         sheet["combat"]["ac"]["override"] = 1
         sheet["abilities"]["strength"]["score"] = 16
@@ -97,6 +106,34 @@ async def prepare(tmp_path, *, reaction):
                     }
                 ],
             }
+            if movement_payment:
+                sheet["inventory"]["items"] = [{
+                    "id": "whip", "name": "Whip", "kind": "weapon",
+                    "equipped": True, "equipped_slot": "main_hand",
+                    "mechanics": {
+                        "category": "martial", "attack_type": "melee",
+                        "attack_ability": "dexterity", "damage_formula": "1d4",
+                        "damage_type": "slashing", "reach_ft": 10,
+                        "properties": ["finesse", "reach"],
+                    },
+                }]
+                sheet["inventory"]["equipment_slots"]["main_hand"] = "whip"
+                plan["steps"] = [
+                    {"id": "move", "op": "movement.move", "args": {
+                        "actor_id": {"$slot": "target"}, "distance_ft": 15,
+                        "destination": {"x": 4, "y": 0}, "payment": movement_payment,
+                        "distance_limit": "speed", "voluntary": True,
+                    }},
+                    {"id": "after", "op": "condition.apply", "args": {
+                        "target_ids": [{"$slot": "target"}], "condition_id": "prone",
+                        "source": "Commanded March",
+                    }},
+                ]
+                # Keep the paid source actor binding meaningful in the source contract.
+                plan["steps"].insert(0, {"id": "target", "op": "target.validate", "args": {
+                    "source_actor_id": {"$slot": "source"},
+                    "target_ids": [{"$slot": "target"}], "exclude_self": True,
+                }})
             sheet["content"]["activities"] = [
                 {
                     "id": "twin",
@@ -183,7 +220,9 @@ async def prepare(tmp_path, *, reaction):
             "positioning_mode": "grid",
             "participant_ids": [a["id"] for a in actors],
             "participant_config": [
-                {"actor_id": a["id"], "initiative": 20 - i * 10, "position": {"x": i, "y": 0}}
+                {"actor_id": a["id"], "initiative": 20 - i * 10,
+                 "position": {"x": i, "y": 0},
+                 "disposition": "friendly" if i else "hostile"}
                 for i, a in enumerate(actors)
             ],
             "scene_id": expanded["scene"]["id"],
@@ -216,8 +255,10 @@ async def prepare(tmp_path, *, reaction):
             "application_id": "twin-1",
             "default_resolver": "agent",
             "ruling_kind": "agent_dm_adjudication",
-            "decision": "Attack the adjacent target.",
-            "reason": "The reviewed source permits two attacks.",
+            "decision": (
+                "Move the adjacent target." if movement_payment else "Attack the adjacent target."
+            ),
+            "reason": text if movement_payment else "The reviewed source permits two attacks.",
             "source_ref": expanded["source_ref"],
             "source_excerpt": text,
         },

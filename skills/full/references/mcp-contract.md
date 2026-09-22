@@ -1608,7 +1608,18 @@ and geometry are evaluated from the encounter map. `movement_mode="forced"`
 and `movement_mode="teleport"` are effect-driven position changes: they may
 move a combatant outside its turn, do not spend its voluntary movement pool,
 and do not open opportunity-attack windows. Teleportation accepts a destination
-but no traversed `path`. In agent mode, movement has
+but no traversed `path`. Off-turn self-powered movement instead uses a paid,
+source-bound semantic `movement.move` step. Its template fixes `payment` to
+`movement`, `action`, or `reaction`, and `distance_limit` to `speed`, `half_speed`,
+or a positive feet allowance; `voluntary` defaults to true and can be fixed false
+for compelled self-powered movement. These authority fields cannot be Agent
+slots. The mover's action/reaction is charged once and has a separate movement
+allowance; ordinary movement payment still consumes remaining turn movement.
+All three can provoke opportunity attacks outside the mover's turn. A durable
+continuation retains source identity and payment through each reach boundary,
+and later semantic steps wait until the complete movement settles. Source
+eligibility and any optional player choice must precede the selected response.
+In agent mode, movement has
 no destination coordinates and requires exactly `decision_id`, `reason`,
 `destination_legal`, `distance_ft`, `difficult_terrain_extra_ft`,
 `moves_farther_from_turn_source`, `enters_turn_source_30_ft`,

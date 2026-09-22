@@ -190,6 +190,100 @@ def _crossing(window):
     return [window["actor_id"], window["opportunity_attack_reach_ft"]]
 
 
+def spend_source_movement(
+    encounter,
+    actor_id,
+    distance,
+    *,
+    payment,
+    distance_limit,
+    source,
+    voluntary=True,
+    **request,
+):
+    """Execute a trusted source grant; public callers cannot manufacture this grant.
+
+    Action/reaction movement has its own source allowance. Movement paid with
+    ordinary movement still spends the actor's remaining movement, even off-turn.
+    The Runtime binds this call to a reviewed plan or a stored Ready response.
+    """
+    value = deepcopy(encounter)
+    if value.get("movement_continuation"):
+        raise engine.CombatEngineError("resolve the pending movement before another source move")
+    mover = next((a for a in value.get("combatants", []) if a["actor_id"] == actor_id), None)
+    if mover is None or not isinstance(source, dict) or not source.get("id"):
+        raise engine.CombatEngineError(
+            "source movement requires a current actor and source identity"
+        )
+    if payment not in {"movement", "action", "reaction"} or not isinstance(voluntary, bool):
+        raise engine.CombatEngineError("invalid source movement payment or volition")
+    if mover.get("hit_points", 1) <= 0 or (
+        payment in {"action", "reaction"}
+        and engine._condition_set(mover.get("conditions")) & engine.INCAPACITATING_STATE_IDS
+    ):
+        raise engine.CombatEngineError("actor cannot pay for source movement")
+    speed = engine._effective_speed_ft(mover, request.get("travel_mode", "walk"))
+    limit = (
+        speed
+        if distance_limit == "speed"
+        else speed // 2
+        if distance_limit == "half_speed"
+        else distance_limit
+    )
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+        raise engine.CombatEngineError("source movement requires a positive distance allowance")
+    if payment != "movement":
+        budget = mover.setdefault("turn_budget", {})
+        key = "main_action" if payment == "action" else "reaction"
+        if int(budget.get(key, 0)) <= 0:
+            raise engine.CombatEngineError(f"actor has no {payment} remaining")
+        budget[key] -= 1
+    grant_id = f"movement-{uuid4().hex}"
+    mover["source_movement"] = {
+        "id": grant_id,
+        "payment": payment,
+        "remaining": limit,
+        "allowance_ft": limit,
+        "distance_limit": distance_limit,
+        "voluntary": voluntary,
+        "source": deepcopy(source),
+        "turn_token": engine._combat_turn_token(value),
+    }
+    value.setdefault("log", []).append(
+        {
+            "type": "source_movement_payment",
+            "actor_id": actor_id,
+            "grant_id": grant_id,
+            "payment": payment,
+            "source": deepcopy(source),
+            "allowance_ft": limit,
+            "voluntary": voluntary,
+        }
+    )
+    return start_movement(value, actor_id, distance, _source_movement_id=grant_id, **request)
+
+
+def _finish_source_movement(value, actor_id, grant_id, status):
+    if not grant_id:
+        return
+    mover = next((a for a in value.get("combatants", []) if a["actor_id"] == actor_id), None)
+    grant = (mover or {}).get("source_movement", {})
+    if grant.get("id") == grant_id:
+        mover.pop("source_movement")
+    value["log"] = [
+        *value.get("log", []),
+        {
+            "type": "source_movement_finished",
+            "actor_id": actor_id,
+            "grant_id": grant_id,
+            "status": status,
+            "source": deepcopy(grant.get("source", {})),
+            "position": deepcopy((mover or {}).get("position")),
+            "turn_budget": deepcopy((mover or {}).get("turn_budget")),
+        },
+    ][-100:]
+
+
 def start_movement(encounter, actor_id, distance, *, _ignored=(), **request):
     if encounter.get("movement_continuation") and request.get("movement_mode", "voluntary") in {
         "voluntary",
@@ -208,6 +302,7 @@ def start_movement(encounter, actor_id, distance, *, _ignored=(), **request):
     ]
     if not windows:
         planned["pending"] = [w for w in planned.get("pending", []) if w["id"] in prior_ids]
+        _finish_source_movement(planned, actor_id, request.get("_source_movement_id"), "completed")
         return planned
     window = windows[0]
     offset = window["movement_offset_ft"]
@@ -346,6 +441,9 @@ def resume_pending_movement(encounter: dict[str, Any]) -> dict[str, Any]:
         value["pending"] = [
             w for w in value.get("pending", []) if w["id"] != continuation["choice_id"]
         ]
+        _finish_source_movement(
+            value, actor_id, continuation["request"].get("_source_movement_id"), "cancelled"
+        )
     value["log"] = [
         *value.get("log", []),
         {

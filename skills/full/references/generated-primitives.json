@@ -336,10 +336,16 @@
   "movement.move": {
     "allowed_fields": [
       "actor_id",
+      "crawl",
       "destination",
       "distance_ft",
+      "distance_limit",
       "path",
-      "source"
+      "payment",
+      "source",
+      "spatial_facts",
+      "travel_mode",
+      "voluntary"
     ],
     "execution_context": "encounter",
     "required_fields": [

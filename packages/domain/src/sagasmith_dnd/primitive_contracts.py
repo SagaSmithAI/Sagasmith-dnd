@@ -169,7 +169,9 @@ PLAN_FIELDS: dict[str, tuple[frozenset[str], frozenset[str]]] = {
     ),
     "movement.move": (
         frozenset({"actor_id"}),
-        frozenset({"actor_id", "distance_ft", "destination", "path", "source"}),
+        frozenset({"actor_id", "distance_ft", "destination", "path", "source",
+                   "payment", "distance_limit", "voluntary", "travel_mode", "crawl",
+                   "spatial_facts"}),
     ),
     "movement.force": (
         frozenset({"source_actor_id", "target_actor_id", "distance_ft"}),

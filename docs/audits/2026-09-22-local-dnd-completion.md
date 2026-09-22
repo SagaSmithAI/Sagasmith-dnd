@@ -23,10 +23,9 @@ snapshot tests remain green. This is domain/MCP evidence, not a live LLM session
 
 ## Next established gaps
 
-1. #109: source-bound off-turn self-powered movement.
-2. #133 / #139: execute the original stored Ready response and readied spell.
-3. #116: resolve ordinary spell component eligibility before resource/RNG spend.
-4. #158: source-bound object statistics and damage thresholds.
+1. #133 / #139: execute the original stored Ready response and readied spell.
+2. #116: resolve ordinary spell component eligibility before resource/RNG spend.
+3. #158: source-bound object statistics and damage thresholds.
 
 Other valid gameplay and content-publication gaps remain in the
 [audited issue list](2026-09-22-local-first-issues.md). The broader Agent upstream
@@ -59,3 +58,28 @@ Public MCP cases exercise lethal/missed/declined reactions, later threats,
 restart, exact replay, stale CAS, nested Shield defenses and Help/Sneak Attack
 lifecycle. Ruff, generated operation references and whitespace checks passed.
 These are executable local contract tests; no live LLM campaign is claimed.
+
+## #109 — source-bound off-turn self-powered movement
+
+Reviewed semantic movement steps can now require the mover's movement, action or
+reaction independently of whose turn it is. Payment, volition and the distance
+allowance are fixed source-template fields, not caller-controlled bindings.
+Runtime binds the exact paid source/plan/application and records the mover's
+payment once. Action/reaction allowances do not reuse or drain ordinary turn
+movement; movement payment still uses its remaining pool. Compelled self-powered
+movement still provokes; external push/pull and teleportation remain exempt.
+
+The existing durable path continuation preserves the source grant across all
+reach exits and cancels on death, immobilization, displacement or inadequate
+remaining speed. Semantic execution waits for the complete movement, including
+later reach windows after the first waiting ID has disappeared. Resumed results
+contain the final position and outcome without paying or moving again.
+
+Validation: 1,752 domain/Runtime tests passed, followed by 19 selected MCP tests
+and a 38-case MCP movement/transaction checkpoint (overlapping suites). Public
+tests cover all three payment types, two weapon reaches, source mismatch,
+incapacitated mover no-write failure, stale CAS, restart, exact replay, and
+dependent steps waiting until movement settles. Existing push/pull and
+teleportation public tests passed. Ruff and generated references were checked.
+This establishes the generic source-bound mechanism, not automation of every
+spell that can cause movement or a live model campaign.
