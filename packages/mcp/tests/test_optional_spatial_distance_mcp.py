@@ -90,8 +90,16 @@ def test_optional_distance_does_not_invent_an_out_of_reach_fact(tmp_path, distan
                 "targetable": True,
                 "in_range": True,
                 "cover_degree": "none",
-                "attacker_can_see_target": True,
-                "target_can_see_attacker": True,
+                "attacker_vision": {
+                    "distance_ft": 5, "illumination": "bright", "obscuration": "none",
+                    "magical_darkness": False, "opaque_boundary": False,
+                    "scene_ref": "fixture:reach", "scene_excerpt": "The guards see each other.",
+                },
+                "target_vision": {
+                    "distance_ft": 5, "illumination": "bright", "obscuration": "none",
+                    "magical_darkness": False, "opaque_boundary": False,
+                    "scene_ref": "fixture:reach", "scene_excerpt": "The guards see each other.",
+                },
             }
             if distance is not None:
                 facts["target_within_5_ft"] = distance

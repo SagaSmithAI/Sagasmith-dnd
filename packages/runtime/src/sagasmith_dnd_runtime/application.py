@@ -1122,6 +1122,22 @@ def _create_application(config: McpConfig | None = None, *, resources) -> DndRun
         )
     )
 
+    _services.combat_poison_coat = _services.public_tool()(
+        _services.bind("combat_poison_coat", "combat_poison_coat")
+    )
+
+    _services.combat_poison_wash = _services.public_tool()(
+        _services.bind("combat_poison_wash", "combat_poison_wash")
+    )
+
+    _services.combat_poison_expose = _services.public_tool()(
+        _services.bind("combat_poison_expose", "combat_poison_expose")
+    )
+
+    _services.combat_poison_neutralize = _services.public_tool()(
+        _services.bind("combat_poison_neutralize", "combat_poison_neutralize")
+    )
+
     _services.combat_use_activity = _services.public_tool()(
         _support._agent_ruling_boundary(
             _services.bind("combat_use_activity", "combat_use_activity")

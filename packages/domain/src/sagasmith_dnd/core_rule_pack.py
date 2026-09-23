@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.94.0"
+CORE_RULE_PACK_VERSION = "1.97.0"
 
 
 @dataclass(frozen=True)
@@ -391,6 +391,13 @@ BOUNDARIES = (
         "bundled:srd2014/02_Classes",
     ),
     CoreBoundary(
+        "dnd5e.core.progression.multiclassing",
+        ("2014",),
+        "progression.advance_single_class_level",
+        ("tests/test_progression.py::test_2014_multiclass_level_up_uses_total_level_and_source_class_contract",),
+        "bundled:srd2014/03_Characterization/Multiclassing.md",
+    ),
+    CoreBoundary(
         "dnd5e.core.progression.extra_attack",
         ("2014", "2024"),
         "progression.advance_single_class_level",
@@ -470,6 +477,41 @@ BOUNDARIES = (
             "tests/test_combat_engine.py::test_2014_jack_of_all_trades_applies_to_initiative",
         ),
         "bundled:srd2014/02_Classes/Bard.md",
+    ),
+    CoreBoundary(
+        "dnd5e.core.check.reliable_talent",
+        ("2014",),
+        "engine.resolve_check|combat_engine.resolve_actor_check",
+        ("tests/test_rogue_features.py::test_reliable_talent_treats_proficient_low_roll_as_ten",),
+        "bundled:srd2014/02_Classes/Rogue.md#reliable-talent",
+    ),
+    CoreBoundary(
+        "dnd5e.core.sense.blindsense",
+        ("2014",),
+        "combat_engine.blindsense_detects_location",
+        ("tests/test_rogue_features.py::test_blindsense_detects_location_without_granting_sight",),
+        "bundled:srd2014/02_Classes/Rogue.md#blindsense",
+    ),
+    CoreBoundary(
+        "dnd5e.core.save.slippery_mind",
+        ("2014",),
+        "character_schema.derive_character_sheet|combat_engine.resolve_actor_check",
+        ("tests/test_rogue_features.py::test_slippery_mind_adds_wisdom_save_proficiency",),
+        "bundled:srd2014/02_Classes/Rogue.md#slippery-mind",
+    ),
+    CoreBoundary(
+        "dnd5e.core.attack.elusive",
+        ("2014",),
+        "combat_engine.preflight_attack",
+        ("tests/test_rogue_features.py::test_elusive_removes_attack_advantage_unless_incapacitated",),
+        "bundled:srd2014/02_Classes/Rogue.md#elusive",
+    ),
+    CoreBoundary(
+        "dnd5e.core.rogue.stroke_of_luck",
+        ("2014",),
+        "character_schema.srd2014_rogue_stroke_of_luck_feature|combat_engine.apply_srd2014_stroke_of_luck_to_check",
+        ("tests/test_rogue_features.py::test_stroke_of_luck_applies_to_a_failed_check_and_has_one_short_rest_use",),
+        "bundled:srd2014/02_Classes/Rogue.md#stroke-of-luck",
     ),
     CoreBoundary(
         "dnd5e.core.check.group",
@@ -766,6 +808,34 @@ BOUNDARIES = (
         "combat_engine.spend_movement",
         ("tests/test_combat_engine.py",),
         "bundled:srd/grappled",
+    ),
+    CoreBoundary(
+        "dnd5e.core.combat.grapple_shove_2014",
+        ("2014",),
+        "combat_engine.pay_2014_special_attack|combat_engine.resolve_2014_special_attack_contest",
+        ("tests/test_combat_engine.py::test_2014_special_attack_replaces_one_attack",),
+        "bundled:srd2014/06_Gameplay/Order_of_Combat.md#Grappling",
+    ),
+    CoreBoundary(
+        "dnd5e.core.vision.light_obscuration_2014",
+        ("2014",),
+        "spatial.compile_battle_map|combat_engine.can_see",
+        ("tests/test_combat_engine.py::test_2014_grid_vision_resolves_light_and_senses",),
+        "bundled:srd2014/06_Gameplay/Adventuring.md#Vision and Light",
+    ),
+    CoreBoundary(
+        "dnd5e.core.movement.jump_2014",
+        ("2014",),
+        "combat_engine.jump_profile_2014|combat_engine.settle_jump_2014|combat_engine.spend_movement",
+        ("tests/test_combat_engine.py::test_2014_jump_obstacle_and_difficult_landing_checks_are_source_bounded",),
+        "bundled:srd2014/06_Gameplay/Adventuring.md#Jumping",
+    ),
+    CoreBoundary(
+        "dnd5e.core.combat.mounted_2014",
+        ("2014",),
+        "mounted_combat.mount_2014|mounted_combat.dismount_2014|combat_engine.available_actions",
+        ("tests/test_mounted_combat.py::test_controlled_mount_uses_own_initiative_slot_and_keeps_budget_separate",),
+        "bundled:srd2014/06_Gameplay/Order_of_Combat.md#Mounted_Combat",
     ),
     CoreBoundary(
         "dnd5e.core.movement.occupied_destination",
@@ -1180,6 +1250,52 @@ BOUNDARIES = (
             "tests/test_character_schema.py::test_2014_exhaustion_halves_effective_hit_point_maximum",
         ),
         "bundled:srd/exhaustion",
+    ),
+    CoreBoundary(
+        "dnd5e.core.adventuring.food_water_2014",
+        ("2014",),
+        "survival.settle_survival_day|services.survival.reconcile_survival_days",
+        (
+            "tests/test_survival.py",
+            "packages/mcp/tests/test_food_water_survival_mcp.py",
+        ),
+        "bundled:srd2014/06_Gameplay/Adventuring.md#Food-and-Water",
+    ),
+    CoreBoundary(
+        "dnd5e.core.gamemastering.poisons_2014",
+        ("2014",),
+        "poisons.POISONS_2014|services.poisons.resolve_poison_delivery",
+        ("tests/test_poisons.py", "packages/mcp/tests/test_poisons_mcp.py"),
+        "bundled:srd2014/08_Gamemastering/Poisons.md",
+    ),
+    CoreBoundary(
+        "dnd5e.core.equipment.basic_poison_2014",
+        ("2014",),
+        "poisons.BASIC_POISON_SOURCE_REF|services.poisons.settle_injury_coating",
+        ("tests/test_poisons.py", "packages/mcp/tests/test_poisons_mcp.py"),
+        "bundled:srd2014/04_Equipment/Adventuring_Gear.md#Poison-Basic",
+    ),
+    CoreBoundary(
+        "dnd5e.core.travel.pace_2014",
+        ("2014",),
+        "travel.travel_duration_minutes|services.campaign_party_travel",
+        ("tests/test_travel.py", "packages/mcp/tests/test_party_travel_mcp.py"),
+        "bundled:srd2014/06_Gameplay/Adventuring.md#Travel-Pace",
+    ),
+    CoreBoundary(
+        "dnd5e.core.travel.difficult_terrain_2014",
+        ("2014",),
+        "travel.travel_duration_minutes|services.campaign_party_travel",
+        ("tests/test_travel.py", "packages/mcp/tests/test_party_travel_mcp.py"),
+        "bundled:srd2014/06_Gameplay/Adventuring.md#Difficult-Terrain",
+    ),
+    CoreBoundary(
+        "dnd5e.core.travel.forced_march_2014",
+        ("2014",),
+        "travel.forced_march_save_dcs|travel.settle_forced_march_save|"
+        "services.campaign_party_travel",
+        ("tests/test_travel.py", "packages/mcp/tests/test_party_travel_mcp.py"),
+        "bundled:srd2014/06_Gameplay/Adventuring.md#Forced-March",
     ),
     CoreBoundary(
         "dnd5e.core.rest.long_rest_timing",

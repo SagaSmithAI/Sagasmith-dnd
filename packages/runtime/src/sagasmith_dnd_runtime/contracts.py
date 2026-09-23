@@ -162,6 +162,8 @@ ACTION_PAYLOADS: dict[str, dict[str, type[Payload]]] = {
             path=_optional(list[Position]), movement_mode=(str, "voluntary"),
             travel_mode=(str, "walk"), crawl=(bool, False),
             spatial_facts=_optional(dict[str, Any]),
+            drag_grapple_ids=_optional(list[Identifier]),
+            jump=_optional(dict[str, Any]),
         ),
         "stand": _payload("StandActor"),
     },

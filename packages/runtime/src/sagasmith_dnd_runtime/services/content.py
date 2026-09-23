@@ -4788,6 +4788,57 @@ class ContentService:
                 unique.append((pack_id, version, artifact))
         return unique
 
+    def multiclass_level_class_source(
+        self,
+        campaign_id: str,
+        class_name: str,
+        *,
+        branch_id: str,
+    ) -> dict[str, Any]:
+        """Load the exact bundled 2014 class contract for a first class level."""
+        normalized = " ".join(str(class_name or "").split())
+        if not normalized:
+            raise ValueError("multiclass class name is required")
+        canonical_id = (
+            f"{_support.CORE_CONTENT_PACK_ID}.class.{_support.ascii_slug(normalized)}"
+        )
+        matches = [
+            (pack_id, version, artifact)
+            for pack_id, version, artifact in self.available_content_artifacts(
+                campaign_id, kind="class", branch_id=branch_id
+            )
+            if str(artifact.get("id") or "") == canonical_id
+            and str(dict(artifact.get("card") or {}).get("name") or "").casefold()
+            == normalized.casefold()
+        ]
+        if len(matches) != 1:
+            raise _support.RulesetUnavailableError(
+                f"exact bundled class definition is unavailable or ambiguous: {normalized}"
+            )
+        pack_id, version, artifact = matches[0]
+        definition = dict(dict(artifact.get("card") or {}).get("class_definition") or {})
+        definition.setdefault("name", str(dict(artifact.get("card") or {}).get("name") or ""))
+        if str(definition.get("name") or "").casefold() != normalized.casefold():
+            raise _support.RulesetUnavailableError(
+                f"bundled class definition does not match: {normalized}"
+            )
+        return {
+            "class_definition": definition,
+            "source_artifact": {
+                "artifact_id": str(artifact["id"]),
+                "pack_id": pack_id,
+                "pack_version": version,
+            },
+            "rule_refs": list(artifact.get("rule_refs") or []),
+            "proficiency_choice_contract": {
+                "skills": {
+                    "count": 1 if normalized.casefold() in {"bard", "ranger", "rogue"} else 0,
+                    "options": list(definition.get("skill_options") or []),
+                },
+                  "tools": {"count": 0, "options": []},
+            },
+        }
+
     def source_scoped_content_matches(
         self,
         matches: list[tuple[str, str, dict[str, Any]]],

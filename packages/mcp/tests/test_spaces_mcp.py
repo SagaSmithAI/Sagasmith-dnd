@@ -231,6 +231,19 @@ def test_agent_squeezing_reaction_preserves_prefix_and_remaining_geometry(
                 "opportunity_attack_actor_ids": [world.other],
                 "opportunity_attack_boundaries": [{
                     "actor_id": world.other, "distance_ft": 5, "weapon_ids": ["unarmed-strike"],
+                    "targetable": True, "in_range": True, "cover_degree": "none",
+                    "attacker_vision": {
+                        "distance_ft": 5, "illumination": "bright", "obscuration": "none",
+                        "magical_darkness": False, "opaque_boundary": False,
+                        "scene_ref": "fixture:hallway",
+                        "scene_excerpt": "The combatants see each other.",
+                    },
+                    "target_vision": {
+                        "distance_ft": 5, "illumination": "bright", "obscuration": "none",
+                        "magical_darkness": False, "opaque_boundary": False,
+                        "scene_ref": "fixture:hallway",
+                        "scene_excerpt": "The combatants see each other.",
+                    },
                 }], "space_segments": [
                     {"distance_ft": 5, "occupant_ids": [], "passage_width_ft": 5,
                      "difficult_terrain": True},

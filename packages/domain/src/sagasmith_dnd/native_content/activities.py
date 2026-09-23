@@ -78,7 +78,7 @@ def settle_core_activity_effect(
             raise CombatEngineError("Aggressive target must be a living combatant")
         if not _are_hostile(combatant, target):
             raise CombatEngineError("Aggressive target must be hostile")
-        if not can_see(combatant, target):
+        if not can_see(combatant, target, value):
             raise CombatEngineError("Aggressive target must be visible to the Orc")
         flags = dict(combatant.get("turn_flags") or {})
         if "aggressive_movement" in flags:

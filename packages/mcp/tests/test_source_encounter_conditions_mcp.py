@@ -308,8 +308,16 @@ def test_source_condition_is_validated_persisted_and_cleared_with_encounter(
             "in_range": True,
             "long_range": False,
             "cover_degree": "none",
-            "attacker_can_see_target": True,
-            "target_can_see_attacker": True,
+            "attacker_vision": {
+                "distance_ft": 5, "illumination": "bright", "obscuration": "none",
+                "magical_darkness": False, "opaque_boundary": False,
+                "scene_ref": "fixture:common-room", "scene_excerpt": "The ruffian sees the hero.",
+            },
+            "target_vision": {
+                "distance_ft": 5, "illumination": "bright", "obscuration": "none",
+                "magical_darkness": False, "opaque_boundary": False,
+                "scene_ref": "fixture:common-room", "scene_excerpt": "The hero sees the ruffian.",
+            },
             "target_within_5_ft": True,
             "close_threat_actor_ids": [],
             "helper_actor_ids": [],

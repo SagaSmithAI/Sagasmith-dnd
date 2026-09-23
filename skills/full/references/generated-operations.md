@@ -42,6 +42,10 @@ idempotency key when recovering an unknown dispatch. Never retry with a new key.
 | `combat_join` | combat | expected_revision | True |
 | `combat_map_patch` | combat | expected_revision | True |
 | `combat_movement` | combat | expected_revision | True |
+| `combat_poison_coat` | combat, lobby, play | expected_revision | True |
+| `combat_poison_expose` | combat, lobby, play | expected_revision | True |
+| `combat_poison_neutralize` | combat, lobby, play | expected_revision | True |
+| `combat_poison_wash` | combat, lobby, play | expected_revision | True |
 | `combat_preflight_attack` | combat | — | False |
 | `combat_query` | combat, play | — | True |
 | `combat_reaction_attack` | combat | expected_revision | True |
@@ -191,12 +195,15 @@ Exact input schema (copy field names and nesting):
 
 ## campaign_change
 
-Update campaign state, advancement, clock, or campaign-space effects.
+Update campaign state, advancement, clock, travel, or campaign-space effects.
 
 party_rest payload: {members:[{character_id, expected_revision}],
 rest_type:"long_rest"|"short_rest", duration_minutes}. Each member uses
 its actor revision; top-level expected_revision is the campaign revision.
 Optional member rest choices are documented in runtime-workflows.md.
+
+party_travel payload: {trip:{travel_id, pace, distance_miles, route_fact,
+participants:[{character_id, expected_revision, survival_intake}]}}.
 In 2014, spend at most one initial Hit Die per member, then inspect its
 roll before deciding on another. short_rest_hit_die payload requires
 {character_id,expected_character_revision,decision:"spend"|"stop",
@@ -215,7 +222,7 @@ Phases: lobby, play
 Exact input schema (copy field names and nesting):
 
 ```json
-{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"payload":{"additionalProperties":true,"title":"Payload","type":"object","description":"Operation-specific bounded JSON object described by the selected action."},"action":{"default":"update","enum":["update","clock_set","clock_advance","party_rest","short_rest_hit_die","stable_recovery","effect_add","effect_remove","advancement_configure","experience_award","loot_acquire","currency_spend","item_spend","consumable_use"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","payload"],"title":"campaign_changeInput","type":"object"}
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"payload":{"additionalProperties":true,"title":"Payload","type":"object","description":"Operation-specific bounded JSON object described by the selected action."},"action":{"default":"update","enum":["update","clock_set","clock_advance","party_rest","party_travel","short_rest_hit_die","stable_recovery","effect_add","effect_remove","advancement_configure","experience_award","loot_acquire","currency_spend","item_spend","consumable_use"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","payload"],"title":"campaign_changeInput","type":"object"}
 ```
 
 ## campaign_create
@@ -508,7 +515,8 @@ for damage or open combat just to settle a trap/fall. heal uses {amount}.
 effect_add uses {effect}; effect_remove uses {effect_id}; resource_set
 uses {resource,value}; exhaustion_set uses {value}. Keep one stable
 idempotency_key per intended transition and copy its new actor revision.
-level_advance requires {class_name,hp_method,reason,source_ref,target_level}.
+level_advance requires {class_name,hp_method,reason,source_ref,target_level};
+a first 2014 class level also accepts multiclass_choices={skills:[...],tools:[...]}.
 target_level is the intended TOTAL character level, exactly current + 1.
 Read progression before advancing; never repeat a completed milestone.
 source_traits is DM-only, outside combat, for existing non-PC actors:
@@ -556,8 +564,11 @@ Requires current campaign expected_revision and idempotency_key. The card
 determines action/slot cost; never spend them separately. target_allocations
 is only for source-bound Magic Missile, not ordinary spell targets.
 In Agent positioning, native single-target spells use declaration
-{target_id, spatial_facts:{decision_id,reason,targetable,in_range,
-attacker_can_see_target}}. Magic Missile uses target_allocations plus
+{target_id, spatial_facts:{decision_id,reason,targetable,in_range}}.
+2014 sight-targeting spells add vision_facts containing distance_ft,
+illumination, obscuration, magical_darkness, opaque_boundary, scene_ref,
+and scene_excerpt; Runtime derives visibility from these and senses.
+Magic Missile uses target_allocations plus
 declaration={target_spatial_facts:{target_id: facts}}. Grid uses positions.
 For an Agent-resolved standard spell, omit declaration to obtain the
 agent_ruling_contract, then copy its submission_shape under declaration,
@@ -624,7 +635,7 @@ Phases: combat
 Exact input schema (copy field names and nesting):
 
 ```json
-{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"actor_id":{"title":"Actor Id","type":"string","description":"Authoritative campaign actor identifier.","maxLength":256},"action":{"enum":["command_dependent","dash","disengage","dodge","drop_held","draw_weapon","stow_weapon","emerge_shell","escape","help","hide","influence","interact_object","improvise","pickup_ground","ready","revive_steel_defender","search","shell_defense","shake_hypnotic_pattern","shake_sleep","stabilize","study","sustain_spell","use_object","utilize"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"target_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Target Id","description":"Bounded target id value accepted by combat_common_action.","maxLength":256},"trigger":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Trigger","description":"Bounded trigger value accepted by combat_common_action."},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","actor_id","action"],"title":"combat_common_actionInput","type":"object"}
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"actor_id":{"title":"Actor Id","type":"string","description":"Authoritative campaign actor identifier.","maxLength":256},"action":{"enum":["command_dependent","dash","disengage","dodge","drop_held","draw_weapon","stow_weapon","grapple","release_grapple","shove","emerge_shell","escape","help","hide","influence","interact_object","improvise","mount","dismount","pickup_ground","ready","revive_steel_defender","search","shell_defense","shake_hypnotic_pattern","shake_poison","shake_sleep","stabilize","study","sustain_spell","use_object","utilize"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"target_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Target Id","description":"Bounded target id value accepted by combat_common_action.","maxLength":256},"trigger":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Trigger","description":"Bounded trigger value accepted by combat_common_action."},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","actor_id","action"],"title":"combat_common_actionInput","type":"object"}
 ```
 
 ## combat_concentration_check
@@ -707,7 +718,8 @@ Exact input schema (copy field names and nesting):
 
 Move or stand using the current campaign revision and a request key.
 
-move payload={distance, destination?, path?, spatial_facts?}; distance is
+move payload={distance, destination?, path?, spatial_facts?, drag_grapple_ids?, jump?};
+distance is
 feet traveled, before difficult-terrain cost. In Agent positioning use
 spatial_facts={decision_id, reason, destination_legal, distance_ft}, with
 distance_ft equal to distance. Optional difficult_terrain_extra_ft adds
@@ -716,6 +728,9 @@ reaction timing: when threats exist, opportunity_attack_boundaries lists
 {actor_id, distance_ft, weapon_ids, difficult_terrain_extra_ft?} for each
 reach exit. Distances and terrain costs are measured from this move's
 origin. Movement pauses there and resumes after reactions settle.
+For 2014 Agent positioning, each opportunity boundary also carries
+attacker_vision and target_vision scene facts, targetable, in_range, and
+cover_degree; Runtime derives sight and attack modifiers from them.
 For 2014 agent movement, space_segments must cover the entire distance:
 [{distance_ft,occupant_ids,passage_width_ft,difficult_terrain}]. Name the
 actual current occupants; null width explicitly means open space. Use
@@ -724,7 +739,12 @@ engine derives size eligibility, occupied terrain, and squeezing cost;
 do not supply computed modifiers. End a willing move in an empty space.
 Grid mode derives these facts from current footprints and reviewed map
 cells; a map boundary alone never implies a narrow physical passage.
-Do not invent
+Drag a source-owned 2014 grapple by listing its exact grapple ID. Agent
+positioning also requires DM-authored spatial_facts.grapple_drag entries.
+A 2014 jump is {kind: long|high}; Grid derives the running start from this turn's
+recorded foot movement and landing terrain. Agent positioning also requires
+jump.spatial_facts with sourced running-start, obstacle, and landing facts.
+For a Grid high jump, distance is height and destination/path are omitted. Do not invent
 grid coordinates when the encounter uses Agent positioning. stand uses {}.
 
 Phases: combat
@@ -732,7 +752,55 @@ Phases: combat
 Exact input schema (copy field names and nesting):
 
 ```json
-{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"actor_id":{"title":"Actor Id","type":"string","description":"Authoritative campaign actor identifier.","maxLength":256},"action":{"enum":["move","stand"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","actor_id","action"],"title":"combat_movementInput","type":"object","allOf":[{"if":{"properties":{"action":{"const":"move"}},"required":["action"]},"then":{"properties":{"payload":{"additionalProperties":false,"properties":{"distance":{"title":"Distance","type":"integer"},"destination":{"anyOf":[{"additionalProperties":{"type":"number"},"type":"object"},{"items":{"type":"number"},"type":"array"},{"maxItems":2,"minItems":2,"prefixItems":[{"type":"number"},{"type":"number"}],"type":"array"},{"type":"null"}],"default":null,"title":"Destination"},"path":{"anyOf":[{"items":{"anyOf":[{"additionalProperties":{"type":"number"},"type":"object"},{"items":{"type":"number"},"type":"array"},{"maxItems":2,"minItems":2,"prefixItems":[{"type":"number"},{"type":"number"}],"type":"array"}]},"type":"array"},{"type":"null"}],"default":null,"title":"Path"},"movement_mode":{"default":"voluntary","title":"Movement Mode","type":"string"},"travel_mode":{"default":"walk","title":"Travel Mode","type":"string"},"crawl":{"default":false,"title":"Crawl","type":"boolean"},"spatial_facts":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Spatial Facts"}},"required":["distance"],"title":"MoveActor","type":"object"}},"required":["payload"]}},{"if":{"properties":{"action":{"const":"stand"}},"required":["action"]},"then":{"properties":{"payload":{"anyOf":[{"additionalProperties":false,"properties":{},"title":"StandActor","type":"object"},{"type":"null"}]}}}}]}
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"actor_id":{"title":"Actor Id","type":"string","description":"Authoritative campaign actor identifier.","maxLength":256},"action":{"enum":["move","stand"],"title":"Action","type":"string","description":"Exact operation supported by this facade.","maxLength":256},"payload":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Payload","description":"Operation-specific bounded JSON object described by the selected action."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","actor_id","action"],"title":"combat_movementInput","type":"object","allOf":[{"if":{"properties":{"action":{"const":"move"}},"required":["action"]},"then":{"properties":{"payload":{"additionalProperties":false,"properties":{"distance":{"title":"Distance","type":"integer"},"destination":{"anyOf":[{"additionalProperties":{"type":"number"},"type":"object"},{"items":{"type":"number"},"type":"array"},{"maxItems":2,"minItems":2,"prefixItems":[{"type":"number"},{"type":"number"}],"type":"array"},{"type":"null"}],"default":null,"title":"Destination"},"path":{"anyOf":[{"items":{"anyOf":[{"additionalProperties":{"type":"number"},"type":"object"},{"items":{"type":"number"},"type":"array"},{"maxItems":2,"minItems":2,"prefixItems":[{"type":"number"},{"type":"number"}],"type":"array"}]},"type":"array"},{"type":"null"}],"default":null,"title":"Path"},"movement_mode":{"default":"voluntary","title":"Movement Mode","type":"string"},"travel_mode":{"default":"walk","title":"Travel Mode","type":"string"},"crawl":{"default":false,"title":"Crawl","type":"boolean"},"spatial_facts":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Spatial Facts"},"drag_grapple_ids":{"anyOf":[{"items":{"maxLength":256,"minLength":1,"type":"string"},"type":"array"},{"type":"null"}],"default":null,"title":"Drag Grapple Ids"},"jump":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Jump"}},"required":["distance"],"title":"MoveActor","type":"object"}},"required":["payload"]}},{"if":{"properties":{"action":{"const":"stand"}},"required":["action"]},"then":{"properties":{"payload":{"anyOf":[{"additionalProperties":false,"properties":{},"title":"StandActor","type":"object"},{"type":"null"}]}}}}]}
+```
+
+## combat_poison_coat
+
+Consume one source-bound contact/injury dose and coat one owned object.
+
+Phases: combat, lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"actor_id":{"title":"Actor Id","type":"string","description":"Authoritative campaign actor identifier.","maxLength":256},"dose_item_id":{"title":"Dose Item Id","type":"string","description":"Bounded dose item id value accepted by combat_poison_coat.","maxLength":256},"object_item_id":{"title":"Object Item Id","type":"string","description":"Bounded object item id value accepted by combat_poison_coat.","maxLength":256},"ammunition_count":{"default":1,"title":"Ammunition Count","type":"integer","description":"Bounded ammunition count value accepted by combat_poison_coat."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","actor_id","dose_item_id","object_item_id"],"title":"combat_poison_coatInput","type":"object"}
+```
+
+## combat_poison_expose
+
+Deliver one ingested/contact dose or release one inhaled 5-foot cloud.
+
+Phases: combat, lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"source_actor_id":{"title":"Source Actor Id","type":"string","description":"Bounded source actor id value accepted by combat_poison_expose.","maxLength":256},"target_ids":{"anyOf":[{"items":{"type":"string"},"type":"array"},{"type":"null"}],"default":null,"title":"Target Ids","description":"Bounded target ids value accepted by combat_poison_expose."},"dose_item_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Dose Item Id","description":"Bounded dose item id value accepted by combat_poison_expose.","maxLength":256},"coating_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Coating Id","description":"Bounded coating id value accepted by combat_poison_expose.","maxLength":256},"swallowed_entire_dose":{"anyOf":[{"type":"boolean"},{"type":"null"}],"default":null,"title":"Swallowed Entire Dose","description":"Bounded swallowed entire dose value accepted by combat_poison_expose."},"partial_ruling":{"anyOf":[{"enum":["advantage_on_save","half_damage_on_failure"],"type":"string"},{"type":"null"}],"default":null,"title":"Partial Ruling","description":"Bounded partial ruling value accepted by combat_poison_expose."},"exposed_skin_touch":{"anyOf":[{"type":"boolean"},{"type":"null"}],"default":null,"title":"Exposed Skin Touch","description":"Bounded exposed skin touch value accepted by combat_poison_expose."},"cube_origin":{"anyOf":[{"items":{"type":"integer"},"type":"array"},{"type":"null"}],"default":null,"title":"Cube Origin","description":"Bounded cube origin value accepted by combat_poison_expose."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","source_actor_id"],"title":"combat_poison_exposeInput","type":"object"}
+```
+
+## combat_poison_neutralize
+
+Remove one exact poison instance after a recorded DM neutralization ruling.
+
+Phases: combat, lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"actor_id":{"title":"Actor Id","type":"string","description":"Authoritative campaign actor identifier.","maxLength":256},"poison_effect_id":{"title":"Poison Effect Id","type":"string","description":"Bounded poison effect id value accepted by combat_poison_neutralize.","maxLength":256},"neutralizer_source_ref":{"title":"Neutralizer Source Ref","type":"string","description":"Bounded neutralizer source ref value accepted by combat_poison_neutralize."},"neutralizer_source_excerpt":{"title":"Neutralizer Source Excerpt","type":"string","description":"Bounded neutralizer source excerpt value accepted by combat_poison_neutralize."},"ruling":{"additionalProperties":true,"title":"Ruling","type":"object","description":"Bounded ruling value accepted by combat_poison_neutralize."},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","actor_id","poison_effect_id","neutralizer_source_ref","neutralizer_source_excerpt","ruling"],"title":"combat_poison_neutralizeInput","type":"object"}
+```
+
+## combat_poison_wash
+
+Wash one source-bound poison coating from its exact owned object.
+
+Phases: combat, lobby, play
+
+Exact input schema (copy field names and nesting):
+
+```json
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"actor_id":{"title":"Actor Id","type":"string","description":"Authoritative campaign actor identifier.","maxLength":256},"object_item_id":{"title":"Object Item Id","type":"string","description":"Bounded object item id value accepted by combat_poison_wash.","maxLength":256},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","actor_id","object_item_id"],"title":"combat_poison_washInput","type":"object"}
 ```
 
 ## combat_preflight_attack
@@ -802,9 +870,11 @@ Resolve one attack and atomically update actors and encounter.
 Use the active actor and campaign revision from the latest receipt, plus
 idempotency_key. action={weapon_id, context?}; use an owned weapon ID.
 Agent positioning requires action.context.spatial_facts={decision_id,
-reason, targetable, in_range, cover_degree, attacker_can_see_target,
-target_can_see_attacker}. Flags are booleans; cover_degree is none/half/
-three_quarters/total. Optional facts: long_range, target_within_5_ft,
+reason, targetable, in_range, cover_degree, attacker_vision,
+target_vision}. For 2014, each vision object contains scene observations:
+distance_ft, illumination, obscuration, magical_darkness, opaque_boundary,
+scene_ref, and scene_excerpt. The engine derives sight from these and the
+actor's senses. Optional facts: long_range, target_within_5_ft,
 close_threat_actor_ids, helper_actor_ids, target_adjacent_ally_actor_ids,
 cleave_secondary_eligible. Ground them in the current scene, never invent
 coordinates to bypass a missing spatial decision. Grid mode uses its map.
@@ -872,13 +942,15 @@ Grid combat derives range and requires within_60_ft to be omitted.
 The target must be another creature; this spends one use and bonus action.
 2014 Rage enters with declaration={} or ends with declaration={end:true}.
 Both require the actor's turn and spend a bonus action; entering spends a use.
+DM-resolved activity checks accept bounded source-grounded rule_facts, including
+Perception sight-reliance and vision facts when the scene requires them.
 
 Phases: combat
 
 Exact input schema (copy field names and nesting):
 
 ```json
-{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"actor_id":{"title":"Actor Id","type":"string","description":"Authoritative campaign actor identifier.","maxLength":256},"activity_id":{"title":"Activity Id","type":"string","description":"Bounded activity id value accepted by combat_use_activity.","maxLength":256},"declaration":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Declaration","description":"Bounded declaration value accepted by combat_use_activity."},"choice_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Choice Id","description":"Bounded choice id value accepted by combat_use_activity.","maxLength":256},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256}},"required":["campaign_id","actor_id","activity_id"],"title":"combat_use_activityInput","type":"object"}
+{"additionalProperties":false,"properties":{"campaign_id":{"title":"Campaign Id","type":"string","description":"Authoritative campaign identifier.","maxLength":256},"actor_id":{"title":"Actor Id","type":"string","description":"Authoritative campaign actor identifier.","maxLength":256},"activity_id":{"title":"Activity Id","type":"string","description":"Bounded activity id value accepted by combat_use_activity.","maxLength":256},"declaration":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Declaration","description":"Bounded declaration value accepted by combat_use_activity."},"choice_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Choice Id","description":"Bounded choice id value accepted by combat_use_activity.","maxLength":256},"principal_id":{"default":"system:local","title":"Principal Id","type":"string","description":"Caller hint overwritten by process binding or signed Host delegation.","maxLength":256},"expected_revision":{"anyOf":[{"type":"integer"},{"type":"null"}],"default":null,"title":"Expected Revision","description":"Authority revision guard used to reject stale mutations."},"branch_id":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Branch Id","description":"Authoritative timeline branch identifier.","maxLength":256},"idempotency_key":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Idempotency Key","description":"Stable business-operation key reused unchanged across retries.","maxLength":256},"rule_facts":{"anyOf":[{"additionalProperties":true,"type":"object"},{"type":"null"}],"default":null,"title":"Rule Facts","description":"Bounded rule facts value accepted by combat_use_activity."}},"required":["campaign_id","actor_id","activity_id"],"title":"combat_use_activityInput","type":"object"}
 ```
 
 ## combat_use_official_item

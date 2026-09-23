@@ -375,6 +375,7 @@ def compile_battle_map(
     )
     blocked = _cells(request.get("blocked_cells") or [], width, height, "blocked_cells")
     difficult = _cells(request.get("difficult_cells") or [], width, height, "difficult_cells")
+    vision = _compile_vision_layers(request, width, height)
     source = {
         "scene_id": scene["scene_id"],
         "encounter_scene_id": scene.get("encounter_scene_id", scene["scene_id"]),
@@ -394,9 +395,122 @@ def compile_battle_map(
         "difficult_cells": difficult,
         "dm_overrides": bool(set(request) - {"location_key"}),
         "world_patches": [],
+        **vision,
     }
     value["checksum"] = _checksum(value)
     return value
+
+
+def _compile_vision_layers(request: dict[str, Any], width: int, height: int) -> dict[str, Any]:
+    """Compile bounded, source-cited environmental facts used by 2014 vision rules."""
+    result: dict[str, Any] = {}
+    if "ambient_illumination" in request:
+        level = request.get("ambient_illumination")
+        if level not in {"bright", "dim", "dark"}:
+            raise BattleMapError("ambient_illumination must be bright, dim, or dark")
+        result["ambient_illumination"] = level
+    raw_sources = request.get("light_sources")
+    if raw_sources is not None:
+        if not isinstance(raw_sources, list) or len(raw_sources) > 100:
+            raise BattleMapError("light_sources must be a bounded array")
+        sources = []
+        seen_ids: set[str] = set()
+        for item in raw_sources:
+            fields = {
+                "id", "position", "bright_radius_ft", "dim_radius_ft",
+                "source_ref", "source_excerpt",
+            }
+            if not isinstance(item, dict) or set(item) != fields:
+                raise BattleMapError(
+                    "light_sources require exact identity, position, radii, and source fields"
+                )
+            identifier = str(item.get("id") or "").strip()
+            position = item.get("position")
+            if not identifier or len(identifier) > 128 or identifier in seen_ids:
+                raise BattleMapError("light source IDs must be unique non-empty strings")
+            if not isinstance(position, dict) or set(position) != {"x", "y"}:
+                raise BattleMapError("light source position must contain exactly x and y")
+            if any(type(position[key]) is not int for key in ("x", "y")):
+                raise BattleMapError("light source positions must use integer grid cells")
+            if _cells([position], width, height, "light_sources.position") == []:
+                raise BattleMapError("light source position is required")
+            bright = item.get("bright_radius_ft")
+            dim = item.get("dim_radius_ft")
+            for label, radius in (("bright", bright), ("dim", dim)):
+                if (
+                    isinstance(radius, bool) or not isinstance(radius, int)
+                    or radius < 0 or radius > 1000 or radius % 5
+                ):
+                    raise BattleMapError(
+                        f"light source {label}_radius_ft must be a five-foot increment"
+                    )
+            if bright > dim:
+                raise BattleMapError("bright light radius cannot exceed dim light radius")
+            source_ref = str(item.get("source_ref") or "").strip()
+            source_excerpt = " ".join(str(item.get("source_excerpt") or "").split())
+            if (
+                not source_ref or len(source_ref) > 500
+                or not source_excerpt or len(source_excerpt) > 1000
+            ):
+                raise BattleMapError("light sources require bounded source references and excerpts")
+            seen_ids.add(identifier)
+            sources.append({
+                "id": identifier,
+                "position": {"x": int(position["x"]), "y": int(position["y"])},
+                "bright_radius_ft": bright,
+                "dim_radius_ft": dim,
+                "source_ref": source_ref,
+                "source_excerpt": source_excerpt,
+            })
+        result["light_sources"] = sources
+    raw_cells = request.get("vision_cells")
+    if raw_cells is not None:
+        if not isinstance(raw_cells, list) or len(raw_cells) > width * height:
+            raise BattleMapError("vision_cells must be a bounded array of unique cells")
+        cells = []
+        seen_cells: set[str] = set()
+        fields = {
+            "x", "y", "illumination", "obscuration", "magical_darkness", "opaque",
+            "source_ref", "source_excerpt",
+        }
+        for item in raw_cells:
+            if not isinstance(item, dict) or set(item) != fields:
+                raise BattleMapError(
+                    "vision_cells require exact illumination, obscuration, and source fields"
+                )
+            if type(item.get("x")) is not int or type(item.get("y")) is not int:
+                raise BattleMapError("vision cell positions must use integer grid cells")
+            key = _cells([{"x": item.get("x"), "y": item.get("y")}], width, height,
+                         "vision_cells")[0]
+            if key in seen_cells:
+                raise BattleMapError("vision_cells contains duplicate cells")
+            illumination = item.get("illumination")
+            obscuration = item.get("obscuration")
+            if illumination not in {None, "bright", "dim", "dark"}:
+                raise BattleMapError("vision cell illumination must be bright, dim, dark, or null")
+            if obscuration not in {None, "lightly", "heavily"}:
+                raise BattleMapError("vision cell obscuration must be lightly, heavily, or null")
+            if (
+                type(item.get("magical_darkness")) is not bool
+                or type(item.get("opaque")) is not bool
+            ):
+                raise BattleMapError("vision cell magical_darkness and opaque must be booleans")
+            source_ref = str(item.get("source_ref") or "").strip()
+            source_excerpt = " ".join(str(item.get("source_excerpt") or "").split())
+            if (
+                not source_ref or len(source_ref) > 500
+                or not source_excerpt or len(source_excerpt) > 1000
+            ):
+                raise BattleMapError("vision cells require bounded source references and excerpts")
+            seen_cells.add(key)
+            cells.append({
+                "x": int(item["x"]), "y": int(item["y"]),
+                "illumination": illumination, "obscuration": obscuration,
+                "magical_darkness": item["magical_darkness"], "opaque": item["opaque"],
+                "source_ref": source_ref, "source_excerpt": source_excerpt,
+            })
+        result["vision_cells"] = sorted(cells, key=lambda item: (item["y"], item["x"]))
+    return result
 
 
 def patch_battle_map(battle_map: dict[str, Any], patches: list[dict[str, Any]]) -> dict[str, Any]:

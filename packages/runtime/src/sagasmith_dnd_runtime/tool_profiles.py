@@ -47,15 +47,18 @@ CORE_TOOLS = frozenset(
 )
 
 # Host presentation only. The stable catalog and runtime authorization remain unchanged.
-LOCAL_DAILY_TOOLS = frozenset("""
+LOCAL_DAILY_TOOLS = frozenset(
+    """
 campaign_query campaign_create character_query character_create_from character_check
 character_action inventory_change inventory_transfer wallet_change game_phase
 module_query module_search module_expand continuity_context memory_change campaign_event
 combat_start combat_query combat_resolve_attack combat_cast_spell combat_movement
 combat_choice combat_end_turn combat_end combat_common_action combat_use_activity
-combat_check character_state_change rule_search rule_expand skill_query
+combat_check combat_poison_coat combat_poison_expose combat_poison_neutralize combat_poison_wash
+character_state_change rule_search rule_expand skill_query
 environment_change
-""".split())
+""".split()
+)
 
 HOST_PRIVATE_TOOLS = frozenset({"npc_conversation_transport"})
 
@@ -72,7 +75,8 @@ PHASE_TOOLS = {
         campaign_create
         campaign_event campaign_rules character_ability_apply character_action
         character_content_apply character_create_from character_metadata_update character_query
-        character_sheet_replace character_spell_prepare character_state_change content_pack
+        character_sheet_replace character_spell_prepare character_state_change combat_poison_coat
+        combat_poison_expose combat_poison_neutralize combat_poison_wash content_pack
         content_solution continuity_context dnd_ability_roll dnd_dice_roll inventory_change
         inventory_transfer memory_change memory_query module_draft module_expand module_query
         module_search module_set_progress playthrough_manifest rule_expand rule_search
@@ -87,6 +91,7 @@ PHASE_TOOLS = {
         branch_query campaign_change campaign_event campaign_rules character_action
         character_check character_content_apply character_metadata_update
         character_query character_state_change chase combat_query combat_start
+        combat_poison_coat combat_poison_expose combat_poison_neutralize combat_poison_wash
         content_pack content_solution
         continuity_context dnd_ability_roll dnd_check dnd_dice_roll inventory_change
         inventory_transfer memory_change memory_query module_expand module_query module_search
@@ -106,6 +111,7 @@ PHASE_TOOLS = {
         combat_reaction_attack combat_ready combat_resolve_attack combat_resolve_hide
         combat_use_activity
         combat_use_official_item
+        combat_poison_coat combat_poison_expose combat_poison_neutralize combat_poison_wash
         content_pack content_solution continuity_context dnd_check dnd_dice_roll module_expand
         module_query module_search
         playthrough_manifest rule_expand rule_search snapshot_create snapshot_query snapshot_restore
@@ -123,6 +129,7 @@ PHASE_DM_TOOLS = {
         memory_change
         memory_query module_draft module_expand module_query module_search module_set_progress
         playthrough_manifest rule_expand rule_search rule_seed_bundled rule_seed_status
+        combat_poison_coat combat_poison_expose combat_poison_neutralize combat_poison_wash
         rulebook_draft snapshot_create snapshot_query snapshot_restore state_revision
         """
     ),
@@ -133,6 +140,7 @@ PHASE_DM_TOOLS = {
         campaign_rules character_content_apply chase
         combat_start content_pack content_solution memory_change memory_query module_set_progress
         npc_conversation playthrough_manifest snapshot_create snapshot_query snapshot_restore
+        combat_poison_coat combat_poison_expose combat_poison_neutralize combat_poison_wash
         state_revision
         """
     ),
@@ -142,6 +150,7 @@ PHASE_DM_TOOLS = {
         campaign_rules combat_end
         combat_join combat_map_patch
         content_pack content_solution module_expand combat_resolve_hide playthrough_manifest
+        combat_poison_coat combat_poison_expose combat_poison_neutralize combat_poison_wash
         snapshot_create snapshot_query
         snapshot_restore
         state_revision

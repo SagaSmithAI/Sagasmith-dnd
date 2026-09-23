@@ -59,6 +59,7 @@ class AttacksService:
     def validate_agent_attack_context(
         self,
         campaign_id: str,
+        principal_id: str,
         action: dict[str, Any],
         *,
         encounter: dict[str, Any],
@@ -73,12 +74,20 @@ class AttacksService:
         positioning_mode = str(encounter.get("positioning_mode") or "grid")
         raw_spatial_facts = context.get("spatial_facts")
         if positioning_mode == "agent":
+            membership = self.access.require_campaign(campaign_id, principal_id)
+            if membership.role not in _support.CAMPAIGN_DM_ROLES:
+                raise PermissionError("Agent scene facts require an authorized DM")
             if not isinstance(raw_spatial_facts, dict):
                 raise _support.NeedsRulingError(
                     "agent-positioned attacks require an Agent spatial decision",
                     missing=("attack.spatial_facts",),
                     ruling_kind="agent_dm_adjudication",
                 )
+            vision_fields = (
+                {"attacker_vision", "target_vision"}
+                if encounter.get("ruleset") == "2014"
+                else {"attacker_can_see_target", "target_can_see_attacker"}
+            )
             allowed_spatial_fields = {
                 "decision_id",
                 "reason",
@@ -86,9 +95,10 @@ class AttacksService:
                 "in_range",
                 "long_range",
                 "cover_degree",
-                "attacker_can_see_target",
-                "target_can_see_attacker",
+                *vision_fields,
                 "target_within_5_ft",
+                "attacker_can_hear_target",
+                "target_within_10_ft",
                 "close_threat_actor_ids",
                 "helper_actor_ids",
                 "target_adjacent_ally_actor_ids",
@@ -100,8 +110,7 @@ class AttacksService:
                 "targetable",
                 "in_range",
                 "cover_degree",
-                "attacker_can_see_target",
-                "target_can_see_attacker",
+                *vision_fields,
             }
             unknown = set(raw_spatial_facts) - allowed_spatial_fields
             missing = required_spatial_fields - set(raw_spatial_facts)
@@ -114,17 +123,26 @@ class AttacksService:
                     f"missing fields: {', '.join(sorted(missing)) or 'none'}; "
                     f"unsupported fields: {', '.join(sorted(unknown)) or 'none'}"
                 )
-            for field in {
-                "targetable",
-                "in_range",
-                "attacker_can_see_target",
-                "target_can_see_attacker",
-            }:
+            for field in {"targetable", "in_range"}:
                 if not isinstance(raw_spatial_facts.get(field), bool):
                     raise _support.CombatEngineError(f"Agent spatial fact {field} must be boolean")
+            if encounter.get("ruleset") == "2014":
+                for field in ("attacker_vision", "target_vision"):
+                    _support.resolve_agent_vision_2014({}, raw_spatial_facts[field])
+            else:
+                for field in ("attacker_can_see_target", "target_can_see_attacker"):
+                    if not isinstance(raw_spatial_facts[field], bool):
+                        raise _support.CombatEngineError(
+                            f"Agent spatial fact {field} must be boolean"
+                        )
             for field in {"long_range", "target_within_5_ft"}:
                 if field in raw_spatial_facts and not isinstance(raw_spatial_facts[field], bool):
                     raise _support.CombatEngineError(f"Agent spatial fact {field} must be boolean")
+            for field in {"attacker_can_hear_target", "target_within_10_ft"}:
+                if field in raw_spatial_facts and not isinstance(raw_spatial_facts[field], bool):
+                    raise _support.CombatEngineError(
+                        f"Agent spatial fact {field} must be boolean"
+                    )
             if "cleave_secondary_eligible" in raw_spatial_facts and not isinstance(
                 raw_spatial_facts["cleave_secondary_eligible"], bool
             ):
@@ -475,12 +493,14 @@ class AttacksService:
             campaign_id, actor_id, principal_id
         )
         campaign, encounter = self.active_encounter(campaign_id)
+        self.require_mounted_action(encounter, actor_id, "attack")
         resolved_branch_id = self.require_current_branch(campaign_id, None)
         self.require_campaign_actor(campaign_id, target_id)
         action = self.sanitize_attack_action(campaign_id, principal_id, dict(action or {}))
         deflect_declaration = action.pop("deflect_attack", None)
         self.validate_agent_attack_context(
             campaign_id,
+            principal_id,
             action,
             encounter=encounter,
         )
@@ -593,9 +613,11 @@ class AttacksService:
         Use the active actor and campaign revision from the latest receipt, plus
         idempotency_key. action={weapon_id, context?}; use an owned weapon ID.
         Agent positioning requires action.context.spatial_facts={decision_id,
-        reason, targetable, in_range, cover_degree, attacker_can_see_target,
-        target_can_see_attacker}. Flags are booleans; cover_degree is none/half/
-        three_quarters/total. Optional facts: long_range, target_within_5_ft,
+        reason, targetable, in_range, cover_degree, attacker_vision,
+        target_vision}. For 2014, each vision object contains scene observations:
+        distance_ft, illumination, obscuration, magical_darkness, opaque_boundary,
+        scene_ref, and scene_excerpt. The engine derives sight from these and the
+        actor's senses. Optional facts: long_range, target_within_5_ft,
         close_threat_actor_ids, helper_actor_ids, target_adjacent_ally_actor_ids,
         cleave_secondary_eligible. Ground them in the current scene, never invent
         coordinates to bypass a missing spatial decision. Grid mode uses its map.
@@ -688,11 +710,13 @@ class AttacksService:
                 f"expected {expected_revision}, found {campaign.revision}"
             )
         _, encounter = self.active_encounter(campaign_id)
+        self.require_mounted_action(encounter, actor_id, "attack")
         if spell_release:
             encounter = spell_release["encounter"]
         encounter, protection_accepted = protection.resume(encounter, protection_binding)
         self.validate_agent_attack_context(
             campaign_id,
+            principal_id,
             action_payload,
             encounter=encounter,
         )
@@ -725,7 +749,12 @@ class AttacksService:
                 )
                 stored = spell_resolution["attacks"][index]
                 stored_action = {"context": _support.deepcopy(stored.get("context") or {})}
-                self.validate_agent_attack_context(campaign_id, stored_action, encounter=encounter)
+                self.validate_agent_attack_context(
+                    campaign_id,
+                    principal_id,
+                    stored_action,
+                    encounter=encounter,
+                )
                 # Source targets and all original attack semantics stay fixed.
                 # Illumination is a newly authorized, expiring scene fact.
                 comparison = _support.deepcopy(action_payload)
@@ -1069,6 +1098,51 @@ class AttacksService:
                     ammunition_item_id=str(plan.get("ammunition_item_id") or "") or None,
                 )
                 updated_attacker["sheet"] = updated_sheet
+        missed_ammunition_poison_state = None
+        missed_ammunition_poison = None
+        missed_ammunition_poison_receipts: list[dict[str, Any]] = []
+        if not attack_roll.get("hit") and plan.get("ammunition_item_id"):
+            from .poisons import settle_missed_ammunition_coating
+
+            (
+                missed_ammunition_poison_state,
+                missed_ammunition_poison,
+                missed_ammunition_poison_receipts,
+            ) = settle_missed_ammunition_coating(
+                self,
+                campaign,
+                attacker_id=actor_id,
+                ammunition_item_id=str(plan.get("ammunition_item_id") or ""),
+                branch_id=resolved_branch_id,
+            )
+        if not attack_roll.get("hit"):
+            stroke_choice = self.open_rogue_stroke_attack_choice(
+                campaign=campaign,
+                campaign_id=campaign_id,
+                actor_id=actor_id,
+                target_id=target_id,
+                principal_id=principal_id,
+                branch_id=resolved_branch_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+                payload=payload,
+                resolution_id=resolution_id,
+                encounter=next_encounter,
+                updated_attacker=updated_attacker,
+                attacker_record=attacker_record,
+                attack_roll=attack_roll,
+                plan=plan,
+                attack_payment=attack_payment,
+                attack_payment_receipts=attack_payment_receipts,
+                ammunition=ammunition,
+                limited_use=limited_use,
+                spell_resolution_id=spell_resolution_id,
+                poison_campaign_state=missed_ammunition_poison_state,
+                poison_event=missed_ammunition_poison,
+                poison_receipts=missed_ammunition_poison_receipts,
+            )
+            if stroke_choice is not None:
+                return stroke_choice
         if defenses:
             result = {
                 **attack_roll,
@@ -1231,6 +1305,36 @@ class AttacksService:
             attack=attack_roll,
             rules=rule_context,
         )
+        poison_campaign_state = missed_ammunition_poison_state
+        if missed_ammunition_poison is not None:
+            result["poison"] = missed_ammunition_poison
+            result.setdefault("rule_receipts", []).extend(missed_ammunition_poison_receipts)
+        if attack_roll.get("hit"):
+            from .poisons import settle_injury_coating
+
+            (
+                updated_attacker,
+                updated_target,
+                poison_campaign_state,
+                poison_receipts,
+            ) = settle_injury_coating(
+                self,
+                campaign,
+                next_encounter,
+                attacker_record=attacker_record,
+                target_record=target_record,
+                updated_attacker=updated_attacker,
+                updated_target=updated_target,
+                plan=plan,
+                attack=attack_roll,
+                result=result,
+                branch_id=resolved_branch_id,
+            )
+            if poison_receipts:
+                result["rule_receipts"] = [
+                    *list(result.get("rule_receipts") or []),
+                    *poison_receipts,
+                ]
         mastery_commit = _support.apply_weapon_mastery_to_encounter(
             next_encounter,
             result,
@@ -1487,6 +1591,8 @@ class AttacksService:
         ][-100:]
         next_state = dict(campaign.state or {})
         next_state["combat"] = next_encounter
+        if poison_campaign_state is not None:
+            next_state["poison_coatings"] = poison_campaign_state["poison_coatings"]
         next_state["resolution_log"] = [
             *list(next_state.get("resolution_log") or []),
             {
@@ -1610,6 +1716,432 @@ class AttacksService:
             attack_response(list(revisions_result or [])),
         )
 
+    def open_rogue_stroke_attack_choice(
+        self,
+        *,
+        campaign: Any,
+        campaign_id: str,
+        actor_id: str,
+        target_id: str,
+        principal_id: str,
+        branch_id: str,
+        idempotency_key: str,
+        scope: str,
+        payload: dict[str, Any],
+        resolution_id: str,
+        encounter: dict[str, Any],
+        updated_attacker: dict[str, Any],
+        attacker_record: Any,
+        attack_roll: dict[str, Any],
+        plan: dict[str, Any],
+        attack_payment: dict[str, Any],
+        attack_payment_receipts: list[dict[str, Any]],
+        ammunition: dict[str, Any] | None,
+        limited_use: dict[str, Any] | None,
+        spell_resolution_id: str,
+        poison_campaign_state: dict[str, Any] | None = None,
+        poison_event: dict[str, Any] | None = None,
+        poison_receipts: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any] | None:
+        from sagasmith_dnd.character_schema import srd2014_rogue_stroke_of_luck_feature
+
+        feature = srd2014_rogue_stroke_of_luck_feature(updated_attacker["sheet"])
+        if feature is None or int(dict(feature.get("uses") or {}).get("value", 0) or 0) < 1:
+            return None
+        next_encounter = _support.add_choice_window(
+            encounter,
+            kind="feature",
+            actor_id_value=actor_id,
+            event="attack.after_miss",
+            candidates=[
+                {"id": "use_stroke_of_luck", "name": "Use Stroke of Luck"},
+                {"id": "decline", "name": "Decline"},
+            ],
+        )
+        window = next_encounter["pending"][-1]
+        choice_id = str(window["id"])
+        window.update(
+            trigger="rogue_stroke_luck_attack",
+            attacker_id=actor_id,
+            target_id=target_id,
+            branch_id=branch_id,
+            resolution_id=resolution_id,
+        )
+        rule_context = self.effective_rule_context(campaign_id, branch_id=branch_id)
+        result = {
+            **_support.deepcopy(attack_roll),
+            "attack_payment": _support.deepcopy(attack_payment),
+            "post_roll_choice": {
+                "id": choice_id,
+                "kind": "stroke_of_luck",
+                "candidates": _support.deepcopy(window["candidates"]),
+            },
+            "rule_receipts": [
+                *list(attack_payment_receipts),
+                *list(poison_receipts or []),
+                *_support.core_receipts(
+                    rule_context,
+                    ["dnd5e.core.rogue.stroke_of_luck"],
+                    "attack.after_miss",
+                ),
+            ],
+        }
+        if ammunition is not None:
+            result["ammunition"] = _support.deepcopy(ammunition)
+        if limited_use is not None:
+            result["limited_use"] = _support.deepcopy(limited_use)
+        if poison_event is not None:
+            result["poison"] = _support.deepcopy(poison_event)
+        next_encounter["log"] = [
+            *list(next_encounter.get("log") or []),
+            {
+                "type": "attack_roll",
+                "actor_id": actor_id,
+                "target_id": target_id,
+                "result": _support.deepcopy(result),
+                "pending_choice_id": choice_id,
+            },
+        ][-100:]
+        next_state = _support.deepcopy(dict(campaign.state or {}))
+        next_state["combat"] = next_encounter
+        if poison_campaign_state is not None:
+            next_state["poison_coatings"] = _support.deepcopy(
+                poison_campaign_state["poison_coatings"]
+            )
+        next_state["rogue_choices"] = [
+            *list(next_state.get("rogue_choices") or []),
+            {
+                "id": choice_id,
+                "actor_id": actor_id,
+                "kind": "stroke_of_luck_attack",
+                "result": {
+                    "offered": _support.deepcopy(result),
+                    "resolution_id": resolution_id,
+                    "attack": _support.deepcopy(attack_roll),
+                    "plan": _support.deepcopy(plan),
+                    "attack_payment": _support.deepcopy(attack_payment),
+                    "attack_payment_receipts": _support.deepcopy(attack_payment_receipts),
+                    "ammunition": _support.deepcopy(ammunition),
+                    "limited_use": _support.deepcopy(limited_use),
+                    "spell_resolution_id": spell_resolution_id,
+                },
+                "branch_id": branch_id,
+                "created_revision": campaign.revision + 1,
+                "target_id": target_id,
+            },
+        ]
+        next_state["resolution_log"] = [
+            *list(next_state.get("resolution_log") or []),
+            {
+                "id": resolution_id,
+                "thread_id": resolution_id,
+                "event_sequence": 1,
+                "type": "combat_attack",
+                "operation": "combat.attack",
+                "status": "pending",
+                "actor_id": actor_id,
+                "audience": {
+                    "scope": "actors",
+                    "actor_refs": [actor_id, target_id],
+                    "disclosure": "private",
+                },
+                "branch_id": branch_id,
+                "campaign_revision": campaign.revision + 1,
+                "result": _support.deepcopy(result),
+                "pending_choice": {
+                    "id": choice_id,
+                    "kind": "rogue_stroke_luck_attack",
+                    "available_actions": ["use_stroke_of_luck", "decline"],
+                },
+            },
+        ][-200:]
+        updates = []
+        if updated_attacker["sheet"] != attacker_record.sheet:
+            updates.append(
+                _support.CharacterStateUpdate(
+                    character_id=actor_id,
+                    sheet=_support.validate_character_sheet(updated_attacker["sheet"]),
+                    notes=_support.validate_character_notes(attacker_record.notes),
+                    expected_revision=attacker_record.revision,
+                )
+            )
+
+        def response_for(revisions: list[Any]) -> dict[str, Any]:
+            response = {
+                "status": "pending_choice",
+                "resolution_id": resolution_id,
+                "thread_id": resolution_id,
+                "event_sequence": 1,
+                "result": result,
+                "choice": window,
+                "combat": next_encounter,
+                "campaign_revision": campaign.revision + 1,
+                "revisions": [_support.asdict(item) for item in revisions],
+            }
+            stream = _support.active_random_stream()
+            if self.config.local_authority and self.is_dm(campaign_id, principal_id):
+                response["affected_state"] = affected_state_slice(
+                    campaign, branch_id, updates, campaign.revision + 1
+                )
+            if stream is not None and stream.draw_count > 0:
+                response["random_stream_receipt"] = stream.receipt()
+            return response
+
+        revisions = _support.StateMutationService(self.storage.database).replace(
+            campaign_id,
+            campaign_state=_support.validate_party_state(next_state),
+            character_updates=updates,
+            expected_campaign_revision=campaign.revision,
+            operation="combat.attack.stroke_of_luck_choice",
+            actor=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            idempotency_write=_support.IdempotencyWrite(
+                scope=scope,
+                payload=payload,
+                response=response_for,
+            ),
+            rule_receipts=list(result.get("rule_receipts") or []),
+        )
+        return self.combat_response(campaign_id, principal_id, response_for(list(revisions or [])))
+
+    def resolve_rogue_stroke_attack_choice(
+        self,
+        *,
+        campaign: Any,
+        campaign_id: str,
+        actor_id: str,
+        choice_id: str,
+        selection: dict[str, Any],
+        principal_id: str,
+        branch_id: str,
+        idempotency_key: str,
+        scope: str,
+        payload: dict[str, Any],
+        pending_choice: dict[str, Any],
+    ) -> dict[str, Any]:
+        from sagasmith_dnd.character_schema import srd2014_rogue_stroke_of_luck_feature
+        from sagasmith_dnd.resources import mutate_bounded_resource
+
+        if (
+            pending_choice.get("kind") != "stroke_of_luck_attack"
+            or pending_choice.get("actor_id") != actor_id
+            or pending_choice.get("branch_id") != branch_id
+        ):
+            raise _support.CombatEngineError("Stroke of Luck attack choice no longer matches")
+        if not isinstance(selection, dict) or set(selection) != {"id"}:
+            raise _support.CombatEngineError(
+                "Stroke of Luck choice requires exactly one selection id"
+            )
+        selection_id = str(selection.get("id") or "")
+        if selection_id not in {"use_stroke_of_luck", "decline"}:
+            raise _support.CombatEngineError("unknown Stroke of Luck choice")
+        if selection_id == "use_stroke_of_luck" and campaign.revision != int(
+            pending_choice.get("created_revision", 0) or 0
+        ):
+            raise _support.CombatEngineError(
+                "Stroke of Luck can only resolve before another campaign write"
+            )
+        details = dict(pending_choice.get("result") or {})
+        attack = _support.deepcopy(dict(details.get("attack") or {}))
+        plan = _support.deepcopy(dict(details.get("plan") or {}))
+        target_id = str(pending_choice.get("target_id") or "")
+        if not attack or not plan or not target_id or attack.get("hit"):
+            raise _support.CombatEngineError("Stroke of Luck attack record is invalid")
+
+        next_state = _support.deepcopy(dict(campaign.state or {}))
+        next_state["rogue_choices"] = [
+            item
+            for item in next_state.get("rogue_choices", [])
+            if str(item.get("id") or "") != choice_id
+        ]
+        encounter = dict(next_state.get("combat") or {})
+        if not encounter.get("active", False):
+            raise _support.CombatEngineError("Stroke of Luck attack encounter is no longer active")
+        window = next(
+            (item for item in encounter.get("pending", []) if item.get("id") == choice_id),
+            None,
+        )
+        if not isinstance(window, dict) or window.get("trigger") != "rogue_stroke_luck_attack":
+            raise _support.CombatEngineError("Stroke of Luck attack choice window is missing")
+        encounter = _support.resolve_choice_window(
+            encounter,
+            choice_id=choice_id,
+            actor_id_value=actor_id,
+            selection=selection,
+        )
+        offered = _support.deepcopy(dict(details.get("offered") or {}))
+        result = offered
+        updates: list[_support.CharacterStateUpdate] = []
+        receipts: list[dict[str, Any]] = []
+        if selection_id == "use_stroke_of_luck":
+            attacker_record = self.require_campaign_actor(campaign_id, actor_id)
+            target_record = self.require_campaign_actor(campaign_id, target_id)
+            attacker = self.character_view(attacker_record)
+            target = self.character_view(target_record)
+            feature = srd2014_rogue_stroke_of_luck_feature(attacker["sheet"])
+            if feature is None:
+                raise _support.CombatEngineError("Stroke of Luck is not present on the actor card")
+            uses = dict(feature.get("uses") or {})
+            if int(uses.get("value", 0) or 0) < 1:
+                raise _support.CombatEngineError("Stroke of Luck is already expended")
+            spend = mutate_bounded_resource(uses, amount=1, direction="spend")
+            attack["hit"] = True
+            attack["stroke_of_luck_applied"] = True
+            attack["stroke_of_luck_original_hit"] = False
+            rule_context = self.effective_rule_context(campaign_id, branch_id=branch_id)
+            updated_attacker, updated_target, result = _support.resolve_attack_damage(
+                attacker,
+                target,
+                plan=plan,
+                attack=attack,
+                rules=rule_context,
+            )
+            feature = srd2014_rogue_stroke_of_luck_feature(updated_attacker["sheet"])
+            if feature is None:
+                raise _support.CombatEngineError("Stroke of Luck source changed during resolution")
+            uses = dict(feature.get("uses") or {})
+            mutate_bounded_resource(uses, amount=1, direction="spend")
+            feature["uses"] = uses
+            stroke_resource = spend
+            stroke_receipts = _support.core_receipts(
+                rule_context,
+                ["dnd5e.core.rogue.stroke_of_luck"],
+                "attack.stroke_of_luck",
+            )
+            receipts = [
+                *list(details.get("attack_payment_receipts") or []),
+                *stroke_receipts,
+                *list(result.get("rule_receipts") or []),
+            ]
+            result.update(
+                {
+                    "stroke_of_luck_applied": True,
+                    "stroke_of_luck_resource": stroke_resource,
+                    "stroke_of_luck_choice": {
+                        "id": choice_id,
+                        "selection": selection_id,
+                        "resolved": True,
+                    },
+                    "attack_payment": _support.deepcopy(details.get("attack_payment") or {}),
+                    "rule_receipts": receipts,
+                }
+            )
+            if details.get("ammunition") is not None:
+                result["ammunition"] = _support.deepcopy(details["ammunition"])
+            if details.get("limited_use") is not None:
+                result["limited_use"] = _support.deepcopy(details["limited_use"])
+            mastery_commit = _support.apply_weapon_mastery_to_encounter(
+                encounter,
+                result,
+                attacker_id=actor_id,
+                target_id=target_id,
+            )
+            encounter = mastery_commit["encounter"]
+            if mastery_commit["effect"] is not None:
+                result.setdefault("weapon_mastery", {})["committed_effect"] = mastery_commit[
+                    "effect"
+                ]
+            self.sync_combatant_conditions(encounter, actor_id, updated_attacker["sheet"])
+            self.sync_combatant_conditions(encounter, target_id, updated_target["sheet"])
+            _support.reconcile_readied_spells(encounter, target_id, updated_target["sheet"])
+            damage = result.get("damage")
+            if isinstance(damage, dict):
+                self.add_concentration_window(
+                    encounter,
+                    target_id,
+                    damage.get("concentration"),
+                    next_revision=campaign.revision + 1,
+                )
+                result["damage"] = {
+                    key: value for key, value in damage.items() if key != "sheet"
+                }
+            self.apply_standard_spell_on_hit_mechanics(
+                encounter,
+                result=result,
+                attacker_id=actor_id,
+                target_id=target_id,
+            )
+            spell_resolution_id = str(details.get("spell_resolution_id") or "")
+            if spell_resolution_id:
+                result["spell_resolution"] = self.advance_spell_attack_resolution(
+                    encounter,
+                    resolution_id=spell_resolution_id,
+                    result=result,
+                )
+            for record, updated in (
+                (attacker_record, updated_attacker),
+                (target_record, updated_target),
+            ):
+                sheet = _support.validate_character_sheet(updated["sheet"])
+                notes = _support.validate_character_notes(record.notes)
+                if sheet == record.sheet and notes == record.notes:
+                    continue
+                updates.append(
+                    _support.CharacterStateUpdate(
+                        character_id=record.id,
+                        sheet=sheet,
+                        notes=notes,
+                        expected_revision=record.revision,
+                    )
+                )
+        else:
+            result["stroke_of_luck_choice"] = {
+                "id": choice_id,
+                "selection": selection_id,
+                "resolved": True,
+            }
+            receipts = list(result.get("rule_receipts") or [])
+
+        encounter["log"] = [
+            *list(encounter.get("log") or []),
+            {
+                "type": "rogue_stroke_of_luck_attack_choice",
+                "actor_id": actor_id,
+                "target_id": target_id,
+                "result": _support.deepcopy(result),
+            },
+        ][-100:]
+        next_state["combat"] = encounter
+        resolution_id = str(details.get("resolution_id") or "")
+        next_state["resolution_log"] = [
+            {
+                **item,
+                "status": "settled",
+                "campaign_revision": campaign.revision + 1,
+                "result": _support.deepcopy(result),
+                "pending_choice": None,
+            }
+            if str(item.get("id") or "") == resolution_id
+            else item
+            for item in next_state.get("resolution_log", [])
+        ]
+        result["stroke_of_luck_choice"] = {
+            "id": choice_id,
+            "selection": selection_id,
+            "resolved": True,
+        }
+        response = self.commit_campaign_state(
+            campaign,
+            next_state,
+            operation="combat.choice.rogue_stroke_of_luck_attack",
+            principal_id=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=payload,
+            response_fields={
+                "status": "committed",
+                "result": result,
+                "choice_resolution": {"choice_id": choice_id, "selection": selection_id},
+                "combat": encounter,
+            },
+            character_updates=updates,
+            rule_receipts=receipts,
+            expected_campaign_revision=campaign.revision,
+        )
+        return self.combat_response(campaign_id, principal_id, response)
+
     def combat_reaction_attack(
         self,
         campaign_id: str,
@@ -1648,6 +2180,23 @@ class AttacksService:
                 "campaign revision conflict: "
                 f"expected {expected_revision}, found {campaign.revision}"
             )
+        if _support.active_random_stream() is None:
+            with self.campaign_random_context(
+                campaign_id,
+                "combat_reaction_attack",
+                {"idempotency_key": idempotency_key},
+            ):
+                return self.combat_reaction_attack(
+                    campaign_id,
+                    actor_id,
+                    choice_id,
+                    target_id,
+                    action_payload,
+                    principal_id,
+                    resolved_branch_id,
+                    expected_revision,
+                    idempotency_key,
+                )
         _, encounter = self.active_encounter(campaign_id)
         window = next(
             (item for item in encounter.get("pending", []) if item.get("id") == choice_id),
@@ -1658,7 +2207,10 @@ class AttacksService:
             or window.get("kind") != "reaction"
             or window.get("actor_id") != actor_id
             or window.get("trigger") != "opportunity_attack"
-            or window.get("target_id") != target_id
+            or target_id not in set(
+                window.get("target_actor_ids")
+                or [window.get("target_id")]
+            )
         ):
             raise _support.CombatEngineError(
                 "choice_id is not this actor's opportunity-attack window"
@@ -1739,7 +2291,13 @@ class AttacksService:
             snapshot["visible_to_actor_ids"] = _support.deepcopy(
                 combatant_state.get("visible_to_actor_ids")
             )
-        if window.get("target_visible"):
+        if isinstance(window.get("attack_spatial_facts"), dict):
+            action_payload = dict(action_payload)
+            action_payload["context"] = {
+                **dict(action_payload.get("context") or {}),
+                "spatial_facts": _support.deepcopy(window["attack_spatial_facts"]),
+            }
+        elif window.get("target_visible"):
             action_payload = dict(action_payload)
             action_payload["context"] = {
                 **dict(action_payload.get("context") or {}),
@@ -1768,6 +2326,18 @@ class AttacksService:
             encounter=trigger_encounter,
             allow_out_of_turn=True,
             rules=rule_context,
+        )
+        reaction_receipts = _support.core_receipts(
+            rule_context,
+            [
+                reaction_receipt_id,
+                *(
+                    ["dnd5e.core.vision.light_obscuration_2014"]
+                    if encounter.get("ruleset") == "2014" and plan.get("vision")
+                    else []
+                ),
+            ],
+            "reaction.opportunity_attack" if readied is None else "reaction.ready.attack",
         )
         weapon = next(
             (
@@ -1937,20 +2507,21 @@ class AttacksService:
                 response_fields={
                     "status": "pending_reaction",
                     "result": result,
+                    "rule_receipts": reaction_receipts,
                     **ready_fields,
                     "choice": defense_window,
                     "combat": next_encounter,
                 },
                 character_updates=updates,
-                rule_receipts=_support.core_receipts(
-                    rule_context,
-                    [
-                        reaction_receipt_id,
-                        "dnd5e.core.reaction.post_hit_defense",
-                    ],
-                    ("reaction.opportunity_attack.hit" if readied is None
-                     else "reaction.ready.attack"),
-                ),
+                rule_receipts=[
+                    *reaction_receipts,
+                    *_support.core_receipts(
+                        rule_context,
+                        ["dnd5e.core.reaction.post_hit_defense"],
+                        "reaction.opportunity_attack.hit" if readied is None
+                        else "reaction.ready.attack",
+                    ),
+                ],
             )
             return self.combat_response(campaign_id, principal_id, response)
         updated_attacker, updated_target, result = _support.resolve_attack_damage(
@@ -2021,6 +2592,7 @@ class AttacksService:
                     "source_or_scene_fact",
                 ),
                 "result": result,
+                "rule_receipts": reaction_receipts,
                 **ready_fields,
                 "combat": next_encounter,
             },
@@ -2040,11 +2612,7 @@ class AttacksService:
             ],
             rule_receipts=[
                 *list(result.get("rule_receipts") or []),
-                *_support.core_receipts(
-                    self.effective_rule_context(campaign_id),
-                    [reaction_receipt_id],
-                    "reaction.opportunity_attack" if readied is None else "reaction.ready.attack",
-                ),
+                *reaction_receipts,
             ],
         )
         return self.combat_response(campaign_id, principal_id, response)

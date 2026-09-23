@@ -29,6 +29,7 @@ from sagasmith_dnd.character_schema import (
     effective_ability_scores,
     effective_hit_point_maximum,
     effective_size,
+    has_srd2014_rogue_feature,
     validate_character_sheet,
 )
 from sagasmith_dnd.conditions import (
@@ -255,7 +256,10 @@ def d20_exhaustion_adjustment(
 
     try:
         return edition_policy(ruleset).d20.exhaustion_adjustment(
-            exhaustion=exhaustion, kind=kind, bonus=bonus, disadvantage=disadvantage,
+            exhaustion=exhaustion,
+            kind=kind,
+            bonus=bonus,
+            disadvantage=disadvantage,
         )
     except ValueError as error:
         raise CombatEngineError(str(error)) from error
@@ -922,6 +926,9 @@ def _initiative_root_id(combatant: dict[str, Any]) -> str:
     contract = combatant.get("dependent_turn")
     if isinstance(contract, dict):
         return str(contract.get("owner_actor_id") or "")
+    mounted_turn = combatant.get("mounted_turn")
+    if isinstance(mounted_turn, dict) and mounted_turn.get("mode") == "controlled":
+        return str(mounted_turn.get("owner_actor_id") or "")
     return str(combatant.get("actor_id") or "")
 
 
@@ -1226,9 +1233,16 @@ def start_encounter(
                     group_rolls[initiative_group_id] = deepcopy(die)
             from .bardic_inspiration import settle_roll
 
-            inspired = settle_roll(identifier, sheet, {
-                **die, "kind": "initiative", "total": die["natural"] + initiative_bonus,
-            }, rng=rng)
+            inspired = settle_roll(
+                identifier,
+                sheet,
+                {
+                    **die,
+                    "kind": "initiative",
+                    "total": die["natural"] + initiative_bonus,
+                },
+                rng=rng,
+            )
             initiative = inspired["total"]
             if "bardic_inspiration" in inspired:
                 die["bardic_inspiration"] = inspired["bardic_inspiration"]
@@ -1258,6 +1272,7 @@ def start_encounter(
                     "movement": current_movement,
                     "speed": speed,
                     "movement_spent": 0,
+                    "movement_history": [],
                     "extra_movement_granted": 0,
                     "travel_mode": "walk",
                     "speed_modes": {
@@ -1268,6 +1283,7 @@ def start_encounter(
                     "attack_budget": 0,
                 },
                 "conditions": list(sheet.get("conditions") or []),
+                "senses": deepcopy(dict(sheet.get("traits") or {}).get("senses") or {}),
                 "hit_points": int(sheet["combat"]["hp"]["value"]),
                 "size": effective_size(sheet),
                 "condition_sources": timed_condition_sources(sheet),
@@ -1995,6 +2011,222 @@ def _update_movement_accounting(
     )
 
 
+def jump_profile_2014(
+    encounter: dict[str, Any],
+    actor: dict[str, Any],
+    combatant: dict[str, Any],
+    kind: str,
+    *,
+    running_start_ft_override: int | None = None,
+) -> dict[str, int | bool]:
+    """Derive SRD 2014 jump limits from Strength and this turn's paid foot route."""
+    if _normalize_ruleset(encounter.get("ruleset")) != "2014":
+        raise CombatEngineError("source-defined jumping requires a 2014 encounter")
+    if kind not in {"long", "high"}:
+        raise CombatEngineError("jump kind must be long or high")
+    if encounter.get("positioning_mode", "grid") != "grid":
+        if (
+            isinstance(running_start_ft_override, bool)
+            or not isinstance(running_start_ft_override, int)
+            or not 0 <= running_start_ft_override <= 1000
+        ):
+            raise NeedsRulingError(
+                "Agent jump running starts require source-grounded path continuity",
+                missing=("jump.spatial_facts.running_start_ft",),
+                ruling_kind="agent_dm_adjudication",
+            )
+        running_ft = running_start_ft_override
+    else:
+        if running_start_ft_override is not None:
+            raise CombatEngineError("Grid jump running starts derive from movement history")
+        running_ft = 0
+        token = _combat_turn_token(encounter)
+        position = _position(combatant.get("position"))
+        history = list(dict(combatant.get("turn_budget") or {}).get("movement_history") or [])
+        for event in reversed(history):
+            if (
+                not isinstance(event, dict)
+                or event.get("turn_token") != token
+                or event.get("movement_mode") not in {"voluntary", "aggressive"}
+                or event.get("travel_mode") != "walk"
+                or event.get("jump_kind") is not None
+                or position is None
+            ):
+                break
+            endpoint = _position(event.get("destination"))
+            route = [_position(point) for point in event.get("path", [])]
+            if endpoint is None or endpoint != position or any(point is None for point in route):
+                break
+            if len(route) >= 2 and route[-1] != endpoint:
+                break
+            recorded = sum(_grid_distance(left, right) for left, right in zip(route, route[1:]))
+            if recorded != int(event.get("distance_ft", -1)):
+                break
+            running_ft += recorded
+            position = _position(event.get("origin"))
+            if running_ft >= 10:
+                break
+    strength = int(effective_ability_scores(actor_sheet(actor))["strength"])
+    base = strength if kind == "long" else max(0, 3 + ability_modifier(strength))
+    maximum = base if running_ft >= 10 else base // 2
+    return {
+        "strength_score": strength,
+        "strength_modifier": ability_modifier(strength),
+        "running_start_ft": running_ft,
+        "running_start": running_ft >= 10,
+        "maximum_ft": max(0, maximum),
+    }
+
+
+def settle_jump_2014(
+    encounter: dict[str, Any],
+    actor: dict[str, Any],
+    combatant: dict[str, Any],
+    *,
+    kind: str,
+    distance_ft: int,
+    obstacle_height_ft: int | None = None,
+    obstacle_check_required: bool = False,
+    landing_difficult_terrain: bool = False,
+    exceptional_height_dc: int | None = None,
+    running_start_ft_override: int | None = None,
+    defer_landing_check: bool = False,
+    rng: Any = None,
+) -> dict[str, Any]:
+    """Settle only the bounded 2014 jump checks whose source supplies a DC."""
+    profile = jump_profile_2014(
+        encounter,
+        actor,
+        combatant,
+        kind,
+        running_start_ft_override=running_start_ft_override,
+    )
+    if isinstance(distance_ft, bool) or not isinstance(distance_ft, int) or distance_ft < 0:
+        raise CombatEngineError("jump distance_ft must be a non-negative integer")
+    if type(obstacle_check_required) is not bool or type(landing_difficult_terrain) is not bool:
+        raise CombatEngineError("jump obstacle and landing facts must be boolean")
+    if type(defer_landing_check) is not bool:
+        raise CombatEngineError("defer_landing_check must be a boolean")
+    if obstacle_height_ft is not None and (
+        isinstance(obstacle_height_ft, bool)
+        or not isinstance(obstacle_height_ft, int)
+        or obstacle_height_ft < 0
+    ):
+        raise CombatEngineError("obstacle_height_ft must be a non-negative integer or null")
+    if exceptional_height_dc is not None and (
+        isinstance(exceptional_height_dc, bool)
+        or not isinstance(exceptional_height_dc, int)
+        or not 1 <= exceptional_height_dc <= 40
+    ):
+        raise CombatEngineError("exceptional_height_dc must be an integer from 1 through 40")
+    high_exception = kind == "high" and distance_ft > int(profile["maximum_ft"])
+    if distance_ft > int(profile["maximum_ft"]) and not (
+        high_exception and exceptional_height_dc is not None
+    ):
+        raise CombatEngineError("jump exceeds the Strength-derived 2014 limit")
+    if kind == "long" and exceptional_height_dc is not None:
+        raise CombatEngineError("exceptional_height_dc applies only to an exceptional high jump")
+    checks: list[dict[str, Any]] = []
+    if high_exception:
+        checks.append(
+            resolve_actor_check(
+                actor,
+                kind="check",
+                ability="athletics",
+                dc=exceptional_height_dc,
+                encounter=encounter,
+                rng=rng,
+                ruleset="2014",
+            )
+        )
+        if not checks[-1]["success"]:
+            return {
+                "kind": kind,
+                "distance_ft": distance_ft,
+                "profile": profile,
+                "checks": checks,
+                "outcome": "exceptional_height_failed",
+                "prone": False,
+            }
+    body_height_cm = actor_sheet(actor).get("identity", {}).get("height_cm")
+    vertical_reach_ft = None
+    if (
+        kind == "high"
+        and isinstance(body_height_cm, (int, float))
+        and not isinstance(body_height_cm, bool)
+        and body_height_cm > 0
+    ):
+        vertical_reach_ft = distance_ft + (1.5 * float(body_height_cm) / 30.48)
+    obstacle_outcome = "none"
+    if obstacle_height_ft is not None:
+        if kind != "long":
+            raise CombatEngineError("low-obstacle clearance applies only to a long jump")
+        if obstacle_height_ft > distance_ft // 4:
+            obstacle_outcome = "hit"
+        elif obstacle_check_required:
+            checks.append(
+                resolve_actor_check(
+                    actor,
+                    kind="check",
+                    ability="athletics",
+                    dc=10,
+                    encounter=encounter,
+                    rng=rng,
+                    ruleset="2014",
+                )
+            )
+            obstacle_outcome = "cleared" if checks[-1]["success"] else "hit"
+        else:
+            obstacle_outcome = "cleared"
+    if obstacle_outcome == "hit":
+        return {
+            "kind": kind,
+            "distance_ft": distance_ft,
+            "profile": profile,
+            "checks": checks,
+            "obstacle_outcome": obstacle_outcome,
+            "outcome": "hit_obstacle",
+            "prone": False,
+        }
+    landing_check = None
+    prone = False
+    landing_check_pending = None
+    if landing_difficult_terrain:
+        if defer_landing_check:
+            landing_check_pending = {
+                "kind": "check",
+                "ability": "acrobatics",
+                "dc": 10,
+                "ruleset": "2014",
+            }
+        else:
+            landing_check = resolve_actor_check(
+                actor,
+                kind="check",
+                ability="acrobatics",
+                dc=10,
+                encounter=encounter,
+                rng=rng,
+                ruleset="2014",
+            )
+            checks.append(landing_check)
+            prone = not bool(landing_check["success"])
+    return {
+        "kind": kind,
+        "distance_ft": distance_ft,
+        "profile": profile,
+        "checks": checks,
+        "obstacle_outcome": obstacle_outcome,
+        "landing_check": landing_check,
+        "landing_check_pending": landing_check_pending,
+        "vertical_reach_ft": vertical_reach_ft,
+        "outcome": "landing_check_pending"
+        if landing_check_pending
+        else ("landed_prone" if prone else "landed"),
+        "prone": prone,
+    }
+
+
 def _refresh_weapon_mastery_speed(encounter: dict[str, Any], combatant: dict[str, Any]) -> None:
     """Project active Slow effects into the existing movement budget once."""
 
@@ -2051,6 +2283,14 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
         if budget.get("object_interaction", 0) > 0:
             actions.append("interact_object")
         return actions
+    mounted_turn = dict(combatant.get("mounted_turn") or {})
+    if mounted_turn.get("mode") == "controlled":
+        actions = []
+        if has_movement and not conditions & {"grappled", "restrained", "prone"}:
+            actions.append("move")
+        if budget.get("main_action", 0) > 0 or budget.get("extra_action", 0) > 0:
+            actions.extend(["dash", "disengage", "dodge"])
+        return actions
     if _stances.active(combatant):
         return _stances.exit_actions(combatant, budget)
     if "turned" in conditions:
@@ -2077,12 +2317,14 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
                 "stabilize",
             ]
         )
+        if _normalize_ruleset(encounter.get("ruleset")) == "2014":
+            actions.extend(["grapple", "shove"])
         actions.extend(_stances.extra_actions(combatant))
         if _normalize_ruleset(encounter.get("ruleset")) == "2024":
             actions.extend(["influence", "study", "utilize"])
         else:
             actions.extend(["improvise", "revive_steel_defender", "use_object"])
-            actions.append("shake_sleep")
+            actions.extend(["shake_poison", "shake_sleep"])
         if conditions & {"grappled", "restrained"}:
             actions.append("escape")
         if (
@@ -2107,6 +2349,18 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
         actions.append("interact_object")
     if budget.get("attack_budget", 0) > 0:
         actions.append("attack")
+        if _normalize_ruleset(encounter.get("ruleset")) == "2014":
+            actions.extend(["grapple", "shove"])
+    if _normalize_ruleset(encounter.get("ruleset")) == "2014":
+        from .mounted_combat import relation_for_rider
+
+        mounting_unused = dict(combatant.get("turn_flags") or {}).get(
+            "mounting_used_turn_token"
+        ) != _combat_turn_token(encounter)
+        if relation_for_rider(encounter, actor_id_value):
+            actions = [item for item in actions if item != "move"]
+            if has_movement and mounting_unused:
+                actions.append("dismount")
     return list(dict.fromkeys(actions))
 
 
@@ -2400,6 +2654,127 @@ def pay_attack_action(
     return value, payment
 
 
+def pay_2014_special_attack(
+    encounter: dict[str, Any],
+    attacker: dict[str, Any],
+    *,
+    kind: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Pay one 2014 grapple or shove as an attack replacement.
+
+    Reuse the ordinary Attack-action budget transition so Extra Attack and an
+    already-open attack action are preserved. These special melee attacks do
+    not create a weapon attack roll or a damage plan.
+    """
+    normalized = str(kind).strip().casefold().replace("-", "_")
+    if normalized not in {"grapple", "shove"}:
+        raise CombatEngineError("2014 special attack must be grapple or shove")
+    if _normalize_ruleset(encounter.get("ruleset")) != "2014":
+        raise CombatEngineError("grapple and shove attack replacements require 2014 rules")
+    paid, payment = pay_attack_action(
+        encounter,
+        attacker,
+        weapon_id="unarmed-strike",
+        attack_mode="melee",
+    )
+    payment = {
+        **payment,
+        "kind": "special_attack_replacement",
+        "special_attack": normalized,
+        "weapon_id": None,
+    }
+    current = next(
+        item
+        for item in paid.get("combatants", [])
+        if str(item.get("actor_id") or "") == actor_id(attacker)
+    )
+    flags = dict(current.get("turn_flags") or {})
+    history = list(flags.get("weapon_attacks_this_turn") or [])
+    if history and history[-1].get("weapon_id") == "unarmed-strike":
+        history.pop()
+        if history:
+            flags["weapon_attacks_this_turn"] = history
+        else:
+            flags.pop("weapon_attacks_this_turn", None)
+        if flags:
+            current["turn_flags"] = flags
+        else:
+            current.pop("turn_flags", None)
+    return paid, payment
+
+
+def resolve_2014_special_attack_contest(
+    attacker: dict[str, Any],
+    target: dict[str, Any],
+    *,
+    attacker_skill: str,
+    target_skill: str,
+    kind: str,
+    encounter: dict[str, Any],
+    rng: Any = None,
+) -> dict[str, Any]:
+    """Roll a source-correct 2014 grapple/shove/escape contest.
+
+    The caller must obtain ``target_skill`` from the target's owned choice.
+    Ties preserve the defender's state, as required for contests.
+    """
+    normalized = str(kind).strip().casefold().replace("-", "_")
+    if normalized not in {"grapple", "shove", "escape"}:
+        raise CombatEngineError("contest kind must be grapple, shove, or escape")
+    if _normalize_ruleset(encounter.get("ruleset")) != "2014":
+        raise CombatEngineError("grapple and shove contests require 2014 rules")
+    allowed = {"athletics", "acrobatics"}
+    if str(target_skill).strip().casefold().replace(" ", "_") not in allowed:
+        raise CombatEngineError("the target must choose Athletics or Acrobatics")
+    if normalized == "escape":
+        if str(attacker_skill).strip().casefold().replace(" ", "_") != "athletics":
+            raise CombatEngineError("the grappler defends an escape with Strength (Athletics)")
+        # ``attacker`` is the escaping creature, while ``target`` is its
+        # grappler. Keep the result fields aligned with those actor arguments.
+        attacker_ability = str(target_skill).strip().casefold().replace(" ", "_")
+        target_ability = "athletics"
+    else:
+        if str(attacker_skill).strip().casefold().replace(" ", "_") != "athletics":
+            raise CombatEngineError("grapple and shove require Strength (Athletics)")
+        attacker_ability = "athletics"
+        target_ability = str(target_skill).strip().casefold().replace(" ", "_")
+
+    target_conditions = _condition_set(actor_sheet(target).get("conditions"))
+    if target_conditions & INCAPACITATING_STATE_IDS:
+        return {
+            "kind": normalized,
+            "attacker_check": None,
+            "target_check": None,
+            "automatic_success": True,
+            "success": True,
+            "reason": "incapacitated_target",
+        }
+    attacker_check = resolve_actor_check(
+        attacker,
+        kind="check",
+        ability=attacker_ability,
+        dc=0,
+        encounter=encounter,
+        rng=rng,
+    )
+    target_check = resolve_actor_check(
+        target,
+        kind="check",
+        ability=target_ability,
+        dc=0,
+        encounter=encounter,
+        rng=rng,
+    )
+    return {
+        "kind": normalized,
+        "attacker_check": attacker_check,
+        "target_check": target_check,
+        "automatic_success": False,
+        "success": int(attacker_check["total"]) > int(target_check["total"]),
+        "tie": int(attacker_check["total"]) == int(target_check["total"]),
+    }
+
+
 def pay_official_item_activation(
     encounter: dict[str, Any],
     *,
@@ -2561,6 +2936,7 @@ def preflight_attack(
                 attacker["position"] = deepcopy(combatant.get("position"))
                 attacker["turn_flags"] = deepcopy(combatant.get("turn_flags") or {})
                 attacker["conditions"] = deepcopy(combatant.get("conditions") or [])
+                attacker["senses"] = deepcopy(combatant.get("senses") or {})
                 attacker["hidden"] = bool(combatant.get("hidden", False))
                 attacker["death_saves"] = bool(combatant.get("death_saves", True))
                 attacker["zero_hp_recovery"] = bool(combatant.get("zero_hp_recovery", False))
@@ -2569,6 +2945,7 @@ def preflight_attack(
                 target["position"] = deepcopy(combatant.get("position"))
                 target["turn_flags"] = deepcopy(combatant.get("turn_flags") or {})
                 target["conditions"] = deepcopy(combatant.get("conditions") or [])
+                target["senses"] = deepcopy(combatant.get("senses") or {})
                 target["hidden"] = bool(combatant.get("hidden", False))
                 target["death_saves"] = bool(combatant.get("death_saves", True))
                 target["zero_hp_recovery"] = bool(combatant.get("zero_hp_recovery", False))
@@ -2687,7 +3064,8 @@ def preflight_attack(
         attack_bonus = int(weapon.get("attack_bonus", 0) or 0)
     archery = archery_bonus(actor_sheet(attacker), weapon)
     already_derived = (
-        0 if explicit_attack_ability and attack_bonus_override is not None
+        0
+        if explicit_attack_ability and attack_bonus_override is not None
         else int(weapon.get("archery_bonus", 0))
     )
     attack_bonus += archery - already_derived
@@ -2794,8 +3172,22 @@ def preflight_attack(
         if spatial_facts.get("in_range") is not True:
             raise CombatEngineError("target is outside range in the Agent spatial ruling")
         context["cover"] = {"degree": str(spatial_facts.get("cover_degree") or "none")}
-        context["attacker_can_see_target"] = bool(spatial_facts.get("attacker_can_see_target"))
-        context["target_can_see_attacker"] = bool(spatial_facts.get("target_can_see_attacker"))
+        if encounter.get("ruleset") == "2014":
+            attacker_vision = resolve_agent_vision_2014(
+                attacker, dict(spatial_facts.get("attacker_vision") or {}), subject=target
+            )
+            target_vision = resolve_agent_vision_2014(
+                target, dict(spatial_facts.get("target_vision") or {}), subject=attacker
+            )
+            context["attacker_can_see_target"] = bool(attacker_vision["visible"])
+            context["target_can_see_attacker"] = bool(target_vision["visible"])
+            context["vision_profiles"] = {
+                "attacker": attacker_vision,
+                "target": target_vision,
+            }
+        else:
+            context["attacker_can_see_target"] = bool(spatial_facts.get("attacker_can_see_target"))
+            context["target_can_see_attacker"] = bool(spatial_facts.get("target_can_see_attacker"))
     raw_cover = context.get("cover")
     if raw_cover is not None and not isinstance(raw_cover, dict):
         raise CombatEngineError("cover context must be an object")
@@ -2906,7 +3298,10 @@ def preflight_attack(
         raise CombatEngineError("weapon_grip must be one_handed or two_handed")
     weapon_grip = supplied_grip or ("two_handed" if "two_handed" in properties else "one_handed")
     great_weapon_available = great_weapon_eligible(
-        actor_sheet(attacker), weapon, attack_mode=attack_mode, grip=weapon_grip,
+        actor_sheet(attacker),
+        weapon,
+        attack_mode=attack_mode,
+        grip=weapon_grip,
     )
     use_great_weapon = action.get("use_great_weapon_fighting", False)
     if type(use_great_weapon) is not bool:
@@ -3051,8 +3446,9 @@ def preflight_attack(
         expression = f"{expression} + {dueling_bonus}"
     from .rage import damage_bonus as rage_damage_bonus
 
-    rage_bonus = rage_damage_bonus(actor_sheet(attacker), attack_ability=attack_ability,
-                                   attack_mode=attack_mode)
+    rage_bonus = rage_damage_bonus(
+        actor_sheet(attacker), attack_ability=attack_ability, attack_mode=attack_mode
+    )
     if rage_bonus and expression:
         expression = f"{expression} + {rage_bonus}"
     damage_type = str(weapon.get("damage_type") or "")
@@ -3088,8 +3484,10 @@ def preflight_attack(
         if attack_mode != "ranged" and reviewed_object_long_range:
             raise CombatEngineError("melee object attacks cannot use long range")
         range_result = {
-            "enforced": True, "distance_ft": None,
-            "disadvantage": reviewed_object_long_range, "source": "reviewed_object_range",
+            "enforced": True,
+            "distance_ft": None,
+            "disadvantage": reviewed_object_long_range,
+            "source": "reviewed_object_range",
         }
     if range_result["disadvantage"]:
         context["disadvantage"] = True
@@ -3097,7 +3495,9 @@ def preflight_attack(
     from .water import WATER_RULE, underwater_weapon_rule
 
     underwater = underwater_weapon_rule(
-        actor_sheet(attacker), weapon, attack_mode=attack_mode,
+        actor_sheet(attacker),
+        weapon,
+        attack_mode=attack_mode,
         swim_speed=int(dict(actor_derived(attacker).get("speed") or {}).get("swim", 0)),
         range_result=range_result,
     )
@@ -3133,7 +3533,7 @@ def preflight_attack(
                 or candidate_position is None
                 or _grid_distance(attacker_position, candidate_position) > 5
                 or not _are_hostile(candidate, attacker)
-                or not can_see(candidate, attacker)
+                or not can_see(candidate, attacker, encounter)
                 or _condition_set(candidate.get("conditions")) & INCAPACITATING_STATE_IDS
             ):
                 continue
@@ -3145,7 +3545,9 @@ def preflight_attack(
     from .sunlight import SUNLIGHT_MECHANIC, sunlight_disadvantage
 
     sunlight = sunlight_disadvantage(
-        attacker_sheet, context.get("sunlight"), actor_id=actor_id(attacker),
+        attacker_sheet,
+        context.get("sunlight"),
+        actor_id=actor_id(attacker),
         subject_id=str(target.get("object_id") or actor_id(target)),
     )
     if sunlight:
@@ -3178,12 +3580,26 @@ def preflight_attack(
     target_conditions = _condition_set(
         target.get("conditions") or actor_sheet(target).get("conditions")
     )
+    elusive = has_srd2014_rogue_feature(
+        actor_sheet(target),
+        feature_id="dnd5e.content.srd2014.feature.rogue-elusive",
+        mechanic_id="dnd5e.core.attack.elusive",
+        minimum_level=18,
+    ) and not bool(target_conditions & INCAPACITATING_STATE_IDS)
     attacker_can_see_target = bool(
-        context.get("attacker_can_see_target", can_see(attacker, target))
+        context.get("attacker_can_see_target", can_see(attacker, target, encounter))
     )
     target_can_see_attacker = bool(
-        context.get("target_can_see_attacker", can_see(target, attacker))
+        context.get("target_can_see_attacker", can_see(target, attacker, encounter))
     )
+    blindsense_target_location = blindsense_detects_location(
+        attacker,
+        target,
+        encounter,
+        spatial_facts=dict(context.get("spatial_facts") or {}),
+    )
+    if blindsense_target_location:
+        context["blindsense_detects_target_location"] = True
     if not target_can_see_attacker:
         context["advantage"] = True
         context.setdefault("advantage_sources", []).append("attacker_unseen")
@@ -3235,7 +3651,7 @@ def preflight_attack(
                 combatant
                 for combatant in encounter.get("combatants", [])
                 if str(combatant.get("actor_id") or "") in fear_sources
-                and can_see(attacker, combatant)
+                and can_see(attacker, combatant, encounter)
             ]
             if visible_sources:
                 context["disadvantage"] = True
@@ -3408,6 +3824,9 @@ def preflight_attack(
         elif opcode == "disadvantage.add":
             context["disadvantage"] = True
             context.setdefault("disadvantage_sources", []).append(modifier["mechanic_id"])
+    if elusive:
+        context["advantage"] = False
+        context["advantage_sources"] = []
     sneak_attack = _sneak_attack_plan(
         attacker,
         target,
@@ -3425,6 +3844,10 @@ def preflight_attack(
         core_boundary_ids.append(SPACE_RULE)
     if sunlight is not None:
         core_boundary_ids.append(SUNLIGHT_MECHANIC)
+    if blindsense_target_location:
+        core_boundary_ids.append("dnd5e.core.sense.blindsense")
+    if elusive:
+        core_boundary_ids.append("dnd5e.core.attack.elusive")
     is_unarmed_strike = bool(
         weapon.get("item_id") == "unarmed-strike" or weapon.get("unarmed_strike") is True
     )
@@ -3458,14 +3881,28 @@ def preflight_attack(
 
     if rage_bonus:
         core_boundary_ids.append("dnd5e.core.class.rage")
+    vision_profiles = dict(context.get("vision_profiles") or {})
+    attacker_vision = vision_profiles.get("attacker") or vision_profile_2014(
+        encounter, attacker, target
+    )
+    target_vision = vision_profiles.get("target") or vision_profile_2014(
+        encounter, target, attacker
+    )
+    if attacker_vision is not None or target_vision is not None:
+        core_boundary_ids.append("dnd5e.core.vision.light_obscuration_2014")
     return {
         "rage_damage_bonus": rage_bonus,
-        "rage_hostile_attack": bool(encounter and any(
-            p.get("actor_id") == actor_id(attacker) and any(
-                q.get("actor_id") == actor_id(target) and _are_hostile(p, q)
-                for q in encounter.get("combatants", [])
-            ) for p in encounter.get("combatants", [])
-        )),
+        "rage_hostile_attack": bool(
+            encounter
+            and any(
+                p.get("actor_id") == actor_id(attacker)
+                and any(
+                    q.get("actor_id") == actor_id(target) and _are_hostile(p, q)
+                    for q in encounter.get("combatants", [])
+                )
+                for p in encounter.get("combatants", [])
+            )
+        ),
         "bardic_inspiration": deepcopy(held(actor_sheet(attacker))),
         "status": "ready",
         "kind": "attack",
@@ -3531,6 +3968,19 @@ def preflight_attack(
         "melee_attack": attack_mode == "melee",
         "attacker_was_hidden": bool(attacker.get("hidden", False)),
         "target_can_see_attacker": target_can_see_attacker,
+        "blindsense_detects_target_location": blindsense_target_location,
+        **(
+            {
+                "vision": {
+                    "attacker": attacker_vision,
+                    "target": target_vision,
+                    "attacker_color_detail": (attacker_vision or {}).get("color_detail"),
+                    "target_color_detail": (target_vision or {}).get("color_detail"),
+                }
+            }
+            if attacker_vision is not None or target_vision is not None
+            else {}
+        ),
         "helped_by": helped_by,
         "help_kind": help_kind,
         "next_attack_advantage_effect_id": next_attack_advantage_effect_id,
@@ -3666,11 +4116,21 @@ def roll_attack_action(
     """Roll one prepared attack without rolling damage or changing actor state."""
     if dict(plan.get("underwater") or {}).get("automatic_miss"):
         attack = {
-            "kind": "attack", "armor_class": int(plan["target_ac"]),
-            "attack_bonus": int(plan["attack_bonus"]), "total": 0,
-            "natural": None, "rolls": [], "rerolls": [], "critical": False, "fumble": False,
-            "hit": False, "automatic_miss": True, "reason": "underwater_beyond_normal_range",
-            "advantage": False, "disadvantage": False, "roll_mode": "automatic_miss",
+            "kind": "attack",
+            "armor_class": int(plan["target_ac"]),
+            "attack_bonus": int(plan["attack_bonus"]),
+            "total": 0,
+            "natural": None,
+            "rolls": [],
+            "rerolls": [],
+            "critical": False,
+            "fumble": False,
+            "hit": False,
+            "automatic_miss": True,
+            "reason": "underwater_beyond_normal_range",
+            "advantage": False,
+            "disadvantage": False,
+            "roll_mode": "automatic_miss",
         }
     else:
         attack = resolve_attack(
@@ -3684,9 +4144,15 @@ def roll_attack_action(
     if plan.get("bardic_inspiration"):
         from .bardic_inspiration import settle_roll
 
-        attack = settle_roll(str(plan["attacker_id"]), {
-            "edition": "2014", "effects": [plan["bardic_inspiration"]],
-        }, attack, rng=rng)
+        attack = settle_roll(
+            str(plan["attacker_id"]),
+            {
+                "edition": "2014",
+                "effects": [plan["bardic_inspiration"]],
+            },
+            attack,
+            rng=rng,
+        )
     if attack["hit"] and plan.get("automatic_critical_on_hit"):
         attack["critical"] = True
     return {
@@ -4032,14 +4498,21 @@ def resolve_attack_damage(
 
         smite_sheet = actor_sheet(updated_attacker)
         smite = settle_smite(
-            actor_id(attacker), smite_sheet, actor_id(target), actor_sheet(target), plan, attack,
+            actor_id(attacker),
+            smite_sheet,
+            actor_id(target),
+            actor_sheet(target),
+            plan,
+            attack,
         )
         updated_attacker["sheet"] = smite_sheet
         if smite:
             result["divine_smite"] = deepcopy(smite)
         damage_expression = _critical_expression(expression) if attack["critical"] else expression
         damage_roll, weapon_rerolls = roll_weapon_damage(
-            damage_expression, reroll_low=bool(plan.get("use_great_weapon_fighting")), rng=rng,
+            damage_expression,
+            reroll_low=bool(plan.get("use_great_weapon_fighting")),
+            rng=rng,
         )
         if plan.get("use_great_weapon_fighting"):
             result["great_weapon_fighting"] = {"used": True, "rerolls": weapon_rerolls}
@@ -4967,7 +5440,18 @@ def _apply_adjusted_damage(
                 conditions.discard("unconscious")
                 conditions.add("dead")
     combat["death_saves"] = death
+    poison_wakes: list[str] = []
+    if adjusted > 0 and hp["value"] > 0:
+        from .poisons import wake_poison_effects
+
+        value, poison_wakes = wake_poison_effects(value, trigger="damage")
+        if poison_wakes:
+            conditions = _condition_set(value.get("conditions"))
     knocked_out_2024 = became_zero and knock_out and melee and normalized_ruleset == "2024"
+    if knocked_out_2024:
+        # The knock-out condition comes from this damage resolution, even if
+        # the same hit also wakes a poison-owned unconsciousness rider.
+        conditions.add("unconscious")
     conditions = reconcile_condition_projection(value, conditions)
     if ended_turn_effects:
         reconcile_ended_effect_conditions(value, ended_effects=ended_turn_effects)
@@ -5002,7 +5486,7 @@ def _apply_adjusted_damage(
             "effect_ids": concentration_effects,
             "status": "pending",
         }
-    return {
+    result = {
         "sheet": value,
         "input_amount": raw,
         "applied_amount": adjusted,
@@ -5020,6 +5504,9 @@ def _apply_adjusted_damage(
         "massive_damage": massive_damage,
         "zero_hp_recovery": zero_hp_recovery_result,
     }
+    if poison_wakes:
+        result["poison_wakes"] = poison_wakes
+    return result
 
 
 def apply_damage_parts_to_sheet(
@@ -5105,8 +5592,11 @@ def apply_damage_parts_to_sheet(
         "concentration": applied["concentration"],
         "ended_effect_ids": applied["ended_effect_ids"],
         "massive_damage": applied["massive_damage"],
-        **({"environment_receipts": deepcopy(water.get("rule_receipts", []))}
-           if "fire" in grouped and water["fully_immersed"] else {}),
+        **(
+            {"environment_receipts": deepcopy(water.get("rule_receipts", []))}
+            if "fire" in grouped and water["fully_immersed"]
+            else {}
+        ),
         **({"attack_facts": deepcopy(attack_facts)} if attack_facts is not None else {}),
     }
 
@@ -5621,14 +6111,24 @@ def spend_movement(
     travel_mode: str = "walk",
     crawl: bool = False,
     spatial_facts: dict[str, Any] | None = None,
+    grapple_drag_ids: list[str] | None = None,
+    jump_kind: str | None = None,
 ) -> dict[str, Any]:
     """Move only as far as the next reaction boundary, retaining the paid prefix."""
     from sagasmith_dnd.movement_continuations import start_movement
 
     return start_movement(
-        encounter, actor_id_value, distance,
-        destination=destination, path=path, movement_mode=movement_mode,
-        travel_mode=travel_mode, crawl=crawl, spatial_facts=spatial_facts,
+        encounter,
+        actor_id_value,
+        distance,
+        destination=destination,
+        path=path,
+        movement_mode=movement_mode,
+        travel_mode=travel_mode,
+        crawl=crawl,
+        spatial_facts=spatial_facts,
+        _grapple_drag_ids=grapple_drag_ids,
+        jump_kind=jump_kind,
     )
 
 
@@ -5645,6 +6145,8 @@ def _spend_movement_uninterrupted(
     spatial_facts: dict[str, Any] | None = None,
     _intermediate_destination: bool = False,
     _source_movement_id: str | None = None,
+    _grapple_drag_ids: list[str] | None = None,
+    jump_kind: str | None = None,
 ) -> dict[str, Any]:
     """Apply movement with a separate reason and travel-speed mode.
 
@@ -5666,8 +6168,20 @@ def _spend_movement_uninterrupted(
         raise CombatEngineError("movement_mode must be voluntary, aggressive, forced, or teleport")
     if travel_mode not in _TRAVEL_SPEED_MODES:
         raise CombatEngineError("travel_mode must be walk, fly, swim, climb, or burrow")
+    if jump_kind not in {None, "long", "high"}:
+        raise CombatEngineError("jump_kind must be long, high, or omitted")
     uses_aggressive_grant = movement_mode == "aggressive"
     willing_movement = movement_mode in {"voluntary", "aggressive"}
+    if jump_kind is not None and (
+        _normalize_ruleset(value.get("ruleset")) != "2014"
+        or not willing_movement
+        or travel_mode != "walk"
+        or crawl
+        or _grapple_drag_ids
+    ):
+        raise CombatEngineError(
+            "2014 jumps require willing on-foot movement without a grapple drag"
+        )
     if not willing_movement and crawl:
         raise CombatEngineError("forced movement and teleportation cannot be declared as crawling")
     if movement_mode == "teleport" and path is not None:
@@ -5696,6 +6210,52 @@ def _spend_movement_uninterrupted(
     )
     if combatant is None:
         raise CombatEngineError(f"combatant not found: {actor_id_value}")
+    grapple_drag_ids = list(_grapple_drag_ids or [])
+    if len(grapple_drag_ids) != len(set(grapple_drag_ids)) or any(
+        not isinstance(item, str) or not item for item in grapple_drag_ids
+    ):
+        raise CombatEngineError("grapple drag IDs must be unique non-empty strings")
+    drag_targets: list[dict[str, Any]] = []
+    dragged_target_ids: set[str] = set()
+    if grapple_drag_ids:
+        if _normalize_ruleset(value.get("ruleset")) != "2014" or not willing_movement:
+            raise CombatEngineError("grapple dragging requires willing 2014 movement")
+        active_sources = [
+            item
+            for item in value.get("grapple_sources", [])
+            if isinstance(item, dict)
+            and item.get("active", True)
+            and str(item.get("source_actor_id") or "") == actor_id_value
+            and str(item.get("id") or "") in grapple_drag_ids
+        ]
+        if {str(item.get("id") or "") for item in active_sources} != set(grapple_drag_ids):
+            raise CombatEngineError("grapple drag requires exact active source-owned grapple IDs")
+        target_ids = {str(item.get("target_actor_id") or "") for item in active_sources}
+        dragged_target_ids = set(target_ids)
+        drag_targets = [
+            item
+            for item in value.get("combatants", [])
+            if str(item.get("actor_id") or "") in target_ids
+        ]
+        if len(drag_targets) != len(target_ids) or any(
+            "grappled" not in _condition_set(item.get("conditions")) for item in drag_targets
+        ):
+            raise CombatEngineError("each dragged target must remain grappled by this source")
+        if positioning_mode == "agent":
+            facts = (spatial_facts or {}).get("grapple_drag")
+            fact_ids = {
+                str(item.get("grapple_id") or "")
+                for item in facts or []
+                if isinstance(item, dict)
+                and item.get("legal") is True
+                and item.get("remains_within_reach") is True
+            }
+            if fact_ids != set(grapple_drag_ids):
+                raise NeedsRulingError(
+                    "Agent grapple dragging requires a reviewed legal movement decision",
+                    missing=("movement.spatial_facts.grapple_drag",),
+                    ruling_kind="agent_dm_adjudication",
+                )
     if not value.get("active", True):
         raise CombatEngineError("combat is not active")
     if any(
@@ -5708,11 +6268,18 @@ def _spend_movement_uninterrupted(
     current = current_combatant(value)
     if current is None:
         raise CombatEngineError("combat has no current actor")
+    from .mounted_combat import relation_for_rider, riders_of
+
+    mounted_rider = relation_for_rider(value, actor_id_value)
+    if willing_movement and mounted_rider is not None:
+        raise CombatEngineError("a mounted rider moves through the mount's movement")
+    mounted_rider_ids = set(riders_of(value, actor_id_value))
     source_grant = dict(combatant.get("source_movement") or {}) if _source_movement_id else None
     if source_grant is not None and (
         source_grant.get("id") != _source_movement_id
         or source_grant.get("turn_token") != _combat_turn_token(value)
-        or not willing_movement or uses_aggressive_grant
+        or not willing_movement
+        or uses_aggressive_grant
     ):
         raise CombatEngineError("source movement requires its active source-bound grant")
     voluntary = willing_movement and (source_grant or {}).get("voluntary", True)
@@ -5741,7 +6308,7 @@ def _spend_movement_uninterrupted(
             raise CombatEngineError("Aggressive target must be a living combatant")
         if not _are_hostile(combatant, aggressive_target):
             raise CombatEngineError("Aggressive target is no longer hostile")
-        if not can_see(combatant, aggressive_target):
+        if not can_see(combatant, aggressive_target, value):
             raise CombatEngineError("Aggressive target is no longer visible")
     conditions = _condition_set(combatant.get("conditions"))
     if willing_movement and conditions & {
@@ -5796,6 +6363,11 @@ def _spend_movement_uninterrupted(
         if source_grant["payment"] == "movement":
             available = min(available, _remaining_movement_ft(combatant, travel_mode))
     origin = _position(combatant.get("position"))
+    stationary_high_jump = jump_kind == "high" and positioning_mode == "grid"
+    if stationary_high_jump and (
+        path is not None or (destination is not None and _position(destination) != origin)
+    ):
+        raise CombatEngineError("a Grid high jump records vertical movement at its landing cell")
     waypoints: list[tuple[float, float]] = []
     if path is not None:
         if not path:
@@ -5814,9 +6386,16 @@ def _spend_movement_uninterrupted(
         if segment_distance != distance:
             raise CombatEngineError("movement distance must equal the path segment distance")
     target_position = _position(destination)
+    if stationary_high_jump:
+        target_position = origin
     if destination is not None and target_position is None:
         raise CombatEngineError("destination must contain numeric x and y coordinates")
-    if path is None and origin is not None and target_position is not None:
+    if (
+        path is None
+        and origin is not None
+        and target_position is not None
+        and not stationary_high_jump
+    ):
         geometric_distance = _grid_distance(origin, target_position)
         if geometric_distance != distance:
             raise CombatEngineError(
@@ -5859,7 +6438,7 @@ def _spend_movement_uninterrupted(
             raise CombatEngineError(
                 "difficult_terrain_extra_ft must be a non-negative five-foot increment"
             )
-    if willing_movement and difficult_cells and distance > 0:
+    if willing_movement and difficult_cells and distance > 0 and not stationary_high_jump:
         if path is None and distance > 5:
             raise NeedsRulingError(
                 "a cell-by-cell path is required to settle difficult terrain",
@@ -5892,10 +6471,14 @@ def _spend_movement_uninterrupted(
                     ruling_kind="agent_dm_adjudication",
                 )
             space_result = agent_route(
-                value, combatant, agent_facts["space_segments"], distance,
-                voluntary=voluntary, check_endpoint=not _intermediate_destination,
+                value,
+                combatant,
+                agent_facts["space_segments"],
+                distance,
+                voluntary=voluntary,
+                check_endpoint=not _intermediate_destination,
             )
-        elif origin is not None and target_position is not None:
+        elif origin is not None and target_position is not None and not stationary_high_jump:
             points = [origin]
             if willing_movement or movement_mode == "forced":
                 for start, end in zip(
@@ -5911,19 +6494,44 @@ def _spend_movement_uninterrupted(
                     points.extend(segment[1:])
             else:
                 points.append(target_position)
+            route_encounter = value
+            excluded_route_ids = dragged_target_ids | mounted_rider_ids
+            if excluded_route_ids:
+                route_encounter = {
+                    **value,
+                    "combatants": [
+                        item
+                        for item in value.get("combatants", [])
+                        if str(item.get("actor_id") or "") not in excluded_route_ids
+                    ],
+                }
             space_result = grid_route(
-                value, combatant, points, voluntary=voluntary,
+                route_encounter,
+                combatant,
+                points,
+                voluntary=voluntary,
                 check_endpoint=not _intermediate_destination,
             )
-        elif distance:
+        elif distance and not stationary_high_jump:
             raise NeedsRulingError(
                 "grid movement requires an origin and destination to settle creature spaces",
                 missing=("movement.positions",),
             )
         if space_result is not None:
             terrain_cost = space_result["terrain_extra_ft"]
+    drag_surcharge = 0
+    if grapple_drag_ids and drag_targets:
+        from .spaces import SIZES
+
+        source_size_index = SIZES.index(str(combatant.get("size") or "medium"))
+        if any(
+            SIZES.index(str(item.get("size") or "medium")) > source_size_index - 2
+            for item in drag_targets
+        ):
+            drag_surcharge = distance
     movement_cost = (
         distance
+        + drag_surcharge
         + (distance if crawl else 0)
         + (distance if missing_aquatic_or_climb_speed else 0)
         + terrain_cost
@@ -5942,6 +6550,8 @@ def _spend_movement_uninterrupted(
             item
             for item in value.get("combatants", [])
             if item.get("actor_id") != actor_id_value
+            and str(item.get("actor_id") or "") not in dragged_target_ids
+            and str(item.get("actor_id") or "") not in mounted_rider_ids
             and _position(item.get("position")) == target_position
             and "dead" not in _condition_set(item.get("conditions"))
         ]
@@ -5969,12 +6579,7 @@ def _spend_movement_uninterrupted(
             raise CombatEngineError(
                 "a turned creature cannot willingly move within 30 feet of the turning source"
             )
-    if (
-        voluntary
-        and "turned" in conditions
-        and origin is not None
-        and target_position is not None
-    ):
+    if voluntary and "turned" in conditions and origin is not None and target_position is not None:
         source_id = str(turning.get("source_actor_id") or "")
         source = next(
             (
@@ -6029,7 +6634,7 @@ def _spend_movement_uninterrupted(
                     "frightened movement source is not in the encounter",
                     missing=("frightened_source_combatant",),
                 )
-            if not can_see(combatant, fear_source):
+            if not can_see(combatant, fear_source, value):
                 continue
             fear_source_position = _position(fear_source.get("position"))
             if fear_source_position is None:
@@ -6063,12 +6668,18 @@ def _spend_movement_uninterrupted(
     if source_grant is not None:
         source_grant["remaining"] -= movement_cost
         combatant["source_movement"] = source_grant
-        value["log"] = [*value.get("log", []), {
-            "type": "source_movement_prefix", "actor_id": actor_id_value,
-            "grant_id": source_grant["id"], "payment": source_grant["payment"],
-            "distance_ft": distance, "cost_ft": movement_cost,
-            "source": deepcopy(source_grant["source"]),
-        }][-100:]
+        value["log"] = [
+            *value.get("log", []),
+            {
+                "type": "source_movement_prefix",
+                "actor_id": actor_id_value,
+                "grant_id": source_grant["id"],
+                "payment": source_grant["payment"],
+                "distance_ft": distance,
+                "cost_ft": movement_cost,
+                "source": deepcopy(source_grant["source"]),
+            },
+        ][-100:]
     if destination is not None:
         from sagasmith_dnd.spatial import validate_position
 
@@ -6076,14 +6687,100 @@ def _spend_movement_uninterrupted(
             for point in path or [destination]:
                 validate_position(battle_map, point)
         combatant["position"] = deepcopy(destination)
+        if mounted_rider_ids:
+            from .mounted_combat import sync_mounted_riders
+
+            sync_mounted_riders(value, actor_id_value)
+    if grapple_drag_ids:
+        if positioning_mode == "grid":
+            if origin is None or target_position is None:
+                raise NeedsRulingError(
+                    "Grid grapple dragging requires the source's reviewed path",
+                    missing=("movement.path",),
+                )
+            source_points = (
+                waypoints[1:]
+                if path is not None
+                else _inferred_grid_waypoints(
+                    origin,
+                    target_position,
+                )
+            )
+            if source_points is None:
+                raise NeedsRulingError(
+                    "Grid grapple dragging requires the source's cell-by-cell path",
+                    missing=("movement.path",),
+                )
+            from .spaces import grid_route
+
+            moved_target_ids: set[str] = set()
+            for target in drag_targets:
+                target_id = str(target.get("actor_id") or "")
+                if target_id in moved_target_ids:
+                    continue
+                moved_target_ids.add(target_id)
+                start = _position(target.get("position"))
+                if start is None:
+                    raise NeedsRulingError(
+                        "Grid grapple dragging requires the target's reviewed token position",
+                        missing=("grapple_drag.target_position",),
+                    )
+                offset = (start[0] - origin[0], start[1] - origin[1])
+                translated = [
+                    (point[0] + offset[0], point[1] + offset[1])
+                    for point in [origin, *source_points]
+                ]
+                route_encounter = {
+                    **value,
+                    "combatants": [
+                        item
+                        for item in value.get("combatants", [])
+                        if str(item.get("actor_id") or "") != actor_id_value
+                        and str(item.get("actor_id") or "") not in dragged_target_ids
+                    ],
+                }
+                dragged = grid_route(
+                    route_encounter,
+                    target,
+                    translated,
+                    voluntary=False,
+                    check_endpoint=True,
+                )
+                destination_value = deepcopy(target.get("position") or {})
+                destination_value["x"], destination_value["y"] = translated[-1]
+                target["position"] = destination_value
+                target.update(dragged["final"])
+        else:
+            drag_facts = list((agent_facts or {}).get("grapple_drag") or [])
+            value.setdefault("spatial_events", [])
+            value["spatial_events"] = [
+                *value["spatial_events"],
+                *[
+                    {
+                        "kind": "grapple_drag",
+                        "source_actor_id": actor_id_value,
+                        "grapple_id": item["grapple_id"],
+                        "target_actor_id": item["target_id"],
+                        "distance_ft": distance,
+                        "decision_id": item["decision_id"],
+                        "reason": item["reason"],
+                    }
+                    for item in drag_facts
+                ],
+            ][-100:]
     if space_result is not None:
         from .spaces import SPACE_RULE
 
         combatant.update(space_result["final"])
-        value["log"] = [*value.get("log", []), {
-            "type": "movement_spaces", "actor_id": actor_id_value,
-            "mechanic_id": SPACE_RULE, **deepcopy(space_result),
-        }][-100:]
+        value["log"] = [
+            *value.get("log", []),
+            {
+                "type": "movement_spaces",
+                "actor_id": actor_id_value,
+                "mechanic_id": SPACE_RULE,
+                **deepcopy(space_result),
+            },
+        ][-100:]
     if (
         willing_movement
         and origin is not None
@@ -6116,6 +6813,34 @@ def _spend_movement_uninterrupted(
             *list(value.get("pending") or []),
             *agent_reaction_windows(value, combatant, agent_facts),
         ]
+    if willing_movement:
+        budget = dict(combatant.get("turn_budget") or {})
+        movement_history = list(budget.get("movement_history") or [])
+        route_points = (
+            []
+            if jump_kind == "high"
+            else waypoints
+            if path is not None
+            else (
+                [origin, target_position]
+                if origin is not None and target_position is not None
+                else []
+            )
+        )
+        movement_history.append(
+            {
+                "turn_token": _combat_turn_token(value),
+                "movement_mode": movement_mode,
+                "travel_mode": travel_mode,
+                "jump_kind": jump_kind,
+                "distance_ft": distance,
+                "origin": ({"x": origin[0], "y": origin[1]} if origin is not None else None),
+                "destination": deepcopy(destination),
+                "path": [{"x": point[0], "y": point[1]} for point in route_points],
+            }
+        )
+        budget["movement_history"] = movement_history[-40:]
+        combatant["turn_budget"] = budget
     if agent_facts is not None:
         value["log"] = [
             *list(value.get("log") or []),
@@ -6251,10 +6976,15 @@ def _force_move_directly(
             except CombatEngineError:
                 break
             if any(
-                overlap(candidate, footprint["space_ft"], _position(other["position"]),
-                        grid_space(other, _position(other["position"]), battle_map)["space_ft"])
+                overlap(
+                    candidate,
+                    footprint["space_ft"],
+                    _position(other["position"]),
+                    grid_space(other, _position(other["position"]), battle_map)["space_ft"],
+                )
                 for other in value["combatants"]
-                if other["actor_id"] != target_actor_id and other.get("position")
+                if other["actor_id"] != target_actor_id
+                and other.get("position")
                 and "dead" not in _condition_set(other.get("conditions"))
                 and not (target.get("can_share_space") or other.get("can_share_space"))
             ):
@@ -6565,6 +7295,7 @@ def resolve_common_action(
         "revive_steel_defender",
         "search",
         "shake_hypnotic_pattern",
+        "shake_poison",
         "shake_sleep",
         "influence",
         "improvise",
@@ -6576,11 +7307,15 @@ def resolve_common_action(
     supported.update(_stances.supported_actions())
     if action not in supported:
         raise CombatEngineError(f"unsupported common action: {action}")
-    if action == "shake_sleep" and _normalize_ruleset(value.get("ruleset")) != "2014":
-        raise CombatEngineError("shake_sleep requires the 2014 Sleep mechanic")
-    if action in {"influence", "study", "utilize"} and _normalize_ruleset(
-        value.get("ruleset")
-    ) != "2024":
+    if (
+        action in {"shake_poison", "shake_sleep"}
+        and _normalize_ruleset(value.get("ruleset")) != "2014"
+    ):
+        raise CombatEngineError(f"{action} requires a 2014 source mechanic")
+    if (
+        action in {"influence", "study", "utilize"}
+        and _normalize_ruleset(value.get("ruleset")) != "2024"
+    ):
         raise CombatEngineError(f"{action} requires the 2024 ruleset")
     current = current_combatant(value)
     combatant = next(
@@ -6804,6 +7539,7 @@ def resolve_common_action(
         "hide",
         "search",
         "shake_hypnotic_pattern",
+        "shake_poison",
         "shake_sleep",
         "influence",
         "improvise",
@@ -6975,7 +7711,11 @@ def trigger_readied_action(
 
 
 def resolve_readied_action_window(
-    encounter: dict[str, Any], *, actor_id_value: str, choice_id: str, release: bool,
+    encounter: dict[str, Any],
+    *,
+    actor_id_value: str,
+    choice_id: str,
+    release: bool,
     _spend_reaction: bool = True,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Consume the original Ready window; Runtime settles its stored response."""
@@ -7632,10 +8372,16 @@ def apply_healing_to_sheet(
             ),
         }
     effective_amount = max(0, requested_amount + bonus)
+    from .poisons import poison_healing_lock_amount
+
+    poison_locked_hp = poison_healing_lock_amount(value)
+    missing_hp = max(0, int(hp.get("max", 0) or 0) - before)
+    maximum_healable = max(0, missing_hp - min(missing_hp, poison_locked_hp))
+    permitted_amount = min(effective_amount, maximum_healable)
     try:
         from sagasmith_dnd.rule_primitives import apply_sheet_primitive
 
-        basic = apply_sheet_primitive(value, "healing.apply", {"amount": effective_amount})
+        basic = apply_sheet_primitive(value, "healing.apply", {"amount": permitted_amount})
     except ValueError as error:
         raise CombatEngineError(str(error)) from error
     value = basic["sheet"]
@@ -7648,6 +8394,8 @@ def apply_healing_to_sheet(
         "requested_amount": requested_amount,
         "bonus_amount": bonus,
         "effective_amount": effective_amount,
+        "poison_locked_hp": poison_locked_hp,
+        "permitted_amount": permitted_amount,
         "source": source,
     }
 
@@ -8189,7 +8937,7 @@ def _frightened_ability_check_disadvantage(
             missing=("frightened_source_visibility",),
             ruling_kind="source_or_scene_fact",
         )
-    return any(can_see(actor, source) for source in source_combatants)
+    return any(can_see(actor, source, encounter) for source in source_combatants)
 
 
 def _sheet_check_modifiers(
@@ -8260,6 +9008,18 @@ def resolve_actor_check(
     derived = actor_derived(actor)
     normalized_ruleset = _normalize_ruleset(ruleset or sheet.get("edition"))
     normalized_ability = str(ability).strip().casefold().replace(" ", "_")
+    reliable_talent = has_srd2014_rogue_feature(
+        sheet,
+        feature_id="dnd5e.content.srd2014.feature.rogue-reliable-talent",
+        mechanic_id="dnd5e.core.check.reliable_talent",
+        minimum_level=11,
+    )
+    slippery_mind = has_srd2014_rogue_feature(
+        sheet,
+        feature_id="dnd5e.content.srd2014.feature.rogue-slippery-mind",
+        mechanic_id="dnd5e.core.save.slippery_mind",
+        minimum_level=15,
+    )
     if passive and (normalized_ruleset != "2014" or kind not in ABILITY_CHECK_KINDS):
         raise CombatEngineError("passive checks require a 2014 ability check")
     if passive and (
@@ -8269,8 +9029,11 @@ def resolve_actor_check(
         raise CombatEngineError("passive checks require a known ability or skill")
     if skill_ability is not None:
         skill_ability = _long_ability_name(skill_ability)
-        if (kind not in ABILITY_CHECK_KINDS or normalized_ability not in SKILL_ABILITIES
-                or skill_ability not in ABILITY_NAMES):
+        if (
+            kind not in ABILITY_CHECK_KINDS
+            or normalized_ability not in SKILL_ABILITIES
+            or skill_ability not in ABILITY_NAMES
+        ):
             raise CombatEngineError("skill_ability requires a skill and a valid ability")
     conditions = _condition_set(sheet.get("conditions"))
     exhaustion = int(sheet.get("combat", {}).get("exhaustion", 0) or 0)
@@ -8279,22 +9042,31 @@ def resolve_actor_check(
     passive_sense_failure = []
     if passive:
         facts = dict(rules.facts) if rules else {}
-        for condition, reliance in (("blinded", "relies_on_sight"),
-                                    ("deafened", "relies_on_hearing")):
+        for condition, reliance in (
+            ("blinded", "relies_on_sight"),
+            ("deafened", "relies_on_hearing"),
+        ):
             if condition not in conditions:
                 continue
             if type(facts.get(reliance)) is not bool:
                 raise NeedsRulingError(
                     "a passive check requires its sensory task classification",
-                    missing=(reliance,), ruling_kind="source_or_scene_fact",
+                    missing=(reliance,),
+                    ruling_kind="source_or_scene_fact",
                 )
             if facts[reliance]:
                 passive_sense_failure.append(condition)
+    sight_perception_failure: str | None = None
+    sight_vision_profile: dict[str, Any] | None = None
     modifier_save_purpose = save_purpose
     if modifier_save_purpose is None and rules is not None:
         modifier_save_purpose = str(dict(rules.facts).get("save_purpose") or "") or None
     effect_roll_bonus, equipment_disadvantage, poisoned = _sheet_check_modifiers(
-        sheet, derived, kind=kind, ability=ability, save_purpose=modifier_save_purpose,
+        sheet,
+        derived,
+        kind=kind,
+        ability=ability,
+        save_purpose=modifier_save_purpose,
         skill_ability=skill_ability,
     )
     effect_advantage, _effect_disadvantage = active_effect_roll_advantage(
@@ -8346,6 +9118,52 @@ def resolve_actor_check(
     if armor_stealth_disadvantage:
         disadvantage = True
     boundary_ids = ["dnd5e.core.check.passive"] if passive else []
+    if reliable_talent and kind in ABILITY_CHECK_KINDS:
+        boundary_ids.append("dnd5e.core.check.reliable_talent")
+    if slippery_mind and kind == "save" and _long_ability_name(ability) == "wisdom":
+        boundary_ids.append("dnd5e.core.save.slippery_mind")
+    if (
+        normalized_ruleset == "2014"
+        and kind in ABILITY_CHECK_KINDS
+        and normalized_ability == "perception"
+    ):
+        viewer = next(
+            (
+                item
+                for item in [*(encounter or {}).get("combatants", [])]
+                if str(item.get("actor_id") or "") == actor_id(actor)
+            ),
+            None,
+        )
+        if viewer is not None:
+            vision = vision_profile_2014(encounter, viewer, viewer)
+            facts = dict(rules.facts) if rules else {}
+            if vision is None and encounter.get("positioning_mode") == "agent":
+                raw_vision_facts = facts.get("vision_facts")
+                if raw_vision_facts is not None:
+                    vision = resolve_agent_vision_2014(viewer, raw_vision_facts)
+            if vision is not None or encounter.get("positioning_mode") == "agent":
+                if type(facts.get("relies_on_sight")) is not bool:
+                    raise NeedsRulingError(
+                        "Perception requires a source-grounded sight-reliance fact",
+                        missing=("perception.relies_on_sight",),
+                        ruling_kind="source_or_scene_fact",
+                    )
+                if facts["relies_on_sight"]:
+                    if vision is None:
+                        raise NeedsRulingError(
+                            "Agent Perception requires bounded illumination and obscuration facts",
+                            missing=("perception.vision_facts",),
+                            ruling_kind="agent_dm_adjudication",
+                        )
+                    sight_vision_profile = vision
+                    boundary_ids.append("dnd5e.core.vision.light_obscuration_2014")
+                    if (
+                        vision.get("obscuration") == "heavily" and not vision.get("blindsight_used")
+                    ) or not vision["visible"]:
+                        sight_perception_failure = "sight_blocked_by_light_or_obscuration"
+                    elif vision.get("perception_disadvantage"):
+                        disadvantage = True
     from .rage import MECHANIC as RAGE_MECHANIC
     from .rage import benefits as rage_benefits
 
@@ -8357,8 +9175,11 @@ def resolve_actor_check(
         boundary_ids.append(RAGE_MECHANIC)
     from .spaces import SPACE_RULE, squeezing
 
-    if (kind == "save" and _long_ability_name(ability) == "dexterity"
-            and squeezing(encounter, actor_id(actor), sheet)):
+    if (
+        kind == "save"
+        and _long_ability_name(ability) == "dexterity"
+        and squeezing(encounter, actor_id(actor), sheet)
+    ):
         disadvantage = True
         boundary_ids.append(SPACE_RULE)
     dodge_advantage = kind == "save" and encounter_dodge_save_advantage(
@@ -8555,8 +9376,10 @@ def resolve_actor_check(
         from .sunlight import SUNLIGHT_MECHANIC, sunlight_disadvantage
 
         sunlight = sunlight_disadvantage(
-            sheet, dict(rules.facts).get("_sunlight") if rules else None,
-            actor_id=actor_id(actor), perception=True,
+            sheet,
+            dict(rules.facts).get("_sunlight") if rules else None,
+            actor_id=actor_id(actor),
+            perception=True,
         )
         if sunlight is not None:
             boundary_ids.append(SUNLIGHT_MECHANIC)
@@ -8577,14 +9400,26 @@ def resolve_actor_check(
             boundary_ids.append("dnd5e.core.check.help")
 
     def with_rule_receipts(result: dict[str, Any]) -> dict[str, Any]:
-        if passive_sense_failure:
+        if passive_sense_failure or sight_perception_failure:
+            prior_total = result.get("total")
+            reason = ", ".join(
+                [
+                    *passive_sense_failure,
+                    *([sight_perception_failure] if sight_perception_failure else []),
+                ]
+            )
             result.update(
-                passive_score=result["total"], total=None, success=False,
-                automatic_failure=True, reason=", ".join(passive_sense_failure),
+                **({"passive_score": prior_total} if passive else {}),
+                total=None,
+                success=False,
+                automatic_failure=True,
+                reason=reason,
             )
         result["effect_roll_bonus"] = effect_roll_bonus
         result["equipment_disadvantage"] = equipment_disadvantage
         result["armor_stealth_disadvantage"] = armor_stealth_disadvantage
+        if sight_vision_profile is not None:
+            result["vision"] = deepcopy(sight_vision_profile)
         if helped_by:
             result["helped_by"] = helped_by
             result["advantage_source"] = "help"
@@ -8599,6 +9434,22 @@ def resolve_actor_check(
 
         result = settle_roll(actor_id(actor), sheet, result, rng=rng)
         return settle_save(actor_id(actor), sheet, result)
+
+    if sight_perception_failure and not passive:
+        return with_rule_receipts(
+            {
+                "kind": "ability",
+                "dc": dc,
+                "natural": None,
+                "rolls": [],
+                "critical": False,
+                "fumble": False,
+                "total": None,
+                "success": False,
+                "automatic_failure": True,
+                "reason": sight_perception_failure,
+            }
+        )
 
     abilities = dict(sheet.get("abilities") or {})
     ability_scores = effective_ability_scores(sheet)
@@ -8637,9 +9488,14 @@ def resolve_actor_check(
     roll_bonus = int(exhaustion_adjustment["bonus"])
     disadvantage = bool(exhaustion_adjustment["disadvantage"])
     if passive and normalized_ability == "perception":
-        roll_bonus += int(derived.get("passive_perception_bonus", dict(
-            dict(sheet.get("traits") or {}).get("senses") or {}
-        ).get("passive_perception_bonus", 0)))
+        roll_bonus += int(
+            derived.get(
+                "passive_perception_bonus",
+                dict(dict(sheet.get("traits") or {}).get("senses") or {}).get(
+                    "passive_perception_bonus", 0
+                ),
+            )
+        )
     derived_skills = dict(derived.get("skills") or {})
     if kind in ABILITY_CHECK_KINDS and normalized_ability in derived_skills:
         score_ability = skill_ability or SKILL_ABILITIES[normalized_ability]
@@ -8663,6 +9519,7 @@ def resolve_actor_check(
                 disadvantage=disadvantage,
                 kind="ability",
                 reroll_ones=_has_halfling_lucky(sheet),
+                reliable_talent=reliable_talent and skill_is_proficient,
                 rng=rng,
                 passive=passive,
             )
@@ -8676,7 +9533,9 @@ def resolve_actor_check(
         )
     )
     if kind == "save" and isinstance(entry, dict):
-        proficient = bool(entry.get("save_proficient", False))
+        proficient = bool(entry.get("save_proficient", False)) or (
+            slippery_mind and long_ability == "wisdom"
+        )
         bonus = int(entry.get("bonus", 0) or 0) + roll_bonus
     else:
         bonus = roll_bonus
@@ -8715,10 +9574,28 @@ def resolve_actor_check(
             disadvantage=disadvantage,
             kind="save" if kind == "save" else "ability",
             reroll_ones=_has_halfling_lucky(sheet),
+            reliable_talent=(reliable_talent and kind in ABILITY_CHECK_KINDS and proficient),
             rng=rng,
             passive=passive,
         )
     )
+
+
+def apply_srd2014_stroke_of_luck_to_check(result: dict[str, Any]) -> dict[str, Any]:
+    """Apply a chosen 2014 Stroke of Luck to a previously failed ability check."""
+    value = deepcopy(result)
+    if value.get("kind") not in {"ability", "check"} or value.get("success") is not False:
+        raise CombatEngineError("Stroke of Luck requires a failed ability check")
+    natural = value.get("natural")
+    if isinstance(natural, bool) or not isinstance(natural, int) or not 1 <= natural <= 20:
+        raise CombatEngineError("Stroke of Luck requires a recorded ability-check d20")
+    before = natural
+    value["natural"] = 20
+    value["total"] = int(value.get("total", 0)) + (20 - before)
+    value["success"] = value["total"] >= int(value.get("dc", 0))
+    value["stroke_of_luck_applied"] = True
+    value["stroke_of_luck_original_natural"] = before
+    return value
 
 
 def resolve_actor_group_check(
@@ -8776,8 +9653,10 @@ def resolve_actor_group_check(
 
             context = normalized_rules.get(actor_id(actor))
             sunlight_disadvantage(
-                sheet, dict(context.facts).get("_sunlight") if context else None,
-                actor_id=actor_id(actor), perception=True,
+                sheet,
+                dict(context.facts).get("_sunlight") if context else None,
+                actor_id=actor_id(actor),
+                perception=True,
             )
         if _normalize_ruleset(sheet.get("edition")) == "2014" and "frightened" in _condition_set(
             sheet.get("conditions")
@@ -8961,8 +9840,10 @@ def resolve_save_damage_to_sheets(
                 "rule_receipts": [
                     *list(reduction_settlement.get("rule_receipts") or []),
                     *core_receipts(
-                        rules, ["dnd5e.core.combat.underwater"]
-                        if damaged_result and "environment_receipts" in damaged_result else [],
+                        rules,
+                        ["dnd5e.core.combat.underwater"]
+                        if damaged_result and "environment_receipts" in damaged_result
+                        else [],
                         "damage.fire.apply",
                     ),
                 ],
@@ -9041,8 +9922,10 @@ def resolve_actor_contest(
             from .sunlight import sunlight_disadvantage
 
             sunlight_disadvantage(
-                sheet, dict(context.facts).get("_sunlight") if context else None,
-                actor_id=actor_id(actor), perception=True,
+                sheet,
+                dict(context.facts).get("_sunlight") if context else None,
+                actor_id=actor_id(actor),
+                perception=True,
             )
         if _normalize_ruleset(sheet.get("edition")) == "2014" and "frightened" in _condition_set(
             sheet.get("conditions")
@@ -9350,6 +10233,7 @@ def end_turn(
             bonus_action=1,
             reaction=1,
             movement_spent=0,
+            movement_history=[],
             extra_movement_granted=0,
             object_interaction=1,
             attack_budget=0,
@@ -9688,10 +10572,20 @@ def _disengaged(combatant: dict[str, Any]) -> bool:
     return bool(dict(combatant.get("turn_flags") or {}).get("disengaged"))
 
 
-def _can_make_opportunity_attack(threat: dict[str, Any], moving: dict[str, Any]) -> bool:
+def _can_make_opportunity_attack(
+    threat: dict[str, Any],
+    moving: dict[str, Any],
+    encounter: dict[str, Any] | None = None,
+    *,
+    visibility_profile: dict[str, Any] | None = None,
+) -> bool:
     if threat.get("actor_id") == moving.get("actor_id"):
         return False
-    if not can_see(threat, moving):
+    if not (
+        bool(visibility_profile.get("visible"))
+        if visibility_profile is not None
+        else can_see(threat, moving, encounter)
+    ):
         # Whether a particular creature can perceive a hidden or invisible
         # mover is a DM fact unless visible_to_actor_ids records it explicitly.
         return False
@@ -9723,8 +10617,320 @@ def _are_hostile(left: dict[str, Any], right: dict[str, Any]) -> bool:
     return {left_disposition, right_disposition} == {"hostile", "friendly"}
 
 
-def can_see(viewer: dict[str, Any], subject: dict[str, Any]) -> bool:
-    """Resolve only recorded visibility, defaulting ordinary creatures to visible."""
+def _vision_line_cells(start: tuple[int, int], end: tuple[int, int]) -> list[tuple[int, int]]:
+    """Return the deterministic grid ray between two occupied token anchors."""
+    x0, y0 = start
+    x1, y1 = end
+    dx, dy = abs(x1 - x0), abs(y1 - y0)
+    sx, sy = (1 if x0 < x1 else -1), (1 if y0 < y1 else -1)
+    error = dx - dy
+    result = []
+    while True:
+        result.append((x0, y0))
+        if (x0, y0) == (x1, y1):
+            return result
+        twice = error * 2
+        if twice > -dy:
+            error -= dy
+            x0 += sx
+        if twice < dx:
+            error += dx
+            y0 += sy
+
+
+def vision_profile_2014(
+    encounter: dict[str, Any] | None,
+    viewer: dict[str, Any],
+    subject: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Settle Grid light, obscuration, and alternative senses from the frozen map."""
+    if not isinstance(encounter, dict) or encounter.get("ruleset") != "2014":
+        return None
+    battle_map = dict(encounter.get("battle_map") or {})
+    if not any(
+        key in battle_map for key in ("ambient_illumination", "light_sources", "vision_cells")
+    ):
+        return None
+    viewer_position = _position(viewer.get("position"))
+    subject_position = _position(subject.get("position"))
+    if viewer_position is None or subject_position is None:
+        return {
+            "visible": False,
+            "reason": "position_unavailable",
+            "mechanic_id": "dnd5e.core.vision.light_obscuration_2014",
+        }
+    from .spaces import SPACE_FT, distance_between
+
+    viewer_size = str(viewer.get("size") or "medium")
+    subject_size = str(subject.get("size") or "medium")
+    distance = distance_between(
+        viewer_position,
+        float(viewer.get("space_ft") or SPACE_FT[viewer_size]),
+        subject_position,
+        float(subject.get("space_ft") or SPACE_FT[subject_size]),
+    )
+    raw_senses = viewer.get("senses")
+    if not isinstance(raw_senses, dict) and isinstance(viewer.get("sheet"), dict):
+        raw_senses = dict(actor_sheet(viewer).get("traits") or {}).get("senses")
+    senses = dict(raw_senses or {})
+
+    def sense_range(name: str) -> int:
+        value = senses.get(name, 0)
+        return max(0, int(value)) if isinstance(value, int) and not isinstance(value, bool) else 0
+
+    darkvision = sense_range("darkvision")
+    blindsight = sense_range("blindsight")
+    truesight = sense_range("truesight")
+    ray = _vision_line_cells(
+        (int(viewer_position[0]), int(viewer_position[1])),
+        (int(subject_position[0]), int(subject_position[1])),
+    )
+    vision_cells = {
+        (int(item["x"]), int(item["y"])): item
+        for item in battle_map.get("vision_cells", [])
+        if isinstance(item, dict)
+    }
+    cell_facts = [vision_cells.get(point, {}) for point in ray]
+    opaque = any(bool(item.get("opaque")) for item in cell_facts)
+    heavy = any(item.get("obscuration") == "heavily" for item in cell_facts)
+    lightly = any(item.get("obscuration") == "lightly" for item in cell_facts)
+    magical_darkness = any(bool(item.get("magical_darkness")) for item in cell_facts)
+    target_facts = vision_cells.get((int(subject_position[0]), int(subject_position[1])), {})
+    level = target_facts.get("illumination") or battle_map.get("ambient_illumination") or "bright"
+    rank = {"dark": 0, "dim": 1, "bright": 2}
+    cell_ft = int(dict(battle_map.get("grid") or {}).get("cell_ft", 5) or 5)
+    for source in battle_map.get("light_sources", []):
+        if not isinstance(source, dict):
+            continue
+        position = dict(source.get("position") or {})
+        source_distance = (
+            max(
+                abs(int(position.get("x", 0)) - int(subject_position[0])),
+                abs(int(position.get("y", 0)) - int(subject_position[1])),
+            )
+            * cell_ft
+        )
+        source_level = (
+            "bright"
+            if source_distance <= int(source.get("bright_radius_ft", 0) or 0)
+            else "dim"
+            if source_distance <= int(source.get("dim_radius_ft", 0) or 0)
+            else "dark"
+        )
+        if rank[source_level] > rank[level]:
+            level = source_level
+    used_blindsight = blindsight > 0 and distance <= blindsight
+    used_truesight = truesight > 0 and distance <= truesight
+    used_darkvision = (
+        level == "dark" and not magical_darkness and darkvision > 0 and distance <= darkvision
+    )
+    if used_darkvision:
+        level = "dim"
+    visible = not opaque and not (heavy and not used_blindsight)
+    if magical_darkness and not (used_blindsight or used_truesight):
+        visible = False
+    if level == "dark" and not (used_blindsight or used_truesight):
+        visible = False
+    return {
+        "visible": visible,
+        "distance_ft": distance,
+        "light_level": level,
+        "obscuration": "heavily" if heavy else "lightly" if lightly else "none",
+        "magical_darkness": magical_darkness,
+        "perception_disadvantage": bool(visible and (lightly or level == "dim")),
+        "darkvision_used": used_darkvision,
+        "blindsight_used": used_blindsight,
+        "truesight_used": used_truesight,
+        "color_detail": "grayscale" if used_darkvision else "full_color",
+        "blindsense_detects_location": blindsense_detects_location(viewer, subject, encounter),
+        "mechanic_id": "dnd5e.core.vision.light_obscuration_2014",
+        "source_cells": [
+            {
+                "x": item["x"],
+                "y": item["y"],
+                "source_ref": item["source_ref"],
+                "source_excerpt": item["source_excerpt"],
+            }
+            for item in cell_facts
+            if item.get("source_ref")
+        ],
+    }
+
+
+def resolve_agent_vision_2014(
+    viewer: dict[str, Any], facts: dict[str, Any], *, subject: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Derive sight from bounded Agent scene observations, never a visibility verdict."""
+    required = {
+        "distance_ft",
+        "illumination",
+        "obscuration",
+        "magical_darkness",
+        "opaque_boundary",
+        "scene_ref",
+        "scene_excerpt",
+    }
+    if not isinstance(facts, dict) or set(facts) != required:
+        raise CombatEngineError("Agent vision facts require the exact bounded scene fields")
+    distance = facts.get("distance_ft")
+    if (
+        isinstance(distance, bool)
+        or not isinstance(distance, int)
+        or not 0 <= distance <= 1_000_000
+    ):
+        raise CombatEngineError("Agent vision distance_ft must be a bounded non-negative integer")
+    illumination = facts.get("illumination")
+    if illumination not in {"bright", "dim", "dark"}:
+        raise CombatEngineError("Agent vision illumination must be bright, dim, or dark")
+    obscuration = facts.get("obscuration")
+    if obscuration not in {"none", "lightly", "heavily"}:
+        raise CombatEngineError("Agent vision obscuration must be none, lightly, or heavily")
+    for key in ("magical_darkness", "opaque_boundary"):
+        if not isinstance(facts.get(key), bool):
+            raise CombatEngineError(f"Agent vision {key} must be boolean")
+    for key in ("scene_ref", "scene_excerpt"):
+        value = facts.get(key)
+        if not isinstance(value, str) or not value.strip() or len(value) > 2000:
+            raise CombatEngineError(f"Agent vision {key} must be non-empty bounded text")
+
+    senses = dict(viewer.get("senses") or {})
+    if not senses and isinstance(viewer.get("sheet"), dict):
+        senses = dict(actor_sheet(viewer).get("traits") or {}).get("senses", {})
+
+    def sense_range(name: str) -> int:
+        value = senses.get(name, 0)
+        return max(0, int(value)) if isinstance(value, int) and not isinstance(value, bool) else 0
+
+    darkvision = sense_range("darkvision")
+    blindsight = sense_range("blindsight")
+    truesight = sense_range("truesight")
+    in_blindsight = blindsight > 0 and distance <= blindsight
+    in_truesight = truesight > 0 and distance <= truesight
+    darkvision_applies = (
+        illumination == "dark"
+        and not facts["magical_darkness"]
+        and darkvision > 0
+        and distance <= darkvision
+    )
+    perceived_light = "dim" if darkvision_applies else illumination
+    visible = not facts["opaque_boundary"]
+    if obscuration == "heavily" and not in_blindsight:
+        visible = False
+    if facts["magical_darkness"] and not (in_blindsight or in_truesight):
+        visible = False
+    if perceived_light == "dark" and not (in_blindsight or in_truesight):
+        visible = False
+    if subject is not None:
+        viewer_conditions = viewer.get("conditions")
+        if "blinded" in _condition_set(
+            viewer_conditions
+            if viewer_conditions is not None
+            else actor_sheet(viewer).get("conditions")
+        ):
+            visible = False
+        visible_to = subject.get("visible_to_actor_ids")
+        if isinstance(visible_to, list) and actor_id(viewer) not in {
+            str(item) for item in visible_to
+        }:
+            visible = False
+        if subject.get("hidden") and not (
+            isinstance(visible_to, list) and actor_id(viewer) in {str(item) for item in visible_to}
+        ):
+            visible = False
+        subject_conditions = subject.get("conditions")
+        if "invisible" in _condition_set(
+            subject_conditions
+            if subject_conditions is not None
+            else actor_sheet(subject).get("conditions")
+        ) and not (in_blindsight or in_truesight):
+            visible = False
+    return {
+        "visible": visible,
+        "distance_ft": distance,
+        "light_level": perceived_light,
+        "obscuration": obscuration,
+        "magical_darkness": facts["magical_darkness"],
+        "perception_disadvantage": bool(
+            visible and (obscuration == "lightly" or perceived_light == "dim")
+        ),
+        "darkvision_used": darkvision_applies,
+        "blindsight_used": in_blindsight,
+        "truesight_used": in_truesight,
+        "color_detail": "grayscale" if darkvision_applies else "full_color",
+        "mechanic_id": "dnd5e.core.vision.light_obscuration_2014",
+        "scene_ref": facts["scene_ref"],
+        "scene_excerpt": facts["scene_excerpt"],
+    }
+
+
+def blindsense_detects_location(
+    viewer: dict[str, Any],
+    subject: dict[str, Any],
+    encounter: dict[str, Any] | None,
+    *,
+    spatial_facts: dict[str, Any] | None = None,
+) -> bool:
+    """Detect a hidden or invisible creature's location within Rogue Blindsense."""
+    if not isinstance(encounter, dict) or encounter.get("ruleset") != "2014":
+        return False
+    viewer_sheet = viewer.get("sheet")
+    if not isinstance(viewer_sheet, dict):
+        return False
+    if "deafened" in _condition_set(viewer_sheet.get("conditions")):
+        return False
+    if not has_srd2014_rogue_feature(
+        viewer_sheet,
+        feature_id="dnd5e.content.srd2014.feature.rogue-blindsense",
+        mechanic_id="dnd5e.core.sense.blindsense",
+        minimum_level=14,
+    ):
+        return False
+    subject_sheet = subject.get("sheet")
+    subject_conditions = _condition_set(
+        subject.get("conditions")
+        if "conditions" in subject
+        else subject_sheet.get("conditions")
+        if isinstance(subject_sheet, dict)
+        else []
+    )
+    if not subject.get("hidden", False) and "invisible" not in subject_conditions:
+        return False
+    positioning_mode = encounter.get("positioning_mode", "grid")
+    if positioning_mode == "agent":
+        facts = dict(spatial_facts or {})
+        required = {"attacker_can_hear_target", "target_within_10_ft"}
+        missing = required - set(facts)
+        if missing:
+            raise NeedsRulingError(
+                "Agent Blindsense needs sourced hearing and distance facts",
+                missing=tuple(f"attack.spatial_facts.{field}" for field in sorted(missing)),
+            )
+        if any(not isinstance(facts.get(field), bool) for field in required):
+            raise CombatEngineError("Agent Blindsense hearing and distance facts must be boolean")
+        return bool(facts["attacker_can_hear_target"] and facts["target_within_10_ft"])
+    if positioning_mode != "grid":
+        return False
+    viewer_position = _position(viewer.get("position"))
+    subject_position = _position(subject.get("position"))
+    if viewer_position is None or subject_position is None:
+        return False
+    from .spaces import SPACE_FT, distance_between
+
+    distance = distance_between(
+        viewer_position,
+        float(viewer.get("space_ft") or SPACE_FT[str(viewer.get("size") or "medium")]),
+        subject_position,
+        float(subject.get("space_ft") or SPACE_FT[str(subject.get("size") or "medium")]),
+    )
+    return distance <= 10
+
+
+def can_see(
+    viewer: dict[str, Any],
+    subject: dict[str, Any],
+    encounter: dict[str, Any] | None = None,
+) -> bool:
+    """Resolve 2014 Grid visibility when map facts exist; retain explicit legacy facts otherwise."""
     viewer_conditions = (
         viewer.get("conditions")
         if "conditions" in viewer
@@ -9734,15 +10940,27 @@ def can_see(viewer: dict[str, Any], subject: dict[str, Any]) -> bool:
         return False
     visible_to = subject.get("visible_to_actor_ids")
     if isinstance(visible_to, list):
-        return actor_id(viewer) in {str(item) for item in visible_to}
-    if subject.get("hidden", False):
+        if actor_id(viewer) not in {str(item) for item in visible_to}:
+            return False
+    profile = vision_profile_2014(encounter, viewer, subject)
+    if isinstance(visible_to, list) and profile is None:
+        return True
+    if profile is not None and not profile["visible"]:
+        return False
+    if subject.get("hidden", False) and not (
+        isinstance(visible_to, list) and actor_id(viewer) in {str(item) for item in visible_to}
+    ):
         return False
     conditions = (
         subject.get("conditions")
         if "conditions" in subject
         else actor_sheet(subject).get("conditions")
     )
-    return "invisible" not in _condition_set(conditions)
+    if "invisible" not in _condition_set(conditions):
+        return True
+    if profile is not None:
+        return bool(profile.get("truesight_used") or profile.get("blindsight_used"))
+    return False
 
 
 def _attack_range(
@@ -9759,13 +10977,15 @@ def _attack_range(
         from .water import water_state
 
         if (
-            attack_mode == "ranged" and not weapon.get("spell_attack")
+            attack_mode == "ranged"
+            and not weapon.get("spell_attack")
             and water_state(actor_sheet(attacker))["underwater"]
             and type(spatial_facts.get("long_range")) is not bool
         ):
             raise NeedsRulingError(
                 "underwater ranged attacks require explicit long_range spatial facts",
-                missing=("attack.spatial_facts.long_range",), ruling_kind="agent_dm_adjudication",
+                missing=("attack.spatial_facts.long_range",),
+                ruling_kind="agent_dm_adjudication",
             )
         return {
             "enforced": True,
@@ -9784,12 +11004,17 @@ def _attack_range(
         from .spaces import distance_between, grid_space
 
         battle_map = encounter.get("battle_map") or {}
-        left = grid_space({"size": effective_size(actor_sheet(attacker))},
-                          attacker_position, battle_map)
-        right = grid_space({"size": effective_size(actor_sheet(target))},
-                           target_position, battle_map)
+        left = grid_space(
+            {"size": effective_size(actor_sheet(attacker))}, attacker_position, battle_map
+        )
+        right = grid_space(
+            {"size": effective_size(actor_sheet(target))}, target_position, battle_map
+        )
         distance = distance_between(
-            attacker_position, left["space_ft"], target_position, right["space_ft"],
+            attacker_position,
+            left["space_ft"],
+            target_position,
+            right["space_ft"],
         )
     range_data = (
         weapon.get("range_ft")

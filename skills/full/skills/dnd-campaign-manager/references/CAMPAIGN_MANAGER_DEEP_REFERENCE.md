@@ -276,6 +276,25 @@ setup. During live play, pass the complete new list as `prepared_spell_ids` on
 that member of the atomic `campaign_change(action="party_rest")` transaction;
 do not toggle preparations one by one.
 
+For a 2014 Long Rest, report the member's actual daily intake with
+`survival_intake`: `food_lb`, `water_gallons`, and, when used, bundled Rations
+by `item_id` and `quantity`. Include the bounded weather decision fact whenever
+`hot_weather` is true. Never send `food_and_drink` as a Boolean. If campaign time
+crosses a day boundary, every 2014 character needs an intake record for that
+day; an incomplete or skipped day returns a pending ruling and does not commit.
+
+For 2014 overland travel, use `campaign_change(action="party_travel")` with a
+bounded route fact, exact miles, pace, and every 2014 character's actual daily
+food and water intake. Keep a multi-request trip active with the same travel ID,
+pace, and participants; end it before changing any of those. Fast pace reduces
+travelers' passive Perception by 5, and a traveler can use stealth while moving
+only at slow pace. Difficult terrain doubles the time for the declared distance.
+Each completed hour after the first eight resolves a Constitution save in the
+atomic travel transaction; never enter a caller-authored save or exhaustion
+outcome. Split a journey at the campaign-day boundary so survival intake settles
+once for each complete day. If a mount, vehicle, vessel, wind, current, or route
+fact is absent or ambiguous, stop for a ruling rather than estimating its speed.
+
 For milestone advancement, record and settle the source-bound award immediately
 when its trigger occurs, before entering a later sourced scene. For XP advancement,
 use one atomic `campaign_change(action="experience_award")` with the exact

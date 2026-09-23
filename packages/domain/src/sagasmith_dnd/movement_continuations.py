@@ -25,17 +25,22 @@ def _route(segments):
 
 
 def _window(mover, threat_id, offset, weapon_ids, **fields):
+    target_ids = fields.pop("target_actor_ids", [mover["actor_id"]])
     return {
         "id": f"reaction-{uuid4().hex}",
         "kind": "reaction",
         "actor_id": threat_id,
         "target_id": mover["actor_id"],
+        "target_actor_ids": list(target_ids),
         "target_visible": True,
         "event": "movement.leave_reach",
         "trigger": "opportunity_attack",
         "opportunity_attack_weapon_ids": weapon_ids,
         "movement_offset_ft": offset,
-        "candidates": [{"id": "opportunity_attack"}, {"id": "decline"}],
+        "candidates": [
+            {"id": "opportunity_attack", "target_actor_ids": list(target_ids)},
+            {"id": "decline"},
+        ],
         "deadline": "before_commit",
         "status": "pending",
         **fields,
@@ -49,9 +54,17 @@ def grid_reaction_windows(encounter, mover, segments):
     points = _route(segments)
     windows = []
     traveled = 0
+    from .mounted_combat import riders_of
+
+    moved_actor_ids = [str(mover["actor_id"]), *riders_of(encounter, str(mover["actor_id"]))]
     for index, (start, end) in enumerate(zip(points, points[1:])):
         for threat in encounter.get("combatants", []):
-            if not engine._can_make_opportunity_attack(threat, mover):
+            targets = [
+                item for item in encounter.get("combatants", [])
+                if str(item.get("actor_id") or "") in moved_actor_ids
+                and engine._can_make_opportunity_attack(threat, item, encounter)
+            ]
+            if not targets:
                 continue
             position = engine._position(threat.get("position"))
             if position is None:
@@ -82,6 +95,7 @@ def grid_reaction_windows(encounter, mover, segments):
                         threat["actor_id"],
                         traveled + engine._grid_distance(start, boundary),
                         [option["weapon_id"] for option in options if option["reach_ft"] == reach],
+                        target_actor_ids=[str(item["actor_id"]) for item in targets],
                         target_position=_point(boundary),
                         opportunity_attack_reach_ft=reach,
                         movement_segment_index=index,
@@ -116,6 +130,11 @@ def agent_reaction_windows(encounter, mover, facts):
             "distance_ft",
             "weapon_ids",
             "difficult_terrain_extra_ft",
+            "attacker_vision",
+            "target_vision",
+            "targetable",
+            "in_range",
+            "cover_degree",
         }:
             raise engine.CombatEngineError("invalid Agent movement boundary")
         threat_id = boundary.get("actor_id")
@@ -180,7 +199,46 @@ def agent_reaction_windows(encounter, mover, facts):
         if key in seen:
             raise engine.CombatEngineError("duplicate movement boundary")
         seen.add(key)
-        if not engine._can_make_opportunity_attack(threat, mover):
+        attack_spatial_facts = None
+        visibility_profile = None
+        if encounter.get("ruleset") == "2014":
+            if any(
+                field not in boundary
+                for field in (
+                    "attacker_vision", "target_vision", "targetable", "in_range", "cover_degree"
+                )
+            ):
+                raise engine.NeedsRulingError(
+                    "2014 Agent opportunity attacks require bounded visibility, range, and cover",
+                    missing=("movement.boundary.attack_spatial_facts",),
+                    ruling_kind="agent_dm_adjudication",
+                )
+            if type(boundary["targetable"]) is not bool or type(boundary["in_range"]) is not bool:
+                raise engine.CombatEngineError(
+                    "opportunity-attack targetability facts must be boolean"
+                )
+            cover = str(boundary["cover_degree"] or "").casefold().replace("-", "_")
+            if cover not in {"none", "half", "three_quarters", "total"}:
+                raise engine.CombatEngineError("invalid opportunity-attack cover degree")
+            visibility_profile = engine.resolve_agent_vision_2014(
+                threat, boundary["attacker_vision"], subject=mover
+            )
+            engine.resolve_agent_vision_2014(mover, boundary["target_vision"], subject=threat)
+            if boundary["targetable"] and boundary["in_range"]:
+                attack_spatial_facts = {
+                    "decision_id": str(facts.get("decision_id") or ""),
+                    "reason": str(facts.get("reason") or ""),
+                    "targetable": True,
+                    "in_range": True,
+                    "cover_degree": cover,
+                    "attacker_vision": deepcopy(boundary["attacker_vision"]),
+                    "target_vision": deepcopy(boundary["target_vision"]),
+                }
+            if not boundary["targetable"] or not boundary["in_range"] or cover == "total":
+                continue
+        if not engine._can_make_opportunity_attack(
+            threat, mover, encounter, visibility_profile=visibility_profile
+        ):
             continue
         windows.append(
             _window(
@@ -192,6 +250,11 @@ def agent_reaction_windows(encounter, mover, facts):
                 opportunity_attack_reach_ft=next(iter(reaches)),
                 movement_terrain_extra_ft=terrain,
                 spatial_ruling_id=facts.get("decision_id"),
+                **({
+                    "attack_spatial_facts": attack_spatial_facts,
+                    "target_visible": True,
+                    "vision_profile": visibility_profile,
+                } if attack_spatial_facts else {}),
             )
         )
     if {b[0] for b in seen} != set(threat_ids):
@@ -431,6 +494,18 @@ def resume_pending_movement(encounter: dict[str, Any]) -> dict[str, Any]:
         return encounter
     value = deepcopy(encounter)
     actor_id = continuation["actor_id"]
+    deferred_landing_check = deepcopy(continuation.get("deferred_landing_check"))
+    if deferred_landing_check is not None and (
+        not isinstance(deferred_landing_check, dict)
+        or deferred_landing_check.get("actor_id") != actor_id
+        or deferred_landing_check.get("kind") != "check"
+        or deferred_landing_check.get("ability") != "acrobatics"
+        or deferred_landing_check.get("dc") != 10
+        or deferred_landing_check.get("ruleset") != "2014"
+    ):
+        raise engine.CombatEngineError(
+            "movement continuation has an invalid deferred landing check"
+        )
     # Damage, concentration and zero-HP rescue choices may still change the
     # mover's final state. Never cancel or advance their enclosing movement early.
     if any(
@@ -466,7 +541,7 @@ def resume_pending_movement(encounter: dict[str, Any]) -> dict[str, Any]:
             threat = next(
                 (a for a in value["combatants"] if a["actor_id"] == owned_window["actor_id"]), None
             )
-            if threat is None or not engine._can_make_opportunity_attack(threat, mover):
+            if threat is None or not engine._can_make_opportunity_attack(threat, mover, value):
                 value["pending"] = [w for w in value["pending"] if w["id"] != owned_window["id"]]
         if any(w.get("status", "pending") == "pending" for w in value.get("pending", [])):
             return value
@@ -482,6 +557,12 @@ def resume_pending_movement(encounter: dict[str, Any]) -> dict[str, Any]:
             )
         except (engine.CombatEngineError, BattleMapError) as error:
             reason = str(error)
+    if reason is None and deferred_landing_check is not None:
+        next_continuation = value.get("movement_continuation")
+        if isinstance(next_continuation, dict):
+            next_continuation["deferred_landing_check"] = deferred_landing_check
+        else:
+            value["jump_landing_check_due"] = deferred_landing_check
     if reason is not None:
         value["pending"] = [
             w for w in value.get("pending", []) if w["id"] != continuation["choice_id"]

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 import sagasmith_dnd.progression as progression_module
-from sagasmith_dnd.character_schema import default_character_sheet
+from sagasmith_dnd.character_schema import default_character_sheet, derive_character_sheet
 from sagasmith_dnd.core_content import PACK_VERSION as CORE_CONTENT_PACK_VERSION
 from sagasmith_dnd.core_content import build_srd2014_content
 from sagasmith_dnd.engine import roll as engine_roll
@@ -19,6 +19,7 @@ from sagasmith_dnd_mcp.server import (
 from tests.component_helpers import with_component_pouch
 
 CORE_ADVANCEMENT_RULE_REF = "bundled:srd2014/03_Characterization/Beyond_1st_Level.md"
+CORE_MULTICLASS_RULE_REF = "bundled:srd2014/03_Characterization/Multiclassing.md"
 
 
 class _SequenceRng:
@@ -2983,6 +2984,123 @@ def test_level_advance_materializes_new_always_prepared_domain_spells(
             }
             assert spells[name]["access"]["always_prepared"] is True
             assert spells[name]["access"]["prepared"] is True
+
+    asyncio.run(exercise())
+
+
+def test_multiclass_level_advance_is_source_bound_and_idempotent(
+    tmp_path: Path, monkeypatch
+) -> None:
+    workspace = Path(__file__).resolve().parents[3]
+    config = McpConfig(
+        home=tmp_path / "home",
+        database_url=None,
+        chroma_url=None,
+        chroma_path_override=None,
+        dnd_skills_dir=workspace / "skills",
+        modulegen_skills_dir=workspace / "skills" / "dnd-module-generator",
+        auto_seed_rules=True,
+    )
+
+    async def exercise() -> None:
+        server = create_server(config)
+        campaign = await _call(
+            server,
+            "campaign_create",
+            {"name": "Multiclass Advancement", "edition": "2014", "idempotency_key": "campaign"},
+        )
+        sheet = _fighter_sheet()
+        sheet["progression"]["level"] = 5
+        sheet["progression"]["classes"][0]["level"] = 5
+        sheet["combat"]["hp"] = {"value": 40, "max": 40, "temp": 0}
+        sheet["combat"]["hit_dice"]["d10"].update(value=5, max=5)
+        sheet["combat"]["hp_progression"] = [
+            {
+                "level": level,
+                "method": "manual" if level == 1 else "fixed",
+                "value": 8,
+                "source": f"Fighter level {level}",
+            }
+            for level in range(1, 6)
+        ]
+        sheet["abilities"]["intelligence"]["score"] = 13
+        actor = await _call(
+            server,
+            "character_create_from",
+            {
+                "mode": "direct",
+                "payload": {"campaign_id": campaign["id"], "name": "Rin", "sheet": sheet},
+                "idempotency_key": "actor",
+            },
+        )
+        plan = await _call(
+            server,
+            "character_query",
+            {
+                "view": "advancement",
+                "payload": {"character_id": actor["id"], "class_name": "Wizard"},
+            },
+        )
+        assert plan["new_class"] is True
+        assert plan["old_level"] == 5
+        assert plan["new_level"] == 6
+        assert plan["multiclass_source_artifact"]["artifact_id"] == (
+            "dnd5e.content.srd2014.class.wizard"
+        )
+
+        rolls: list[str] = []
+
+        def fixed_hp_roll(expression: str, *, rng=None):
+            rolls.append(expression)
+            return engine_roll(expression, rng=_SequenceRng(4))
+
+        monkeypatch.setattr(progression_module, "roll", fixed_hp_roll)
+
+        arguments = {
+            "character_id": actor["id"],
+            "action": "level_advance",
+            "payload": {
+                "target_level": 6,
+                "class_name": "Wizard",
+                "hp_method": "rolled",
+                "reason": "Rin began formal arcane training",
+                "source_ref": CORE_MULTICLASS_RULE_REF,
+            },
+            "expected_revision": actor["revision"],
+            "idempotency_key": "wizard-level-one",
+        }
+        advanced = await _call(server, "character_state_change", arguments)
+        replay = await _call(server, "character_state_change", arguments)
+        assert replay == advanced
+        restarted = create_server(config)
+        persisted_replay = await _call(restarted, "character_state_change", arguments)
+        assert persisted_replay == advanced
+        assert rolls == ["1d6"]
+
+        result_sheet = advanced["character"]["sheet"]
+        classes = {item["name"]: item for item in result_sheet["progression"]["classes"]}
+        assert result_sheet["progression"]["level"] == 6
+        assert classes["Fighter"]["level"] == 5
+        assert classes["Wizard"]["level"] == 1
+        assert classes["Wizard"]["source_artifact"]["artifact_id"] == (
+            "dnd5e.content.srd2014.class.wizard"
+        )
+        assert result_sheet["combat"]["hit_dice"]["d6"]["max"] == 1
+        assert result_sheet["spellcasting"]["spell_slots"]["1"]["max"] == 2
+        assert derive_character_sheet(result_sheet)["proficiency_bonus"] == 3
+        assert advanced["advancement"]["new_total_level"] == 6
+        assert advanced["advancement"]["spellcasting"]["kind"] == "multiclass"
+        assert advanced["advancement"]["follow_up"]["spell_choices"]["cantrips_to_add"] == 3
+        assert advanced["advancement"]["follow_up"]["spell_choices"] == {
+            "cantrips_to_add": 3,
+            "leveled_spells_to_add": 0,
+            "spellbook_spells_to_add": 6,
+        }
+        assert advanced["advancement"]["hit_points"]["roll"]["total"] == 4
+        assert any(
+            item["mechanic_id"] == "dnd5e.core.progression.multiclassing"
+            for item in advanced["rule_receipts"]
+        )
 
     asyncio.run(exercise())
 

@@ -2368,8 +2368,28 @@ def test_dependent_actor_feature_binding_is_atomic_unique_and_restart_safe(
                             "targetable": True,
                             "in_range": True,
                             "cover_degree": "none",
-                            "attacker_can_see_target": True,
-                            "target_can_see_attacker": True,
+                            "attacker_vision": {
+                                "distance_ft": 5,
+                                "illumination": "bright",
+                                "obscuration": "none",
+                                "magical_darkness": False,
+                                "opaque_boundary": False,
+                                "scene_ref": "fixture:steel-defender-scene",
+                                "scene_excerpt": (
+                                    "The adjacent attacker and defender see each other."
+                                ),
+                            },
+                            "target_vision": {
+                                "distance_ft": 5,
+                                "illumination": "bright",
+                                "obscuration": "none",
+                                "magical_darkness": False,
+                                "opaque_boundary": False,
+                                "scene_ref": "fixture:steel-defender-scene",
+                                "scene_excerpt": (
+                                    "The adjacent attacker and defender see each other."
+                                ),
+                            },
                         }
                     },
                     "deflect_attack": {

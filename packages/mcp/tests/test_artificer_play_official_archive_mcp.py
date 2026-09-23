@@ -36,6 +36,18 @@ _FEATURES = (
 )
 
 
+def _agent_vision() -> dict:
+    return {
+        "distance_ft": 5,
+        "illumination": "bright",
+        "obscuration": "none",
+        "magical_darkness": False,
+        "opaque_boundary": False,
+        "scene_ref": "fixture:visible-adjacent-combatants",
+        "scene_excerpt": "The adjacent combatants see each other in bright light.",
+    }
+
+
 async def _read_infusion_source_framing(server, campaign_id: str) -> dict:
     """Check the actual activated source seen by the Agent, not item execution."""
     contexts = {}
@@ -130,7 +142,8 @@ def test_protocol_combat_uses_and_persists_campaign_random_stream(tmp_path: Path
                         "context": {"spatial_facts": {
                             "decision_id": "protocol-attack", "reason": "Adjacent visible target",
                             "targetable": True, "in_range": True, "cover_degree": "none",
-                            "attacker_can_see_target": True, "target_can_see_attacker": True,
+                            "attacker_vision": _agent_vision(),
+                            "target_vision": _agent_vision(),
                         }},
                     }, "expected_revision": started["campaign_revision"],
                     "idempotency_key": "attack",
@@ -267,7 +280,7 @@ async def _exercise_defender_combat(
         "weapon_id": rend["id"], "attack_mode": "melee", "context": {"spatial_facts": {
             "decision_id": "actual-defender-rend", "reason": "Visible adjacent sparring partner",
             "targetable": True, "in_range": True, "cover_degree": "none",
-            "attacker_can_see_target": True, "target_can_see_attacker": True,
+            "attacker_vision": _agent_vision(), "target_vision": _agent_vision(),
         }},
     }
     before = await current()
@@ -352,7 +365,7 @@ async def _exercise_deflect_attack(
                 "decision_id": "actual-deflect-primary",
                 "reason": "Visible adjacent sparring partner",
                 "targetable": True, "in_range": True, "cover_degree": "none",
-                "attacker_can_see_target": True, "target_can_see_attacker": True,
+                "attacker_vision": _agent_vision(), "target_vision": _agent_vision(),
             }},
             "deflect_attack": {"defender_id": defender["id"], "spatial_facts": {
                 "decision_id": "actual-deflect-reaction",

@@ -4,9 +4,22 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
+from sagasmith_dnd.character_schema import derive_character_sheet
+from sagasmith_dnd.game_time import TICKS_PER_DAY, TICKS_PER_MINUTE
+from sagasmith_dnd.survival import merge_daily_intake, validate_daily_intake
+from sagasmith_dnd.travel import (
+    forced_march_save_dcs,
+    settle_forced_march_save,
+    travel_duration_minutes,
+    validate_travel_leg,
+)
+
 from .. import application_support as _support
 from ..result_contracts import affected_state_slice
+from .grapples import reconcile_grapples
+from .mounted_combat import needs_mounted_rider_save, reconcile_mounted_conditions
 from .movement_continuations import reconcile_movement
+from .survival import needs_survival_save, reconcile_survival_days
 
 
 class CampaignsService:
@@ -108,10 +121,58 @@ class CampaignsService:
     ) -> dict[str, Any]:
         """Commit one public state result and its exact retry response atomically."""
 
+        needs_mounted_save = needs_mounted_rider_save(self, campaign_state, character_updates)
+        needs_water_save = needs_survival_save(self, campaign, campaign_state, character_updates)
+        if _support.active_random_stream() is None and (needs_mounted_save or needs_water_save):
+            with self.campaign_random_context(
+                campaign.id,
+                f"{operation}.rule_settlement",
+                {"idempotency_key": idempotency_key},
+            ):
+                return self.commit_campaign_state(
+                    campaign,
+                    campaign_state,
+                    operation=operation,
+                    principal_id=principal_id,
+                    branch_id=branch_id,
+                    idempotency_key=idempotency_key,
+                    scope=scope,
+                    payload=payload,
+                    response_fields=response_fields,
+                    character_updates=character_updates,
+                    actor_knowledge_transfers=actor_knowledge_transfers,
+                    rule_receipts=rule_receipts,
+                    include_campaign_revision=include_campaign_revision,
+                    include_revisions=include_revisions,
+                    expected_campaign_revision=expected_campaign_revision,
+                )
+
+        survival_rule_receipts: list[dict[str, Any]] = []
+        if campaign_state is not None:
+            (
+                campaign_state,
+                character_updates,
+                response_fields,
+                survival_rule_receipts,
+            ) = reconcile_survival_days(
+                self,
+                campaign,
+                campaign_state,
+                character_updates,
+                response_fields,
+                branch_id,
+            )
+            rule_receipts = [*list(rule_receipts or []), *survival_rule_receipts]
+
         from .saving_throws import finalize
 
         campaign_state, character_updates, response_fields, rule_receipts = finalize(
-            self, campaign, campaign_state, character_updates, response_fields, rule_receipts,
+            self,
+            campaign,
+            campaign_state,
+            character_updates,
+            response_fields,
+            rule_receipts,
         )
 
         campaign_state, character_updates, response_fields = self.reconcile_steel_defender_deaths(
@@ -134,13 +195,27 @@ class CampaignsService:
         campaign_state, character_updates, response_fields = self.reconcile_unconscious_inventory(
             campaign, campaign_state, character_updates, response_fields
         )
+        campaign_state, character_updates, response_fields = reconcile_grapples(
+            self, campaign_state, character_updates, response_fields
+        )
+        before_mounted = campaign_state
+        campaign_state, character_updates, response_fields = reconcile_mounted_conditions(
+            self, campaign, campaign_state, character_updates, response_fields
+        )
+        if campaign_state is not before_mounted:
+            rule_receipts = [
+                *list(rule_receipts or []),
+                *list(response_fields.get("mounted_rule_receipts") or []),
+            ]
         before_movement = campaign_state
         campaign_state, character_updates, response_fields = reconcile_movement(
             self, campaign, campaign_state, character_updates, response_fields
         )
         if campaign_state is not before_movement:
             (
-                campaign_state, character_updates, response_fields,
+                campaign_state,
+                character_updates,
+                response_fields,
             ) = self.reconcile_actor_effect_dependencies(
                 campaign, campaign_state, character_updates, response_fields
             )
@@ -174,7 +249,9 @@ class CampaignsService:
             if self.config.local_authority and self.is_dm(campaign.id, principal_id):
                 # These are the exact documents being committed, not a later readback.
                 response["affected_state"] = affected_state_slice(
-                    campaign, branch_id, character_updates or [],
+                    campaign,
+                    branch_id,
+                    character_updates or [],
                     campaign.revision + (1 if persists_campaign else 0),
                 )
             if include_campaign_revision:
@@ -298,11 +375,18 @@ class CampaignsService:
         value["state"].pop("bardic_inspiration_grants", None)
         value["state"].pop("_rage_activations", None)
         if pending:
-            field = ("pending_roll" if pending["decisions"][-1].get("kind") == "bardic_inspiration"
-                     else "pending_hit" if pending["decisions"][-1].get("kind") == "divine_smite"
-                     else "pending_save")
+            field = (
+                "pending_roll"
+                if pending["decisions"][-1].get("kind") == "bardic_inspiration"
+                else "pending_hit"
+                if pending["decisions"][-1].get("kind") == "divine_smite"
+                else "pending_save"
+            )
             value[field] = public_choice(
-                self, campaign_id, principal_id, pending["decisions"][-1],
+                self,
+                campaign_id,
+                principal_id,
+                pending["decisions"][-1],
             )
         value["effective_game_phase"] = _support.campaign_phase(campaign.state)
         if membership.role in _support.CAMPAIGN_DM_ROLES:
@@ -1353,6 +1437,26 @@ class CampaignsService:
                     "clock advance does not reach expected_elapsed_ticks: "
                     f"computed {time_transition['after']['elapsed_ticks']}"
                 )
+            after_elapsed = int(time_transition["after"]["elapsed_ticks"])
+            if (
+                self.poison_clock_events_due(campaign_id, after_elapsed)
+                and _support.active_random_stream() is None
+            ):
+                with self.campaign_random_context(
+                    campaign_id,
+                    "campaign.poison.clock",
+                    {"idempotency_key": idempotency_key},
+                ):
+                    return self.campaign_advance_effects(
+                        campaign_id,
+                        normalized_period,
+                        count,
+                        principal_id,
+                        expected_revision,
+                        resolved_branch_id,
+                        idempotency_key,
+                        expected_elapsed_ticks,
+                    )
         elapsed_ticks = int(time_transition["elapsed_ticks"]) if time_transition is not None else 0
         elapsed_minutes = (
             int(time_transition["elapsed_minutes"]) if time_transition is not None else 0
@@ -1433,6 +1537,14 @@ class CampaignsService:
             )
             advanced[character.id] = list(dict.fromkeys(character_advanced))
             expired[character.id] = list(dict.fromkeys(character_expired))
+        updates, poison_events, poison_receipts = self.settle_poison_clock_events(
+            campaign,
+            campaign_id,
+            next_state,
+            updates,
+            branch_id=resolved_branch_id,
+        )
+        rule_receipts.extend(poison_receipts)
         next_state, updates, _ = self.reconcile_actor_effect_dependencies(
             campaign, next_state, updates, {}
         )
@@ -1449,6 +1561,7 @@ class CampaignsService:
                 "expired": expired,
                 "world_advanced": list(dict.fromkeys(world_advanced)),
                 "world_expired": list(dict.fromkeys(world_expired)),
+                "poison_events": poison_events,
                 "rule_receipts": rule_receipts,
                 "ruleset_fingerprint": rule_context.fingerprint,
                 "campaign_revision": campaign.revision + (1 if mutation_required else 0),
@@ -2417,6 +2530,490 @@ class CampaignsService:
         )
         return response
 
+    def campaign_party_travel(
+        self,
+        campaign_id: str,
+        trip: dict[str, Any],
+        principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None,
+        branch_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Resolve one source-bound 2014 travel leg and forced-march saves atomically."""
+        self.access.require_campaign(campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES)
+        self.require_write_contract(expected_revision, idempotency_key)
+        resolved_branch_id = self.require_current_branch(campaign_id, branch_id)
+        if not isinstance(trip, dict):
+            raise ValueError("trip must be an object")
+        if set(trip) - {
+            "travel_id",
+            "pace",
+            "distance_miles",
+            "difficult_terrain",
+            "route_fact",
+            "terrain_fact",
+            "end_trip",
+            "participants",
+        }:
+            raise ValueError("trip has unsupported fields")
+        raw_participants = trip.get("participants")
+        if not isinstance(raw_participants, list) or not raw_participants:
+            raise ValueError("trip.participants must be a non-empty array")
+        leg = validate_travel_leg(
+            {key: value for key, value in trip.items() if key != "participants"}
+        )
+        payload = {"trip": _support.deepcopy(trip), "branch_id": resolved_branch_id}
+        scope = f"campaign-party-travel:{campaign_id}:{resolved_branch_id}:{principal_id}"
+        replay = self.replay_idempotent(scope, idempotency_key, payload)
+        if replay is not None:
+            return replay
+        participant_fields = {"character_id", "expected_revision", "survival_intake"}
+        normalized_members: list[dict[str, Any]] = []
+        member_ids: list[str] = []
+        campaign = self.campaigns.get(campaign_id)
+        campaign_state = _support.validate_party_state(_support.deepcopy(campaign.state or {}))
+        if campaign.revision != expected_revision:
+            raise ValueError(
+                "campaign revision conflict: "
+                f"expected {expected_revision}, found {campaign.revision}"
+            )
+        if bool(dict(campaign_state.get("combat") or {}).get("active")):
+            raise _support.CombatEngineError("party travel is not allowed during active combat")
+        for index, raw in enumerate(raw_participants):
+            if not isinstance(raw, dict) or set(raw) - participant_fields:
+                raise ValueError(f"trip.participants[{index}] has unsupported fields")
+            actor_id = str(raw.get("character_id") or "").strip()
+            revision = raw.get("expected_revision")
+            if not actor_id:
+                raise ValueError(f"trip.participants[{index}].character_id is required")
+            if isinstance(revision, bool) or not isinstance(revision, int):
+                raise ValueError(f"trip.participants[{index}].expected_revision is required")
+            record = self.characters.get(actor_id)
+            if record.campaign_id != campaign_id or record.sheet.get("edition") != "2014":
+                raise _support.CombatEngineError(
+                    "2014 party travel participants must be 2014 characters in this campaign"
+                )
+            if record.revision != revision:
+                raise ValueError(f"character revision conflict: {actor_id}")
+            raw_intake = raw.get("survival_intake")
+            if not isinstance(raw_intake, dict):
+                raise ValueError(
+                    f"trip.participants[{index}].survival_intake is required for daily travel"
+                )
+            allowed_intake = {
+                "food_lb",
+                "water_gallons",
+                "hot_weather",
+                "weather_fact",
+                "rations",
+            }
+            unknown_intake = set(raw_intake) - allowed_intake
+            if unknown_intake:
+                raise ValueError(
+                    f"trip.participants[{index}].survival_intake has unsupported fields: "
+                    f"{sorted(unknown_intake)}"
+                )
+            base_intake = validate_daily_intake(
+                {
+                    key: raw_intake[key]
+                    for key in ("food_lb", "water_gallons", "hot_weather", "weather_fact")
+                    if key in raw_intake
+                }
+            )
+            ration_entries = raw_intake.get("rations", [])
+            if not isinstance(ration_entries, list) or len(ration_entries) > 20:
+                raise ValueError("survival_intake.rations must be a bounded array")
+            inventory = dict(record.sheet.get("inventory") or {})
+            consumed_items = []
+            ration_food_lb = 0
+            for ration_index, ration in enumerate(ration_entries):
+                if not isinstance(ration, dict) or set(ration) != {"item_id", "quantity"}:
+                    raise ValueError(
+                        f"survival_intake.rations[{ration_index}] requires item_id and quantity"
+                    )
+                item_id, quantity = str(ration.get("item_id") or "").strip(), ration.get("quantity")
+                item = next(
+                    (
+                        entry
+                        for entry in inventory.get("items", [])
+                        if str(entry.get("id") or "") == item_id
+                    ),
+                    None,
+                )
+                source_key = str((item or {}).get("source_key") or "")
+                if (
+                    not item_id
+                    or isinstance(quantity, bool)
+                    or not isinstance(quantity, int)
+                    or quantity < 1
+                    or item is None
+                    or str(item.get("name") or "").strip().casefold() not in {"ration", "rations"}
+                    or source_key.rsplit(":", 1)[-1] != "dnd5e.content.srd2014.item.rations"
+                    or quantity > int(item.get("quantity", 0) or 0)
+                ):
+                    raise ValueError(
+                        "survival rations must reference available bundled 2014 Rations"
+                    )
+                consumed_items.append(
+                    {
+                        "item_id": item_id,
+                        "source_key": source_key,
+                        "quantity": quantity,
+                    }
+                )
+                ration_food_lb += quantity
+            base_intake["food_lb"] += ration_food_lb
+            base_intake["consumed_items"] = consumed_items
+            base_intake = validate_daily_intake(base_intake)
+            normalized_members.append(
+                {
+                    "character_id": actor_id,
+                    "expected_revision": revision,
+                    "survival_intake": base_intake,
+                }
+            )
+            member_ids.append(actor_id)
+        if len(member_ids) != len(set(member_ids)):
+            raise ValueError("trip participant ids must be unique")
+        member_ids.sort()
+        members_by_id = {item["character_id"]: item for item in normalized_members}
+        campaign_characters = {
+            item.id: item for item in self.characters.list(campaign_id=campaign_id)
+        }
+        required_ids = sorted(
+            item.id for item in campaign_characters.values() if item.sheet.get("edition") == "2014"
+        )
+        if member_ids != required_ids:
+            raise _support.NeedsRulingError(
+                "daily travel must identify every 2014 campaign character and its intake",
+                missing=tuple(
+                    f"trip.participants.{actor_id}"
+                    for actor_id in sorted(set(required_ids) - set(member_ids))
+                ),
+                ruling_kind="source_or_scene_fact",
+            )
+
+        current_ticks = int(campaign_state["game_time"]["elapsed_ticks"])
+        current_day = current_ticks // TICKS_PER_DAY
+        travel_state = campaign_state["travel"]
+        day_elapsed = (
+            int(travel_state["day_elapsed_minutes"])
+            if int(travel_state["day_index"]) == current_day
+            else 0
+        )
+        active = travel_state.get("active")
+        if active is not None and (
+            active["travel_id"] != leg["travel_id"]
+            or active["pace"] != leg["pace"]
+            or active["participant_ids"] != member_ids
+        ):
+            raise _support.CombatEngineError(
+                "end the current party travel leg before changing route, pace, or participants"
+            )
+        prior_trip_elapsed = int(active["elapsed_minutes"]) if active else 0
+        prior_trip_distance = float(active["distance_miles"]) if active else 0.0
+        effective_distance = leg["distance_miles"] * (2 if leg["difficult_terrain"] else 1)
+        trip_distance = prior_trip_distance + effective_distance
+        trip_elapsed = travel_duration_minutes(trip_distance, leg["pace"])
+        duration_minutes = trip_elapsed - prior_trip_elapsed
+        if duration_minutes < 1:
+            raise _support.CombatEngineError("travel leg must advance at least one minute")
+        if duration_minutes > 1440:
+            raise _support.NeedsRulingError(
+                "split journeys longer than one day at a daily travel boundary",
+                missing=("travel.daily_segment",),
+                ruling_kind="source_or_scene_fact",
+            )
+        minutes_to_midnight = max(
+            1,
+            (TICKS_PER_DAY - current_ticks % TICKS_PER_DAY) // TICKS_PER_MINUTE,
+        )
+        if duration_minutes > minutes_to_midnight:
+            raise _support.NeedsRulingError(
+                "split party travel at the campaign day boundary so daily intake "
+                "settles atomically",
+                missing=("travel.day_boundary",),
+                ruling_kind="source_or_scene_fact",
+            )
+        dcs = forced_march_save_dcs(day_elapsed, duration_minutes)
+        if day_elapsed + duration_minutes > 1440:
+            raise _support.NeedsRulingError(
+                "split a forced march before it passes a second unsettled travel day",
+                missing=("travel.daily_segment",),
+                ruling_kind="source_or_scene_fact",
+            )
+        if dcs and _support.active_random_stream() is None:
+            with self.campaign_random_context(
+                campaign_id,
+                "campaign.party.travel",
+                {"idempotency_key": idempotency_key},
+            ):
+                return self.campaign_party_travel(
+                    campaign_id,
+                    trip,
+                    principal_id=principal_id,
+                    expected_revision=expected_revision,
+                    branch_id=resolved_branch_id,
+                    idempotency_key=idempotency_key,
+                )
+
+        next_state = _support.deepcopy(campaign_state)
+        next_state, time_transition = self.advance_state_game_time(
+            next_state,
+            period="minute",
+            count=duration_minutes,
+        )
+        elapsed_ticks = int(time_transition["elapsed_ticks"])
+        world_duration = self.advance_world_effect_clocks(
+            next_state,
+            elapsed_ticks=elapsed_ticks,
+            period_steps={"round": elapsed_ticks},
+        )
+        next_state = world_duration["state"]
+
+        survival = next_state["survival"]
+        day_entries = survival["daily_intakes"].setdefault(str(current_day), {})
+        updates_by_actor: dict[str, _support.CharacterStateUpdate] = {}
+        for actor_id in member_ids:
+            record = campaign_characters[actor_id]
+            member = members_by_id[actor_id]
+            if current_day <= int(survival["last_settled_day"]):
+                raise _support.CombatEngineError(
+                    "travel intake cannot be added to an already settled campaign day"
+                )
+            merged = merge_daily_intake(day_entries.get(actor_id), member["survival_intake"])
+            day_entries[actor_id] = merged
+            sheet = record.sheet
+            for ration in member["survival_intake"]["consumed_items"]:
+                sheet, _ = _support.remove_inventory_item(
+                    sheet,
+                    ration["item_id"],
+                    ration["quantity"],
+                )
+            if sheet != record.sheet:
+                updates_by_actor[actor_id] = _support.CharacterStateUpdate(
+                    character_id=actor_id,
+                    sheet=sheet,
+                    notes=record.notes,
+                    expected_revision=record.revision,
+                )
+        survival["daily_intakes"] = next_state["survival"]["daily_intakes"]
+        next_state["survival"] = survival
+
+        travel_record = {
+            "travel_id": leg["travel_id"],
+            "pace": leg["pace"],
+            "distance_miles": leg["distance_miles"],
+            "difficult_terrain": leg["difficult_terrain"],
+            "duration_minutes": duration_minutes,
+            "started_elapsed_ticks": current_ticks,
+            "completed_elapsed_ticks": int(time_transition["after"]["elapsed_ticks"]),
+            "participant_ids": member_ids,
+            "route_fact": leg["route_fact"],
+            "terrain_fact": leg.get("terrain_fact"),
+            "forced_march_saves": [],
+        }
+        travel_state = next_state["travel"]
+        ledger = [*travel_state["ledger"], travel_record][-100:]
+        is_new_day = int(next_state["game_time"]["elapsed_ticks"]) // TICKS_PER_DAY != current_day
+        travel_state.update(
+            {
+                "day_index": current_day + (1 if is_new_day else 0),
+                "day_elapsed_minutes": 0 if is_new_day else day_elapsed + duration_minutes,
+                "active": (
+                    None
+                    if leg["end_trip"]
+                    else {
+                        "travel_id": leg["travel_id"],
+                        "pace": leg["pace"],
+                        "participant_ids": member_ids,
+                        "elapsed_minutes": trip_elapsed,
+                        "distance_miles": trip_distance,
+                    }
+                ),
+                "ledger": ledger,
+            }
+        )
+        next_state["travel"] = travel_state
+
+        advanced: dict[str, list[str]] = {}
+        expired: dict[str, list[str]] = {}
+        world_advanced = world_duration["advanced"]
+        world_expired = world_duration["expired"]
+        rule_receipts: list[dict[str, Any]] = []
+        rule_context = self.effective_rule_context(campaign_id, branch_id=resolved_branch_id)
+        for record in campaign_characters.values():
+            update = updates_by_actor.get(record.id)
+            sheet = update.sheet if update is not None else record.sheet
+            actor_advanced: list[str] = []
+            actor_expired: list[str] = []
+            duration = _support.advance_elapsed_effect_durations(
+                sheet,
+                elapsed_ticks=elapsed_ticks,
+            )
+            extension = _support.apply_rule_event(
+                duration["sheet"],
+                "duration.advance",
+                _support.context_with_facts(
+                    rule_context,
+                    actor_id=record.id,
+                    period="tick",
+                    amount=elapsed_ticks,
+                    elapsed_minutes=duration_minutes,
+                ),
+            )
+            sheet = extension.sheet
+            rule_receipts.extend(extension.receipts)
+            actor_advanced.extend(duration["advanced"])
+            actor_expired.extend(duration["expired"])
+            round_duration = _support.advance_effect_durations(
+                sheet,
+                period="round",
+                amount=elapsed_ticks,
+                advance_breathing=False,
+            )
+            extension = _support.apply_rule_event(
+                round_duration["sheet"],
+                "duration.advance",
+                _support.context_with_facts(
+                    rule_context,
+                    actor_id=record.id,
+                    period="round",
+                    amount=elapsed_ticks,
+                ),
+            )
+            sheet = extension.sheet
+            rule_receipts.extend(extension.receipts)
+            actor_advanced.extend(round_duration["advanced"])
+            actor_expired.extend(round_duration["expired"])
+            if sheet != (update.sheet if update is not None else record.sheet):
+                updates_by_actor[record.id] = _support.CharacterStateUpdate(
+                    character_id=record.id,
+                    sheet=_support.validate_character_sheet(sheet),
+                    notes=update.notes if update is not None else record.notes,
+                    expected_revision=(
+                        update.expected_revision if update is not None else record.revision
+                    ),
+                )
+            if actor_advanced:
+                advanced[record.id] = list(dict.fromkeys(actor_advanced))
+            if actor_expired:
+                expired[record.id] = list(dict.fromkeys(actor_expired))
+
+        forced_march_results = []
+        stream = _support.active_random_stream()
+        for hour_index, dc in enumerate(dcs, start=1):
+            for actor_id in member_ids:
+                record = campaign_characters[actor_id]
+                update = updates_by_actor.get(actor_id)
+                sheet = update.sheet if update is not None else record.sheet
+                if "dead" in _support.condition_ids(sheet.get("conditions")):
+                    forced_march_results.append(
+                        {
+                            "actor_id": actor_id,
+                            "hour_after_eight": hour_index,
+                            "dc": dc,
+                            "skipped": "dead",
+                            "exhaustion_added": 0,
+                        }
+                    )
+                    continue
+                snapshot = self.combat_actor_snapshot(actor_id)
+                snapshot["sheet"] = _support.deepcopy(sheet)
+                snapshot["derived"] = derive_character_sheet(sheet)
+                check_rules = self.effective_rule_context(
+                    campaign_id,
+                    branch_id=resolved_branch_id,
+                    facts={
+                        "actor_id": actor_id,
+                        "travel_id": leg["travel_id"],
+                        "hour_after_eight": hour_index,
+                        "kind": "save",
+                        "ability": "constitution",
+                        "dc": dc,
+                    },
+                )
+                save = _support.resolve_actor_check(
+                    snapshot,
+                    kind="save",
+                    ability="constitution",
+                    dc=dc,
+                    encounter=next_state.get("combat"),
+                    rules=check_rules,
+                    rng=stream,
+                    ruleset="2014",
+                )
+                applied = settle_forced_march_save(sheet, save)
+                if applied["sheet"] != sheet:
+                    updates_by_actor[actor_id] = _support.CharacterStateUpdate(
+                        character_id=actor_id,
+                        sheet=applied["sheet"],
+                        notes=update.notes if update is not None else record.notes,
+                        expected_revision=(
+                            update.expected_revision if update is not None else record.revision
+                        ),
+                    )
+                settlement = {
+                    "actor_id": actor_id,
+                    "hour_after_eight": hour_index,
+                    "dc": dc,
+                    "save": save,
+                    "exhaustion_added": applied["exhaustion_added"],
+                }
+                if applied.get("died"):
+                    settlement["died"] = True
+                forced_march_results.append(settlement)
+        travel_record["forced_march_saves"] = forced_march_results
+        next_state["travel"]["ledger"][-1] = travel_record
+        updates = list(updates_by_actor.values())
+        next_state, updates, _ = self.reconcile_actor_effect_dependencies(
+            campaign,
+            next_state,
+            updates,
+            {},
+        )
+        receipts = _support.core_receipts(
+            rule_context,
+            [
+                "dnd5e.core.travel.pace_2014",
+                *(["dnd5e.core.travel.difficult_terrain_2014"] if leg["difficult_terrain"] else []),
+                *(["dnd5e.core.travel.forced_march_2014"] if dcs else []),
+            ],
+            "campaign.travel.settlement",
+        )
+        rule_receipts.extend(receipts)
+        response_fields = {
+            "status": "committed",
+            "travel_id": leg["travel_id"],
+            "pace": leg["pace"],
+            "distance_miles": leg["distance_miles"],
+            "difficult_terrain": leg["difficult_terrain"],
+            "duration_minutes": duration_minutes,
+            "game_time": time_transition["after"],
+            "world_time": time_transition["world_time_after"],
+            "forced_march_saves": forced_march_results,
+            "advanced": advanced,
+            "expired": expired,
+            "world_advanced": list(dict.fromkeys(world_advanced)),
+            "world_expired": list(dict.fromkeys(world_expired)),
+            "ruleset_fingerprint": rule_context.fingerprint,
+            "rule_receipts": rule_receipts,
+        }
+        return self.commit_campaign_state(
+            campaign,
+            next_state,
+            operation="campaign.party.travel",
+            principal_id=principal_id,
+            branch_id=resolved_branch_id,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=payload,
+            response_fields=response_fields,
+            character_updates=updates,
+            rule_receipts=rule_receipts,
+            expected_campaign_revision=campaign.revision,
+        )
+
     def campaign_party_rest(
         self,
         campaign_id: str,
@@ -2467,6 +3064,16 @@ class CampaignsService:
             )
         if not isinstance(members, list) or not members:
             raise ValueError("party rest requires at least one member")
+        scope = f"campaign-party-rest:{campaign_id}:{resolved_branch_id}:{principal_id}"
+        request_payload = {
+            "members": _support.deepcopy(members),
+            "duration_minutes": duration_minutes,
+            "rest_type": normalized_rest_type,
+            "branch_id": resolved_branch_id,
+        }
+        replay = self.replay_idempotent(scope, idempotency_key, request_payload)
+        if replay is not None:
+            return replay
         allowed_member_fields = {
             "character_id",
             "expected_revision",
@@ -2481,11 +3088,13 @@ class CampaignsService:
             "song_of_rest_source_actor_id",
             "attune_item_id",
             "attunement_prerequisite_confirmed",
+            "survival_intake",
         }
         long_rest_fields = {
             "prepared_spell_ids",
             "hit_dice_recovery",
             "food_and_drink",
+            "survival_intake",
         }
         short_rest_fields = {
             "hit_dice_spends",
@@ -2562,6 +3171,92 @@ class CampaignsService:
             food_and_drink = raw_member.get("food_and_drink", False)
             if not isinstance(food_and_drink, bool):
                 raise ValueError(f"members[{index}].food_and_drink must be a boolean")
+            survival_intake = None
+            if (
+                normalized_rest_type == "long_rest"
+                and current_member.sheet.get("edition") == "2014"
+            ):
+                if "food_and_drink" in raw_member:
+                    raise ValueError(
+                        "2014 long rests use survival_intake; food_and_drink is not an "
+                        "outcome input"
+                    )
+                raw_intake = raw_member.get("survival_intake")
+                if raw_intake is not None and not isinstance(raw_intake, dict):
+                    raise ValueError(
+                        f"members[{index}].survival_intake must be an object when provided"
+                    )
+                unknown_intake = set(raw_intake or {}) - {
+                    "food_lb",
+                    "water_gallons",
+                    "hot_weather",
+                    "weather_fact",
+                    "rations",
+                }
+                if unknown_intake:
+                    raise ValueError(
+                        f"members[{index}].survival_intake has unsupported fields: "
+                        f"{sorted(unknown_intake)}"
+                    )
+                ration_entries = (raw_intake or {}).get("rations", [])
+                if not isinstance(ration_entries, list) or len(ration_entries) > 20:
+                    raise ValueError("survival_intake.rations must be a bounded array")
+                if raw_intake is not None:
+                    survival_intake = validate_daily_intake(
+                        {
+                            key: raw_intake[key]
+                            for key in ("food_lb", "water_gallons", "hot_weather", "weather_fact")
+                            if key in raw_intake
+                        }
+                    )
+                normalized_rations = []
+                ration_food_lb = 0.0
+                inventory = dict(current_member.sheet.get("inventory") or {})
+                for ration_index, ration in enumerate(ration_entries):
+                    if not isinstance(ration, dict) or set(ration) != {"item_id", "quantity"}:
+                        raise ValueError(
+                            f"survival_intake.rations[{ration_index}] requires item_id and quantity"
+                        )
+                    item_id = str(ration.get("item_id") or "").strip()
+                    quantity = ration.get("quantity")
+                    if (
+                        not item_id
+                        or isinstance(quantity, bool)
+                        or not isinstance(quantity, int)
+                        or quantity < 1
+                    ):
+                        raise ValueError("survival ration item_id and quantity are invalid")
+                    item = next(
+                        (
+                            entry
+                            for entry in inventory.get("items", [])
+                            if str(entry.get("id") or "") == item_id
+                        ),
+                        None,
+                    )
+                    source_key = str((item or {}).get("source_key") or "")
+                    canonical_source = source_key.rsplit(":", 1)[-1]
+                    if (
+                        item is None
+                        or item.get("name", "").strip().casefold() not in {"ration", "rations"}
+                        or canonical_source != "dnd5e.content.srd2014.item.rations"
+                        or quantity > int(item.get("quantity", 0) or 0)
+                    ):
+                        raise ValueError(
+                            "survival rations must reference an available bundled 2014 Rations item"
+                        )
+                    normalized_rations.append(
+                        {
+                            "item_id": item_id,
+                            "source_key": source_key,
+                            "quantity": quantity,
+                        }
+                    )
+                    ration_food_lb += quantity
+                if survival_intake is not None:
+                    survival_intake["food_lb"] += ration_food_lb
+                    survival_intake["consumed_items"] = normalized_rations
+                    survival_intake = validate_daily_intake(survival_intake)
             rest_activities = _support.validate_rest_activity_minutes(
                 raw_member.get("rest_activity_minutes")
             )
@@ -2587,6 +3282,7 @@ class CampaignsService:
                         "prepared_spell_ids": prepared_ids,
                         "hit_dice_recovery": recovery,
                         "food_and_drink": food_and_drink,
+                        "survival_intake": survival_intake,
                     }
                 )
             else:
@@ -2615,17 +3311,6 @@ class CampaignsService:
                 raise _support.CombatEngineError(
                     "every Song of Rest source must participate in the same party rest"
                 )
-        request_payload = {
-            "members": normalized_members,
-            "duration_minutes": duration_minutes,
-            "branch_id": resolved_branch_id,
-        }
-        if normalized_rest_type != "long_rest":
-            request_payload["rest_type"] = normalized_rest_type
-        scope = f"campaign-party-rest:{campaign_id}:{resolved_branch_id}:{principal_id}"
-        replay = self.replay_idempotent(scope, idempotency_key, request_payload)
-        if replay is not None:
-            return replay
         campaign = self.campaigns.get(campaign_id)
         if campaign.revision != expected_revision:
             raise ValueError(
@@ -2651,6 +3336,9 @@ class CampaignsService:
         elapsed_ticks = int(time_transition["elapsed_ticks"])
         completed_game_day = _support.rules_day_from_ticks(completed_elapsed_ticks)
         all_characters = {item.id: item for item in self.characters.list(campaign_id=campaign_id)}
+        survival_state = next_state["survival"]
+        survival_day_index = started_elapsed_ticks // _support.game_time_ticks("day")
+        daily_intakes = survival_state["daily_intakes"]
         for member in normalized_members:
             current = all_characters.get(member["character_id"])
             if current is None:
@@ -2659,6 +3347,30 @@ class CampaignsService:
                 )
             if current.revision != member["expected_revision"]:
                 raise ValueError(f"character revision conflict: {current.id}")
+            intake = member.get("survival_intake")
+            if normalized_rest_type == "long_rest" and intake is not None:
+                if survival_day_index <= survival_state["last_settled_day"]:
+                    raise _support.CombatEngineError(
+                        "survival intake cannot be added to an already settled campaign day"
+                    )
+                day_entry = daily_intakes.setdefault(str(survival_day_index), {})
+                merged = merge_daily_intake(day_entry.get(current.id), intake)
+                day_entry[current.id] = merged
+                member["survival_intake"] = merged
+                required_water = 2.0 if merged["hot_weather"] else 1.0
+                member["food_and_drink"] = (
+                    merged["food_lb"] >= 1 and merged["water_gallons"] >= required_water
+                )
+                sheet = current.sheet
+                for ration in intake["consumed_items"]:
+                    sheet, _ = _support.remove_inventory_item(
+                        sheet,
+                        ration["item_id"],
+                        ration["quantity"],
+                    )
+                if sheet != current.sheet:
+                    current = _support.replace(current, sheet=sheet)
+                    all_characters[current.id] = current
             _support.record_rest_completion(
                 current.sheet,
                 rest_type=normalized_rest_type,
@@ -2805,6 +3517,30 @@ class CampaignsService:
                     raise _support.CombatEngineError(
                         f"party rest for {current.id} requires an unresolved rule choice"
                     )
+                if (
+                    normalized_rest_type == "long_rest"
+                    and member.get("survival_intake") is not None
+                    and member["food_and_drink"]
+                ):
+                    survival_actor = next_state["survival"]["actors"].setdefault(
+                        current.id,
+                        {
+                            "food_deprivation_days": 0.0,
+                            "starvation_exhaustion_earned": 0,
+                            "deprivation_exhaustion_levels": 0,
+                            "recovery_locked": False,
+                        },
+                    )
+                    exhaustion_recovered = max(
+                        0,
+                        int(sheet["combat"]["exhaustion"])
+                        - int(applied["sheet"]["combat"]["exhaustion"]),
+                    )
+                    survival_actor["deprivation_exhaustion_levels"] = max(
+                        0,
+                        int(survival_actor["deprivation_exhaustion_levels"]) - exhaustion_recovered,
+                    )
+                    survival_actor["recovery_locked"] = False
                 if normalized_rest_type == "short_rest" and member["attune_item_id"] is not None:
                     applied["sheet"] = _support.attune_inventory_item(
                         applied["sheet"],
@@ -2924,33 +3660,20 @@ class CampaignsService:
             ),
         }
 
-        def party_rest_response(revisions: list[Any]) -> dict[str, Any]:
-            return {
-                **base_response,
-                "revisions": [_support.asdict(item) for item in revisions],
-                **({"affected_state": affected_state_slice(
-                    campaign, resolved_branch_id, updates, campaign.revision + 1,
-                )} if self.config.local_authority
-                   and self.is_dm(campaign_id, principal_id) else {}),
-            }
-
-        revisions_result = _support.StateMutationService(self.storage.database).replace(
-            campaign_id,
-            campaign_state=_support.validate_party_state(next_state),
-            character_updates=updates,
-            expected_campaign_revision=campaign.revision,
+        return self.commit_campaign_state(
+            campaign,
+            next_state,
             operation=f"campaign.party.rest.{normalized_rest_type}",
-            actor=principal_id,
+            principal_id=principal_id,
             branch_id=resolved_branch_id,
             idempotency_key=idempotency_key,
-            idempotency_write=_support.IdempotencyWrite(
-                scope=scope,
-                payload=request_payload,
-                response=party_rest_response,
-            ),
+            scope=scope,
+            payload=request_payload,
+            response_fields=base_response,
+            character_updates=updates,
             rule_receipts=rule_receipts,
+            expected_campaign_revision=campaign.revision,
         )
-        return party_rest_response(list(revisions_result or []))
 
     def campaign_short_rest_hit_die(
         self,
@@ -3395,9 +4118,12 @@ class CampaignsService:
                 audience=str(data.get("audience") or "dm"),
                 branch_id=(str(current_branch["id"]) if current_branch is not None else None),
                 limit=int(data.get("limit", 8)),
-                budget_chars=int(data.get(
-                    "budget_chars", 4_000 if detail == "summary" else 12_000,
-                )),
+                budget_chars=int(
+                    data.get(
+                        "budget_chars",
+                        4_000 if detail == "summary" else 12_000,
+                    )
+                ),
                 related_refs=data.get("related_refs"),
                 principal_id=principal_id,
             )
@@ -3439,12 +4165,27 @@ class CampaignsService:
             )
             return self.facade_result(view, result, page=page)
         if detail == "summary" and view in {"get", "resume"}:
+
             def identity(record: dict[str, Any]) -> dict[str, Any]:
                 keys = {
-                    "id", "campaign_id", "module_id", "scene_id", "scope_id", "name",
-                    "title", "slug", "system_id", "status", "revision", "state_version",
-                    "effective_game_phase", "base_snapshot_id", "head_snapshot_id",
-                    "is_current", "current_location_key", "progress",
+                    "id",
+                    "campaign_id",
+                    "module_id",
+                    "scene_id",
+                    "scope_id",
+                    "name",
+                    "title",
+                    "slug",
+                    "system_id",
+                    "status",
+                    "revision",
+                    "state_version",
+                    "effective_game_phase",
+                    "base_snapshot_id",
+                    "head_snapshot_id",
+                    "is_current",
+                    "current_location_key",
+                    "progress",
                 }
                 return {
                     key: value[:512] if isinstance(value, str) else value
@@ -3457,7 +4198,8 @@ class CampaignsService:
             state = campaign_value.get("state") or {}
             combat = state.get("combat") or {}
             brief["combat"] = {
-                key: combat[key] for key in ("id", "active", "scene_id", "round", "turn_index")
+                key: combat[key]
+                for key in ("id", "active", "scene_id", "round", "turn_index")
                 if key in combat
             }
             brief["detail"] = "summary"
@@ -3473,8 +4215,11 @@ class CampaignsService:
                 if isinstance(scene, dict):
                     result["current_scene"] = {
                         **identity(scene),
-                        **{key: identity(value) for key, value in scene.items()
-                           if key in {"module", "scene", "progress"} and isinstance(value, dict)},
+                        **{
+                            key: identity(value)
+                            for key, value in scene.items()
+                            if key in {"module", "scene", "progress"} and isinstance(value, dict)
+                        },
                     }
             result["read_next"] = {
                 "campaign_state": (
@@ -3490,15 +4235,22 @@ class CampaignsService:
                 "branches": "branch_query for remaining branches",
             }
             result["omitted_detail"] = [
-                "campaign.state", "campaign.settings", "full manifest", "full scene",
+                "campaign.state",
+                "campaign.settings",
+                "full manifest",
+                "full scene",
                 "branches after first 10",
             ]
         return self.facade_result(view, result)
 
     def environment_change(
-        self, campaign_id: str, payload: dict[str, Any], action: Literal["water"] = "water",
+        self,
+        campaign_id: str,
+        payload: dict[str, Any],
+        action: Literal["water"] = "water",
         principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
-        expected_revision: int | None = None, branch_id: str | None = None,
+        expected_revision: int | None = None,
+        branch_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Record a DM-reviewed 2014 water transition without moving an actor.
@@ -3516,8 +4268,12 @@ class CampaignsService:
         from .environment import change_water_environment
 
         return change_water_environment(
-            self, campaign_id, payload, principal_id=principal_id,
-            expected_revision=expected_revision, branch_id=branch_id,
+            self,
+            campaign_id,
+            payload,
+            principal_id=principal_id,
+            expected_revision=expected_revision,
+            branch_id=branch_id,
             idempotency_key=idempotency_key,
         )
 
@@ -3530,6 +4286,7 @@ class CampaignsService:
             "clock_set",
             "clock_advance",
             "party_rest",
+            "party_travel",
             "short_rest_hit_die",
             "stable_recovery",
             "effect_add",
@@ -3546,12 +4303,15 @@ class CampaignsService:
         branch_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Update campaign state, advancement, clock, or campaign-space effects.
+        """Update campaign state, advancement, clock, travel, or campaign-space effects.
 
         party_rest payload: {members:[{character_id, expected_revision}],
         rest_type:"long_rest"|"short_rest", duration_minutes}. Each member uses
         its actor revision; top-level expected_revision is the campaign revision.
         Optional member rest choices are documented in runtime-workflows.md.
+
+        party_travel payload: {trip:{travel_id, pace, distance_miles, route_fact,
+        participants:[{character_id, expected_revision, survival_intake}]}}.
         In 2014, spend at most one initial Hit Die per member, then inspect its
         roll before deciding on another. short_rest_hit_die payload requires
         {character_id,expected_character_revision,decision:"spend"|"stop",
@@ -3586,6 +4346,7 @@ class CampaignsService:
                 {"members", "duration_minutes", "rest_type"},
                 ("members",),
             ),
+            "party_travel": ({"trip"}, ("trip",)),
             "short_rest_hit_die": (
                 {
                     "character_id",
@@ -3685,6 +4446,15 @@ class CampaignsService:
                     _support.LONG_REST_MINIMUM_MINUTES,
                 ),
                 rest_type=data.get("rest_type", "long_rest"),
+                principal_id=principal_id,
+                expected_revision=expected_revision,
+                branch_id=branch_id,
+                idempotency_key=idempotency_key,
+            )
+        elif action == "party_travel":
+            result = self.campaign_party_travel(
+                campaign_id=campaign_id,
+                trip=self.required(data, "trip"),
                 principal_id=principal_id,
                 expected_revision=expected_revision,
                 branch_id=branch_id,
@@ -3893,8 +4663,14 @@ class CampaignsService:
         data = self.facade_payload(payload)
         if action == "add":
             allowed = {
-                "summary", "event_type", "payload", "audience_scope", "branch_id",
-                "known_by_actor_ids", "knowledge_key", "knowledge_proposition",
+                "summary",
+                "event_type",
+                "payload",
+                "audience_scope",
+                "branch_id",
+                "known_by_actor_ids",
+                "knowledge_key",
+                "knowledge_proposition",
                 "knowledge_disclosure_scope",
             }
             unknown = sorted(set(data) - allowed)

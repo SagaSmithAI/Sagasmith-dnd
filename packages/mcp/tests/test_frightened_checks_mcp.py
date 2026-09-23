@@ -136,7 +136,10 @@ def test_frightened_checks_use_recorded_sources_and_atomic_receipts(
                 "campaign_id": campaign_id, "actor_id": actor["id"], "kind": "check",
                 "ability": "perception", "action": "search", "dc": 12,
                 "advantage": advantage,
-                "rule_facts": {"frightened_source_visibility": False},
+                "rule_facts": {
+                    "frightened_source_visibility": False,
+                    "relies_on_sight": False,
+                },
                 "expected_revision": before["revision"], "idempotency_key": "fear-search",
             }
             if patient is not None:
@@ -148,6 +151,7 @@ def test_frightened_checks_use_recorded_sources_and_atomic_receipts(
                 arguments = {
                     "campaign_id": campaign_id, "actor_id": actor["id"],
                     "activity_id": legendary_activity_id,
+                    "rule_facts": {"relies_on_sight": False},
                     "expected_revision": before["revision"], "idempotency_key": "fear-search",
                 }
             with pytest.raises(ToolError, match="revision conflict"):
@@ -169,7 +173,11 @@ def test_frightened_checks_use_recorded_sources_and_atomic_receipts(
                 assert await snapshot() == before
             else:
                 expected_draws = 2 if visibility == "visible" and not advantage else 1
-                assert settled["status"] == "committed"
+                assert settled["status"] == "committed", {
+                    "missing": settled.get("missing"),
+                    "message": settled.get("message"),
+                    "ruling_kind": settled.get("ruling_kind"),
+                }
                 check = settled["result"]
                 if check_action == "legendary":
                     check = check["core_effect"]["check"]
@@ -396,6 +404,8 @@ def test_missing_source_check_resumes_after_authoritative_source_entry(
                 "ability": "perception", "dc": 10, "action": "search",
                 "expected_revision": before["revision"], "idempotency_key": "search-once",
             }
+            if mode == "agent":
+                check_args["rule_facts"] = {"relies_on_sight": False}
             pending = await raw(server, "combat_check", check_args)
             assert pending["status"] == "pending_ruling"
             assert pending["committed"] is False

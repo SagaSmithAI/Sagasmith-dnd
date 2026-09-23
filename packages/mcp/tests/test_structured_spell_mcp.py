@@ -2391,7 +2391,13 @@ def test_sacred_flame_direct_save_needs_no_manual_damage_step(
                     "target_id": actors[1]["id"],
                     **({"spatial_facts": {
                         "decision_id": "visible-target", "reason": "Clear line of sight in room",
-                        "targetable": True, "in_range": True, "attacker_can_see_target": True,
+                        "targetable": True, "in_range": True, "cover_degree": "none",
+                        "vision_facts": {
+                            "distance_ft": 10, "illumination": "bright", "obscuration": "none",
+                            "magical_darkness": False, "opaque_boundary": False,
+                            "scene_ref": "fixture:sacred-flame",
+                            "scene_excerpt": "The cleric can see the target in clear bright light.",
+                        },
                     }} if positioning_mode == "agent" else {}),
                 },
                 "expected_revision": revision,

@@ -131,6 +131,21 @@ def test_movement_requires_explicit_reaction_assessment(tmp_path, provokes):
                         "actor_id": actors[1]["id"],
                         "distance_ft": 0,
                         "weapon_ids": ["unarmed-strike"],
+                        "targetable": True,
+                        "in_range": True,
+                        "cover_degree": "none",
+                        "attacker_vision": {
+                            "distance_ft": 5, "illumination": "bright",
+                            "obscuration": "none", "magical_darkness": False,
+                            "opaque_boundary": False, "scene_ref": "fixture:exit-reach",
+                            "scene_excerpt": "The mover and guard see each other in bright light.",
+                        },
+                        "target_vision": {
+                            "distance_ft": 5, "illumination": "bright",
+                            "obscuration": "none", "magical_darkness": False,
+                            "opaque_boundary": False, "scene_ref": "fixture:exit-reach",
+                            "scene_excerpt": "The mover and guard see each other in bright light.",
+                        },
                     }
                 ]
             moved = await _call(server, "combat_movement", arguments)

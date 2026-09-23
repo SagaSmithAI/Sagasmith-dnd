@@ -41,6 +41,8 @@ from sagasmith_dnd.combat_engine import (
     enter_tortle_shell_defense,
     force_move_directly_away,
     force_move_directly_toward,
+    jump_profile_2014,
+    pay_2014_special_attack,
     pay_activity_activation,
     pay_attack_action,
     pay_legendary_action,
@@ -52,9 +54,11 @@ from sagasmith_dnd.combat_engine import (
     reconcile_effect_dependencies,
     reconcile_tortle_shell_defense_projection,
     require_harmful_targeting_allowed,
+    resolve_2014_special_attack_contest,
     resolve_actor_check,
     resolve_actor_contest,
     resolve_actor_group_check,
+    resolve_agent_vision_2014,
     resolve_attack_action,
     resolve_attack_damage,
     resolve_choice_window,
@@ -73,6 +77,7 @@ from sagasmith_dnd.combat_engine import (
     roll_attack_action,
     settle_core_activity_effect,
     settle_hide,
+    settle_jump_2014,
     source_speed_multiplier,
     spend_movement,
     stabilize_sheet,
@@ -81,6 +86,7 @@ from sagasmith_dnd.combat_engine import (
     start_encounter,
     tortle_shell_defense_available,
     trigger_readied_spell,
+    vision_profile_2014,
 )
 from sagasmith_dnd.content_solution import build_content_solution
 from sagasmith_dnd.engine import resolve_check, roll_d20
@@ -1235,6 +1241,88 @@ def _grid_encounter(
     )
 
 
+def test_2014_jump_limits_use_strength_and_paid_current_turn_foot_movement() -> None:
+    actor = _actor("jumper")
+    actor["position"] = {"x": 0, "y": 0}
+    encounter = _grid_encounter([actor])
+    standing = jump_profile_2014(
+        encounter, actor, current_combatant(encounter), "long"
+    )
+    assert standing["running_start"] is False
+    assert standing["maximum_ft"] == 8
+
+    moved = spend_movement(encounter, "jumper", 10, destination={"x": 2, "y": 0})
+    profile = jump_profile_2014(
+        moved, actor, current_combatant(moved), "long"
+    )
+    assert profile["running_start_ft"] == 10
+    assert profile["running_start"] is True
+    assert profile["maximum_ft"] == 16
+
+    high = spend_movement(moved, "jumper", 6, jump_kind="high")
+    assert current_combatant(high)["position"] == {"x": 2.0, "y": 0.0}
+    assert current_combatant(high)["turn_budget"]["movement_spent"] == 16
+
+    long_jump = spend_movement(
+        moved,
+        "jumper",
+        15,
+        destination={"x": 5, "y": 0},
+        jump_kind="long",
+    )
+    after_jump = jump_profile_2014(
+        long_jump, actor, current_combatant(long_jump), "long"
+    )
+    assert after_jump["running_start"] is False
+
+
+def test_2014_standing_high_jump_rounds_negative_strength_modifier_correctly() -> None:
+    actor = _actor("low-strength-jumper")
+    actor["sheet"]["abilities"]["strength"]["score"] = 8
+    actor["derived"] = derive_character_sheet(actor["sheet"])
+    actor["position"] = {"x": 0, "y": 0}
+    encounter = _grid_encounter([actor])
+    profile = jump_profile_2014(
+        encounter, actor, current_combatant(encounter), "high"
+    )
+    assert profile["strength_modifier"] == -1
+    assert profile["maximum_ft"] == 1
+
+
+def test_2014_jump_obstacle_and_difficult_landing_checks_are_source_bounded() -> None:
+    actor = _actor("jumper")
+    actor["position"] = {"x": 0, "y": 0}
+    encounter = _grid_encounter([actor])
+    encounter = spend_movement(encounter, "jumper", 10, destination={"x": 2, "y": 0})
+    current = current_combatant(encounter)
+    assert current is not None
+
+    obstacle = settle_jump_2014(
+        encounter,
+        actor,
+        current,
+        kind="long",
+        distance_ft=12,
+        obstacle_height_ft=3,
+        obstacle_check_required=True,
+        rng=_SequenceRng(1),
+    )
+    assert obstacle["outcome"] == "hit_obstacle"
+    assert obstacle["checks"][0]["dc"] == 10
+
+    landing = settle_jump_2014(
+        encounter,
+        actor,
+        current,
+        kind="long",
+        distance_ft=8,
+        landing_difficult_terrain=True,
+        rng=_SequenceRng(1),
+    )
+    assert landing["outcome"] == "landed_prone"
+    assert landing["prone"] is True
+
+
 def test_movement_can_switch_travel_speeds_and_carries_distance_spent() -> None:
     actor = _actor("speedster")
     actor["position"] = {"x": 10, "y": 10}
@@ -1345,7 +1433,16 @@ def test_agent_attack_requires_explicit_condition_distance(condition: str) -> No
     facts = {
         "decision_id": "condition-distance", "reason": "Target is visible; distance needs ruling.",
         "targetable": True, "in_range": True, "cover_degree": "none",
-        "attacker_can_see_target": True, "target_can_see_attacker": False,
+        "attacker_vision": {
+            "distance_ft": 5, "illumination": "bright", "obscuration": "none",
+            "magical_darkness": False, "opaque_boundary": False,
+            "scene_ref": "test-scene", "scene_excerpt": "Clear line of sight.",
+        },
+        "target_vision": {
+            "distance_ft": 5, "illumination": "dark", "obscuration": "none",
+            "magical_darkness": False, "opaque_boundary": False,
+            "scene_ref": "test-scene", "scene_excerpt": "The target is in darkness.",
+        },
     }
     action = {"weapon_id": "reach-weapon", "context": {"spatial_facts": facts}}
     with pytest.raises(NeedsRulingError, match="target_within_5_ft"):
@@ -1386,8 +1483,16 @@ def test_agent_positioned_attack_requires_and_consumes_structured_spatial_facts(
         "in_range": True,
         "long_range": False,
         "cover_degree": "none",
-        "attacker_can_see_target": True,
-        "target_can_see_attacker": True,
+        "attacker_vision": {
+            "distance_ft": 5, "illumination": "bright", "obscuration": "none",
+            "magical_darkness": False, "opaque_boundary": False,
+            "scene_ref": "test-scene", "scene_excerpt": "Clear line of sight.",
+        },
+        "target_vision": {
+            "distance_ft": 5, "illumination": "bright", "obscuration": "none",
+            "magical_darkness": False, "opaque_boundary": False,
+            "scene_ref": "test-scene", "scene_excerpt": "Clear line of sight.",
+        },
         "target_within_5_ft": True,
         "close_threat_actor_ids": [],
         "helper_actor_ids": [],
@@ -1449,6 +1554,17 @@ def test_agent_positioned_movement_consumes_distance_and_opportunity_facts() -> 
     facts["opportunity_attack_boundaries"] = [{
         "actor_id": "threat", "distance_ft": 5,
         "difficult_terrain_extra_ft": 0, "weapon_ids": ["unarmed-strike"],
+        "attacker_vision": {
+            "distance_ft": 5, "illumination": "bright", "obscuration": "none",
+            "magical_darkness": False, "opaque_boundary": False,
+            "scene_ref": "scene:open-ground", "scene_excerpt": "The combatants see each other.",
+        },
+        "target_vision": {
+            "distance_ft": 5, "illumination": "bright", "obscuration": "none",
+            "magical_darkness": False, "opaque_boundary": False,
+            "scene_ref": "scene:open-ground", "scene_excerpt": "The combatants see each other.",
+        },
+        "targetable": True, "in_range": True, "cover_degree": "none",
     }]
     moved = spend_movement(encounter, "mover", 10, spatial_facts=facts)
     current = current_combatant(moved)
@@ -2024,6 +2140,364 @@ def test_extra_attack_cantrip_replacement_uses_one_attack_budget_and_cannot_over
             weapon_id="spell-attack:fire-bolt",
             attack_mode="cantrip",
         )
+
+
+@pytest.mark.parametrize("special_attack", ["grapple", "shove"])
+def test_2014_special_attack_replaces_one_attack_and_preserves_extra_attack(
+    special_attack: str,
+) -> None:
+    attacker = _actor("special-attacker")
+    attacker["sheet"]["combat"]["attacks_per_action"] = 2
+    attacker["derived"] = derive_character_sheet(attacker["sheet"])
+    target = _actor("special-target")
+    attacker.update(initiative=20, tie_breaker=0)
+    target.update(initiative=10, tie_breaker=1)
+    encounter = start_encounter([attacker, target], ruleset="2014")
+
+    paid, payment = pay_2014_special_attack(encounter, attacker, kind=special_attack)
+    assert payment["kind"] == "special_attack_replacement"
+    assert payment["special_attack"] == special_attack
+    assert current_combatant(paid)["turn_budget"]["attack_budget"] == 1
+    flags = current_combatant(paid).get("turn_flags", {})
+    assert "weapon_attacks_this_turn" not in flags
+
+    with pytest.raises(CombatEngineError, match="require 2014"):
+        pay_2014_special_attack(
+            start_encounter([attacker, target], ruleset="2024"),
+            attacker,
+            kind=special_attack,
+        )
+
+
+def test_2014_special_attack_contest_ties_fail_and_incapacitated_target_auto_fails() -> None:
+    attacker = _actor("contest-attacker")
+    target = _actor("contest-target")
+    target["sheet"]["abilities"]["dexterity"]["score"] = 16
+    target["derived"] = derive_character_sheet(target["sheet"])
+    attacker.update(initiative=20, tie_breaker=0)
+    target.update(initiative=10, tie_breaker=1)
+    encounter = start_encounter([attacker, target], ruleset="2014")
+
+    tied = resolve_2014_special_attack_contest(
+        attacker,
+        target,
+        attacker_skill="athletics",
+        target_skill="acrobatics",
+        kind="grapple",
+        encounter=encounter,
+        rng=_SequenceRng(10, 10),
+    )
+    assert tied["tie"] is True
+    assert tied["success"] is False
+
+    target["sheet"]["conditions"] = ["incapacitated"]
+    automatic = resolve_2014_special_attack_contest(
+        attacker,
+        target,
+        attacker_skill="athletics",
+        target_skill="athletics",
+        kind="shove",
+        encounter=encounter,
+        rng=_SequenceRng(),
+    )
+    assert automatic["automatic_success"] is True
+    assert automatic["success"] is True
+    assert automatic["attacker_check"] is None
+
+
+def test_2014_escape_contest_uses_grappler_athletics_proficiency() -> None:
+    grappler = _actor("grappler")
+    escapee = _actor("escapee")
+    grappler["sheet"]["skills"]["athletics"]["proficiency"] = "proficient"
+    grappler["derived"] = derive_character_sheet(grappler["sheet"])
+    grappler.update(initiative=20, tie_breaker=0)
+    escapee.update(initiative=10, tie_breaker=1)
+    encounter = start_encounter([grappler, escapee], ruleset="2014")
+
+    result = resolve_2014_special_attack_contest(
+        escapee,
+        grappler,
+        attacker_skill="athletics",
+        target_skill="acrobatics",
+        kind="escape",
+        encounter=encounter,
+        rng=_SequenceRng(10, 10),
+    )
+    assert result["attacker_check"]["proficiency_bonus"] == 0
+    assert result["target_check"]["proficiency_bonus"] == 2
+
+
+def test_2014_grid_vision_resolves_light_and_senses() -> None:
+    source_ref = "bundled:srd2014/04_Equipment/Adventuring_Gear.md#Torch"
+    torch_excerpt = (
+        "A torch burns for 1 hour, shedding bright light in a 20-foot radius and dim light "
+        "for an additional 20 feet."
+    )
+
+    def actors(*, viewer_senses: dict[str, int], map_request: dict, subject_x: int = 2):
+        viewer = _actor("viewer")
+        viewer["sheet"]["traits"]["senses"].update(viewer_senses)
+        viewer["derived"] = derive_character_sheet(viewer["sheet"])
+        subject = _actor("subject")
+        viewer.update(initiative=20, tie_breaker=0, position={"x": 0, "y": 0})
+        subject.update(initiative=10, tie_breaker=1, position={"x": subject_x, "y": 0})
+        battle_map = compile_battle_map(
+            {"scene_id": "vision-test", "spatial": {}},
+            {"width_cells": 8, "height_cells": 8, **map_request},
+        )
+        encounter = start_encounter(
+            [viewer, subject], ruleset="2014", positioning_mode="grid", battle_map=battle_map,
+        )
+        participants = {item["actor_id"]: item for item in encounter["combatants"]}
+        return encounter, participants["viewer"], participants["subject"]
+
+    dark_map = {"ambient_illumination": "dark"}
+    encounter, ordinary, subject = actors(viewer_senses={}, map_request=dark_map)
+    assert not can_see(ordinary, subject, encounter)
+
+    encounter, darkvision, subject = actors(
+        viewer_senses={"darkvision": 30}, map_request=dark_map,
+    )
+    profile = vision_profile_2014(encounter, darkvision, subject)
+    assert can_see(darkvision, subject, encounter)
+    assert profile["darkvision_used"] is True
+    assert profile["color_detail"] == "grayscale"
+
+    magical_map = {
+        **dark_map,
+        "vision_cells": [{
+            "x": 2, "y": 0, "illumination": "dark", "obscuration": None,
+            "magical_darkness": True, "opaque": False, "source_ref": "scene:vision-test:darkness",
+            "source_excerpt": "The chamber is filled with magical darkness.",
+        }],
+    }
+    encounter, darkvision, subject = actors(
+        viewer_senses={"darkvision": 30}, map_request=magical_map,
+    )
+    assert not can_see(darkvision, subject, encounter)
+    encounter, truesight, subject = actors(
+        viewer_senses={"truesight": 30}, map_request=magical_map,
+    )
+    assert can_see(truesight, subject, encounter)
+
+    torch_map = {
+        "ambient_illumination": "dark",
+        "light_sources": [{
+            "id": "torch", "position": {"x": 0, "y": 0},
+            "bright_radius_ft": 20, "dim_radius_ft": 40,
+            "source_ref": source_ref, "source_excerpt": torch_excerpt,
+        }],
+    }
+    encounter, ordinary, subject = actors(
+        viewer_senses={}, map_request=torch_map, subject_x=5,
+    )
+    profile = vision_profile_2014(encounter, ordinary, subject)
+    assert can_see(ordinary, subject, encounter)
+    assert profile["light_level"] == "dim"
+    assert profile["perception_disadvantage"] is True
+
+
+def test_2014_agent_vision_derives_sight_from_bounded_scene_facts() -> None:
+    facts = {
+        "distance_ft": 30,
+        "illumination": "dark",
+        "obscuration": "none",
+        "magical_darkness": False,
+        "opaque_boundary": False,
+        "scene_ref": "scene:crypt:hall",
+        "scene_excerpt": "The target is in the unlit hall, with no barrier between them.",
+    }
+    ordinary = _actor("ordinary-vision")
+    profile = resolve_agent_vision_2014(ordinary, facts)
+    assert profile["visible"] is False
+
+    darkvision = _actor("darkvision")
+    darkvision["sheet"]["traits"]["senses"]["darkvision"] = 60
+    darkvision["derived"] = derive_character_sheet(darkvision["sheet"])
+    profile = resolve_agent_vision_2014(darkvision, facts)
+    assert profile["visible"] is True
+    assert profile["color_detail"] == "grayscale"
+    assert profile["perception_disadvantage"] is True
+
+    magical = {**facts, "magical_darkness": True}
+    assert resolve_agent_vision_2014(darkvision, magical)["visible"] is False
+    truesight = _actor("truesight")
+    truesight["sheet"]["traits"]["senses"]["truesight"] = 60
+    truesight["derived"] = derive_character_sheet(truesight["sheet"])
+    assert resolve_agent_vision_2014(truesight, magical)["visible"] is True
+
+    opaque = {**facts, "opaque_boundary": True}
+    assert resolve_agent_vision_2014(truesight, opaque)["visible"] is False
+    malformed = {**facts, "attacker_can_see_target": True}
+    with pytest.raises(CombatEngineError, match="exact bounded scene fields"):
+        resolve_agent_vision_2014(ordinary, malformed)
+
+
+def test_2014_sight_perception_applies_dim_disadvantage_and_heavy_failure() -> None:
+    torch_map = compile_battle_map(
+        {"scene_id": "perception-vision-test", "spatial": {}},
+        {
+            "width_cells": 8, "height_cells": 8, "ambient_illumination": "dark",
+            "light_sources": [{
+                "id": "torch", "position": {"x": 0, "y": 0},
+                "bright_radius_ft": 20, "dim_radius_ft": 40,
+                "source_ref": "bundled:srd2014/04_Equipment/Adventuring_Gear.md#Torch",
+                "source_excerpt": (
+                    "A torch burns for 1 hour, shedding bright light in a 20-foot radius "
+                    "and dim light for an additional 20 feet."
+                ),
+            }],
+        },
+    )
+    observer = _actor("perceiver")
+    observer.update(initiative=20, position={"x": 5, "y": 0})
+    subject = _actor("sight-task")
+    subject.update(initiative=10, position={"x": 6, "y": 0})
+    encounter = start_encounter(
+        [observer, subject], ruleset="2014", positioning_mode="grid", battle_map=torch_map,
+    )
+    rules = resolution_context(
+        {"edition": "2014", "fingerprint": "", "lock": []},
+        facts={"relies_on_sight": True},
+    )
+    result = resolve_actor_check(
+        observer,
+        kind="ability",
+        ability="perception",
+        skill_ability="wisdom",
+        dc=12,
+        encounter=encounter,
+        ruleset="2014",
+        rules=rules,
+        rng=_SequenceRng(15, 5),
+    )
+    assert result["disadvantage_applied"] is True
+    assert any(
+        receipt["mechanic_id"] == "dnd5e.core.vision.light_obscuration_2014"
+        for receipt in result["rule_receipts"]
+    )
+
+    blocked_map = compile_battle_map(
+        {"scene_id": "perception-blocked-test", "spatial": {}},
+        {
+            "width_cells": 8, "height_cells": 8, "ambient_illumination": "bright",
+            "vision_cells": [{
+                "x": 5, "y": 0, "illumination": None, "obscuration": "heavily",
+                "magical_darkness": False, "opaque": False,
+                "source_ref": "scene:perception-blocked-test:fog",
+                "source_excerpt": "Opaque fog fills the observer's space.",
+            }],
+        },
+    )
+    blocked_encounter = start_encounter(
+        [observer, subject], ruleset="2014", positioning_mode="grid", battle_map=blocked_map,
+    )
+    unused_rng = _SequenceRng(15)
+    blocked = resolve_actor_check(
+        observer,
+        kind="ability",
+        ability="perception",
+        skill_ability="wisdom",
+        dc=12,
+        encounter=blocked_encounter,
+        ruleset="2014",
+        rules=rules,
+        rng=unused_rng,
+    )
+    assert blocked["automatic_failure"] is True
+    assert unused_rng.values == [15]
+
+
+def test_2014_agent_perception_and_passive_hide_observer_use_sight_facts() -> None:
+    observer = _actor("agent-observer")
+    observer["sheet"]["traits"]["senses"]["darkvision"] = 60
+    observer["derived"] = derive_character_sheet(observer["sheet"])
+    subject = _actor("agent-hidden-subject")
+    observer.update(initiative=20)
+    subject.update(initiative=10)
+    encounter = start_encounter([observer, subject], ruleset="2014", positioning_mode="agent")
+    scene_facts = {
+        "distance_ft": 30,
+        "illumination": "dark",
+        "obscuration": "none",
+        "magical_darkness": False,
+        "opaque_boundary": False,
+        "scene_ref": "scene:crypt:observer-sight",
+        "scene_excerpt": "The observer can see through ordinary darkness to the hidden subject.",
+    }
+    rules = resolution_context(
+        {"edition": "2014", "fingerprint": "", "lock": []},
+        facts={"relies_on_sight": True, "vision_facts": scene_facts},
+    )
+    result = resolve_actor_check(
+        observer,
+        kind="check",
+        ability="perception",
+        dc=0,
+        encounter=encounter,
+        ruleset="2014",
+        rules=rules,
+        passive=True,
+        rng=_SequenceRng(),
+    )
+    assert result["vision"]["darkvision_used"] is True
+    assert result["vision"]["color_detail"] == "grayscale"
+    assert result["disadvantage_applied"] is True
+    assert any(
+        receipt["mechanic_id"] == "dnd5e.core.vision.light_obscuration_2014"
+        for receipt in result["rule_receipts"]
+    )
+
+
+def test_2014_agent_opportunity_attack_requires_derived_visibility() -> None:
+    def move_with_boundary(illumination: str) -> dict:
+        mover = _actor(f"mover-{illumination}")
+        threat = _actor(f"threat-{illumination}")
+        mover.update({"initiative": 20, "disposition": "friendly"})
+        threat.update({"initiative": 10, "disposition": "hostile"})
+        encounter = start_encounter(
+            [mover, threat], ruleset="2014", positioning_mode="agent"
+        )
+        threat_id = threat["id"]
+        scene = {
+            "distance_ft": 5,
+            "illumination": illumination,
+            "obscuration": "none",
+            "magical_darkness": False,
+            "opaque_boundary": False,
+            "scene_ref": "scene:crossing",
+            "scene_excerpt": "The mover crosses the threat's reach boundary.",
+        }
+        facts = {
+            "decision_id": "spatial:crossing",
+            "reason": "The mover crosses out of the adjacent threat's reach.",
+            "destination_legal": True,
+            "distance_ft": 10,
+            "opportunity_attack_actor_ids": [threat_id],
+            "space_segments": [
+                {"distance_ft": 5, "occupant_ids": [], "passage_width_ft": None,
+                 "difficult_terrain": False},
+                {"distance_ft": 5, "occupant_ids": [], "passage_width_ft": None,
+                 "difficult_terrain": False},
+            ],
+            "opportunity_attack_boundaries": [{
+                "actor_id": threat_id,
+                "distance_ft": 5,
+                "weapon_ids": ["unarmed-strike"],
+                "targetable": True,
+                "in_range": True,
+                "cover_degree": "none",
+                "attacker_vision": scene,
+                "target_vision": {**scene, "scene_ref": "scene:crossing:reciprocal"},
+            }],
+        }
+        return spend_movement(encounter, mover["id"], 10, spatial_facts=facts)
+
+    in_light = move_with_boundary("bright")
+    assert in_light["pending"][0]["trigger"] == "opportunity_attack"
+    assert in_light["pending"][0]["attack_spatial_facts"]["decision_id"] == "spatial:crossing"
+    in_dark = move_with_boundary("dark")
+    assert not in_dark.get("pending")
 
 
 def test_2024_nick_moves_the_light_extra_attack_into_the_attack_action() -> None:

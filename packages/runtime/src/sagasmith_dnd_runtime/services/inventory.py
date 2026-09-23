@@ -427,6 +427,10 @@ class InventoryService:
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Add a normalized inventory item and return its assigned item id."""
+        if dict(item.get("mechanics") or {}).get("poison_dose") is not None:
+            raise _support.CombatEngineError(
+                "source-bound poison doses must be added from their reviewed content artifact"
+            )
         current = self.characters.get(character_id)
         self.require_character_control(current, principal_id)
         self.require_outside_active_combat(current, "inventory changes")
@@ -467,6 +471,21 @@ class InventoryService:
         self.require_character_control(current, principal_id)
         self.require_outside_active_combat(current, "inventory changes")
         normalized_patch = _support.deepcopy(patch)
+        current_item = next(
+            (
+                item
+                for item in current.sheet.get("inventory", {}).get("items", [])
+                if str(item.get("id") or "") == item_id
+            ),
+            None,
+        )
+        if (
+            current_item is not None
+            and dict(current_item.get("mechanics") or {}).get("poison_dose") is not None
+        ) or dict(normalized_patch.get("mechanics") or {}).get("poison_dose") is not None:
+            raise _support.CombatEngineError(
+                "source-bound poison dose identity changes only through poison operations"
+            )
         patched_mechanics = normalized_patch.get("mechanics")
         if (
             isinstance(patched_mechanics, dict)
@@ -716,8 +735,12 @@ class InventoryService:
         if action in {"draw_weapon", "stow_weapon"}:
             item_id = payload.get("item_id")
             item = next(
-                (entry for entry in sheets[actor_id]["inventory"]["items"]
-                 if entry["id"] == item_id), None
+                (
+                    entry
+                    for entry in sheets[actor_id]["inventory"]["items"]
+                    if entry["id"] == item_id
+                ),
+                None,
             )
             if item is None or item.get("kind") != "weapon":
                 raise ValueError("draw/stow requires an owned weapon item_id")
@@ -741,7 +764,8 @@ class InventoryService:
                 else "extra_action"
             )
             state["combat"] = _support.resolve_common_action(
-                encounter, actor_id_value=actor_id,
+                encounter,
+                actor_id_value=actor_id,
                 action="interact_object" if payment == "object_interaction" else "use_object",
                 payload={"object_description": item["name"], "interaction": action},
                 payment=payment,
@@ -1008,6 +1032,10 @@ class InventoryService:
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Add an item to the campaign shared inventory."""
+        if dict(item.get("mechanics") or {}).get("poison_dose") is not None:
+            raise _support.CombatEngineError(
+                "source-bound poison doses must be added from their reviewed content artifact"
+            )
         self.access.require_campaign(campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES)
         if expected_revision is None or not idempotency_key:
             raise ValueError(

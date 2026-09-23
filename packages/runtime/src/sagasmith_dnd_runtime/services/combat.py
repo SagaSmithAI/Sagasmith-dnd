@@ -25,18 +25,28 @@ def _without_repeated_preflight_cards(encounter: dict[str, Any]) -> dict[str, An
             groups.append(group)
             continue
         omitted += sum(isinstance(actor, dict) and "combat_card" in actor for actor in actors)
-        groups.append({**group, "actors": [
-            {key: value for key, value in actor.items() if key != "combat_card"}
-            if isinstance(actor, dict) else actor for actor in actors
-        ]})
+        groups.append(
+            {
+                **group,
+                "actors": [
+                    {key: value for key, value in actor.items() if key != "combat_card"}
+                    if isinstance(actor, dict)
+                    else actor
+                    for actor in actors
+                ],
+            }
+        )
     if not omitted:
         return encounter
-    return {**encounter, "participant_manifest": {**manifest, "groups": groups},
-            "preflight_cards_window": {
-                "omitted": omitted, "cards_are_preparation_snapshots": True,
-                "read_next": {"tool": "combat_query", "view": "status",
-                              "payload": {"detail": "full"}},
-            }}
+    return {
+        **encounter,
+        "participant_manifest": {**manifest, "groups": groups},
+        "preflight_cards_window": {
+            "omitted": omitted,
+            "cards_are_preparation_snapshots": True,
+            "read_next": {"tool": "combat_query", "view": "status", "payload": {"detail": "full"}},
+        },
+    }
 
 
 def _with_current_turn(encounter: dict[str, Any]) -> dict[str, Any]:
@@ -44,14 +54,22 @@ def _with_current_turn(encounter: dict[str, Any]) -> dict[str, Any]:
     index = encounter.get("turn_index")
     actors = encounter.get("combatants")
     current = None
-    if (encounter.get("active") is True and type(index) is int
-            and isinstance(actors, list) and 0 <= index < len(actors)
-            and isinstance(actors[index], dict)):
-        current = {key: actors[index][key] for key in (
-            "actor_id", "name", "hit_points", "conditions", "turn_budget"
-        ) if key in actors[index]}
-    return {"current_turn": current,
-            **{key: value for key, value in encounter.items() if key != "current_turn"}}
+    if (
+        encounter.get("active") is True
+        and type(index) is int
+        and isinstance(actors, list)
+        and 0 <= index < len(actors)
+        and isinstance(actors[index], dict)
+    ):
+        current = {
+            key: actors[index][key]
+            for key in ("actor_id", "name", "hit_points", "conditions", "turn_budget")
+            if key in actors[index]
+        }
+    return {
+        "current_turn": current,
+        **{key: value for key, value in encounter.items() if key != "current_turn"},
+    }
 
 
 class CombatService:
@@ -1012,6 +1030,7 @@ class CombatService:
             "opportunity_attack_actor_ids",
             "opportunity_attack_boundaries",
             "space_segments",
+            "grapple_drag",
         }
         required_fields = {"decision_id", "reason", "destination_legal", "distance_ft"}
         if set(spatial_facts) - allowed_fields or required_fields - set(spatial_facts):
@@ -1036,11 +1055,14 @@ class CombatService:
                     ruling_kind="agent_dm_adjudication",
                 )
             segments = validate_segments(
-                spatial_facts["space_segments"], spatial_facts["distance_ft"],
+                spatial_facts["space_segments"],
+                spatial_facts["distance_ft"],
             )
             ground_cost = sum(s["distance_ft"] for s in segments if s["difficult_terrain"])
-            if ("difficult_terrain_extra_ft" in spatial_facts
-                    and spatial_facts["difficult_terrain_extra_ft"] != ground_cost):
+            if (
+                "difficult_terrain_extra_ft" in spatial_facts
+                and spatial_facts["difficult_terrain_extra_ft"] != ground_cost
+            ):
                 raise _support.CombatEngineError(
                     "terrain cost disagrees with reviewed space segments"
                 )
@@ -1067,6 +1089,47 @@ class CombatService:
                     f"Agent movement spatial fact {field} must be a non-negative "
                     "five-foot increment"
                 )
+        grapple_drag = spatial_facts.get("grapple_drag", [])
+        if not isinstance(grapple_drag, list) or len(grapple_drag) > 32:
+            raise _support.CombatEngineError(
+                "grapple_drag must be a bounded list of reviewed grapple movements"
+            )
+        normalized_drag = []
+        for fact in grapple_drag:
+            if not isinstance(fact, dict) or set(fact) != {
+                "grapple_id",
+                "target_id",
+                "decision_id",
+                "reason",
+                "legal",
+                "remains_within_reach",
+            }:
+                raise _support.CombatEngineError(
+                    "grapple_drag entries require exact source, target, and spatial decision facts"
+                )
+            decision_id = str(fact.get("decision_id") or "").strip()
+            reason = " ".join(str(fact.get("reason") or "").split())
+            if (
+                not str(fact.get("grapple_id") or "").strip()
+                or not str(fact.get("target_id") or "").strip()
+                or not decision_id
+                or not reason
+                or len(reason) > 500
+                or fact.get("legal") is not True
+                or fact.get("remains_within_reach") is not True
+            ):
+                raise _support.CombatEngineError(
+                    "Agent grapple dragging facts must confirm a legal move within reach"
+                )
+            normalized_drag.append(
+                {
+                    **fact,
+                    "grapple_id": str(fact["grapple_id"]).strip(),
+                    "target_id": str(fact["target_id"]).strip(),
+                    "decision_id": decision_id,
+                    "reason": reason,
+                }
+            )
         participant_ids = {
             str(item.get("actor_id") or "") for item in encounter.get("combatants", [])
         }
@@ -1097,6 +1160,7 @@ class CombatService:
                 spatial_facts.get("moves_toward_aggressive_target", False)
             ),
             "opportunity_attack_actor_ids": list(threat_ids),
+            "grapple_drag": normalized_drag,
         }
 
     def sync_combatant_spaces(self, encounter, actor_id, sheet):
@@ -1106,16 +1170,19 @@ class CombatService:
         from sagasmith_dnd.character_schema import effective_size
         from sagasmith_dnd.spaces import grid_space, passage_space
 
-        for combatant in [*encounter.get("combatants", []),
-                          *encounter.get("reinforcements", [])]:
+        for combatant in [*encounter.get("combatants", []), *encounter.get("reinforcements", [])]:
             if combatant.get("actor_id") != actor_id:
                 continue
             combatant["size"] = effective_size(sheet)
             if encounter.get("positioning_mode") == "grid" and combatant.get("position"):
                 position = combatant["position"]
-                combatant.update(grid_space(
-                    combatant, (position["x"], position["y"]), encounter.get("battle_map") or {},
-                ))
+                combatant.update(
+                    grid_space(
+                        combatant,
+                        (position["x"], position["y"]),
+                        encounter.get("battle_map") or {},
+                    )
+                )
             elif encounter.get("positioning_mode") == "agent":
                 combatant.update(passage_space(combatant, combatant.get("passage_width_ft")))
 
@@ -1159,6 +1226,9 @@ class CombatService:
                 # effect could make a persisted dodging=True flag active again.
                 prior_dodge_transition = _support.reconcile_dodge_lifecycle(combatant)
                 combatant["conditions"] = list(sheet.get("conditions") or [])
+                combatant["senses"] = _support.deepcopy(
+                    dict(sheet.get("traits") or {}).get("senses") or {}
+                )
                 combatant["hit_points"] = int(sheet["combat"]["hp"]["value"])
                 self.sync_combatant_spaces(encounter, actor_id, sheet)
                 if (
@@ -1172,10 +1242,13 @@ class CombatService:
                 combatant["condition_sources"] = _support.timed_condition_sources(sheet)
                 from sagasmith_dnd.combat_engine import _opportunity_attack_options
 
-                combatant["opportunity_attack_options"] = _opportunity_attack_options({
-                    "id": actor_id, "sheet": sheet,
-                    "derived": self.derive_character_sheet(sheet, character_id=actor_id),
-                })
+                combatant["opportunity_attack_options"] = _opportunity_attack_options(
+                    {
+                        "id": actor_id,
+                        "sheet": sheet,
+                        "derived": self.derive_character_sheet(sheet, character_id=actor_id),
+                    }
+                )
                 combatant["speed_multiplier"] = _support.source_speed_multiplier(sheet)
                 if conditions.intersection(_support.INCAPACITATING_STATE_IDS):
                     flags = dict(combatant.get("turn_flags") or {})
@@ -1332,6 +1405,17 @@ class CombatService:
                 str(item.get("actor_id") or "") for item in encounter.get("combatants", [])
             }:
                 raise direct_error
+            from sagasmith_dnd.mounted_combat import relation_for_mount
+
+            mount_relation = relation_for_mount(encounter, actor_id_value)
+            if mount_relation is not None and mount_relation.get("mode") == "controlled":
+                owner_actor_id = str(mount_relation.get("rider_actor_id") or "")
+                self.access.require_actor(campaign_id, owner_actor_id, principal_id, control=True)
+                return {
+                    "kind": "controlled_mount",
+                    "owner_character_id": owner_actor_id,
+                    "mount_actor_id": actor_id_value,
+                }
             matches = [
                 relation
                 for relation in _support.validate_dependent_actor_relations(
@@ -1361,6 +1445,28 @@ class CombatService:
                 "owner_character_id": matches[0]["owner_character_id"],
                 "dependent_actor_id": actor_id_value,
             }
+
+    @staticmethod
+    def require_mounted_action(encounter: dict[str, Any], actor_id_value: str, action: str) -> None:
+        combatant = next(
+            (
+                item
+                for item in encounter.get("combatants", [])
+                if str(item.get("actor_id") or "") == str(actor_id_value)
+            ),
+            None,
+        )
+        contract = dict((combatant or {}).get("mounted_turn") or {})
+        if contract.get("mode") == "controlled" and action not in {
+            "move",
+            "stand",
+            "dash",
+            "disengage",
+            "dodge",
+        }:
+            raise _support.CombatEngineError(
+                "a controlled mount may only Dash, Disengage, or Dodge as an action"
+            )
 
     def reviewed_chase_source(
         self,
@@ -1580,7 +1686,10 @@ class CombatService:
             actor_snapshots,
             rules=rules_context,
             pursuer_rules=chase_passive_contexts(
-                self, campaign_id, resolved_branch_id, principal_id,
+                self,
+                campaign_id,
+                resolved_branch_id,
+                principal_id,
                 [identifier for identifier in participant_ids if identifier not in quarry_ids],
                 passive_rule_facts,
             ),
@@ -1621,9 +1730,12 @@ class CombatService:
             operation="chase.start",
             character_updates=[
                 _support.CharacterStateUpdate(
-                    character_id=snapshot["id"], sheet=snapshot["sheet"], notes=snapshot["notes"],
+                    character_id=snapshot["id"],
+                    sheet=snapshot["sheet"],
+                    notes=snapshot["notes"],
                     expected_revision=snapshot["revision"],
-                ) for snapshot in actor_snapshots
+                )
+                for snapshot in actor_snapshots
             ],
             actor=principal_id,
             branch_id=resolved_branch_id,
@@ -1763,9 +1875,15 @@ class CombatService:
             death_saves=current_actor.character_type == "pc",
             rules=rules_context,
             pursuer_rules=chase_passive_contexts(
-                self, campaign_id, resolved_branch_id, principal_id,
-                [str(item["actor_id"]) for item in chase.get("participants", [])
-                 if item.get("role") == "pursuer" and item.get("active", True)],
+                self,
+                campaign_id,
+                resolved_branch_id,
+                principal_id,
+                [
+                    str(item["actor_id"])
+                    for item in chase.get("participants", [])
+                    if item.get("role") == "pursuer" and item.get("active", True)
+                ],
                 passive_rule_facts,
             ),
         )
@@ -2580,7 +2698,12 @@ class CombatService:
         from .saving_throws import finalize
 
         updated_state, source_start_updates, start_fields, start_receipts = finalize(
-            self, campaign, updated_state, source_start_updates, start_fields, start_receipts,
+            self,
+            campaign,
+            updated_state,
+            source_start_updates,
+            start_fields,
+            start_receipts,
         )
         self.validate_inventory_custody_update(campaign, updated_state, source_start_updates)
         encounter = updated_state["combat"]
@@ -2785,7 +2908,12 @@ class CombatService:
         from .saving_throws import finalize
 
         next_state, character_updates, join_fields, receipts = finalize(
-            self, campaign, next_state, character_updates, join_fields, receipts,
+            self,
+            campaign,
+            next_state,
+            character_updates,
+            join_fields,
+            receipts,
         )
         self.validate_inventory_custody_update(campaign, next_state, character_updates)
         next_encounter = next_state["combat"]
@@ -2959,6 +3087,15 @@ class CombatService:
 
         rage_turn = rage.end_turn(current_sheet)
         current_sheet = rage_turn["sheet"]
+        current_sheet, poison_end_events, poison_end_receipts = self.settle_poison_turn_events(
+            campaign,
+            campaign_id,
+            actor_id,
+            current_sheet,
+            phase="end_of_turn",
+            branch_id=resolved_branch_id,
+            encounter=encounter,
+        )
         duration = _support.advance_effect_durations(current_sheet, period="turn_end")
         ended_turn_token = self.encounter_turn_token(next_encounter)
         expired_standard_turn_end = self.expire_standard_source_turn_effects(
@@ -2985,6 +3122,27 @@ class CombatService:
             if item.get("kind") == "spell" and str(item.get("id")) not in remaining_readied_ids
         ]
         next_combatant = _support.current_combatant(next_state["combat"])
+        if next_combatant is not None:
+            next_actor_id = str(next_combatant.get("actor_id") or "")
+            needs_poison_rng = self.poison_turn_events_due(actor_id, "end_of_turn") or (
+                bool(next_actor_id) and self.poison_turn_events_due(next_actor_id, "start_of_turn")
+            )
+            if needs_poison_rng and _support.active_random_stream() is None:
+                with self.campaign_random_context(
+                    campaign_id,
+                    "combat.poison.turn",
+                    {"idempotency_key": idempotency_key},
+                ):
+                    return self.combat_end_turn(
+                        campaign_id,
+                        actor_id,
+                        principal_id,
+                        expected_revision,
+                        resolved_branch_id,
+                        idempotency_key,
+                    )
+        poison_turn_events = list(poison_end_events)
+        poison_turn_receipts = list(poison_end_receipts)
         expired_standard_turn_start: list[str] = []
         if next_combatant is not None:
             next_actor_id = str(next_combatant.get("actor_id") or "")
@@ -3067,6 +3225,18 @@ class CombatService:
         activity_recharge_receipts: list[dict[str, Any]] = []
         if next_combatant is not None:
             next_actor_id = str(next_combatant.get("actor_id") or "")
+            next_sheet, next_events, next_receipts = self.settle_poison_turn_events(
+                campaign,
+                campaign_id,
+                next_actor_id,
+                source_sheets[next_actor_id],
+                phase="start_of_turn",
+                branch_id=resolved_branch_id,
+                encounter=next_state["combat"],
+            )
+            source_sheets[next_actor_id] = next_sheet
+            poison_turn_events.extend(next_events)
+            poison_turn_receipts.extend(next_receipts)
             try:
                 recharged = _support.recharge_activities_at_turn_start(
                     source_sheets[next_actor_id],
@@ -3105,6 +3275,7 @@ class CombatService:
             "turn.end.duration_clock",
         )
         rule_receipts.extend(activity_recharge_receipts)
+        rule_receipts.extend(poison_turn_receipts)
         if rage.feature(current.sheet):
             expired_effects.update(rage_turn["ended"])
             rule_receipts.extend(
@@ -3236,7 +3407,12 @@ class CombatService:
         from .saving_throws import finalize
 
         next_state, combat_updates, steel_defender_lifecycle, rule_receipts = finalize(
-            self, campaign, next_state, combat_updates, steel_defender_lifecycle, rule_receipts,
+            self,
+            campaign,
+            next_state,
+            combat_updates,
+            steel_defender_lifecycle,
+            rule_receipts,
         )
 
         def turn_end_response(revisions: list[Any]) -> dict[str, Any]:
@@ -3250,6 +3426,7 @@ class CombatService:
                 "world_expired": list(dict.fromkeys(world_expired)),
                 "readied_spells_expired": sorted(str(item.get("id")) for item in expired_readied),
                 "activity_recharges": activity_recharges,
+                "poison_events": poison_turn_events,
                 "rule_receipts": rule_receipts,
                 "ruleset_fingerprint": rule_context.fingerprint,
                 "campaign_revision": campaign.revision + 1,
@@ -3295,10 +3472,12 @@ class CombatService:
         travel_mode: str = "walk",
         crawl: bool = False,
         spatial_facts: dict[str, Any] | None = None,
+        drag_grapple_ids: list[str] | None = None,
         principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
         expected_revision: int | None = None,
         branch_id: str | None = None,
         idempotency_key: str | None = None,
+        jump: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Apply movement with a reason and an independent travel-speed mode.
 
@@ -3320,6 +3499,8 @@ class CombatService:
             "travel_mode": travel_mode,
             "crawl": crawl,
             "spatial_facts": spatial_facts,
+            "drag_grapple_ids": drag_grapple_ids,
+            "jump": jump,
             "branch_id": resolved_branch_id,
         }
         scope = f"combat-move:{campaign_id}:{resolved_branch_id}:{principal_id}"
@@ -3334,7 +3515,104 @@ class CombatService:
             )
         _, encounter = self.active_encounter(campaign_id)
         self.require_no_blocking_pending(encounter)
+        self.require_mounted_action(encounter, actor_id, "move")
+        mounted_riders: list[str] = []
+        if str(movement_mode).strip().casefold().replace("-", "_") in {"forced", "teleport"}:
+            from sagasmith_dnd.mounted_combat import riders_of
+
+            mounted_riders = riders_of(encounter, actor_id)
+            if mounted_riders and _support.active_random_stream() is None:
+                with self.campaign_random_context(
+                    campaign_id,
+                    "combat_movement_mounted_fall",
+                    {"idempotency_key": idempotency_key},
+                ):
+                    return self.combat_move(
+                        campaign_id,
+                        actor_id,
+                        distance,
+                        destination,
+                        path,
+                        movement_mode,
+                        travel_mode,
+                        crawl,
+                        spatial_facts,
+                        drag_grapple_ids,
+                        principal_id,
+                        expected_revision,
+                        branch_id,
+                        idempotency_key,
+                        jump=jump,
+                    )
         normalized_spatial_facts = self.validate_agent_movement_facts(encounter, spatial_facts)
+        if (
+            encounter.get("positioning_mode") == "agent"
+            and encounter.get("ruleset") == "2014"
+            and normalized_spatial_facts
+            and normalized_spatial_facts.get("opportunity_attack_actor_ids")
+        ):
+            self.access.require_campaign(
+                campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES
+            )
+        drag_ids = list(drag_grapple_ids or [])
+        if len(drag_ids) != len(set(drag_ids)) or any(
+            not isinstance(item, str) or not item.strip() for item in drag_ids
+        ):
+            raise _support.CombatEngineError(
+                "drag_grapple_ids must contain unique non-empty grapple source IDs"
+            )
+        if encounter.get("positioning_mode") == "agent":
+            drag_facts = list((normalized_spatial_facts or {}).get("grapple_drag") or [])
+            fact_ids = [str(item.get("grapple_id") or "") for item in drag_facts]
+            if set(fact_ids) != set(drag_ids) or len(fact_ids) != len(set(fact_ids)):
+                raise _support.NeedsRulingError(
+                    "Agent grapple dragging requires a reviewed fact for each exact grapple",
+                    missing=("movement.spatial_facts.grapple_drag",),
+                    ruling_kind="agent_dm_adjudication",
+                )
+            if drag_ids:
+                self.access.require_campaign(
+                    campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES
+                )
+        elif normalized_spatial_facts is not None and "grapple_drag" in normalized_spatial_facts:
+            raise _support.CombatEngineError(
+                "Grid grapple dragging derives legality from token positions"
+            )
+        for grapple_id in drag_ids:
+            grapple = next(
+                (
+                    item
+                    for item in encounter.get("grapple_sources", [])
+                    if item.get("active", True)
+                    and str(item.get("id") or "") == grapple_id
+                    and str(item.get("source_actor_id") or "") == actor_id
+                ),
+                None,
+            )
+            if grapple is None:
+                raise _support.CombatEngineError(
+                    "only an active source-owned grapple can be dragged"
+                )
+            if encounter.get("positioning_mode") == "agent":
+                fact = next(
+                    item
+                    for item in normalized_spatial_facts["grapple_drag"]
+                    if item["grapple_id"] == grapple_id
+                )
+                if fact["target_id"] != str(grapple.get("target_actor_id") or ""):
+                    raise _support.CombatEngineError(
+                        "Agent grapple dragging fact names a different held creature"
+                    )
+            target_id = str(grapple.get("target_actor_id") or "")
+            target_record = self.require_campaign_actor(campaign_id, target_id)
+            if str(grapple.get("effect_id") or "") not in {
+                str(item.get("id") or "")
+                for item in target_record.sheet.get("effects", [])
+                if item.get("active", True)
+            } or "grappled" not in _support.condition_ids(target_record.sheet.get("conditions")):
+                raise _support.CombatEngineError(
+                    "dragged target must still have this active source-bound grapple"
+                )
         space_guards = []
         if encounter.get("ruleset") == "2014":
             encounter = _support.deepcopy(encounter)
@@ -3344,10 +3622,242 @@ class CombatService:
                 current = self.characters.get(participant["actor_id"])
                 sheet = _support.deepcopy(current.sheet)
                 self.sync_combatant_spaces(encounter, current.id, sheet)
-                space_guards.append(_support.CharacterStateUpdate(
-                    character_id=current.id, sheet=sheet, notes=current.notes,
-                    expected_revision=current.revision,
-                ))
+                space_guards.append(
+                    _support.CharacterStateUpdate(
+                        character_id=current.id,
+                        sheet=sheet,
+                        notes=current.notes,
+                        expected_revision=current.revision,
+                    )
+                )
+        jump_result = None
+        movement_distance = distance
+        movement_destination = destination
+        movement_path = path
+        movement_jump_kind = None
+        if jump is not None:
+            if encounter.get("ruleset") != "2014":
+                raise _support.CombatEngineError("native jumping requires a 2014 encounter")
+            if (
+                str(movement_mode).casefold() != "voluntary"
+                or str(travel_mode).casefold() != "walk"
+                or crawl
+                or drag_ids
+            ):
+                raise _support.CombatEngineError(
+                    "jumps require voluntary on-foot movement without crawling or grapple dragging"
+                )
+            positioning_mode = str(encounter.get("positioning_mode") or "grid")
+            required_jump_fields = (
+                {"kind"}
+                if positioning_mode == "grid"
+                else {
+                    "kind",
+                    "spatial_facts",
+                }
+            )
+            if not isinstance(jump, dict) or set(jump) != required_jump_fields:
+                raise _support.CombatEngineError(
+                    "jump requires kind and, for Agent positioning, spatial_facts"
+                )
+            kind = str(jump.get("kind") or "").casefold()
+            if kind not in {"long", "high"}:
+                raise _support.CombatEngineError("jump kind must be long or high")
+            running_start_ft = None
+            obstacle_height_ft = None
+            obstacle_check_required = False
+            exceptional_height_dc = None
+            if positioning_mode == "agent":
+                self.access.require_campaign(
+                    campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES
+                )
+                facts = jump.get("spatial_facts")
+                fact_fields = {
+                    "decision_id",
+                    "reason",
+                    "scene_ref",
+                    "scene_excerpt",
+                    "running_start_ft",
+                    "obstacle_height_ft",
+                    "obstacle_check_required",
+                    "landing_difficult_terrain",
+                    "exceptional_height_dc",
+                }
+                if not isinstance(facts, dict) or set(facts) != fact_fields:
+                    raise _support.NeedsRulingError(
+                        "Agent jump requires bounded source-grounded path and landing facts",
+                        missing=("jump.spatial_facts",),
+                        ruling_kind="agent_dm_adjudication",
+                    )
+                for field, limit in (
+                    ("decision_id", 160),
+                    ("scene_ref", 500),
+                    ("scene_excerpt", 2000),
+                ):
+                    value = facts.get(field)
+                    if not isinstance(value, str) or not value.strip() or len(value) > limit:
+                        raise _support.CombatEngineError(
+                            f"jump.spatial_facts.{field} must be non-empty bounded text"
+                        )
+                reason = " ".join(str(facts.get("reason") or "").split())
+                if not reason or len(reason) > 500:
+                    raise _support.CombatEngineError(
+                        "jump.spatial_facts.reason must be non-empty text up to 500 characters"
+                    )
+                running_start_ft = facts.get("running_start_ft")
+                obstacle_height_ft = facts.get("obstacle_height_ft")
+                exceptional_height_dc = facts.get("exceptional_height_dc")
+                if (
+                    isinstance(running_start_ft, bool)
+                    or not isinstance(running_start_ft, int)
+                    or not 0 <= running_start_ft <= 1000
+                ):
+                    raise _support.CombatEngineError(
+                        "jump running_start_ft must be from 0 through 1000"
+                    )
+                if obstacle_height_ft is not None and (
+                    isinstance(obstacle_height_ft, bool)
+                    or not isinstance(obstacle_height_ft, int)
+                    or not 0 <= obstacle_height_ft <= 1000
+                ):
+                    raise _support.CombatEngineError(
+                        "jump obstacle_height_ft must be an integer from 0 through 1000 or null"
+                    )
+                if (
+                    type(facts.get("obstacle_check_required")) is not bool
+                    or type(facts.get("landing_difficult_terrain")) is not bool
+                ):
+                    raise _support.CombatEngineError(
+                        "jump obstacle and landing rulings must be boolean"
+                    )
+                obstacle_check_required = facts["obstacle_check_required"]
+                if obstacle_height_ft is None and obstacle_check_required:
+                    raise _support.CombatEngineError(
+                        "an obstacle check requires a recorded obstacle"
+                    )
+                if exceptional_height_dc is not None and (
+                    isinstance(exceptional_height_dc, bool)
+                    or not isinstance(exceptional_height_dc, int)
+                    or not 1 <= exceptional_height_dc <= 40
+                ):
+                    raise _support.CombatEngineError(
+                        "exceptional height DC must be from 1 through 40 or null"
+                    )
+                landing_difficult = facts["landing_difficult_terrain"]
+            else:
+                landing_position = (
+                    _support.deepcopy(
+                        next(
+                            item
+                            for item in encounter["combatants"]
+                            if item.get("actor_id") == actor_id
+                        ).get("position")
+                    )
+                    if kind == "high"
+                    else destination
+                )
+                if kind == "high" and (destination is not None or path is not None):
+                    raise _support.CombatEngineError(
+                        "Grid high jumps use distance as height and have no horizontal destination"
+                    )
+                from sagasmith_dnd.combat_engine import _position
+
+                landing = _position(landing_position)
+                if landing is None:
+                    raise _support.NeedsRulingError(
+                        "Grid jump landing requires a known position",
+                        missing=("jump.landing_position",),
+                    )
+                from sagasmith_dnd.spaces import grid_space
+
+                jumper = next(
+                    item for item in encounter["combatants"] if item.get("actor_id") == actor_id
+                )
+                footprint = grid_space(jumper, landing, encounter.get("battle_map") or {})[
+                    "space_ft"
+                ]
+                cells = set(dict(encounter.get("battle_map") or {}).get("difficult_cells") or [])
+                cells_per_side = int(footprint // 5)
+                landing_difficult = any(
+                    f"{x},{y}" in cells
+                    for x in range(int(landing[0]), int(landing[0]) + cells_per_side)
+                    for y in range(int(landing[1]), int(landing[1]) + cells_per_side)
+                )
+                if kind == "high":
+                    movement_destination = None
+                    movement_path = None
+            stream = _support.active_random_stream()
+            if stream is None:
+                stream = _support.CampaignRandomStream.from_campaign_state(
+                    campaign_id,
+                    campaign.state,
+                    operation="combat.movement.jump",
+                    idempotency_key=idempotency_key,
+                    campaign_revision=campaign.revision,
+                )
+                with _support.use_random_stream(stream):
+                    return self.combat_move(
+                        campaign_id,
+                        actor_id,
+                        distance,
+                        destination,
+                        path,
+                        movement_mode,
+                        travel_mode,
+                        crawl,
+                        spatial_facts,
+                        drag_grapple_ids,
+                        principal_id,
+                        expected_revision,
+                        branch_id,
+                        idempotency_key,
+                        jump=jump,
+                    )
+            random_state = _support.validate_random_stream_state(
+                dict(campaign.state or {}).get("random_stream")
+                or _support.initial_random_stream(f"sagasmith-dnd:{campaign_id}")
+            )
+            if (
+                stream.campaign_id != campaign_id
+                or stream.seed != random_state["seed"]
+                or stream.start_position != random_state["position"]
+                or (
+                    stream.campaign_revision is not None
+                    and stream.campaign_revision != campaign.revision
+                )
+            ):
+                raise _support.CombatEngineError(
+                    "jump checks require the current campaign random snapshot"
+                )
+            jump_actor = self.combat_actor_snapshot(actor_id)
+            jumper = next(
+                item for item in encounter["combatants"] if item.get("actor_id") == actor_id
+            )
+            jump_result = _support.settle_jump_2014(
+                encounter,
+                jump_actor,
+                jumper,
+                kind=kind,
+                distance_ft=distance,
+                obstacle_height_ft=obstacle_height_ft,
+                obstacle_check_required=obstacle_check_required,
+                landing_difficult_terrain=landing_difficult,
+                exceptional_height_dc=exceptional_height_dc,
+                running_start_ft_override=running_start_ft,
+                defer_landing_check=True,
+                rng=stream,
+            )
+            if positioning_mode == "agent":
+                jump_result["spatial_facts"] = _support.deepcopy(jump["spatial_facts"])
+            movement_jump_kind = kind
+            if jump_result["outcome"] == "hit_obstacle":
+                movement_distance = 0
+                movement_destination = jumper.get("position")
+                movement_path = None
+                movement_jump_kind = None
+            elif jump_result["outcome"] == "exceptional_height_failed":
+                movement_distance = int(jump_result["profile"]["maximum_ft"])
+                movement_jump_kind = "high"
         moving_combatant = next(
             item for item in encounter.get("combatants", []) if item.get("actor_id") == actor_id
         )
@@ -3358,14 +3868,111 @@ class CombatService:
         next_encounter = _support.spend_movement(
             encounter,
             actor_id,
-            distance,
-            destination=destination,
-            path=path,
+            movement_distance,
+            destination=movement_destination,
+            path=movement_path,
             movement_mode=movement_mode,
             travel_mode=travel_mode,
             crawl=crawl,
             spatial_facts=normalized_spatial_facts,
+            grapple_drag_ids=drag_ids,
+            jump_kind=movement_jump_kind,
         )
+        mount_fall_resolutions: list[dict[str, Any]] = []
+        if mounted_riders:
+            stream = _support.active_random_stream()
+            if stream is None:
+                raise _support.CombatEngineError(
+                    "forced mounted movement requires the campaign random stream"
+                )
+            from sagasmith_dnd.mounted_combat import forced_dismount_2014
+
+            mount_rules = self.effective_rule_context(
+                campaign_id,
+                facts={
+                    "mount_actor_id": actor_id,
+                    "movement_mode": str(movement_mode),
+                    "rider_actor_ids": list(mounted_riders),
+                },
+            )
+            for rider_id in mounted_riders:
+                rider_snapshot = self.combat_actor_snapshot(rider_id)
+                save = _support.resolve_actor_check(
+                    rider_snapshot,
+                    kind="save",
+                    ability="dexterity",
+                    dc=10,
+                    encounter=next_encounter,
+                    rules=mount_rules,
+                    rng=stream,
+                    ruleset="2014",
+                )
+                resolution = {
+                    "rider_actor_id": rider_id,
+                    "mount_actor_id": actor_id,
+                    "trigger": "mount_moved_unwillingly",
+                    "save": _support.deepcopy(save),
+                    "fell": not bool(save.get("success")),
+                }
+                if resolution["fell"]:
+                    next_encounter = forced_dismount_2014(
+                        next_encounter,
+                        rider_actor_id=rider_id,
+                        reason="mount_moved_unwillingly",
+                        prone=True,
+                    )
+                    next_encounter["log"][-1]["save"] = _support.deepcopy(save)
+                    rider_record = self.require_campaign_actor(campaign_id, rider_id)
+                    rider_sheet = _support.deepcopy(rider_record.sheet)
+                    _support.apply_condition_change(rider_sheet, condition_id="prone", add=True)
+                    self.sync_combatant_conditions(next_encounter, rider_id, rider_sheet)
+                    mount_fall_resolutions.append(
+                        {
+                            **resolution,
+                            "landing_position": next(
+                                item["position"]
+                                for item in next_encounter["combatants"]
+                                if item.get("actor_id") == rider_id
+                            ),
+                        }
+                    )
+                    space_guards = [
+                        update for update in space_guards if update.character_id != rider_id
+                    ]
+                    space_guards.append(
+                        _support.CharacterStateUpdate(
+                            character_id=rider_id,
+                            sheet=_support.validate_character_sheet(rider_sheet),
+                            notes=_support.validate_character_notes(rider_record.notes),
+                            expected_revision=rider_record.revision,
+                        )
+                    )
+                else:
+                    mount_fall_resolutions.append(resolution)
+        deferred_jump_landing = bool(
+            jump_result is not None
+            and jump_result.get("landing_check_pending")
+            and next_encounter.get("movement_continuation")
+        )
+        if deferred_jump_landing:
+            next_encounter["movement_continuation"]["deferred_landing_check"] = {
+                "actor_id": actor_id,
+                **_support.deepcopy(jump_result["landing_check_pending"]),
+            }
+        elif jump_result is not None and jump_result.get("landing_check_pending"):
+            next_encounter["jump_landing_check_due"] = {
+                "actor_id": actor_id,
+                **_support.deepcopy(jump_result["landing_check_pending"]),
+            }
+        if jump_result is not None:
+            next_encounter["log"] = [
+                *list(next_encounter.get("log") or []),
+                {
+                    "type": "jump_resolved",
+                    "actor_id": actor_id,
+                    "resolution": _support.deepcopy(jump_result),
+                },
+            ][-100:]
         range_reconciliation = _support.reconcile_witch_bolt_range(next_encounter)
         next_encounter = range_reconciliation["encounter"]
         ended_tethers = _support.newly_ended_witch_bolt_tethers(
@@ -3398,21 +4005,41 @@ class CombatService:
                 ended["sheet"],
             )
             replacement = _support.CharacterStateUpdate(
-                    character_id=caster_id,
-                    sheet=_support.validate_character_sheet(ended["sheet"]),
-                    notes=_support.validate_character_notes(caster.notes),
-                    expected_revision=caster.revision,
+                character_id=caster_id,
+                sheet=_support.validate_character_sheet(ended["sheet"]),
+                notes=_support.validate_character_notes(caster.notes),
+                expected_revision=caster.revision,
             )
             prior = next((u for u in concentration_updates if u.character_id == caster_id), None)
             if prior is not None:
                 concentration_updates[concentration_updates.index(prior)] = replacement
             else:
                 concentration_updates.append(replacement)
+        if jump_result is not None and jump_result.get("prone") and not deferred_jump_landing:
+            jumper_record = self.require_campaign_actor(campaign_id, actor_id)
+            jumper_sheet = _support.deepcopy(jumper_record.sheet)
+            _support.apply_condition_change(jumper_sheet, condition_id="prone", add=True)
+            self.sync_combatant_conditions(next_encounter, actor_id, jumper_sheet)
+            replacement = _support.CharacterStateUpdate(
+                character_id=actor_id,
+                sheet=_support.validate_character_sheet(jumper_sheet),
+                notes=_support.validate_character_notes(jumper_record.notes),
+                expected_revision=jumper_record.revision,
+            )
+            prior = next((u for u in concentration_updates if u.character_id == actor_id), None)
+            if prior is not None:
+                concentration_updates[concentration_updates.index(prior)] = replacement
+            else:
+                concentration_updates.append(replacement)
         movement_boundary_ids: list[str] = []
+        if jump_result is not None and jump_result.get("prone"):
+            movement_boundary_ids.append("dnd5e.core.movement.prone_crawl_stand")
         if encounter.get("ruleset") == "2014":
             from sagasmith_dnd.spaces import SPACE_RULE
 
             movement_boundary_ids.append(SPACE_RULE)
+        if jump_result is not None:
+            movement_boundary_ids.append("dnd5e.core.movement.jump_2014")
         normalized_movement_mode = str(movement_mode).strip().lower().replace("-", "_")
         if normalized_movement_mode == "aggressive":
             movement_boundary_ids.append(_support.CORE_ORC_AGGRESSIVE_MECHANIC_ID)
@@ -3422,12 +4049,16 @@ class CombatService:
             movement_boundary_ids.append("dnd5e.core.movement.prone_crawl_stand")
         if "grappled" in moving_conditions:
             movement_boundary_ids.append("dnd5e.core.movement.grapple_source")
+        if drag_ids:
+            movement_boundary_ids.append("dnd5e.core.movement.grapple_source")
         if "turned" in moving_conditions:
             movement_boundary_ids.append("dnd5e.core.activity.turn_undead")
-        if destination is not None:
+        if movement_destination is not None:
             movement_boundary_ids.append("dnd5e.core.movement.occupied_destination")
         difficult_cells = set(dict(encounter.get("battle_map") or {}).get("difficult_cells") or [])
-        route_points = list(path or ([] if destination is None else [destination]))
+        route_points = list(
+            movement_path or ([] if movement_destination is None else [movement_destination])
+        )
         if any(
             isinstance(point, dict) and f"{point.get('x')},{point.get('y')}" in difficult_cells
             for point in route_points
@@ -3442,6 +4073,8 @@ class CombatService:
             movement_boundary_ids.append("dnd5e.core.reaction.opportunity_path")
         if ended_tethers:
             movement_boundary_ids.append(_support.CORE_WITCH_BOLT_MECHANIC_ID)
+        if mounted_riders:
+            movement_boundary_ids.append("dnd5e.core.combat.mounted_2014")
         movement_receipts = _support.core_receipts(
             self.effective_rule_context(campaign_id),
             movement_boundary_ids,
@@ -3459,14 +4092,21 @@ class CombatService:
             payload=payload,
             response_fields={
                 "status": (
-                    "pending_reaction" if next_encounter.get("movement_continuation")
+                    "pending_reaction"
+                    if next_encounter.get("movement_continuation")
                     else "committed"
                 ),
                 "combat": next_encounter,
+                **({"jump_resolution": jump_result} if jump_result is not None else {}),
                 "rule_receipts": movement_receipts,
                 "ended_witch_bolt_tether_ids": [
                     str(item.get("id") or "") for item in ended_tethers
                 ],
+                **(
+                    {"mount_fall_resolutions": mount_fall_resolutions}
+                    if mount_fall_resolutions
+                    else {}
+                ),
             },
             character_updates=concentration_updates,
             rule_receipts=movement_receipts,
@@ -3536,6 +4176,100 @@ class CombatService:
         )
         return self.combat_response(campaign_id, principal_id, response)
 
+    def _settle_2014_mount_action(
+        self,
+        *,
+        campaign,
+        encounter,
+        campaign_id: str,
+        actor_id: str,
+        action: str,
+        target_id: str | None,
+        raw_payload: dict[str, Any],
+        principal_id: str,
+        branch_id: str,
+        idempotency_key: str | None,
+        scope: str,
+        payload_value: dict[str, Any],
+    ) -> dict[str, Any]:
+        if encounter.get("ruleset") != "2014":
+            raise _support.CombatEngineError("mounting and dismounting use 2014 rules only")
+        if action == "mount":
+            if target_id is None or set(raw_payload) != {"mounting_facts"}:
+                raise _support.CombatEngineError(
+                    "mount requires target_id and exact mounting_facts"
+                )
+            self.access.require_campaign(
+                campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES
+            )
+            self.require_campaign_actor(campaign_id, target_id)
+            from sagasmith_dnd.mounted_combat import mount_2014
+
+            next_encounter = mount_2014(
+                encounter,
+                rider_actor_id=actor_id,
+                mount_actor_id=target_id,
+                facts=raw_payload["mounting_facts"],
+            )
+            settled = next_encounter["log"][-1]
+            operation = "combat.mount"
+        else:
+            from sagasmith_dnd.mounted_combat import dismount_2014, relation_for_rider
+
+            relation = relation_for_rider(encounter, actor_id)
+            if relation is None:
+                raise _support.CombatEngineError("rider is not mounted")
+            mount_id = str(relation.get("mount_actor_id") or "")
+            if target_id is not None and target_id != mount_id:
+                raise _support.CombatEngineError(
+                    "dismount target does not match the mounted creature"
+                )
+            if encounter.get("positioning_mode") == "grid":
+                if set(raw_payload) != {"destination"}:
+                    raise _support.CombatEngineError(
+                        "Grid dismount requires only a landing destination"
+                    )
+                destination = raw_payload["destination"]
+                spatial_facts = None
+            else:
+                if set(raw_payload) != {"spatial_facts"}:
+                    raise _support.CombatEngineError("Agent dismount requires only spatial_facts")
+                destination = None
+                spatial_facts = raw_payload["spatial_facts"]
+                self.access.require_campaign(
+                    campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES
+                )
+            next_encounter = dismount_2014(
+                encounter,
+                rider_actor_id=actor_id,
+                destination=destination,
+                spatial_facts=spatial_facts,
+            )
+            settled = next_encounter["log"][-1]
+            operation = "combat.dismount"
+        boundary_ids = ["dnd5e.core.combat.mounted_2014"]
+        receipts = _support.core_receipts(
+            self.effective_rule_context(campaign_id), boundary_ids, operation
+        )
+        response = self.commit_campaign_state(
+            campaign,
+            {**dict(campaign.state or {}), "combat": next_encounter},
+            operation=operation,
+            principal_id=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=payload_value,
+            response_fields={
+                "status": "committed",
+                "combat": next_encounter,
+                "mount_resolution": settled,
+                "rule_receipts": receipts,
+            },
+            rule_receipts=receipts,
+        )
+        return self.combat_response(campaign_id, principal_id, response)
+
     def combat_common_action(
         self,
         campaign_id: str,
@@ -3548,6 +4282,9 @@ class CombatService:
             "drop_held",
             "draw_weapon",
             "stow_weapon",
+            "grapple",
+            "release_grapple",
+            "shove",
             "emerge_shell",
             "escape",
             "help",
@@ -3555,12 +4292,15 @@ class CombatService:
             "influence",
             "interact_object",
             "improvise",
+            "mount",
+            "dismount",
             "pickup_ground",
             "ready",
             "revive_steel_defender",
             "search",
             "shell_defense",
             "shake_hypnotic_pattern",
+            "shake_poison",
             "shake_sleep",
             "stabilize",
             "study",
@@ -3631,6 +4371,64 @@ class CombatService:
         if target_id is not None:
             self.require_campaign_actor(campaign_id, target_id)
         normalized_action = str(action).strip().lower().replace("-", "_")
+        if normalized_action in {"mount", "dismount"}:
+            return self._settle_2014_mount_action(
+                campaign=campaign,
+                encounter=encounter,
+                campaign_id=campaign_id,
+                actor_id=actor_id,
+                action=normalized_action,
+                target_id=target_id,
+                raw_payload=dict(payload or {}),
+                principal_id=principal_id,
+                branch_id=resolved_branch_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+                payload_value=payload_value,
+            )
+        self.require_mounted_action(encounter, actor_id, normalized_action)
+        if normalized_action == "release_grapple":
+            return self._release_2014_grapple(
+                campaign=campaign,
+                encounter=encounter,
+                campaign_id=campaign_id,
+                actor_id=actor_id,
+                target_id=target_id,
+                payload_value=payload_value,
+                raw_payload=dict(payload or {}),
+                principal_id=principal_id,
+                branch_id=resolved_branch_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+            )
+        if normalized_action == "escape" and "grapple_id" in dict(payload or {}):
+            return self._escape_2014_grapple(
+                campaign=campaign,
+                encounter=encounter,
+                campaign_id=campaign_id,
+                actor_id=actor_id,
+                payload_value=payload_value,
+                raw_payload=dict(payload or {}),
+                principal_id=principal_id,
+                branch_id=resolved_branch_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+            )
+        if normalized_action in {"grapple", "shove"}:
+            return self._begin_2014_special_attack(
+                campaign=campaign,
+                encounter=encounter,
+                campaign_id=campaign_id,
+                actor_id=actor_id,
+                target_id=target_id,
+                action=normalized_action,
+                payload_value=payload_value,
+                raw_payload=dict(payload or {}),
+                principal_id=principal_id,
+                branch_id=resolved_branch_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+            )
         revival_relation_index: int | None = None
         revival_relations: list[dict[str, Any]] | None = None
         revival_relation: dict[str, Any] | None = None
@@ -3958,7 +4756,7 @@ class CombatService:
                 if normalized_action == "shell_defense"
                 else _support.emerge_tortle_shell_defense(shell_defense_record.sheet)
             )
-        if normalized_action in {"shake_hypnotic_pattern", "shake_sleep"}:
+        if normalized_action in {"shake_hypnotic_pattern", "shake_poison", "shake_sleep"}:
             if target_id is None or target_id == actor_id:
                 raise _support.CombatEngineError("shaking awake requires another target creature")
             acting_combatant = self.require_encounter_combatant(
@@ -3969,7 +4767,9 @@ class CombatService:
             target_combatant = self.require_encounter_combatant(
                 encounter,
                 target_id,
-                role="sleeping target",
+                role="sleeping target"
+                if normalized_action != "shake_poison"
+                else "poisoned target",
             )
             if normalized_action == "shake_sleep" and encounter.get("positioning_mode") == "agent":
                 self.access.require_campaign(
@@ -3982,7 +4782,40 @@ class CombatService:
                     return sleep_wake_spatial_facts
                 engine_payload = {"spatial_facts": sleep_wake_spatial_facts}
             else:
-                if payload:
+                if normalized_action == "shake_poison":
+                    poison_payload = dict(payload or {})
+                    if set(poison_payload) != {"poison_effect_id"}:
+                        raise _support.CombatEngineError(
+                            "shake_poison requires only its exact poison_effect_id"
+                        )
+                    selected_effect_id = str(poison_payload.get("poison_effect_id") or "").strip()
+                    if not selected_effect_id:
+                        raise _support.CombatEngineError(
+                            "shake_poison requires a non-empty poison_effect_id"
+                        )
+                    hypnotic_target_record = self.characters.get(target_id)
+                    if "unconscious" not in _support.condition_ids(
+                        hypnotic_target_record.sheet.get("conditions", [])
+                    ):
+                        raise _support.CombatEngineError(
+                            "shake_poison requires an unconscious target"
+                        )
+                    hp = dict(
+                        dict(hypnotic_target_record.sheet.get("combat") or {}).get("hp") or {}
+                    )
+                    if int(hp.get("value", 0) or 0) <= 0:
+                        raise _support.CombatEngineError(
+                            "shaking a poisoned creature awake cannot remove "
+                            "zero-HP unconsciousness"
+                        )
+                    from sagasmith_dnd.poisons import wake_poison_effects
+
+                    _preview, active_shaken_effect_ids = wake_poison_effects(
+                        hypnotic_target_record.sheet,
+                        trigger="action_shake",
+                        effect_ids=[selected_effect_id],
+                    )
+                elif payload:
                     raise _support.CombatEngineError(
                         f"{normalized_action} does not accept a payload"
                     )
@@ -3995,17 +4828,18 @@ class CombatService:
                 )
                 if distance is None or distance > 5:
                     raise _support.CombatEngineError("shaking awake requires an adjacent target")
-            hypnotic_target_record = self.characters.get(target_id)
-            active_shaken_effect_ids = (
-                _support.active_hypnotic_pattern_effect_ids(hypnotic_target_record.sheet)
-                if normalized_action == "shake_hypnotic_pattern"
-                else [
-                    str(effect["id"])
-                    for effect in hypnotic_target_record.sheet.get("effects", [])
-                    if effect.get("active")
-                    and effect.get("source_spell_id") == _support.CORE_SLEEP_SPELL_ID
-                ]
-            )
+            if normalized_action != "shake_poison":
+                hypnotic_target_record = self.characters.get(target_id)
+                active_shaken_effect_ids = (
+                    _support.active_hypnotic_pattern_effect_ids(hypnotic_target_record.sheet)
+                    if normalized_action == "shake_hypnotic_pattern"
+                    else [
+                        str(effect["id"])
+                        for effect in hypnotic_target_record.sheet.get("effects", [])
+                        if effect.get("active")
+                        and effect.get("source_spell_id") == _support.CORE_SLEEP_SPELL_ID
+                    ]
+                )
             if not active_shaken_effect_ids:
                 raise _support.CombatEngineError(
                     f"target has no active effect for {normalized_action}"
@@ -4239,20 +5073,30 @@ class CombatService:
                 "conditions": list(shell_defense_sheet.get("conditions") or []),
             }
         if hypnotic_target_record is not None:
-            ended_hypnotic = (
-                _support.end_hypnotic_pattern_effects(
+            if normalized_action == "shake_hypnotic_pattern":
+                ended_hypnotic = _support.end_hypnotic_pattern_effects(
                     hypnotic_target_record.sheet, ended_reason="shaken_awake"
                 )
-                if normalized_action == "shake_hypnotic_pattern"
-                else _support.wake_sleep_effects(
+                shaken_kind = "hypnotic_pattern_shaken_awake"
+            elif normalized_action == "shake_sleep":
+                ended_hypnotic = _support.wake_sleep_effects(
                     hypnotic_target_record.sheet, reason="shaken_awake"
                 )
-            )
-            shaken_kind = (
-                "hypnotic_pattern_shaken_awake"
-                if normalized_action == "shake_hypnotic_pattern"
-                else "sleep_shaken_awake"
-            )
+                shaken_kind = "sleep_shaken_awake"
+            else:
+                from sagasmith_dnd.poisons import wake_poison_effects
+
+                updated_sheet, woken_effect_ids = wake_poison_effects(
+                    hypnotic_target_record.sheet,
+                    trigger="action_shake",
+                    effect_ids=active_shaken_effect_ids,
+                )
+                ended_hypnotic = {
+                    "sheet": updated_sheet,
+                    "ended_effect_ids": [],
+                    "woken_effect_ids": woken_effect_ids,
+                }
+                shaken_kind = "poison_shaken_awake"
             self.sync_combatant_conditions(
                 next_encounter,
                 str(target_id),
@@ -4273,6 +5117,9 @@ class CombatService:
                 "ended_reason": "shaken_awake",
                 **({"spatial_facts": sleep_wake_spatial_facts} if sleep_wake_spatial_facts else {}),
             }
+            if normalized_action == "shake_poison":
+                condition_resolution["woken_effect_ids"] = ended_hypnotic["woken_effect_ids"]
+                condition_resolution["ended_reason"] = "action_shake"
             next_encounter["log"] = [
                 *list(next_encounter.get("log") or []),
                 {
@@ -4280,6 +5127,11 @@ class CombatService:
                     "actor_id": actor_id,
                     "target_id": str(target_id),
                     "ended_effect_ids": ended_hypnotic["ended_effect_ids"],
+                    **(
+                        {"woken_effect_ids": ended_hypnotic["woken_effect_ids"]}
+                        if normalized_action == "shake_poison"
+                        else {}
+                    ),
                 },
             ][-100:]
         if source_condition_record is not None:
@@ -4370,6 +5222,8 @@ class CombatService:
             boundary_ids.append(_support.CORE_HYPNOTIC_PATTERN_MECHANIC_ID)
         if normalized_action == "shake_sleep":
             boundary_ids.append(_support.CORE_SLEEP_MECHANIC_ID)
+        if normalized_action == "shake_poison":
+            boundary_ids.append("dnd5e.core.gamemastering.poisons_2014")
         if normalized_action in {"shell_defense", "emerge_shell"}:
             boundary_ids.append(_support.CORE_TORTLE_SHELL_DEFENSE_MECHANIC_ID)
         acting_combatant = next(
@@ -4424,6 +5278,744 @@ class CombatService:
             },
             character_updates=character_updates,
             rule_receipts=action_receipts,
+        )
+        return self.combat_response(campaign_id, principal_id, response)
+
+    def _special_attack_rule_receipt(self, campaign_id: str, kind: str) -> dict[str, Any]:
+        receipts = _support.core_receipts(
+            self.effective_rule_context(campaign_id),
+            ["dnd5e.core.combat.grapple_shove_2014"],
+            f"combat.{kind}.settlement",
+        )
+        if len(receipts) != 1:
+            raise RuntimeError("2014 grapple/shove source boundary is unavailable")
+        return receipts[0]
+
+    def _release_2014_grapple(
+        self,
+        *,
+        campaign: Any,
+        encounter: dict[str, Any],
+        campaign_id: str,
+        actor_id: str,
+        target_id: str | None,
+        payload_value: dict[str, Any],
+        raw_payload: dict[str, Any],
+        principal_id: str,
+        branch_id: str,
+        idempotency_key: str,
+        scope: str,
+    ) -> dict[str, Any]:
+        if encounter.get("ruleset") != "2014":
+            raise _support.CombatEngineError("source-bound grapple release requires 2014 rules")
+        if not target_id or set(raw_payload) != {"grapple_id"}:
+            raise _support.CombatEngineError(
+                "release_grapple requires the grappled target and exact grapple_id"
+            )
+        grapple_id = str(raw_payload.get("grapple_id") or "")
+        sources = list(encounter.get("grapple_sources") or [])
+        source = next(
+            (
+                item
+                for item in sources
+                if item.get("active", True)
+                and str(item.get("id") or "") == grapple_id
+                and str(item.get("source_actor_id") or "") == actor_id
+                and str(item.get("target_actor_id") or "") == target_id
+            ),
+            None,
+        )
+        if source is None:
+            raise _support.CombatEngineError(
+                "only the recorded grappler can release this active grapple"
+            )
+        target = self.require_campaign_actor(campaign_id, target_id)
+        updated_sheet = _support.remove_effect(target.sheet, str(source["effect_id"]))
+        next_encounter = _support.deepcopy(encounter)
+        ended_source = next(
+            item
+            for item in next_encounter.get("grapple_sources", [])
+            if str(item.get("id") or "") == grapple_id
+        )
+        ended_source["active"] = False
+        ended_source["ended_reason"] = "voluntary_release"
+        ended_source["ended_round"] = int(next_encounter.get("round", 1) or 1)
+        self.sync_combatant_conditions(next_encounter, target_id, updated_sheet)
+        receipts = [self._special_attack_rule_receipt(campaign_id, "grapple")]
+        response = self.commit_campaign_state(
+            campaign,
+            {**dict(campaign.state or {}), "combat": next_encounter},
+            operation="combat.grapple.release",
+            principal_id=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=payload_value,
+            response_fields={
+                "status": "committed",
+                "condition_resolution": {
+                    "kind": "grapple_release",
+                    "grapple_id": grapple_id,
+                    "source_actor_id": actor_id,
+                    "target_actor_id": target_id,
+                    "remaining_grappled": (
+                        "grappled" in _support.condition_ids(updated_sheet.get("conditions"))
+                    ),
+                },
+                "combat": next_encounter,
+                "rule_receipts": receipts,
+            },
+            character_updates=[
+                _support.CharacterStateUpdate(
+                    character_id=target_id,
+                    sheet=_support.validate_character_sheet(updated_sheet),
+                    notes=_support.validate_character_notes(target.notes),
+                    expected_revision=target.revision,
+                )
+            ],
+            rule_receipts=receipts,
+        )
+        return self.combat_response(campaign_id, principal_id, response)
+
+    def _escape_2014_grapple(
+        self,
+        *,
+        campaign: Any,
+        encounter: dict[str, Any],
+        campaign_id: str,
+        actor_id: str,
+        payload_value: dict[str, Any],
+        raw_payload: dict[str, Any],
+        principal_id: str,
+        branch_id: str,
+        idempotency_key: str,
+        scope: str,
+    ) -> dict[str, Any]:
+        if encounter.get("ruleset") != "2014":
+            raise _support.CombatEngineError("source-bound grapple escape requires 2014 rules")
+        if set(raw_payload) != {"grapple_id", "skill"}:
+            raise _support.CombatEngineError(
+                "grapple escape requires exactly grapple_id and the actor's chosen skill"
+            )
+        grapple_id = str(raw_payload.get("grapple_id") or "")
+        skill = str(raw_payload.get("skill") or "").strip().casefold().replace(" ", "_")
+        if skill not in {"athletics", "acrobatics"}:
+            raise _support.CombatEngineError("grapple escape skill must be Athletics or Acrobatics")
+        source = next(
+            (
+                item
+                for item in encounter.get("grapple_sources", [])
+                if item.get("active", True)
+                and str(item.get("id") or "") == grapple_id
+                and str(item.get("target_actor_id") or "") == actor_id
+            ),
+            None,
+        )
+        if source is None:
+            raise _support.CombatEngineError("actor is not held by this active grapple source")
+        grappler_id = str(source.get("source_actor_id") or "")
+        combatant_before = next(
+            item
+            for item in encounter.get("combatants", [])
+            if str(item.get("actor_id") or "") == actor_id
+        )
+        budget_before = dict(combatant_before.get("turn_budget") or {})
+        paid = _support.resolve_common_action(
+            encounter,
+            actor_id_value=actor_id,
+            action="escape",
+            payload={"grapple_id": grapple_id, "skill": skill},
+        )
+        combatant_after = next(
+            item
+            for item in paid.get("combatants", [])
+            if str(item.get("actor_id") or "") == actor_id
+        )
+        budget_after = dict(combatant_after.get("turn_budget") or {})
+        action_payment = next(
+            (
+                payment
+                for payment in ("extra_action", "main_action")
+                if int(budget_after.get(payment, 0) or 0) < int(budget_before.get(payment, 0) or 0)
+            ),
+            None,
+        )
+        if action_payment is None:
+            raise _support.CombatEngineError("grapple escape did not pay an action")
+        stream = _support.active_random_stream()
+        if stream is None:
+            stream = _support.CampaignRandomStream.from_campaign_state(
+                campaign_id,
+                campaign.state,
+                operation="combat_grapple_escape",
+                idempotency_key=idempotency_key,
+                campaign_revision=campaign.revision,
+            )
+            with _support.use_random_stream(stream):
+                return self._escape_2014_grapple(
+                    campaign=campaign,
+                    encounter=encounter,
+                    campaign_id=campaign_id,
+                    actor_id=actor_id,
+                    payload_value=payload_value,
+                    raw_payload=raw_payload,
+                    principal_id=principal_id,
+                    branch_id=branch_id,
+                    idempotency_key=idempotency_key,
+                    scope=scope,
+                )
+        random_state = _support.validate_random_stream_state(
+            dict(campaign.state or {}).get("random_stream")
+            or _support.initial_random_stream(f"sagasmith-dnd:{campaign_id}")
+        )
+        if (
+            stream.campaign_id != campaign_id
+            or (
+                stream.campaign_revision is not None
+                and stream.campaign_revision != campaign.revision
+            )
+            or stream.seed != random_state["seed"]
+            or stream.start_position != random_state["position"]
+        ):
+            raise _support.CombatEngineError(
+                "grapple escape requires the current campaign random snapshot"
+            )
+        escapee = self.combat_actor_snapshot(actor_id)
+        grappler = self.combat_actor_snapshot(grappler_id)
+        result = _support.resolve_2014_special_attack_contest(
+            escapee,
+            grappler,
+            attacker_skill="athletics",
+            target_skill=skill,
+            kind="escape",
+            encounter=encounter,
+            rng=stream,
+        )
+        next_encounter = paid
+        character_updates: list[Any] = []
+        if result["success"]:
+            current = self.require_campaign_actor(campaign_id, actor_id)
+            updated_sheet = _support.remove_effect(current.sheet, str(source["effect_id"]))
+            next_encounter = _support.deepcopy(paid)
+            ended = next(
+                item
+                for item in next_encounter.get("grapple_sources", [])
+                if str(item.get("id") or "") == grapple_id
+            )
+            ended["active"] = False
+            ended["ended_reason"] = "escaped"
+            ended["ended_round"] = int(next_encounter.get("round", 1) or 1)
+            self.sync_combatant_conditions(next_encounter, actor_id, updated_sheet)
+            character_updates.append(
+                _support.CharacterStateUpdate(
+                    character_id=actor_id,
+                    sheet=_support.validate_character_sheet(updated_sheet),
+                    notes=_support.validate_character_notes(current.notes),
+                    expected_revision=current.revision,
+                )
+            )
+        receipts = [self._special_attack_rule_receipt(campaign_id, "grapple")]
+        response = self.commit_campaign_state(
+            campaign,
+            {**dict(campaign.state or {}), "combat": next_encounter},
+            operation="combat.grapple.escape",
+            principal_id=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=payload_value,
+            response_fields={
+                "status": "committed",
+                "condition_resolution": {
+                    "kind": "grapple_escape",
+                    "grapple_id": grapple_id,
+                    "skill": skill,
+                    "escaped": bool(result["success"]),
+                    "contest": result,
+                    "action_payment": action_payment,
+                },
+                "combat": next_encounter,
+                "rule_receipts": receipts,
+            },
+            character_updates=character_updates,
+            rule_receipts=receipts,
+        )
+        return self.combat_response(campaign_id, principal_id, response)
+
+    def _begin_2014_special_attack(
+        self,
+        *,
+        campaign: Any,
+        encounter: dict[str, Any],
+        campaign_id: str,
+        actor_id: str,
+        target_id: str | None,
+        action: str,
+        payload_value: dict[str, Any],
+        raw_payload: dict[str, Any],
+        principal_id: str,
+        branch_id: str,
+        idempotency_key: str,
+        scope: str,
+    ) -> dict[str, Any]:
+        """Open the defender-owned skill choice for a 2014 grapple or shove."""
+        if target_id is None:
+            raise _support.CombatEngineError(f"{action} requires a target actor")
+        if encounter.get("ruleset") != "2014":
+            raise _support.CombatEngineError("grapple and shove require a 2014 encounter")
+        if raw_payload.keys() - {"outcome", "spatial_facts"}:
+            raise _support.CombatEngineError(
+                "grapple and shove accept only their outcome and spatial facts"
+            )
+        outcome = raw_payload.get("outcome")
+        if action == "grapple" and outcome is not None:
+            raise _support.CombatEngineError("grapple does not accept a shove outcome")
+        if action == "shove" and outcome not in {"prone", "push_5_ft"}:
+            raise _support.CombatEngineError("shove outcome must be prone or push_5_ft")
+        positioning_mode = str(encounter.get("positioning_mode") or "agent")
+        spatial_facts: dict[str, Any] | None = None
+        if positioning_mode == "agent":
+            self.access.require_campaign(
+                campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES
+            )
+            raw_spatial = raw_payload.get("spatial_facts")
+            if (
+                not isinstance(raw_spatial, dict)
+                or set(raw_spatial) != {"decision_id", "reason", "within_reach"}
+                or not isinstance(raw_spatial.get("decision_id"), str)
+                or not raw_spatial["decision_id"].strip()
+                or not isinstance(raw_spatial.get("reason"), str)
+                or not raw_spatial["reason"].strip()
+                or len(raw_spatial["reason"]) > 500
+                or raw_spatial.get("within_reach") is not True
+            ):
+                raise _support.CombatEngineError(
+                    "Agent positioning requires a bounded DM decision confirming reach"
+                )
+            spatial_facts = {
+                "decision_id": raw_spatial["decision_id"].strip(),
+                "reason": raw_spatial["reason"].strip(),
+                "within_reach": True,
+                "source": "agent_dm_adjudication",
+            }
+        elif raw_payload.get("spatial_facts") is not None:
+            raise _support.CombatEngineError("Grid positioning computes reach from token positions")
+
+        attacker_record = self.require_campaign_actor(campaign_id, actor_id)
+        target_record = self.require_campaign_actor(campaign_id, target_id)
+        attacker_sheet = _support.deepcopy(attacker_record.sheet)
+        target_sheet = _support.deepcopy(target_record.sheet)
+        from sagasmith_dnd.character_schema import effective_size
+        from sagasmith_dnd.spaces import SIZES, SPACE_FT, distance_between
+
+        attacker_size = effective_size(attacker_sheet)
+        target_size = effective_size(target_sheet)
+
+        if SIZES.index(target_size) > SIZES.index(attacker_size) + 1:
+            raise _support.CombatEngineError("target can be no more than one size larger")
+        attacker_combatant = self.require_encounter_combatant(
+            encounter, actor_id, role="special attack source"
+        )
+        target_combatant = self.require_encounter_combatant(
+            encounter, target_id, role="special attack target"
+        )
+        if positioning_mode == "grid":
+            attacker_position = self.combat_coordinates(attacker_combatant.get("position"))
+            target_position = self.combat_coordinates(target_combatant.get("position"))
+            if attacker_position is None or target_position is None:
+                raise _support.CombatEngineError(
+                    "Grid special attacks require both token positions"
+                )
+            distance = distance_between(
+                attacker_position,
+                float(attacker_combatant.get("space_ft") or SPACE_FT[attacker_size]),
+                target_position,
+                float(target_combatant.get("space_ft") or SPACE_FT[target_size]),
+            )
+            if distance > 5:
+                raise _support.CombatEngineError(
+                    "special attack target must be within 5-foot reach"
+                )
+            spatial_facts = {
+                "distance_ft": distance,
+                "source": "grid_token_positions_and_footprints",
+            }
+        if action == "grapple":
+            hands = int(
+                dict(attacker_sheet.get("traits") or {})
+                .get("anatomy", {})
+                .get("functional_hands", 2)
+            )
+            inventory = dict(attacker_sheet.get("inventory") or {})
+            slots = dict(inventory.get("equipment_slots") or {})
+            occupied = sum(bool(slots.get(slot)) for slot in ("main_hand", "off_hand", "shield"))
+            items = {
+                str(item.get("id") or ""): item
+                for item in inventory.get("items", [])
+                if isinstance(item, dict)
+            }
+            main_hand = items.get(str(slots.get("main_hand") or ""), {})
+            mechanics = dict(main_hand.get("mechanics") or {})
+            properties = {
+                str(value).strip().casefold()
+                for value in mechanics.get("properties", main_hand.get("properties", []))
+            }
+            if "two_handed" in properties:
+                occupied = max(occupied, 2)
+            if hands - occupied < 1:
+                raise _support.CombatEngineError("grapple requires at least one free hand")
+
+        paid, payment = _support.pay_2014_special_attack(
+            encounter, self.combat_actor_snapshot(actor_id), kind=action
+        )
+        character_updates: list[Any] = []
+        attacker_revision = attacker_record.revision
+        from sagasmith_dnd.combat_engine import _are_hostile
+
+        if _are_hostile(attacker_combatant, target_combatant):
+            from sagasmith_dnd.rage import note_activity
+
+            rage_sheet = _support.deepcopy(attacker_record.sheet)
+            note_activity(rage_sheet, attacked=True)
+            if rage_sheet != attacker_record.sheet:
+                character_updates.append(
+                    _support.CharacterStateUpdate(
+                        character_id=actor_id,
+                        sheet=_support.validate_character_sheet(rage_sheet),
+                        notes=_support.validate_character_notes(attacker_record.notes),
+                        expected_revision=attacker_record.revision,
+                    )
+                )
+                attacker_revision += 1
+        incapacitated = bool(
+            _support.condition_ids(target_sheet.get("conditions"))
+            & _support.INCAPACITATING_STATE_IDS
+        )
+        source_declaration = {
+            "kind": action,
+            "attacker_id": actor_id,
+            "target_id": target_id,
+            "shove_outcome": outcome,
+            "spatial_facts": spatial_facts,
+            "attack_payment": _support.deepcopy(payment),
+            "attacker_revision": attacker_revision,
+            "target_revision": target_record.revision,
+            "declared_campaign_revision": campaign.revision,
+        }
+        if incapacitated:
+            result = {
+                "kind": action,
+                "attacker_check": None,
+                "target_check": None,
+                "automatic_success": True,
+                "success": True,
+                "reason": "incapacitated_target",
+            }
+            return self._commit_2014_special_attack_result(
+                campaign=campaign,
+                campaign_id=campaign_id,
+                principal_id=principal_id,
+                branch_id=branch_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+                payload=payload_value,
+                encounter=paid,
+                declaration=source_declaration,
+                contest=result,
+                choice_id=None,
+                selection=None,
+                character_updates=character_updates,
+            )
+
+        pending = _support.add_choice_window(
+            paid,
+            kind="choice",
+            actor_id_value=target_id,
+            event=f"attack.{action}.defense_skill",
+            candidates=[
+                {"id": "athletics", "name": "Strength (Athletics)"},
+                {"id": "acrobatics", "name": "Dexterity (Acrobatics)"},
+            ],
+        )
+        window = pending["pending"][-1]
+        window.update(
+            trigger="special_attack_defense",
+            special_attack=source_declaration,
+        )
+        receipts = [self._special_attack_rule_receipt(campaign_id, action)]
+        response = self.commit_campaign_state(
+            campaign,
+            {**dict(campaign.state or {}), "combat": pending},
+            operation=f"combat.{action}.declare",
+            principal_id=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=payload_value,
+            response_fields={
+                "status": "pending_choice",
+                "action": action,
+                "choice": _support.deepcopy(window),
+                "attack_payment": payment,
+                "spatial_facts": spatial_facts,
+                "combat": pending,
+                "rule_receipts": receipts,
+            },
+            character_updates=character_updates,
+            rule_receipts=receipts,
+        )
+        return self.combat_response(campaign_id, principal_id, response)
+
+    def _resolve_2014_special_attack_choice(
+        self,
+        *,
+        campaign: Any,
+        encounter: dict[str, Any],
+        campaign_id: str,
+        actor_id: str,
+        choice_id: str,
+        selection: dict[str, Any],
+        principal_id: str,
+        branch_id: str,
+        expected_revision: int | None,
+        idempotency_key: str,
+        scope: str,
+        payload: dict[str, Any],
+        pending_choice: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Resolve the defender-owned skill choice with the campaign random stream."""
+        if not isinstance(selection, dict) or set(selection) != {"id"}:
+            raise _support.CombatEngineError("special attack defense selects exactly one skill")
+        if selection.get("id") not in {"athletics", "acrobatics"}:
+            raise _support.CombatEngineError("defense must select Athletics or Acrobatics")
+        if str(pending_choice.get("actor_id") or "") != actor_id:
+            raise _support.CombatEngineError("only the targeted actor may choose its defense skill")
+        declaration = dict(pending_choice.get("special_attack") or {})
+        attacker_id = str(declaration.get("attacker_id") or "")
+        target_id = str(declaration.get("target_id") or "")
+        if target_id != actor_id or not attacker_id:
+            raise _support.CombatEngineError("special attack choice has an invalid source binding")
+        stream = _support.active_random_stream()
+        if stream is None:
+            stream = _support.CampaignRandomStream.from_campaign_state(
+                campaign_id,
+                campaign.state,
+                operation="combat_special_attack_contest",
+                idempotency_key=idempotency_key,
+                campaign_revision=campaign.revision,
+            )
+            with _support.use_random_stream(stream):
+                return self._resolve_2014_special_attack_choice(
+                    campaign=campaign,
+                    encounter=encounter,
+                    campaign_id=campaign_id,
+                    actor_id=actor_id,
+                    choice_id=choice_id,
+                    selection=selection,
+                    principal_id=principal_id,
+                    branch_id=branch_id,
+                    expected_revision=expected_revision,
+                    idempotency_key=idempotency_key,
+                    scope=scope,
+                    payload=payload,
+                    pending_choice=pending_choice,
+                )
+        random_state = _support.validate_random_stream_state(
+            dict(campaign.state or {}).get("random_stream")
+            or _support.initial_random_stream(f"sagasmith-dnd:{campaign_id}")
+        )
+        if (
+            stream.campaign_id != campaign_id
+            or (
+                stream.campaign_revision is not None
+                and stream.campaign_revision != campaign.revision
+            )
+            or stream.seed != random_state["seed"]
+            or stream.start_position != random_state["position"]
+        ):
+            raise _support.CombatEngineError(
+                "special attack requires the current campaign random snapshot"
+            )
+        if expected_revision != campaign.revision:
+            raise ValueError(
+                f"campaign revision conflict: expected {expected_revision}, "
+                f"found {campaign.revision}"
+            )
+        attacker_record = self.require_campaign_actor(campaign_id, attacker_id)
+        target_record = self.require_campaign_actor(campaign_id, target_id)
+        if attacker_record.revision != int(
+            declaration.get("attacker_revision", -1)
+        ) or target_record.revision != int(declaration.get("target_revision", -1)):
+            raise _support.CombatEngineError(
+                "a special attack participant changed after the defense choice opened"
+            )
+        attacker = self.combat_actor_snapshot(attacker_id)
+        target = self.combat_actor_snapshot(target_id)
+        contest = _support.resolve_2014_special_attack_contest(
+            attacker,
+            target,
+            attacker_skill="athletics",
+            target_skill=str(selection["id"]),
+            kind=str(declaration.get("kind") or ""),
+            encounter=encounter,
+            rng=stream,
+        )
+        return self._commit_2014_special_attack_result(
+            campaign=campaign,
+            campaign_id=campaign_id,
+            principal_id=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=payload,
+            encounter=encounter,
+            declaration=declaration,
+            contest=contest,
+            choice_id=choice_id,
+            selection=selection,
+            character_updates=[],
+        )
+
+    def _commit_2014_special_attack_result(
+        self,
+        *,
+        campaign: Any,
+        campaign_id: str,
+        principal_id: str,
+        branch_id: str,
+        idempotency_key: str,
+        scope: str,
+        payload: dict[str, Any],
+        encounter: dict[str, Any],
+        declaration: dict[str, Any],
+        contest: dict[str, Any],
+        choice_id: str | None,
+        selection: dict[str, Any] | None,
+        character_updates: list[Any],
+    ) -> dict[str, Any]:
+        kind = str(declaration["kind"])
+        attacker_id = str(declaration["attacker_id"])
+        target_id = str(declaration["target_id"])
+        target_record = self.require_campaign_actor(campaign_id, target_id)
+        next_encounter = _support.deepcopy(encounter)
+        if choice_id is not None:
+            next_encounter = _support.resolve_choice_window(
+                next_encounter,
+                choice_id=choice_id,
+                actor_id_value=target_id,
+                selection=dict(selection or {}),
+            )
+        success = bool(contest.get("success"))
+        target_sheet = _support.deepcopy(target_record.sheet)
+        condition_resolution: dict[str, Any] = {
+            "kind": kind,
+            "success": success,
+            "automatic_success": bool(contest.get("automatic_success")),
+            "attacker_check": _support.deepcopy(contest.get("attacker_check")),
+            "target_check": _support.deepcopy(contest.get("target_check")),
+            "attack_payment": _support.deepcopy(declaration.get("attack_payment")),
+            "spatial_facts": _support.deepcopy(declaration.get("spatial_facts")),
+        }
+        updates = list(character_updates)
+        if success and kind == "grapple":
+            digest = _support.hashlib.sha256(
+                f"{campaign_id}:{branch_id}:{choice_id or idempotency_key}".encode("utf-8")
+            ).hexdigest()[:24]
+            effect_id = f"grapple-{digest}"
+            effect = {
+                "id": effect_id,
+                "name": "2014 Grapple",
+                "kind": "timed_conditions",
+                "source": attacker_id,
+                "active": True,
+                "concentration": False,
+                "duration": {"period": "manual", "remaining": 1},
+                "changes": [{"path": "conditions", "mode": "add", "value": "grappled"}],
+                "description": "Source-bound 2014 grapple; ends when its source releases it, "
+                "the target escapes, the source is incapacitated, or separation ends it.",
+            }
+            target_sheet, _ = _support.add_effect(target_sheet, effect)
+            if "grappled" in _support.condition_ids(target_sheet.get("conditions")):
+                sources = list(next_encounter.get("grapple_sources") or [])
+                sources.append(
+                    {
+                        "id": effect_id,
+                        "source_actor_id": attacker_id,
+                        "target_actor_id": target_id,
+                        "effect_id": effect_id,
+                        "reach_ft": 5,
+                        "active": True,
+                        "created_round": int(next_encounter.get("round", 1) or 1),
+                        "choice_id": choice_id,
+                    }
+                )
+                next_encounter["grapple_sources"] = sources
+                condition_resolution.update(condition="grappled", effect_id=effect_id)
+            else:
+                target_sheet = _support.deepcopy(target_record.sheet)
+                condition_resolution.update(condition="grappled", immune=True)
+        elif success and kind == "shove":
+            shove_outcome = str(declaration.get("shove_outcome") or "")
+            if shove_outcome == "prone":
+                _support.apply_condition_change(target_sheet, condition_id="prone", add=True)
+                condition_resolution.update(
+                    condition="prone",
+                    applied="prone" in _support.condition_ids(target_sheet.get("conditions")),
+                )
+            elif shove_outcome == "push_5_ft":
+                if next_encounter.get("positioning_mode") == "grid":
+                    moved = _support.force_move_directly_away(
+                        next_encounter,
+                        source_actor_id=attacker_id,
+                        target_actor_id=target_id,
+                        distance_ft=5,
+                    )
+                    next_encounter = moved["encounter"]
+                    condition_resolution["movement"] = {
+                        key: value for key, value in moved.items() if key != "encounter"
+                    }
+                else:
+                    spatial_events = list(next_encounter.get("spatial_events") or [])
+                    event = {
+                        "kind": "shove_displacement",
+                        "source_actor_id": attacker_id,
+                        "target_actor_id": target_id,
+                        "distance_ft": 5,
+                        "direction": "directly_away",
+                        "spatial_facts": _support.deepcopy(declaration.get("spatial_facts")),
+                    }
+                    spatial_events.append(event)
+                    next_encounter["spatial_events"] = spatial_events[-100:]
+                    condition_resolution["movement"] = event
+        if target_sheet != target_record.sheet:
+            self.sync_combatant_conditions(next_encounter, target_id, target_sheet)
+            updates.append(
+                _support.CharacterStateUpdate(
+                    character_id=target_id,
+                    sheet=_support.validate_character_sheet(target_sheet),
+                    notes=_support.validate_character_notes(target_record.notes),
+                    expected_revision=target_record.revision,
+                )
+            )
+        receipts = [self._special_attack_rule_receipt(campaign_id, kind)]
+        next_state = {**dict(campaign.state or {}), "combat": next_encounter}
+        response = self.commit_campaign_state(
+            campaign,
+            next_state,
+            operation="combat.choice.resolve" if choice_id else f"combat.{kind}.automatic",
+            principal_id=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=payload,
+            response_fields={
+                "status": "committed",
+                "condition_resolution": condition_resolution,
+                "combat": next_encounter,
+                "rule_receipts": receipts,
+            },
+            character_updates=updates,
+            rule_receipts=receipts,
         )
         return self.combat_response(campaign_id, principal_id, response)
 
@@ -4545,11 +6137,24 @@ class CombatService:
             str(item.get("id")) for item in _support.available_reactions(encounter, actor_id)
         }:
             raise _support.CombatEngineError("actor cannot take this reaction")
-        window = next((item for item in encounter.get("pending", [])
-                       if item.get("id") == choice_id and item.get("actor_id") == actor_id
-                       and item.get("trigger") == "readied_action"), None)
-        readied = next((item for item in encounter.get("readied", [])
-                        if window and item.get("id") == window.get("readied_id")), None)
+        window = next(
+            (
+                item
+                for item in encounter.get("pending", [])
+                if item.get("id") == choice_id
+                and item.get("actor_id") == actor_id
+                and item.get("trigger") == "readied_action"
+            ),
+            None,
+        )
+        readied = next(
+            (
+                item
+                for item in encounter.get("readied", [])
+                if window and item.get("id") == window.get("readied_id")
+            ),
+            None,
+        )
         if readied is None or readied.get("status") != "triggered":
             raise _support.CombatEngineError("choice_id is not this actor's live Ready response")
         original_response = _support.deepcopy(readied["payload"])
@@ -4567,25 +6172,45 @@ class CombatService:
             if sunlight is not None and response["action"] != "attack":
                 raise ValueError("sunlight is only applicable to a readied attack")
             if response["action"] == "ruling":
-                return self.combat_response(campaign_id, principal_id, {
-                    **_support._ruling_status("pending_ruling", "ready_release_effect"),
-                    "released": False, "committed": False,
-                    "declaration": original_response, "readied_id": readied["id"],
-                    "campaign_revision": campaign.revision, "combat": encounter,
-                })
+                return self.combat_response(
+                    campaign_id,
+                    principal_id,
+                    {
+                        **_support._ruling_status("pending_ruling", "ready_release_effect"),
+                        "released": False,
+                        "committed": False,
+                        "declaration": original_response,
+                        "readied_id": readied["id"],
+                        "campaign_revision": campaign.revision,
+                        "combat": encounter,
+                    },
+                )
             if response["action"] == "attack":
                 if sunlight is not None:
-                    response["attack"].setdefault("context", {})["sunlight"] = (
-                        _support.deepcopy(sunlight)
+                    response["attack"].setdefault("context", {})["sunlight"] = _support.deepcopy(
+                        sunlight
                     )
                 action_payload = self.sanitize_attack_action(
                     campaign_id, principal_id, response["attack"]
                 )
-                self.validate_agent_attack_context(campaign_id, action_payload, encounter=encounter)
+                self.validate_agent_attack_context(
+                    campaign_id, principal_id, action_payload, encounter=encounter
+                )
                 return self.settle_reaction_attack(
-                    campaign_id, campaign, encounter, actor_id, response["target_id"],
-                    action_payload, choice_id, window, principal_id, resolved_branch_id,
-                    idempotency_key, scope, payload, readied=readied,
+                    campaign_id,
+                    campaign,
+                    encounter,
+                    actor_id,
+                    response["target_id"],
+                    action_payload,
+                    choice_id,
+                    window,
+                    principal_id,
+                    resolved_branch_id,
+                    idempotency_key,
+                    scope,
+                    payload,
+                    readied=readied,
                 )
             from .ready_actions import settle_non_attack
 
@@ -4617,8 +6242,13 @@ class CombatService:
             payload=payload,
             response_fields={
                 **_support._ruling_status(
-                    ("pending_reaction" if next_encounter.get("movement_continuation")
-                     else "committed") if release else "armed",
+                    (
+                        "pending_reaction"
+                        if next_encounter.get("movement_continuation")
+                        else "committed"
+                    )
+                    if release
+                    else "armed",
                     "ready_release_effect",
                 ),
                 "released": release,
@@ -4844,6 +6474,7 @@ class CombatService:
         expected_revision: int | None = None,
         branch_id: str | None = None,
         idempotency_key: str | None = None,
+        rule_facts: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Pay an activity and settle supported Core outcomes; return rulings for the rest.
 
@@ -4853,18 +6484,36 @@ class CombatService:
         The target must be another creature; this spends one use and bonus action.
         2014 Rage enters with declaration={} or ends with declaration={end:true}.
         Both require the actor's turn and spend a bonus action; entering spends a use.
+        DM-resolved activity checks accept bounded source-grounded rule_facts, including
+        Perception sight-reliance and vision facts when the scene requires them.
         """
         from .inspiration import bardic, grant
         from .rage import rage, use
 
         if activity_id == rage.FEATURE:
-            return use(self, campaign_id, actor_id, declaration, principal_id,
-                       expected_revision, branch_id, idempotency_key)
+            return use(
+                self,
+                campaign_id,
+                actor_id,
+                declaration,
+                principal_id,
+                expected_revision,
+                branch_id,
+                idempotency_key,
+            )
         if activity_id == bardic.FEATURE:
             actor = self.require_campaign_actor(campaign_id, actor_id)
-            return grant(self, actor, declaration, principal_id, None, idempotency_key,
-                         combat=True, branch_id=branch_id,
-                         expected_campaign_revision=expected_revision)
+            return grant(
+                self,
+                actor,
+                declaration,
+                principal_id,
+                None,
+                idempotency_key,
+                combat=True,
+                branch_id=branch_id,
+                expected_campaign_revision=expected_revision,
+            )
         self.require_combat_actor_or_steel_defender_owner_control(
             campaign_id, actor_id, principal_id, branch_id=branch_id
         )
@@ -5150,9 +6799,18 @@ class CombatService:
                 },
                 "campaign_revision": campaign.revision,
             }
+        activity_rule_facts = self.checked_rule_facts(rule_facts)
+        if activity_rule_facts and not self.is_dm(campaign_id, principal_id):
+            raise _support.CombatEngineError(
+                "rule facts for combat activities require an Agent-as-DM resolution"
+            )
         rule_context = self.effective_rule_context(
             campaign_id,
-            facts={"actor_id": actor_id, "activity_id": activity_id},
+            facts={
+                **activity_rule_facts,
+                "actor_id": actor_id,
+                "activity_id": activity_id,
+            },
             branch_id=resolved_branch_id,
         )
         legendary_spec = (
@@ -6347,13 +8005,13 @@ class CombatService:
             "observers": list(normalized_observer_ids),
         }
         observer_facts = raw_ruling.get("observer_rule_facts", {})
-        if (
-            not isinstance(observer_facts, dict)
-            or set(observer_facts) - set(normalized_observer_ids)
+        if not isinstance(observer_facts, dict) or set(observer_facts) - set(
+            normalized_observer_ids
         ):
             raise ValueError("observer_rule_facts must identify only the reviewed Hide observers")
-        observer_facts = {key: self.checked_rule_facts(value)
-                          for key, value in observer_facts.items()}
+        observer_facts = {
+            key: self.checked_rule_facts(value) for key, value in observer_facts.items()
+        }
         if observer_facts:
             normalized_ruling["observer_rule_facts"] = observer_facts
         payload = {
@@ -6418,17 +8076,28 @@ class CombatService:
             observer_snapshot = self.combat_actor_snapshot(observer.id)
             hide_snapshots[observer_id] = observer_snapshot
             passive = _support.resolve_actor_check(
-                observer_snapshot, kind="check", ability="perception", dc=0, passive=True,
+                observer_snapshot,
+                kind="check",
+                ability="perception",
+                dc=0,
+                passive=True,
                 encounter=encounter,
                 rules=self.effective_rule_context(
-                    campaign_id, branch_id=resolved_branch_id,
+                    campaign_id,
+                    branch_id=resolved_branch_id,
                     facts={
                         **prepare_check_facts(
-                            self, observer_facts.get(observer_id, {}), campaign_id=campaign_id,
-                            actor_id=observer_id, principal_id=principal_id,
+                            self,
+                            observer_facts.get(observer_id, {}),
+                            campaign_id=campaign_id,
+                            actor_id=observer_id,
+                            principal_id=principal_id,
                         ),
-                        "actor_id": observer_id, "kind": "check", "ability": "perception",
-                        "passive": True, "action": "observe_hide",
+                        "actor_id": observer_id,
+                        "kind": "check",
+                        "ability": "perception",
+                        "passive": True,
+                        "action": "observe_hide",
                     },
                 ),
             )
@@ -6526,9 +8195,12 @@ class CombatService:
             },
             character_updates=[
                 _support.CharacterStateUpdate(
-                    character_id=snapshot["id"], sheet=snapshot["sheet"], notes=snapshot["notes"],
+                    character_id=snapshot["id"],
+                    sheet=snapshot["sheet"],
+                    notes=snapshot["notes"],
                     expected_revision=snapshot["revision"],
-                ) for snapshot in hide_snapshots.values()
+                )
+                for snapshot in hide_snapshots.values()
             ],
             rule_receipts=receipts,
         )
@@ -6715,6 +8387,13 @@ class CombatService:
         if replay is not None:
             return self.combat_response(campaign_id, principal_id, replay)
         campaign = self.campaigns.get(campaign_id)
+        if any(
+            str(item.get("actor_id") or "") == actor_id
+            for item in dict(campaign.state or {}).get("rogue_choices") or []
+        ):
+            raise _support.CombatEngineError(
+                "resolve this actor's pending Stroke of Luck choice before another check"
+            )
         if expected_revision is not None and campaign.revision != expected_revision:
             raise ValueError(
                 "campaign revision conflict: "
@@ -7002,7 +8681,10 @@ class CombatService:
                     campaign_id,
                     facts={
                         **prepare_check_facts(
-                            self, settlement_facts, campaign_id=campaign_id, actor_id=actor_id,
+                            self,
+                            settlement_facts,
+                            campaign_id=campaign_id,
+                            actor_id=actor_id,
                             principal_id=principal_id,
                         ),
                         "actor_id": actor_id,
@@ -7048,6 +8730,71 @@ class CombatService:
                 result = {**result, "action": normalized_check_action}
         if not any(update.character_id == actor_id for update in updates):
             updates.extend(check_updates([actor], settlement_facts))
+        rogue_stroke_choice: dict[str, Any] | None = None
+        if kind in _support.ABILITY_CHECK_KINDS and result.get("success") is False:
+            from sagasmith_dnd.character_schema import srd2014_rogue_stroke_of_luck_feature
+
+            stroke_feature = srd2014_rogue_stroke_of_luck_feature(actor["sheet"])
+            if int(dict(dict(stroke_feature or {}).get("uses") or {}).get("value", 0) or 0) > 0:
+                if encounter.get("active", False):
+                    encounter = _support.add_choice_window(
+                        encounter,
+                        kind="feature",
+                        actor_id_value=actor_id,
+                        event="ability_check.after_failure",
+                        candidates=[
+                            {"id": "use_stroke_of_luck", "name": "Use Stroke of Luck"},
+                            {"id": "decline", "name": "Decline"},
+                        ],
+                    )
+                    window = encounter["pending"][-1]
+                    window["trigger"] = "rogue_stroke_luck_check"
+                    choice_id = str(window["id"])
+                    next_state["combat"] = encounter
+                else:
+                    choice_id = f"rogue-stroke-{_support.uuid4().hex}"
+                    window = {
+                        "id": choice_id,
+                        "kind": "feature",
+                        "actor_id": actor_id,
+                        "event": "ability_check.after_failure",
+                        "candidates": [
+                            {"id": "use_stroke_of_luck", "name": "Use Stroke of Luck"},
+                            {"id": "decline", "name": "Decline"},
+                        ],
+                    }
+                rule_context = self.effective_rule_context(
+                    campaign_id, branch_id=resolved_branch_id
+                )
+                result = {
+                    **result,
+                    "post_roll_choice": {
+                        "id": choice_id,
+                        "kind": "stroke_of_luck",
+                        "candidates": _support.deepcopy(window["candidates"]),
+                    },
+                    "rule_receipts": [
+                        *list(result.get("rule_receipts") or []),
+                        *_support.core_receipts(
+                            rule_context,
+                            ["dnd5e.core.rogue.stroke_of_luck"],
+                            "ability_check.after_failure",
+                        ),
+                    ],
+                }
+                rogue_stroke_choice = {
+                    "id": choice_id,
+                    "actor_id": actor_id,
+                    "kind": "stroke_of_luck_check",
+                    "result": _support.deepcopy(result),
+                    "branch_id": resolved_branch_id,
+                    "created_revision": campaign.revision + 1,
+                    "target_id": str(target_id or ""),
+                }
+                next_state["rogue_choices"] = [
+                    *list(next_state.get("rogue_choices") or []),
+                    rogue_stroke_choice,
+                ]
         if encounter is not None and result.get("helped_by"):
             encounter = _support.consume_task_help(
                 encounter,
@@ -7081,9 +8828,10 @@ class CombatService:
             scope=scope,
             payload=payload,
             response_fields={
-                "status": "committed",
+                "status": "pending_choice" if rogue_stroke_choice else "committed",
                 "result": result,
                 "combat": next_state.get("combat"),
+                **({"choice": window} if rogue_stroke_choice else {}),
             },
             character_updates=updates,
             rule_receipts=list(result.get("rule_receipts") or []),
@@ -7279,15 +9027,20 @@ class CombatService:
         ):
             raise _support.CombatEngineError("this paid semantic plan has already been settled")
 
-
         from .semantic_execution import CombatPlanContext, CombatPlanRuntime
 
-        runtime = CombatPlanRuntime(CombatPlanContext(
-            encounter=encounter, runtime_services=self, campaign=campaign,
-            campaign_id=campaign_id, resolved_branch_id=resolved_branch_id,
-            bound_plan=bound_plan, compiled_plan=compiled_plan,
-            save_facts_by_step=save_facts_by_step,
-        ))
+        runtime = CombatPlanRuntime(
+            CombatPlanContext(
+                encounter=encounter,
+                runtime_services=self,
+                campaign=campaign,
+                campaign_id=campaign_id,
+                resolved_branch_id=resolved_branch_id,
+                bound_plan=bound_plan,
+                compiled_plan=compiled_plan,
+                save_facts_by_step=save_facts_by_step,
+            )
+        )
         try:
             settled = _support.execute_resolution_plan(bound_plan, runtime)
         except (
@@ -7307,7 +9060,8 @@ class CombatService:
         completed = settled.status == "committed"
         if completed:
             next_encounter.get("semantic_state", {}).get("continuations", {}).pop(
-                application_id, None,
+                application_id,
+                None,
             )
         if completed and source_card_kind == "item":
             next_encounter["pending"] = [
@@ -7370,9 +9124,12 @@ class CombatService:
                 "result": {
                     "plan_id": compiled_plan.id,
                     "application_id": application_id,
-                    "waiting_choice_ids": list(runtime.encounter.get("semantic_state", {}).get(
-                        "continuations", {}
-                    ).get(application_id, {}).get("waiting_ids", [])),
+                    "waiting_choice_ids": list(
+                        runtime.encounter.get("semantic_state", {})
+                        .get("continuations", {})
+                        .get(application_id, {})
+                        .get("waiting_ids", [])
+                    ),
                     "plan_fingerprint": compiled_plan.fingerprint,
                     "bound_plan_fingerprint": bound_plan.fingerprint,
                     "results": _support.deepcopy(settled.results),
@@ -8151,6 +9908,269 @@ class CombatService:
         )
         return self.combat_response(campaign_id, principal_id, response)
 
+    def _resolve_mounted_fall_choice(
+        self,
+        *,
+        campaign,
+        encounter,
+        campaign_id: str,
+        actor_id: str,
+        choice_id: str,
+        selection: dict[str, Any],
+        principal_id: str,
+        branch_id: str | None,
+        idempotency_key: str,
+        scope: str,
+        payload: dict[str, Any],
+        pending_choice: dict[str, Any],
+    ):
+        from sagasmith_dnd.mounted_combat import forced_dismount_2014
+
+        selection_id = str(selection.get("id") or "").casefold()
+        if selection_id not in {"dismount_steady", "fall_prone"} or set(selection) != {"id"}:
+            raise _support.CombatEngineError(
+                "mount-prone reaction must choose dismount_steady or fall_prone"
+            )
+        relation_id = str(pending_choice.get("relation_id") or "")
+        relation = next(
+            (
+                item
+                for item in encounter.get("mount_relations", [])
+                if item.get("id") == relation_id and item.get("active", True)
+            ),
+            None,
+        )
+        if (
+            pending_choice.get("actor_id") != actor_id
+            or relation is None
+            or str(relation.get("rider_actor_id") or "") != actor_id
+            or str(relation.get("mount_actor_id") or "")
+            != str(pending_choice.get("mount_actor_id") or "")
+        ):
+            raise _support.CombatEngineError("mount-prone reaction no longer matches its rider")
+        next_encounter = _support.resolve_choice_window(
+            encounter,
+            choice_id=choice_id,
+            actor_id_value=actor_id,
+            selection=selection,
+        )
+        if selection_id == "dismount_steady":
+            rider = next(
+                item
+                for item in next_encounter["combatants"]
+                if str(item.get("actor_id") or "") == actor_id
+            )
+            budget = dict(rider.get("turn_budget") or {})
+            if int(budget.get("reaction", 0) or 0) <= 0:
+                raise _support.CombatEngineError("rider has no reaction remaining")
+            budget["reaction"] = int(budget["reaction"]) - 1
+            rider["turn_budget"] = budget
+        next_encounter = forced_dismount_2014(
+            next_encounter,
+            rider_actor_id=actor_id,
+            reason="mount_knocked_prone",
+            prone=selection_id == "fall_prone",
+        )
+        rider_record = self.require_campaign_actor(campaign_id, actor_id)
+        rider_sheet = _support.deepcopy(rider_record.sheet)
+        if selection_id == "fall_prone":
+            _support.apply_condition_change(rider_sheet, condition_id="prone", add=True)
+        self.sync_combatant_conditions(next_encounter, actor_id, rider_sheet)
+        result = {
+            "choice_id": choice_id,
+            "selection": selection_id,
+            "relation_id": relation_id,
+            "landing_position": next(
+                item.get("position")
+                for item in next_encounter["combatants"]
+                if str(item.get("actor_id") or "") == actor_id
+            ),
+            "prone": selection_id == "fall_prone",
+        }
+        next_encounter["log"] = [
+            *list(next_encounter.get("log") or []),
+            {"type": "mount_prone_reaction_settled", **_support.deepcopy(result)},
+        ][-100:]
+        receipts = _support.core_receipts(
+            self.effective_rule_context(campaign_id),
+            ["dnd5e.core.combat.mounted_2014"],
+            "combat.mounted_fall",
+        )
+        response = self.commit_campaign_state(
+            campaign,
+            {**dict(campaign.state or {}), "combat": next_encounter},
+            operation="combat.mounted_fall.resolve",
+            principal_id=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=payload,
+            response_fields={
+                "status": "committed",
+                "combat": next_encounter,
+                "mounted_fall_resolution": result,
+            },
+            character_updates=[
+                _support.CharacterStateUpdate(
+                    character_id=actor_id,
+                    sheet=_support.validate_character_sheet(rider_sheet),
+                    notes=_support.validate_character_notes(rider_record.notes),
+                    expected_revision=rider_record.revision,
+                )
+            ],
+            rule_receipts=receipts,
+        )
+        return self.combat_response(campaign_id, principal_id, response)
+
+    def _resolve_rogue_stroke_luck_choice(
+        self,
+        *,
+        campaign,
+        campaign_id: str,
+        actor_id: str,
+        choice_id: str,
+        selection: dict[str, Any],
+        principal_id: str,
+        branch_id: str,
+        idempotency_key: str,
+        scope: str,
+        payload: dict[str, Any],
+        pending_choice: dict[str, Any],
+    ) -> dict[str, Any]:
+        from sagasmith_dnd.character_schema import srd2014_rogue_stroke_of_luck_feature
+        from sagasmith_dnd.combat_engine import apply_srd2014_stroke_of_luck_to_check
+        from sagasmith_dnd.resources import mutate_bounded_resource
+
+        if pending_choice.get("kind") == "stroke_of_luck_attack":
+            return self.resolve_rogue_stroke_attack_choice(
+                campaign=campaign,
+                campaign_id=campaign_id,
+                actor_id=actor_id,
+                choice_id=choice_id,
+                selection=selection,
+                principal_id=principal_id,
+                branch_id=branch_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+                payload=payload,
+                pending_choice=pending_choice,
+            )
+        if (
+            pending_choice.get("kind") != "stroke_of_luck_check"
+            or pending_choice.get("actor_id") != actor_id
+            or pending_choice.get("branch_id") != branch_id
+        ):
+            raise _support.CombatEngineError("Stroke of Luck choice no longer matches this actor")
+        if not isinstance(selection, dict) or set(selection) != {"id"}:
+            raise _support.CombatEngineError(
+                "Stroke of Luck choice requires exactly one selection id"
+            )
+        selection_id = str(selection.get("id") or "")
+        if selection_id not in {"use_stroke_of_luck", "decline"}:
+            raise _support.CombatEngineError("unknown Stroke of Luck choice")
+        if selection_id == "use_stroke_of_luck" and campaign.revision != int(
+            pending_choice.get("created_revision", 0) or 0
+        ):
+            raise _support.CombatEngineError(
+                "Stroke of Luck can only resolve before another campaign write"
+            )
+
+        next_state = _support.deepcopy(dict(campaign.state or {}))
+        next_state["rogue_choices"] = [
+            item
+            for item in next_state.get("rogue_choices", [])
+            if str(item.get("id") or "") != choice_id
+        ]
+        encounter = dict(next_state.get("combat") or {})
+        if encounter.get("active", False):
+            window = next(
+                (item for item in encounter.get("pending", []) if item.get("id") == choice_id),
+                None,
+            )
+            if not isinstance(window, dict) or window.get("trigger") != "rogue_stroke_luck_check":
+                raise _support.CombatEngineError("Stroke of Luck combat choice window is missing")
+            encounter = _support.resolve_choice_window(
+                encounter,
+                choice_id=choice_id,
+                actor_id_value=actor_id,
+                selection=selection,
+            )
+            next_state["combat"] = encounter
+
+        result = _support.deepcopy(dict(pending_choice.get("result") or {}))
+        receipts: list[dict[str, Any]] = []
+        updates: list[_support.CharacterStateUpdate] = []
+        if selection_id == "use_stroke_of_luck":
+            current = self.require_campaign_actor(campaign_id, actor_id)
+            sheet = _support.deepcopy(current.sheet)
+            feature = srd2014_rogue_stroke_of_luck_feature(sheet)
+            if feature is None:
+                raise _support.CombatEngineError("Stroke of Luck is not present on the actor card")
+            uses = dict(feature.get("uses") or {})
+            if int(uses.get("value", 0) or 0) < 1:
+                raise _support.CombatEngineError("Stroke of Luck is already expended")
+            spend = mutate_bounded_resource(uses, amount=1, direction="spend")
+            feature["uses"] = uses
+            result = apply_srd2014_stroke_of_luck_to_check(result)
+            result["stroke_of_luck_resource"] = spend
+            rule_context = self.effective_rule_context(campaign_id, branch_id=branch_id)
+            receipts = _support.core_receipts(
+                rule_context,
+                ["dnd5e.core.rogue.stroke_of_luck"],
+                "ability_check.stroke_of_luck",
+            )
+            result["rule_receipts"] = [*list(result.get("rule_receipts") or []), *receipts]
+            result.pop("post_roll_choice", None)
+            updates.append(
+                _support.CharacterStateUpdate(
+                    character_id=actor_id,
+                    sheet=_support.validate_character_sheet(sheet),
+                    notes=_support.validate_character_notes(current.notes),
+                    expected_revision=current.revision,
+                )
+            )
+        result["stroke_of_luck_choice"] = {
+            "id": choice_id,
+            "selection": selection_id,
+            "resolved": True,
+        }
+        next_state["resolution_log"] = [
+            *list(next_state.get("resolution_log") or []),
+            {
+                "id": f"resolution-{_support.uuid4().hex}",
+                "type": "rogue_stroke_of_luck",
+                "operation": "combat.choice.rogue_stroke_of_luck",
+                "actor_id": actor_id,
+                "audience": {
+                    "scope": "actors",
+                    "actor_refs": [actor_id],
+                    "disclosure": "private",
+                },
+                "branch_id": branch_id,
+                "campaign_revision": campaign.revision + 1,
+                "result": _support.deepcopy(result),
+            },
+        ][-100:]
+        response = self.commit_campaign_state(
+            campaign,
+            next_state,
+            operation="combat.choice.rogue_stroke_of_luck",
+            principal_id=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=payload,
+            response_fields={
+                "status": "committed",
+                "result": result,
+                "choice_resolution": {"choice_id": choice_id, "selection": selection_id},
+                "combat": next_state.get("combat"),
+            },
+            character_updates=updates,
+            rule_receipts=receipts,
+        )
+        return self.combat_response(campaign_id, principal_id, response)
+
     def combat_choice_resolve(
         self,
         campaign_id: str,
@@ -8182,18 +10202,78 @@ class CombatService:
                 "campaign revision conflict: "
                 f"expected {expected_revision}, found {campaign.revision}"
             )
+        pending_rogue_choice = next(
+            (
+                item
+                for item in dict(campaign.state or {}).get("rogue_choices") or []
+                if str(item.get("id") or "") == choice_id
+            ),
+            None,
+        )
+        if pending_rogue_choice is not None:
+            return self._resolve_rogue_stroke_luck_choice(
+                campaign=campaign,
+                campaign_id=campaign_id,
+                actor_id=actor_id,
+                choice_id=choice_id,
+                selection=selection,
+                principal_id=principal_id,
+                branch_id=resolved_branch_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+                payload=payload,
+                pending_choice=pending_rogue_choice,
+            )
         _, encounter = self.active_encounter(campaign_id)
         pending_choice = next(
             (item for item in encounter.get("pending", []) if item.get("id") == choice_id),
             None,
         )
+        if pending_choice and pending_choice.get("trigger") == "mounted_mount_prone":
+            return self._resolve_mounted_fall_choice(
+                campaign=campaign,
+                encounter=encounter,
+                campaign_id=campaign_id,
+                actor_id=actor_id,
+                choice_id=choice_id,
+                selection=selection,
+                principal_id=principal_id,
+                branch_id=resolved_branch_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+                payload=payload,
+                pending_choice=pending_choice,
+            )
+        if pending_choice and pending_choice.get("trigger") == "special_attack_defense":
+            return self._resolve_2014_special_attack_choice(
+                campaign=campaign,
+                encounter=encounter,
+                campaign_id=campaign_id,
+                actor_id=actor_id,
+                choice_id=choice_id,
+                selection=selection,
+                principal_id=principal_id,
+                branch_id=resolved_branch_id,
+                expected_revision=expected_revision,
+                idempotency_key=idempotency_key,
+                scope=scope,
+                payload=payload,
+                pending_choice=pending_choice,
+            )
         if pending_choice and pending_choice.get("trigger") in {"protection", "protection_resume"}:
             from . import protection
 
             return protection.resolve(
-                self, campaign, encounter, pending_choice, selection, principal_id=principal_id,
-                branch_id=resolved_branch_id, idempotency_key=idempotency_key,
-                scope=scope, payload=payload,
+                self,
+                campaign,
+                encounter,
+                pending_choice,
+                selection,
+                principal_id=principal_id,
+                branch_id=resolved_branch_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+                payload=payload,
             )
         if encounter.get("protection_intent"):
             raise _support.CombatEngineError("finish the pending Protection attack first")
@@ -8680,15 +10760,11 @@ class CombatService:
         elif view == "available_actions":
             if not actor_id:
                 raise ValueError("top-level actor_id is required for available_actions")
-            result = self.combat_available_actions(
-                campaign_id, actor_id, principal_id
-            )
+            result = self.combat_available_actions(campaign_id, actor_id, principal_id)
         elif view == "reactions":
             if not actor_id:
                 raise ValueError("top-level actor_id is required for reactions")
-            result = self.combat_reactions(
-                campaign_id, actor_id, principal_id
-            )
+            result = self.combat_reactions(campaign_id, actor_id, principal_id)
         elif view == "render":
             audience_projection = str(data.get("audience_projection") or "caller")
             if audience_projection not in {"caller", "party_public"}:
@@ -8745,7 +10821,8 @@ class CombatService:
     ) -> dict[str, Any]:
         """Move or stand using the current campaign revision and a request key.
 
-        move payload={distance, destination?, path?, spatial_facts?}; distance is
+        move payload={distance, destination?, path?, spatial_facts?, drag_grapple_ids?, jump?};
+        distance is
         feet traveled, before difficult-terrain cost. In Agent positioning use
         spatial_facts={decision_id, reason, destination_legal, distance_ft}, with
         distance_ft equal to distance. Optional difficult_terrain_extra_ft adds
@@ -8754,6 +10831,9 @@ class CombatService:
         {actor_id, distance_ft, weapon_ids, difficult_terrain_extra_ft?} for each
         reach exit. Distances and terrain costs are measured from this move's
         origin. Movement pauses there and resumes after reactions settle.
+        For 2014 Agent positioning, each opportunity boundary also carries
+        attacker_vision and target_vision scene facts, targetable, in_range, and
+        cover_degree; Runtime derives sight and attack modifiers from them.
         For 2014 agent movement, space_segments must cover the entire distance:
         [{distance_ft,occupant_ids,passage_width_ft,difficult_terrain}]. Name the
         actual current occupants; null width explicitly means open space. Use
@@ -8762,7 +10842,12 @@ class CombatService:
         do not supply computed modifiers. End a willing move in an empty space.
         Grid mode derives these facts from current footprints and reviewed map
         cells; a map boundary alone never implies a narrow physical passage.
-        Do not invent
+        Drag a source-owned 2014 grapple by listing its exact grapple ID. Agent
+        positioning also requires DM-authored spatial_facts.grapple_drag entries.
+        A 2014 jump is {kind: long|high}; Grid derives the running start from this turn's
+        recorded foot movement and landing terrain. Agent positioning also requires
+        jump.spatial_facts with sourced running-start, obstacle, and landing facts.
+        For a Grid high jump, distance is height and destination/path are omitted. Do not invent
         grid coordinates when the encounter uses Agent positioning. stand uses {}.
         """
         data = self.facade_payload(payload)
@@ -8777,10 +10862,12 @@ class CombatService:
                 data.get("travel_mode", "walk"),
                 self.facade_bool(data, "crawl"),
                 data.get("spatial_facts"),
+                data.get("drag_grapple_ids"),
                 principal_id,
                 expected_revision,
                 branch_id,
                 idempotency_key,
+                jump=data.get("jump"),
             )
             if action == "move"
             else self.combat_stand(
@@ -8908,14 +10995,42 @@ class CombatService:
                 principal_id,
                 roles=_support.CAMPAIGN_DM_ROLES,
             )
-        self.require_facade_phase(
-            campaign_id,
-            f"combat_choice({action})",
-            _support.PROFILE_COMBAT,
-        )
         resolved_actor_id = str(self.required({"actor_id": actor_id}, "actor_id"))
+        data = self.facade_payload(payload)
+        rogue_choice = None
+        if action == "resolve":
+            choice_id = str(data.get("choice_id") or "")
+            campaign = self.campaigns.get(campaign_id)
+            rogue_choice = next(
+                (
+                    item
+                    for item in dict(campaign.state or {}).get("rogue_choices") or []
+                    if str(item.get("id") or "") == choice_id
+                    and str(item.get("actor_id") or "") == resolved_actor_id
+                    and item.get("kind") in {"stroke_of_luck_check", "stroke_of_luck_attack"}
+                ),
+                None,
+            )
+            if rogue_choice is None:
+                rogue_choice = next(
+                    (
+                        item
+                        for item in dict(campaign.state or {}).get("resolution_log") or []
+                        if str(item.get("actor_id") or "") == resolved_actor_id
+                        and isinstance(item.get("result"), dict)
+                        and isinstance(item["result"].get("stroke_of_luck_choice"), dict)
+                        and str(item["result"]["stroke_of_luck_choice"].get("id") or "")
+                        == choice_id
+                    ),
+                    None,
+                )
+        if rogue_choice is None:
+            self.require_facade_phase(
+                campaign_id,
+                f"combat_choice({action})",
+                _support.PROFILE_COMBAT,
+            )
         if action == "execute_plan":
-            data = self.facade_payload(payload)
             result = self.combat_resolution_plan(
                 campaign_id,
                 resolved_actor_id,
@@ -8926,7 +11041,6 @@ class CombatService:
                 idempotency_key=idempotency_key,
             )
         elif action == "open":
-            data = self.facade_payload(payload)
             result = self.combat_choice_open(
                 campaign_id,
                 resolved_actor_id,
@@ -8939,7 +11053,6 @@ class CombatService:
                 idempotency_key,
             )
         elif action == "resolve_defense":
-            data = self.facade_payload(payload)
             choice_id = self.required(data, "choice_id")
             _campaign, encounter = self.active_encounter(campaign_id)
             window = next(
@@ -8962,7 +11075,6 @@ class CombatService:
                 idempotency_key,
             )
         elif action == "resolve":
-            data = self.facade_payload(payload)
             result = self.combat_choice_resolve(
                 campaign_id,
                 resolved_actor_id,
@@ -8974,7 +11086,6 @@ class CombatService:
                 idempotency_key,
             )
         else:
-            data = self.facade_payload(payload)
             result = self.combat_on_hit_ruling(
                 campaign_id,
                 resolved_actor_id,

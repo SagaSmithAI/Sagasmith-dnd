@@ -53,6 +53,40 @@ def test_movement_pauses_resumes_and_charges_only_committed_prefixes():
     assert resume_pending_movement(finished) == finished
 
 
+def test_jump_landing_check_waits_until_every_opportunity_reaction_finishes():
+    paused = spend_movement(
+        _encounter(second=True), "mover", 30, destination={"x": 6, "y": 0}
+    )
+    paused["movement_continuation"]["deferred_landing_check"] = {
+        "actor_id": "mover",
+        "kind": "check",
+        "ability": "acrobatics",
+        "dc": 10,
+        "ruleset": "2014",
+    }
+
+    first = resume_pending_movement(_decline(paused))
+    assert current_combatant(first)["conditions"] == []
+    assert first["movement_continuation"]["deferred_landing_check"] == {
+        "actor_id": "mover",
+        "kind": "check",
+        "ability": "acrobatics",
+        "dc": 10,
+        "ruleset": "2014",
+    }
+
+    finished = resume_pending_movement(_decline(first))
+    assert "movement_continuation" not in finished
+    assert current_combatant(finished)["conditions"] == []
+    assert finished["jump_landing_check_due"] == {
+        "actor_id": "mover",
+        "kind": "check",
+        "ability": "acrobatics",
+        "dc": 10,
+        "ruleset": "2014",
+    }
+
+
 @pytest.mark.parametrize(
     "condition", ["dead", "unconscious", "stunned", "paralyzed", "restrained", "grappled", "prone"]
 )

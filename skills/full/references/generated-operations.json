@@ -1814,7 +1814,7 @@
     }
   },
   {
-    "description": "Update campaign state, advancement, clock, or campaign-space effects.\n\nparty_rest payload: {members:[{character_id, expected_revision}],\nrest_type:\"long_rest\"|\"short_rest\", duration_minutes}. Each member uses\nits actor revision; top-level expected_revision is the campaign revision.\nOptional member rest choices are documented in runtime-workflows.md.\nIn 2014, spend at most one initial Hit Die per member, then inspect its\nroll before deciding on another. short_rest_hit_die payload requires\n{character_id,expected_character_revision,decision:\"spend\"|\"stop\",\nrest_completed_elapsed_ticks,hit_die_key?}. Use the completed rest's\nactual elapsed ticks and the actor's exact Hit Die pool key; hit_die_key\nis required for spend and omitted for stop. Top-level expected_revision\nis the current campaign revision. Each new decision gets a new key.\nFor live prepared-spell changes, put prepared_spell_ids on that member\nin a legal long_rest; returning to Lobby does not reopen initial setup.\nclock_advance payload={period, count?, expected_elapsed_ticks?}. period is\nminute/hour/day/round/encounter; expected_elapsed_ticks is the resulting\nclock, required for minute/hour/day (10 ticks/minute), not the old clock.",
+    "description": "Update campaign state, advancement, clock, travel, or campaign-space effects.\n\nparty_rest payload: {members:[{character_id, expected_revision}],\nrest_type:\"long_rest\"|\"short_rest\", duration_minutes}. Each member uses\nits actor revision; top-level expected_revision is the campaign revision.\nOptional member rest choices are documented in runtime-workflows.md.\n\nparty_travel payload: {trip:{travel_id, pace, distance_miles, route_fact,\nparticipants:[{character_id, expected_revision, survival_intake}]}}.\nIn 2014, spend at most one initial Hit Die per member, then inspect its\nroll before deciding on another. short_rest_hit_die payload requires\n{character_id,expected_character_revision,decision:\"spend\"|\"stop\",\nrest_completed_elapsed_ticks,hit_die_key?}. Use the completed rest's\nactual elapsed ticks and the actor's exact Hit Die pool key; hit_die_key\nis required for spend and omitted for stop. Top-level expected_revision\nis the current campaign revision. Each new decision gets a new key.\nFor live prepared-spell changes, put prepared_spell_ids on that member\nin a legal long_rest; returning to Lobby does not reopen initial setup.\nclock_advance payload={period, count?, expected_elapsed_ticks?}. period is\nminute/hour/day/round/encounter; expected_elapsed_ticks is the resulting\nclock, required for minute/hour/day (10 ticks/minute), not the old clock.",
     "error_envelope": {
       "fields": [
         "code",
@@ -1838,6 +1838,7 @@
             "clock_set",
             "clock_advance",
             "party_rest",
+            "party_travel",
             "short_rest_hit_die",
             "stable_recovery",
             "effect_add",
@@ -5536,7 +5537,7 @@
     }
   },
   {
-    "description": "Apply a character transition; expected_revision is the actor revision.\n\ndamage payload={parts:[{amount:1,damage_type:\"bludgeoning\"}],\ncritical?:bool,knock_out?:bool,melee?:bool}. Do not use a top-level amount\nfor damage or open combat just to settle a trap/fall. heal uses {amount}.\neffect_add uses {effect}; effect_remove uses {effect_id}; resource_set\nuses {resource,value}; exhaustion_set uses {value}. Keep one stable\nidempotency_key per intended transition and copy its new actor revision.\nlevel_advance requires {class_name,hp_method,reason,source_ref,target_level}.\ntarget_level is the intended TOTAL character level, exactly current + 1.\nRead progression before advancing; never repeat a completed milestone.\nsource_traits is DM-only, outside combat, for existing non-PC actors:\n{source_ref,reason,traits:{damage_resistances?:[\"fire\"],darkvision_ft?:60,\nlanguages?:[\"Common\"],damage_immunities?:[],damage_vulnerabilities?:[],\ncondition_immunities?:[]}}. Each supplied trait replaces that trait only;\ncopy the full source-supported list. It preserves HP, conditions and resources.\nlegendary_resistance and bardic_inspiration resolve an owned roll choice in any phase:\npayload={choice_id,accept:bool}. It resumes the saved command with its recorded dice.\ndivine_smite resolves an owned hit choice with {choice_id,accept:bool,slot?:str};\nacceptance requires one offered slot key, decline omits slot.\nstatblock_proficiency_sync is DM-only for legacy 2014 non-PC imports:\npayload={reason}. It derives armor training from unchanged recorded source gear,\naccepts no supplied proficiencies, and preserves active combat and all actor state.",
+    "description": "Apply a character transition; expected_revision is the actor revision.\n\ndamage payload={parts:[{amount:1,damage_type:\"bludgeoning\"}],\ncritical?:bool,knock_out?:bool,melee?:bool}. Do not use a top-level amount\nfor damage or open combat just to settle a trap/fall. heal uses {amount}.\neffect_add uses {effect}; effect_remove uses {effect_id}; resource_set\nuses {resource,value}; exhaustion_set uses {value}. Keep one stable\nidempotency_key per intended transition and copy its new actor revision.\nlevel_advance requires {class_name,hp_method,reason,source_ref,target_level};\na first 2014 class level also accepts multiclass_choices={skills:[...],tools:[...]}.\ntarget_level is the intended TOTAL character level, exactly current + 1.\nRead progression before advancing; never repeat a completed milestone.\nsource_traits is DM-only, outside combat, for existing non-PC actors:\n{source_ref,reason,traits:{damage_resistances?:[\"fire\"],darkvision_ft?:60,\nlanguages?:[\"Common\"],damage_immunities?:[],damage_vulnerabilities?:[],\ncondition_immunities?:[]}}. Each supplied trait replaces that trait only;\ncopy the full source-supported list. It preserves HP, conditions and resources.\nlegendary_resistance and bardic_inspiration resolve an owned roll choice in any phase:\npayload={choice_id,accept:bool}. It resumes the saved command with its recorded dice.\ndivine_smite resolves an owned hit choice with {choice_id,accept:bool,slot?:str};\nacceptance requires one offered slot key, decline omits slot.\nstatblock_proficiency_sync is DM-only for legacy 2014 non-PC imports:\npayload={reason}. It derives armor training from unchanged recorded source gear,\naccepts no supplied proficiencies, and preserves active combat and all actor state.",
     "error_envelope": {
       "fields": [
         "code",
@@ -6001,7 +6002,7 @@
     }
   },
   {
-    "description": "Cast the exact spell_id recorded on the caster card, on a legal turn.\n\nRequires current campaign expected_revision and idempotency_key. The card\ndetermines action/slot cost; never spend them separately. target_allocations\nis only for source-bound Magic Missile, not ordinary spell targets.\nIn Agent positioning, native single-target spells use declaration\n{target_id, spatial_facts:{decision_id,reason,targetable,in_range,\nattacker_can_see_target}}. Magic Missile uses target_allocations plus\ndeclaration={target_spatial_facts:{target_id: facts}}. Grid uses positions.\nFor an Agent-resolved standard spell, omit declaration to obtain the\nagent_ruling_contract, then copy its submission_shape under declaration,\nfilling application_id, decision and reason and preserving source_excerpt.\npayment_required=true means nothing has been paid yet. After payment is\nrecorded, do not cast again to finish the effect or use another attack\naction. Follow the returned resolution/owned choice contract; combat_choice\nneeds an actual choice_id, not an application_id. Agent-ruling commitment\nrecords payment and adjudication, not automatic target HP/condition changes.\nResolve remaining source-grounded consequences through their public tools.",
+    "description": "Cast the exact spell_id recorded on the caster card, on a legal turn.\n\nRequires current campaign expected_revision and idempotency_key. The card\ndetermines action/slot cost; never spend them separately. target_allocations\nis only for source-bound Magic Missile, not ordinary spell targets.\nIn Agent positioning, native single-target spells use declaration\n{target_id, spatial_facts:{decision_id,reason,targetable,in_range}}.\n2014 sight-targeting spells add vision_facts containing distance_ft,\nillumination, obscuration, magical_darkness, opaque_boundary, scene_ref,\nand scene_excerpt; Runtime derives visibility from these and senses.\nMagic Missile uses target_allocations plus\ndeclaration={target_spatial_facts:{target_id: facts}}. Grid uses positions.\nFor an Agent-resolved standard spell, omit declaration to obtain the\nagent_ruling_contract, then copy its submission_shape under declaration,\nfilling application_id, decision and reason and preserving source_excerpt.\npayment_required=true means nothing has been paid yet. After payment is\nrecorded, do not cast again to finish the effect or use another attack\naction. Follow the returned resolution/owned choice contract; combat_choice\nneeds an actual choice_id, not an application_id. Agent-ruling commitment\nrecords payment and adjudication, not automatic target HP/condition changes.\nResolve remaining source-grounded consequences through their public tools.",
     "error_envelope": {
       "fields": [
         "code",
@@ -7311,6 +7312,9 @@
             "drop_held",
             "draw_weapon",
             "stow_weapon",
+            "grapple",
+            "release_grapple",
+            "shove",
             "emerge_shell",
             "escape",
             "help",
@@ -7318,12 +7322,15 @@
             "influence",
             "interact_object",
             "improvise",
+            "mount",
+            "dismount",
             "pickup_ground",
             "ready",
             "revive_steel_defender",
             "search",
             "shell_defense",
             "shake_hypnotic_pattern",
+            "shake_poison",
             "shake_sleep",
             "stabilize",
             "study",
@@ -9245,7 +9252,7 @@
     }
   },
   {
-    "description": "Move or stand using the current campaign revision and a request key.\n\nmove payload={distance, destination?, path?, spatial_facts?}; distance is\nfeet traveled, before difficult-terrain cost. In Agent positioning use\nspatial_facts={decision_id, reason, destination_legal, distance_ft}, with\ndistance_ft equal to distance. Optional difficult_terrain_extra_ft adds\ncost; opportunity_attack_actor_ids lists actual threats. Do not invent\nreaction timing: when threats exist, opportunity_attack_boundaries lists\n{actor_id, distance_ft, weapon_ids, difficult_terrain_extra_ft?} for each\nreach exit. Distances and terrain costs are measured from this move's\norigin. Movement pauses there and resumes after reactions settle.\nFor 2014 agent movement, space_segments must cover the entire distance:\n[{distance_ft,occupant_ids,passage_width_ft,difficult_terrain}]. Name the\nactual current occupants; null width explicitly means open space. Use\npositive five-foot segment lengths and boolean difficult_terrain. The\nengine derives size eligibility, occupied terrain, and squeezing cost;\ndo not supply computed modifiers. End a willing move in an empty space.\nGrid mode derives these facts from current footprints and reviewed map\ncells; a map boundary alone never implies a narrow physical passage.\nDo not invent\ngrid coordinates when the encounter uses Agent positioning. stand uses {}.",
+    "description": "Move or stand using the current campaign revision and a request key.\n\nmove payload={distance, destination?, path?, spatial_facts?, drag_grapple_ids?, jump?};\ndistance is\nfeet traveled, before difficult-terrain cost. In Agent positioning use\nspatial_facts={decision_id, reason, destination_legal, distance_ft}, with\ndistance_ft equal to distance. Optional difficult_terrain_extra_ft adds\ncost; opportunity_attack_actor_ids lists actual threats. Do not invent\nreaction timing: when threats exist, opportunity_attack_boundaries lists\n{actor_id, distance_ft, weapon_ids, difficult_terrain_extra_ft?} for each\nreach exit. Distances and terrain costs are measured from this move's\norigin. Movement pauses there and resumes after reactions settle.\nFor 2014 Agent positioning, each opportunity boundary also carries\nattacker_vision and target_vision scene facts, targetable, in_range, and\ncover_degree; Runtime derives sight and attack modifiers from them.\nFor 2014 agent movement, space_segments must cover the entire distance:\n[{distance_ft,occupant_ids,passage_width_ft,difficult_terrain}]. Name the\nactual current occupants; null width explicitly means open space. Use\npositive five-foot segment lengths and boolean difficult_terrain. The\nengine derives size eligibility, occupied terrain, and squeezing cost;\ndo not supply computed modifiers. End a willing move in an empty space.\nGrid mode derives these facts from current footprints and reviewed map\ncells; a map boundary alone never implies a narrow physical passage.\nDrag a source-owned 2014 grapple by listing its exact grapple ID. Agent\npositioning also requires DM-authored spatial_facts.grapple_drag entries.\nA 2014 jump is {kind: long|high}; Grid derives the running start from this turn's\nrecorded foot movement and landing terrain. Agent positioning also requires\njump.spatial_facts with sourced running-start, obstacle, and landing facts.\nFor a Grid high jump, distance is height and destination/path are omitted. Do not invent\ngrid coordinates when the encounter uses Agent positioning. stand uses {}.",
     "error_envelope": {
       "fields": [
         "code",
@@ -9319,6 +9326,36 @@
                   "distance": {
                     "title": "Distance",
                     "type": "integer"
+                  },
+                  "drag_grapple_ids": {
+                    "anyOf": [
+                      {
+                        "items": {
+                          "maxLength": 256,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Drag Grapple Ids"
+                  },
+                  "jump": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": true,
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "title": "Jump"
                   },
                   "movement_mode": {
                     "default": "voluntary",
@@ -9682,6 +9719,1046 @@
     ],
     "roles": {
       "combat": []
+    }
+  },
+  {
+    "description": "Consume one source-bound contact/injury dose and coat one owned object.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
+    "id": "combat_poison_coat",
+    "idempotent": true,
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "actor_id": {
+          "description": "Authoritative campaign actor identifier.",
+          "maxLength": 256,
+          "title": "Actor Id",
+          "type": "string"
+        },
+        "ammunition_count": {
+          "default": 1,
+          "description": "Bounded ammunition count value accepted by combat_poison_coat.",
+          "title": "Ammunition Count",
+          "type": "integer"
+        },
+        "branch_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Authoritative timeline branch identifier.",
+          "maxLength": 256,
+          "title": "Branch Id"
+        },
+        "campaign_id": {
+          "description": "Authoritative campaign identifier.",
+          "maxLength": 256,
+          "title": "Campaign Id",
+          "type": "string"
+        },
+        "dose_item_id": {
+          "description": "Bounded dose item id value accepted by combat_poison_coat.",
+          "maxLength": 256,
+          "title": "Dose Item Id",
+          "type": "string"
+        },
+        "expected_revision": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Authority revision guard used to reject stale mutations.",
+          "title": "Expected Revision"
+        },
+        "idempotency_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Stable business-operation key reused unchanged across retries.",
+          "maxLength": 256,
+          "title": "Idempotency Key"
+        },
+        "object_item_id": {
+          "description": "Bounded object item id value accepted by combat_poison_coat.",
+          "maxLength": 256,
+          "title": "Object Item Id",
+          "type": "string"
+        },
+        "principal_id": {
+          "default": "system:local",
+          "description": "Caller hint overwritten by process binding or signed Host delegation.",
+          "maxLength": 256,
+          "title": "Principal Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "campaign_id",
+        "actor_id",
+        "dose_item_id",
+        "object_item_id"
+      ],
+      "title": "combat_poison_coatInput",
+      "type": "object"
+    },
+    "output_schema": {
+      "additionalProperties": true,
+      "description": "Structured authoritative result for combat_poison_coat.",
+      "properties": {
+        "action": {
+          "description": "Authoritative action returned by combat_poison_coat.",
+          "type": "string"
+        },
+        "branch_id": {
+          "description": "Authoritative branch id returned by combat_poison_coat.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "campaign_id": {
+          "description": "Authoritative campaign id returned by combat_poison_coat.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "campaign_revision": {
+          "description": "Authoritative campaign revision returned by combat_poison_coat.",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "character_revision": {
+          "description": "Authoritative character revision returned by combat_poison_coat.",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "error": {
+          "additionalProperties": false,
+          "description": "Authoritative error returned by combat_poison_coat.",
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "recovery": {
+              "type": [
+                "string",
+                "object"
+              ]
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable",
+            "recovery"
+          ],
+          "type": "object"
+        },
+        "event_sequence": {
+          "description": "Authoritative event sequence returned by combat_poison_coat.",
+          "type": "integer"
+        },
+        "has_more": {
+          "description": "Authoritative has more returned by combat_poison_coat.",
+          "type": "boolean"
+        },
+        "host_context_binding": {
+          "description": "Authoritative host context binding returned by combat_poison_coat.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "idempotent_replay": {
+          "description": "Authoritative idempotent replay returned by combat_poison_coat.",
+          "type": "boolean"
+        },
+        "next_cursor": {
+          "description": "Authoritative next cursor returned by combat_poison_coat.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "random_stream_receipt": {
+          "description": "Authoritative random stream receipt returned by combat_poison_coat.",
+          "type": "object"
+        },
+        "resolution_id": {
+          "description": "Authoritative resolution id returned by combat_poison_coat.",
+          "type": "string"
+        },
+        "status": {
+          "description": "Authoritative status returned by combat_poison_coat.",
+          "type": "string"
+        },
+        "thread_id": {
+          "description": "Authoritative thread id returned by combat_poison_coat.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "phases": [
+      "combat",
+      "lobby",
+      "play"
+    ],
+    "read_only": false,
+    "requires_campaign": true,
+    "revision_fields": [
+      "expected_revision"
+    ],
+    "roles": {
+      "combat": [
+        "dm",
+        "owner"
+      ],
+      "lobby": [
+        "dm",
+        "owner"
+      ],
+      "play": [
+        "dm",
+        "owner"
+      ]
+    }
+  },
+  {
+    "description": "Deliver one ingested/contact dose or release one inhaled 5-foot cloud.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
+    "id": "combat_poison_expose",
+    "idempotent": true,
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "branch_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Authoritative timeline branch identifier.",
+          "maxLength": 256,
+          "title": "Branch Id"
+        },
+        "campaign_id": {
+          "description": "Authoritative campaign identifier.",
+          "maxLength": 256,
+          "title": "Campaign Id",
+          "type": "string"
+        },
+        "coating_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Bounded coating id value accepted by combat_poison_expose.",
+          "maxLength": 256,
+          "title": "Coating Id"
+        },
+        "cube_origin": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Bounded cube origin value accepted by combat_poison_expose.",
+          "title": "Cube Origin"
+        },
+        "dose_item_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Bounded dose item id value accepted by combat_poison_expose.",
+          "maxLength": 256,
+          "title": "Dose Item Id"
+        },
+        "expected_revision": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Authority revision guard used to reject stale mutations.",
+          "title": "Expected Revision"
+        },
+        "exposed_skin_touch": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Bounded exposed skin touch value accepted by combat_poison_expose.",
+          "title": "Exposed Skin Touch"
+        },
+        "idempotency_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Stable business-operation key reused unchanged across retries.",
+          "maxLength": 256,
+          "title": "Idempotency Key"
+        },
+        "partial_ruling": {
+          "anyOf": [
+            {
+              "enum": [
+                "advantage_on_save",
+                "half_damage_on_failure"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Bounded partial ruling value accepted by combat_poison_expose.",
+          "title": "Partial Ruling"
+        },
+        "principal_id": {
+          "default": "system:local",
+          "description": "Caller hint overwritten by process binding or signed Host delegation.",
+          "maxLength": 256,
+          "title": "Principal Id",
+          "type": "string"
+        },
+        "source_actor_id": {
+          "description": "Bounded source actor id value accepted by combat_poison_expose.",
+          "maxLength": 256,
+          "title": "Source Actor Id",
+          "type": "string"
+        },
+        "swallowed_entire_dose": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Bounded swallowed entire dose value accepted by combat_poison_expose.",
+          "title": "Swallowed Entire Dose"
+        },
+        "target_ids": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Bounded target ids value accepted by combat_poison_expose.",
+          "title": "Target Ids"
+        }
+      },
+      "required": [
+        "campaign_id",
+        "source_actor_id"
+      ],
+      "title": "combat_poison_exposeInput",
+      "type": "object"
+    },
+    "output_schema": {
+      "additionalProperties": true,
+      "description": "Structured authoritative result for combat_poison_expose.",
+      "properties": {
+        "action": {
+          "description": "Authoritative action returned by combat_poison_expose.",
+          "type": "string"
+        },
+        "branch_id": {
+          "description": "Authoritative branch id returned by combat_poison_expose.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "campaign_id": {
+          "description": "Authoritative campaign id returned by combat_poison_expose.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "campaign_revision": {
+          "description": "Authoritative campaign revision returned by combat_poison_expose.",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "character_revision": {
+          "description": "Authoritative character revision returned by combat_poison_expose.",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "error": {
+          "additionalProperties": false,
+          "description": "Authoritative error returned by combat_poison_expose.",
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "recovery": {
+              "type": [
+                "string",
+                "object"
+              ]
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable",
+            "recovery"
+          ],
+          "type": "object"
+        },
+        "event_sequence": {
+          "description": "Authoritative event sequence returned by combat_poison_expose.",
+          "type": "integer"
+        },
+        "has_more": {
+          "description": "Authoritative has more returned by combat_poison_expose.",
+          "type": "boolean"
+        },
+        "host_context_binding": {
+          "description": "Authoritative host context binding returned by combat_poison_expose.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "idempotent_replay": {
+          "description": "Authoritative idempotent replay returned by combat_poison_expose.",
+          "type": "boolean"
+        },
+        "next_cursor": {
+          "description": "Authoritative next cursor returned by combat_poison_expose.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "random_stream_receipt": {
+          "description": "Authoritative random stream receipt returned by combat_poison_expose.",
+          "type": "object"
+        },
+        "resolution_id": {
+          "description": "Authoritative resolution id returned by combat_poison_expose.",
+          "type": "string"
+        },
+        "status": {
+          "description": "Authoritative status returned by combat_poison_expose.",
+          "type": "string"
+        },
+        "thread_id": {
+          "description": "Authoritative thread id returned by combat_poison_expose.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "phases": [
+      "combat",
+      "lobby",
+      "play"
+    ],
+    "read_only": false,
+    "requires_campaign": true,
+    "revision_fields": [
+      "expected_revision"
+    ],
+    "roles": {
+      "combat": [
+        "dm",
+        "owner"
+      ],
+      "lobby": [
+        "dm",
+        "owner"
+      ],
+      "play": [
+        "dm",
+        "owner"
+      ]
+    }
+  },
+  {
+    "description": "Remove one exact poison instance after a recorded DM neutralization ruling.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
+    "id": "combat_poison_neutralize",
+    "idempotent": true,
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "actor_id": {
+          "description": "Authoritative campaign actor identifier.",
+          "maxLength": 256,
+          "title": "Actor Id",
+          "type": "string"
+        },
+        "branch_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Authoritative timeline branch identifier.",
+          "maxLength": 256,
+          "title": "Branch Id"
+        },
+        "campaign_id": {
+          "description": "Authoritative campaign identifier.",
+          "maxLength": 256,
+          "title": "Campaign Id",
+          "type": "string"
+        },
+        "expected_revision": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Authority revision guard used to reject stale mutations.",
+          "title": "Expected Revision"
+        },
+        "idempotency_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Stable business-operation key reused unchanged across retries.",
+          "maxLength": 256,
+          "title": "Idempotency Key"
+        },
+        "neutralizer_source_excerpt": {
+          "description": "Bounded neutralizer source excerpt value accepted by combat_poison_neutralize.",
+          "title": "Neutralizer Source Excerpt",
+          "type": "string"
+        },
+        "neutralizer_source_ref": {
+          "description": "Bounded neutralizer source ref value accepted by combat_poison_neutralize.",
+          "title": "Neutralizer Source Ref",
+          "type": "string"
+        },
+        "poison_effect_id": {
+          "description": "Bounded poison effect id value accepted by combat_poison_neutralize.",
+          "maxLength": 256,
+          "title": "Poison Effect Id",
+          "type": "string"
+        },
+        "principal_id": {
+          "default": "system:local",
+          "description": "Caller hint overwritten by process binding or signed Host delegation.",
+          "maxLength": 256,
+          "title": "Principal Id",
+          "type": "string"
+        },
+        "ruling": {
+          "additionalProperties": true,
+          "description": "Bounded ruling value accepted by combat_poison_neutralize.",
+          "title": "Ruling",
+          "type": "object"
+        }
+      },
+      "required": [
+        "campaign_id",
+        "actor_id",
+        "poison_effect_id",
+        "neutralizer_source_ref",
+        "neutralizer_source_excerpt",
+        "ruling"
+      ],
+      "title": "combat_poison_neutralizeInput",
+      "type": "object"
+    },
+    "output_schema": {
+      "additionalProperties": true,
+      "description": "Structured authoritative result for combat_poison_neutralize.",
+      "properties": {
+        "action": {
+          "description": "Authoritative action returned by combat_poison_neutralize.",
+          "type": "string"
+        },
+        "branch_id": {
+          "description": "Authoritative branch id returned by combat_poison_neutralize.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "campaign_id": {
+          "description": "Authoritative campaign id returned by combat_poison_neutralize.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "campaign_revision": {
+          "description": "Authoritative campaign revision returned by combat_poison_neutralize.",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "character_revision": {
+          "description": "Authoritative character revision returned by combat_poison_neutralize.",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "error": {
+          "additionalProperties": false,
+          "description": "Authoritative error returned by combat_poison_neutralize.",
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "recovery": {
+              "type": [
+                "string",
+                "object"
+              ]
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable",
+            "recovery"
+          ],
+          "type": "object"
+        },
+        "event_sequence": {
+          "description": "Authoritative event sequence returned by combat_poison_neutralize.",
+          "type": "integer"
+        },
+        "has_more": {
+          "description": "Authoritative has more returned by combat_poison_neutralize.",
+          "type": "boolean"
+        },
+        "host_context_binding": {
+          "description": "Authoritative host context binding returned by combat_poison_neutralize.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "idempotent_replay": {
+          "description": "Authoritative idempotent replay returned by combat_poison_neutralize.",
+          "type": "boolean"
+        },
+        "next_cursor": {
+          "description": "Authoritative next cursor returned by combat_poison_neutralize.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "random_stream_receipt": {
+          "description": "Authoritative random stream receipt returned by combat_poison_neutralize.",
+          "type": "object"
+        },
+        "resolution_id": {
+          "description": "Authoritative resolution id returned by combat_poison_neutralize.",
+          "type": "string"
+        },
+        "status": {
+          "description": "Authoritative status returned by combat_poison_neutralize.",
+          "type": "string"
+        },
+        "thread_id": {
+          "description": "Authoritative thread id returned by combat_poison_neutralize.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "phases": [
+      "combat",
+      "lobby",
+      "play"
+    ],
+    "read_only": false,
+    "requires_campaign": true,
+    "revision_fields": [
+      "expected_revision"
+    ],
+    "roles": {
+      "combat": [
+        "dm",
+        "owner"
+      ],
+      "lobby": [
+        "dm",
+        "owner"
+      ],
+      "play": [
+        "dm",
+        "owner"
+      ]
+    }
+  },
+  {
+    "description": "Wash one source-bound poison coating from its exact owned object.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
+    "id": "combat_poison_wash",
+    "idempotent": true,
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "actor_id": {
+          "description": "Authoritative campaign actor identifier.",
+          "maxLength": 256,
+          "title": "Actor Id",
+          "type": "string"
+        },
+        "branch_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Authoritative timeline branch identifier.",
+          "maxLength": 256,
+          "title": "Branch Id"
+        },
+        "campaign_id": {
+          "description": "Authoritative campaign identifier.",
+          "maxLength": 256,
+          "title": "Campaign Id",
+          "type": "string"
+        },
+        "expected_revision": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Authority revision guard used to reject stale mutations.",
+          "title": "Expected Revision"
+        },
+        "idempotency_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Stable business-operation key reused unchanged across retries.",
+          "maxLength": 256,
+          "title": "Idempotency Key"
+        },
+        "object_item_id": {
+          "description": "Bounded object item id value accepted by combat_poison_wash.",
+          "maxLength": 256,
+          "title": "Object Item Id",
+          "type": "string"
+        },
+        "principal_id": {
+          "default": "system:local",
+          "description": "Caller hint overwritten by process binding or signed Host delegation.",
+          "maxLength": 256,
+          "title": "Principal Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "campaign_id",
+        "actor_id",
+        "object_item_id"
+      ],
+      "title": "combat_poison_washInput",
+      "type": "object"
+    },
+    "output_schema": {
+      "additionalProperties": true,
+      "description": "Structured authoritative result for combat_poison_wash.",
+      "properties": {
+        "action": {
+          "description": "Authoritative action returned by combat_poison_wash.",
+          "type": "string"
+        },
+        "branch_id": {
+          "description": "Authoritative branch id returned by combat_poison_wash.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "campaign_id": {
+          "description": "Authoritative campaign id returned by combat_poison_wash.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "campaign_revision": {
+          "description": "Authoritative campaign revision returned by combat_poison_wash.",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "character_revision": {
+          "description": "Authoritative character revision returned by combat_poison_wash.",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "error": {
+          "additionalProperties": false,
+          "description": "Authoritative error returned by combat_poison_wash.",
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "recovery": {
+              "type": [
+                "string",
+                "object"
+              ]
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable",
+            "recovery"
+          ],
+          "type": "object"
+        },
+        "event_sequence": {
+          "description": "Authoritative event sequence returned by combat_poison_wash.",
+          "type": "integer"
+        },
+        "has_more": {
+          "description": "Authoritative has more returned by combat_poison_wash.",
+          "type": "boolean"
+        },
+        "host_context_binding": {
+          "description": "Authoritative host context binding returned by combat_poison_wash.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "idempotent_replay": {
+          "description": "Authoritative idempotent replay returned by combat_poison_wash.",
+          "type": "boolean"
+        },
+        "next_cursor": {
+          "description": "Authoritative next cursor returned by combat_poison_wash.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "random_stream_receipt": {
+          "description": "Authoritative random stream receipt returned by combat_poison_wash.",
+          "type": "object"
+        },
+        "resolution_id": {
+          "description": "Authoritative resolution id returned by combat_poison_wash.",
+          "type": "string"
+        },
+        "status": {
+          "description": "Authoritative status returned by combat_poison_wash.",
+          "type": "string"
+        },
+        "thread_id": {
+          "description": "Authoritative thread id returned by combat_poison_wash.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "phases": [
+      "combat",
+      "lobby",
+      "play"
+    ],
+    "read_only": false,
+    "requires_campaign": true,
+    "revision_fields": [
+      "expected_revision"
+    ],
+    "roles": {
+      "combat": [
+        "dm",
+        "owner"
+      ],
+      "lobby": [
+        "dm",
+        "owner"
+      ],
+      "play": [
+        "dm",
+        "owner"
+      ]
     }
   },
   {
@@ -10995,7 +12072,7 @@
     }
   },
   {
-    "description": "Resolve one attack and atomically update actors and encounter.\n\nUse the active actor and campaign revision from the latest receipt, plus\nidempotency_key. action={weapon_id, context?}; use an owned weapon ID.\nAgent positioning requires action.context.spatial_facts={decision_id,\nreason, targetable, in_range, cover_degree, attacker_can_see_target,\ntarget_can_see_attacker}. Flags are booleans; cover_degree is none/half/\nthree_quarters/total. Optional facts: long_range, target_within_5_ft,\nclose_threat_actor_ids, helper_actor_ids, target_adjacent_ally_actor_ids,\ncleave_secondary_eligible. Ground them in the current scene, never invent\ncoordinates to bypass a missing spatial decision. Grid mode uses its map.\nUnderwater ranged weapon attacks require an explicit long_range boolean;\ntrue automatically misses, while false still applies weapon exceptions.\nuse_great_weapon_fighting=true opts into one reroll of each qualifying\nweapon die showing 1/2. Protection returns pending_reaction before the\nroll: resolve each owner's combat_choice, then repeat the same attack\nwith a new operation ID. Agent context.protection requires decision_id,\nreason, actors=[{actor_id,within_5_ft,can_see_attacker}] for every available\nshield bearer. Failed/unknown calls always retry their original ID.",
+    "description": "Resolve one attack and atomically update actors and encounter.\n\nUse the active actor and campaign revision from the latest receipt, plus\nidempotency_key. action={weapon_id, context?}; use an owned weapon ID.\nAgent positioning requires action.context.spatial_facts={decision_id,\nreason, targetable, in_range, cover_degree, attacker_vision,\ntarget_vision}. For 2014, each vision object contains scene observations:\ndistance_ft, illumination, obscuration, magical_darkness, opaque_boundary,\nscene_ref, and scene_excerpt. The engine derives sight from these and the\nactor's senses. Optional facts: long_range, target_within_5_ft,\nclose_threat_actor_ids, helper_actor_ids, target_adjacent_ally_actor_ids,\ncleave_secondary_eligible. Ground them in the current scene, never invent\ncoordinates to bypass a missing spatial decision. Grid mode uses its map.\nUnderwater ranged weapon attacks require an explicit long_range boolean;\ntrue automatically misses, while false still applies weapon exceptions.\nuse_great_weapon_fighting=true opts into one reroll of each qualifying\nweapon die showing 1/2. Protection returns pending_reaction before the\nroll: resolve each owner's combat_choice, then repeat the same attack\nwith a new operation ID. Agent context.protection requires decision_id,\nreason, actors=[{actor_id,within_5_ft,can_see_attacker}] for every available\nshield bearer. Failed/unknown calls always retry their original ID.",
     "error_envelope": {
       "fields": [
         "code",
@@ -11880,7 +12957,7 @@
     }
   },
   {
-    "description": "Pay an activity and settle supported Core outcomes; return rulings for the rest.\n\n2014 Bardic Inspiration requires declaration={target_id,scene_facts:{\ndecision_id,reason,target_can_hear:bool,within_60_ft:bool}} from the DM.\nGrid combat derives range and requires within_60_ft to be omitted.\nThe target must be another creature; this spends one use and bonus action.\n2014 Rage enters with declaration={} or ends with declaration={end:true}.\nBoth require the actor's turn and spend a bonus action; entering spends a use.",
+    "description": "Pay an activity and settle supported Core outcomes; return rulings for the rest.\n\n2014 Bardic Inspiration requires declaration={target_id,scene_facts:{\ndecision_id,reason,target_can_hear:bool,within_60_ft:bool}} from the DM.\nGrid combat derives range and requires within_60_ft to be omitted.\nThe target must be another creature; this spends one use and bonus action.\n2014 Rage enters with declaration={} or ends with declaration={end:true}.\nBoth require the actor's turn and spend a bonus action; entering spends a use.\nDM-resolved activity checks accept bounded source-grounded rule_facts, including\nPerception sight-reliance and vision facts when the scene requires them.",
     "error_envelope": {
       "fields": [
         "code",
@@ -11989,6 +13066,20 @@
           "maxLength": 256,
           "title": "Principal Id",
           "type": "string"
+        },
+        "rule_facts": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Bounded rule facts value accepted by combat_use_activity.",
+          "title": "Rule Facts"
         }
       },
       "required": [

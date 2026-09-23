@@ -90,7 +90,9 @@ def validate_attacks(
             principal_id,
             {"context": deepcopy(attack.get("context") or {})},
         )
-        service.validate_agent_attack_context(campaign_id, action, encounter=encounter)
+        service.validate_agent_attack_context(
+            campaign_id, principal_id, action, encounter=encounter
+        )
         action = prepare_attack_action(
             service, action, campaign_id=campaign_id, actor_id=actor_id,
             target_id=attack["target_id"], principal_id=principal_id, encounter=encounter,

@@ -8192,18 +8192,7 @@ def test_short_rest_recovers_the_atomic_random_receipt_without_rerolling() -> No
                         {
                             "character_id": "fighter",
                             "expected_revision": 2,
-                            "rest_activity_minutes": {},
-                            "derived_rest_timing": regression_playthrough.validate_rest_schedule(
-                                rest_type="short_rest",
-                                duration_minutes=60,
-                            ),
                             "hit_dice_spends": [{"key": "fighter:d10", "count": 1}],
-                            "arcane_recovery": {},
-                            "natural_recovery": {},
-                            "sorcerous_restoration_points": None,
-                            "song_of_rest_source_actor_id": None,
-                            "attune_item_id": None,
-                            "attunement_prerequisite_confirmed": None,
                         }
                     ],
                     "duration_minutes": 60,
@@ -8502,18 +8491,7 @@ def test_short_rest_restart_recovers_the_exact_sequential_receipt_chain(
                         {
                             "character_id": "fighter",
                             "expected_revision": 2,
-                            "rest_activity_minutes": {},
-                            "derived_rest_timing": regression_playthrough.validate_rest_schedule(
-                                rest_type="short_rest",
-                                duration_minutes=60,
-                            ),
                             "hit_dice_spends": [{"key": "fighter:d10", "count": 1}],
-                            "arcane_recovery": {},
-                            "natural_recovery": {},
-                            "sorcerous_restoration_points": None,
-                            "song_of_rest_source_actor_id": None,
-                            "attune_item_id": None,
-                            "attunement_prerequisite_confirmed": None,
                         }
                     ],
                     "duration_minutes": 60,

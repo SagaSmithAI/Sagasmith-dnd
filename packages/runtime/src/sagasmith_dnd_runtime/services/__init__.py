@@ -11,6 +11,7 @@ from .combat import CombatService
 from .content import ContentService
 from .continuity import ContinuityService
 from .inventory import InventoryService
+from .poisons import PoisonsService
 from .presentation import PresentationService
 from .shared import SharedService
 from .spells import SpellsService
@@ -26,6 +27,7 @@ class ApplicationServices(
     ContinuityService,
     InventoryService,
     PresentationService,
+    PoisonsService,
     SharedService,
     SpellsService,
 ):

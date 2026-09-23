@@ -6,6 +6,7 @@ from copy import deepcopy
 from typing import Any
 
 from sagasmith_dnd.combat_engine import resolve_actor_check
+from sagasmith_dnd.travel import travel_passive_perception_bonus
 
 from .. import application_support as support
 from .sunlight import prepare_check_facts
@@ -123,14 +124,22 @@ def resolve_passive_scene_check(
                    **{key: task[key] for key in ("relies_on_sight", "relies_on_hearing")
                       if key in task}},
         )
+        travel_bonus = (
+            travel_passive_perception_bonus(campaign.state, actor.id)
+            if str(selection["ability"]).strip().casefold() == "perception"
+            else 0
+        )
         result = resolve_actor_check(
             snapshot, kind="check", ability=selection["ability"], dc=dc, passive=True,
             skill_ability=selection.get("skill_ability"), rules=rules,
+            bonus=travel_bonus,
             advantage=circumstance and task.get("advantage", False),
             disadvantage=circumstance and task.get("disadvantage", False),
         )
         result["actor_id"] = actor.id
         result["ability"] = selection["ability"]
+        if travel_bonus:
+            result["travel_pace_modifier"] = travel_bonus
         if selection.get("skill_ability"):
             result["skill_ability"] = selection["skill_ability"]
         return result

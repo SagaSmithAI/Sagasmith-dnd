@@ -364,12 +364,15 @@ def effect_is_immune(sheet: dict[str, Any], effect: dict[str, Any]) -> bool:
     """Return whether a disease/poison effect is rejected by actor defenses."""
 
     kind = str(effect.get("kind") or "").strip().casefold().replace("-", "_")
-    static = condition_ids(dict(sheet.get("traits") or {}).get("condition_immunities"))
+    traits = dict(sheet.get("traits") or {})
+    static = condition_ids(traits.get("condition_immunities"))
     if kind in {"disease", "nonmagical_disease"}:
         return "disease" in static
     if kind in {"poison", "poisoned"}:
-        traits = dict(sheet.get("traits") or {})
-        return "poisoned" in static or "poison" in condition_ids(traits.get("immunities"))
+        if "poison" in condition_ids(traits.get("immunities")):
+            return True
+        additions = effect_condition_additions(effect)
+        return bool(additions) and additions <= static
     return False
 
 

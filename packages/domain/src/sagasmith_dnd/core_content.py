@@ -15,6 +15,13 @@ from sagasmith_dnd.content_import import (
     class_selection_definition_from_source,
 )
 from sagasmith_dnd.content_resolution import finalize_bundled_artifact_resolutions
+from sagasmith_dnd.poisons import (
+    BASIC_POISON_MECHANIC_ID,
+    BASIC_POISON_SOURCE_REF,
+    POISON_ITEM_SOURCE_PREFIX,
+    POISON_SOURCE_REF,
+    POISONS_2014,
+)
 from sagasmith_dnd.spell_resolution import (
     SPELL_RESOLUTION_MECHANIC_ID,
     known_spell_resolution,
@@ -37,7 +44,7 @@ from sagasmith_dnd.standard_spell_ids import (
 )
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.48.0"
+PACK_VERSION = "1.55.0"
 
 _CONDITIONAL_SPECIES_SAVE_TRAITS = {
     "dwarven resilience": ("dwarven_resilience", CORE_DWARVEN_RESILIENCE_MECHANIC_ID),
@@ -89,6 +96,7 @@ def _cached_srd2014_content(skill_root: str) -> tuple[dict[str, Any], list[dict[
     )
     artifacts.extend(_sections(root / "05_Feats", "feat", _h2_sections))
     artifacts.extend(_equipment_items(root / "04_Equipment"))
+    artifacts.extend(_poison_items(root / "08_Gamemastering" / "Poisons.md"))
     artifacts.extend(_simple_files(root / "09_Magic_Items" / "Magic_Items_Each", "item"))
     artifacts = finalize_bundled_artifact_resolutions(
         _deduplicate(artifacts),
@@ -842,6 +850,13 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
         return {
             "activation": {"type": "action", "cost": 1},
             "resource_key": "channel_divinity",
+            "resource_scaling": _resource_scaling(
+                target="channel_divinity",
+                label="Channel Divinity",
+                class_name="Paladin",
+                maximum_by_level={3: 1},
+                recovers_on="short_rest",
+            ),
             "mechanical_grants": {
                 "resources": {
                     "channel_divinity": {
@@ -872,6 +887,24 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
         return {"mechanic_refs": ["dnd5e.core.check.jack_of_all_trades"]}
     if key == ("rogue", "sneak attack"):
         return {"mechanic_refs": ["dnd5e.core.attack.sneak_attack"]}
+    if key == ("rogue", "reliable talent"):
+        return {"mechanic_refs": ["dnd5e.core.check.reliable_talent"]}
+    if key == ("rogue", "blindsense"):
+        return {"mechanic_refs": ["dnd5e.core.sense.blindsense"]}
+    if key == ("rogue", "slippery mind"):
+        return {"mechanic_refs": ["dnd5e.core.save.slippery_mind"]}
+    if key == ("rogue", "elusive"):
+        return {"mechanic_refs": ["dnd5e.core.attack.elusive"]}
+    if key == ("rogue", "stroke of luck"):
+        return {
+            "mechanic_refs": ["dnd5e.core.rogue.stroke_of_luck"],
+            "uses": {
+                "max": 1,
+                "value": 1,
+                "recovers_on": "short_rest",
+                "unlimited": False,
+            },
+        }
     if key == ("rogue", "uncanny dodge"):
         return {
             "activation": {"type": "reaction", "cost": 0, "trigger": "attack.after_hit"},
@@ -1459,6 +1492,14 @@ def _class_resource_structures(class_name: str, text: str) -> dict[str, dict[str
             },
             activation={"type": "action", "cost": 1},
         )
+        add_shared(
+            "channel divinity",
+            resource_key="channel_divinity",
+            label="Channel Divinity",
+            maximum_by_level={3: 1},
+            recovers_on="short_rest",
+            activation={"type": "action", "cost": 1},
+        )
     elif key == "sorcerer":
         sorcery_maximum, _ = _numeric_column_scaling(rows, "Sorcery Points")
         add_shared(
@@ -1809,8 +1850,7 @@ def _equipment_items(folder: Path) -> list[dict[str, Any]]:
             )
             if amount is not None:
                 properties["amount"] = amount
-            result.append(
-                _artifact(
+            artifact = _artifact(
                     "item",
                     item_name,
                     path,
@@ -1826,9 +1866,65 @@ def _equipment_items(folder: Path) -> list[dict[str, Any]]:
                         ),
                     },
                 )
-            )
+            if (
+                name == "Adventuring_Gear.md"
+                and item_name.casefold().startswith("poison, basic")
+            ):
+                artifact["id"] = POISON_ITEM_SOURCE_PREFIX + "basic_poison"
+                identity = {
+                    "poison_id": "basic_poison",
+                    "delivery": "injury",
+                    "source_ref": BASIC_POISON_SOURCE_REF,
+                    "edition": "2014",
+                }
+                template = artifact["card"]["inventory_template"]
+                template["kind"] = "consumable"
+                template["source_key"] = artifact["id"]
+                template["mechanics"] = {"poison_dose": identity}
+                artifact["card"]["mechanics"] = {"poison_dose": identity}
+                artifact["card"]["mechanic_refs"] = [BASIC_POISON_MECHANIC_ID]
+            result.append(artifact)
         if name == "Adventuring_Gear.md":
             result.extend(_equipment_packs(path, text))
+    return result
+
+
+def _poison_items(path: Path) -> list[dict[str, Any]]:
+    if not path.is_file():
+        return []
+    result = []
+    for profile in POISONS_2014.values():
+        description = (
+            f"One dose of {profile.name}. Source delivery type: {profile.delivery}. "
+            f"Price: {profile.price_gp} gp per dose."
+        )
+        poison_dose = {
+            "poison_id": profile.id,
+            "delivery": profile.delivery,
+            "source_ref": POISON_SOURCE_REF,
+            "edition": "2014",
+        }
+        template = _inventory_template(
+            profile.name,
+            table_name="Poisons",
+            properties={"cost": f"{profile.price_gp} gp"},
+            description=description,
+        )
+        template["kind"] = "consumable"
+        template["mechanics"] = {"poison_dose": poison_dose}
+        card = {
+            "name": profile.name,
+            "description": description,
+            "cost": {"gp": profile.price_gp},
+            "dose_count": 1,
+            "inventory_template": template,
+            "mechanics": {"poison_dose": poison_dose},
+            "mechanic_refs": ["dnd5e.core.gamemastering.poisons_2014"],
+        }
+        artifact = _artifact("item", profile.name, path, card)
+        artifact["id"] = f"{PACK_ID}.item.poison.{profile.id}"
+        artifact["card"]["inventory_template"]["source_key"] = artifact["id"]
+        result.append(artifact)
     return result
 
 

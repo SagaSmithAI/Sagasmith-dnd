@@ -106,6 +106,47 @@ CASTER_CONFIG = {
     "wizard": ("intelligence", "spellbook", "full"),
 }
 
+MULTICLASS_PREREQUISITES = {
+    "barbarian": ({"strength": 13},),
+    "bard": ({"charisma": 13},),
+    "cleric": ({"wisdom": 13},),
+    "druid": ({"wisdom": 13},),
+    "fighter": ({"strength": 13}, {"dexterity": 13}),
+    "monk": ({"dexterity": 13, "wisdom": 13},),
+    "paladin": ({"strength": 13, "charisma": 13},),
+    "ranger": ({"dexterity": 13, "wisdom": 13},),
+    "rogue": ({"dexterity": 13},),
+    "sorcerer": ({"charisma": 13},),
+    "warlock": ({"charisma": 13},),
+    "wizard": ({"intelligence": 13},),
+}
+
+MULTICLASS_PROFICIENCIES = {
+    "barbarian": {"armor": ["Shields"], "weapons": ["Simple weapons", "Martial weapons"]},
+    "bard": {"armor": ["Light armor"]},
+    "cleric": {"armor": ["Light armor", "Medium armor", "Shields"]},
+    "druid": {"armor": ["Light armor", "Medium armor", "Shields"]},
+    "fighter": {
+        "armor": ["Light armor", "Medium armor", "Shields"],
+        "weapons": ["Simple weapons", "Martial weapons"],
+    },
+    "monk": {"weapons": ["Simple weapons", "Shortswords"]},
+    "paladin": {
+        "armor": ["Light armor", "Medium armor", "Shields"],
+        "weapons": ["Simple weapons", "Martial weapons"],
+    },
+    "ranger": {
+        "armor": ["Light armor", "Medium armor", "Shields"],
+        "weapons": ["Simple weapons", "Martial weapons"],
+    },
+    "rogue": {"armor": ["Light armor"], "tools": ["Thieves' tools"]},
+    "sorcerer": {},
+    "warlock": {"armor": ["Light armor"], "weapons": ["Simple weapons"]},
+    "wizard": {},
+}
+
+MULTICLASS_SKILL_CHOICES = {"bard": 1, "ranger": 1, "rogue": 1}
+
 KNOWN_SPELLS = {
     "bard": (4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15, 15, 16, 18, 19, 19, 20, 22, 22, 22),
     "ranger": (0, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11),
@@ -837,6 +878,9 @@ def advance_single_class_level(
     source_ref: str = "",
     reason: str = "",
     rng: Any = None,
+    class_definition: dict[str, Any] | None = None,
+    source_artifact: dict[str, Any] | None = None,
+    multiclass_choices: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Advance an existing 2014 or 2024 class exactly one level.
 
@@ -851,19 +895,92 @@ def advance_single_class_level(
         raise CombatEngineError(str(exc)) from exc
     progression = value.setdefault("progression", {})
     classes = list(progression.get("classes") or [])
-    if len(classes) != 1:
-        raise CombatEngineError("level advancement currently requires a single-class actor")
-    target = classes[0]
-    if str(target.get("name") or "").casefold() != str(class_name).strip().casefold():
-        raise CombatEngineError("class_name must match the actor's existing class")
-    old_level = int(target.get("level", 0) or 0)
-    if old_level < 1 or old_level >= 20:
-        raise CombatEngineError("the existing class level must be from 1 to 19")
-    if int(progression.get("level", 0) or 0) != old_level:
-        raise CombatEngineError("single-class total level does not match its class level")
+    class_key = " ".join(str(class_name).split()).casefold()
+    if not classes:
+        raise CombatEngineError("level advancement requires an existing base class")
+    class_levels = [int(item.get("level", 0) or 0) for item in classes]
+    if any(level < 1 or level > 20 for level in class_levels):
+        raise CombatEngineError("every recorded class level must be from 1 to 20")
+    old_total_level = sum(class_levels)
+    if int(progression.get("level", 0) or 0) != old_total_level:
+        raise CombatEngineError("total character level does not match the sum of class levels")
+    if old_total_level >= 20:
+        raise CombatEngineError("total character level must be below 20 before advancement")
+    matches = [
+        item for item in classes
+        if str(item.get("name") or "").strip().casefold() == class_key
+    ]
+    if len(matches) > 1:
+        raise CombatEngineError("class_name resolves to duplicate class entries")
+    is_new_class = not matches
+    multiclass_proficiencies: dict[str, list[str]] = {}
+    if is_new_class:
+        if class_definition is None and source_artifact is None:
+            raise CombatEngineError(
+                "class_name must match an existing class or include a source class definition"
+            )
+        if edition != "2014":
+            raise CombatEngineError("new-class advancement requires reviewed 2014 multiclass rules")
+        definition = dict(class_definition or {})
+        if str(definition.get("name") or "").strip().casefold() != class_key:
+            raise CombatEngineError(
+                "new multiclass level requires its exact source class definition"
+            )
+        try:
+            hit_die = int(definition.get("hit_die", 0))
+        except (TypeError, ValueError) as exc:
+            raise CombatEngineError("source class definition requires a valid hit die") from exc
+        if hit_die not in {6, 8, 10, 12}:
+            raise CombatEngineError("source class definition has an invalid hit die")
+        binding = dict(source_artifact or {})
+        if set(binding) != {"artifact_id", "pack_id", "pack_version"} or any(
+            not str(binding.get(field) or "").strip()
+            for field in ("artifact_id", "pack_id", "pack_version")
+        ):
+            raise CombatEngineError(
+                "new multiclass level requires exact content artifact provenance"
+            )
+        _validate_multiclass_prerequisites(value, classes, class_key)
+        multiclass_proficiencies = _apply_multiclass_proficiencies(
+            value,
+            class_name=class_key,
+            class_definition=definition,
+            choices=multiclass_choices,
+        )
+        target = {
+            "name": " ".join(
+                str(definition.get("name") or class_name).split()
+            ),
+            "level": 0,
+            "subclass": "",
+            "hit_die": hit_die,
+            "source_artifact": binding,
+            "multiclass_proficiencies": {
+                key: list(multiclass_proficiencies.get(key, []))
+                for key in ("armor", "weapons", "tools", "skills")
+            },
+        }
+        if definition.get("spellcasting"):
+            try:
+                target["spellcasting"] = normalize_class_spellcasting_profile(
+                    definition["spellcasting"], "multiclass.class_definition.spellcasting"
+                )
+            except ValueError as exc:
+                raise CombatEngineError(str(exc)) from exc
+        classes.append(target)
+        old_level = 0
+    else:
+        target = matches[0]
+        if class_definition is not None or source_artifact is not None or multiclass_choices:
+            raise CombatEngineError(
+                "existing-class advancement does not accept a new class definition"
+            )
+        old_level = int(target.get("level", 0) or 0)
+        hit_die = int(target.get("hit_die", 0) or 0)
+    if old_level < 0 or old_level >= 20:
+        raise CombatEngineError("the class level must be from 1 to 19 before advancement")
     new_level = old_level + 1
 
-    hit_die = int(target.get("hit_die", 0) or 0)
     if hit_die not in {6, 8, 10, 12}:
         raise CombatEngineError("class hit_die must be one of 6, 8, 10, or 12")
     if isinstance(hp_per_level_bonus, bool) or not isinstance(hp_per_level_bonus, int):
@@ -871,8 +988,9 @@ def advance_single_class_level(
     if hp_per_level_bonus < 0:
         raise CombatEngineError("hp_per_level_bonus cannot be negative")
     hp_progression = value.setdefault("combat", {}).setdefault("hp_progression", [])
-    if any(int(item.get("level", 0) or 0) == new_level for item in hp_progression):
-        raise CombatEngineError("hit-point progression already records the new level")
+    new_total_level = old_total_level + 1
+    if any(int(item.get("level", 0) or 0) == new_total_level for item in hp_progression):
+        raise CombatEngineError("hit-point progression already records the new total level")
     normalized_method = str(hp_method).strip().casefold().replace("-", "_")
     hp_roll_result: dict[str, Any] | None = None
     if normalized_method == "fixed":
@@ -892,7 +1010,7 @@ def advance_single_class_level(
     # The 2014 rule increases maximum HP; it does not say that leveling heals
     # damage already taken. Current HP therefore remains unchanged.
     hp_gain_entry = {
-        "level": new_level,
+        "level": new_total_level,
         "method": normalized_method,
         "value": hp_gain,
         "source": source or f"{class_name} level {new_level}",
@@ -910,16 +1028,27 @@ def advance_single_class_level(
     hit_dice[hit_die_key] = hit_die_resource
 
     target["level"] = new_level
-    progression["classes"] = [target]
-    progression["level"] = new_level
-    spellcasting = _advance_spellcasting(
-        value,
-        class_name,
-        old_level,
-        new_level,
-        edition=edition,
-        progression_profile=dict(target.get("spellcasting") or {}),
-    )
+    progression["classes"] = classes
+    progression["level"] = new_total_level
+    if is_new_class or len(classes) > 1:
+        synchronized = synchronize_multiclass_spell_slots(value)
+        value = synchronized["sheet"]
+        spellcasting = {
+            "kind": "multiclass",
+            "caster_level": synchronized["caster_level"],
+            "slot_changes": synchronized["changes"],
+            "class_name": str(target.get("name") or class_name),
+            "class_level": new_level,
+        }
+    else:
+        spellcasting = _advance_spellcasting(
+            value,
+            str(target.get("name") or class_name),
+            old_level,
+            new_level,
+            edition=edition,
+            progression_profile=dict(target.get("spellcasting") or {}),
+        )
     resource_sync = synchronize_class_feature_resources(value)
     value = resource_sync["sheet"]
     return {
@@ -928,6 +1057,11 @@ def advance_single_class_level(
         "class_name": str(target.get("name") or class_name),
         "old_level": old_level,
         "new_level": new_level,
+        "old_total_level": old_total_level,
+        "new_total_level": new_total_level,
+        "new_class": is_new_class,
+        "multiclass_proficiencies": multiclass_proficiencies,
+        "source_artifact": deepcopy(target.get("source_artifact")) if is_new_class else None,
         "hit_points": {
             "method": normalized_method,
             "hit_die": hit_die,
@@ -967,6 +1101,32 @@ def synchronize_class_feature_resources(sheet: dict[str, Any]) -> dict[str, Any]
         for item in value.get("progression", {}).get("classes", [])
     }
     changes: list[dict[str, Any]] = []
+    shared_channel: tuple[int | None, bool, str] | None = None
+    shared_channel_rank = (-1, -1)
+    for feature in value.get("content", {}).get("features", []):
+        scaling = dict(feature.get("resource_scaling") or {})
+        if str(scaling.get("target") or "") != "channel_divinity":
+            continue
+        class_name = str(scaling.get("class_name") or "").casefold()
+        class_level = class_levels.get(class_name, 0)
+        if class_level < 1:
+            raise CombatEngineError(
+                "feature resource scaling references a class absent from the actor card"
+            )
+        maximum, unlimited = _scaled_resource_capacity(value, scaling, class_level)
+        if maximum is None:
+            continue
+        recovery = str(scaling.get("recovers_on") or "none")
+        for raw_level, candidate in sorted(
+            dict(scaling.get("recovery_by_level") or {}).items(),
+            key=lambda item: int(item[0]),
+        ):
+            if int(raw_level) <= class_level:
+                recovery = str(candidate)
+        rank = (1 if unlimited else 0, int(maximum))
+        if rank > shared_channel_rank:
+            shared_channel = (maximum, unlimited, recovery)
+            shared_channel_rank = rank
     for feature in value.get("content", {}).get("features", []):
         scaling = dict(feature.get("resource_scaling") or {})
         if not scaling:
@@ -988,6 +1148,8 @@ def synchronize_class_feature_resources(sheet: dict[str, Any]) -> dict[str, Any]
             if int(raw_level) <= class_level:
                 recovery = str(candidate)
         target = str(scaling.get("target") or "")
+        if target == "channel_divinity" and shared_channel is not None:
+            new_maximum, unlimited, recovery = shared_channel
         resources = value.setdefault("resources", {})
         if target == "uses":
             old_resource = dict(feature.get("uses") or {})
@@ -1004,7 +1166,11 @@ def synchronize_class_feature_resources(sheet: dict[str, Any]) -> dict[str, Any]
             "value": old_value,
             "max": old_maximum,
             "recovers_on": recovery,
-            "source_key": str(scaling.get("class_name") or old_resource.get("source_key") or ""),
+            "source_key": str(
+                old_resource.get("source_key")
+                or scaling.get("class_name")
+                or ""
+            ),
             "slot_level": int(old_resource.get("slot_level", 0) or 0),
         }
         if recovery_requirements:
@@ -1248,29 +1414,37 @@ def _spell_choice_delta(
     if profile:
         cantrips = list(profile.get("cantrips_known_by_level") or [])
         spells_known = list(profile.get("leveled_spells_known_by_level") or [])
+        old_index = old_level - 1 if old_level > 0 else None
         if cantrips:
-            result["cantrips_to_add"] = max(0, cantrips[new_level - 1] - cantrips[old_level - 1])
+            old_count = cantrips[old_index] if old_index is not None else 0
+            result["cantrips_to_add"] = max(0, cantrips[new_level - 1] - old_count)
         if spells_known:
-            result["leveled_spells_to_add"] = max(
-                0, spells_known[new_level - 1] - spells_known[old_level - 1]
-            )
+            old_count = spells_known[old_index] if old_index is not None else 0
+            spell_delta = max(0, spells_known[new_level - 1] - old_count)
+            if profile.get("spellbook") is True:
+                result["spellbook_spells_to_add"] = spell_delta
+            else:
+                result["leveled_spells_to_add"] = spell_delta
         return result
     cantrips = CANTRIPS_KNOWN.get(key)
     if cantrips:
-        result["cantrips_to_add"] = max(0, cantrips[new_level - 1] - cantrips[old_level - 1])
+        old_count = cantrips[old_level - 1] if old_level > 0 else 0
+        result["cantrips_to_add"] = max(0, cantrips[new_level - 1] - old_count)
     if edition == "2024":
         prepared = PREPARED_SPELL_LIMITS_2024.get(key)
         if prepared:
+            old_count = prepared[old_level - 1] if old_level > 0 else 0
             result["leveled_spells_to_add"] = max(
                 0,
-                prepared[new_level - 1] - prepared[old_level - 1],
+                prepared[new_level - 1] - old_count,
             )
         if key == "wizard":
             result["spellbook_spells_to_add"] = 2
         return result
     known = KNOWN_SPELLS.get(key)
     if known:
-        result["leveled_spells_to_add"] = max(0, known[new_level - 1] - known[old_level - 1])
+        old_count = known[old_level - 1] if old_level > 0 else 0
+        result["leveled_spells_to_add"] = max(0, known[new_level - 1] - old_count)
         # The Bard table includes the two unrestricted Magical Secrets in
         # Spells Known at levels 10, 14, and 18. The corresponding feature
         # artifact settles those choices, so they must not also be requested
@@ -1278,8 +1452,229 @@ def _spell_choice_delta(
         if key == "bard" and new_level in {10, 14, 18}:
             result["leveled_spells_to_add"] = max(0, result["leveled_spells_to_add"] - 2)
     if key == "wizard":
-        result["leveled_spells_to_add"] = 2
+        result["leveled_spells_to_add"] = 0
+        result["spellbook_spells_to_add"] = 6 if old_level == 0 else 2
     return result
+
+
+def _multiclass_spellcasting_contract(class_entry: dict[str, Any]) -> dict[str, Any]:
+    profile = dict(class_entry.get("spellcasting") or {})
+    if profile:
+        return profile
+    config = CASTER_CONFIG.get(str(class_entry.get("name") or "").casefold())
+    if config is None:
+        return {"slot_progression": "none"}
+    ability, _mode, progression = config
+    return {"ability": ability, "class_list": str(class_entry["name"]),
+            "slot_progression": progression}
+
+
+def synchronize_multiclass_spell_slots(sheet: dict[str, Any]) -> dict[str, Any]:
+    """Set ordinary spell slots from combined 2014 caster class levels.
+
+    Each half-caster is rounded down separately. Pact Magic stays in its own
+    short-rest resource, while class entries retain per-class casting profiles.
+    """
+    value = deepcopy(sheet)
+    progression = value.get("progression", {})
+    classes = list(progression.get("classes") or [])
+    if len(classes) < 2:
+        return {"sheet": value, "caster_level": None, "changes": []}
+    if normalize_dnd_edition(value.get("edition")) != "2014":
+        raise CombatEngineError("combined multiclass slots require the reviewed 2014 source")
+    caster_level = 0
+    warlock: dict[str, Any] | None = None
+    class_lists: list[str] = []
+    for class_entry in classes:
+        class_level = int(class_entry.get("level", 0) or 0)
+        contract = _multiclass_spellcasting_contract(class_entry)
+        kind = str(contract.get("slot_progression") or "none")
+        if kind == "full":
+            caster_level += class_level
+        elif kind == "half":
+            caster_level += class_level // 2
+        elif kind == "half_round_up":
+            raise CombatEngineError("2014 multiclassing does not accept half_round_up class tables")
+        elif kind == "pact":
+            warlock = class_entry
+        elif kind != "none":
+            raise CombatEngineError("class spellcasting slot progression is invalid")
+        class_list = str(
+            contract.get("class_list") or class_entry.get("name") or ""
+        ).strip()
+        if class_list:
+            class_lists.append(class_list)
+
+    spellcasting = value.setdefault("spellcasting", {})
+    spellcasting["class_lists"] = list(
+        dict.fromkeys([*list(spellcasting.get("class_lists") or []), *class_lists])
+    )
+    contracts = [_multiclass_spellcasting_contract(item) for item in classes]
+    if not spellcasting.get("ability"):
+        spellcasting["ability"] = next(
+            (str(item["ability"]) for item in contracts if item.get("ability")), None
+        )
+    prepared_classes = [
+        item for item in contracts
+        if str(item.get("preparation_mode") or "") in PREPARED_SELECTION_MODES
+    ]
+    spellcasting_classes = [
+        (entry, contract)
+        for entry, contract in zip(classes, contracts, strict=True)
+        if str(contract.get("slot_progression") or "none") in {"full", "half"}
+    ]
+    has_spellbook = any(item.get("spellbook") is True for item in contracts)
+    if has_spellbook:
+        spellcasting.setdefault("spellbook", {})["enabled"] = True
+    if prepared_classes:
+        spellcasting.setdefault("preparation", {})["mode"] = (
+            "prepared"
+            if any(item.get("preparation_mode") == "prepared" for item in prepared_classes)
+            else "spellbook" if has_spellbook else str(prepared_classes[0]["preparation_mode"])
+        )
+        spellcasting["preparation"].setdefault("selected_spell_ids", [])
+        spellcasting["preparation"].setdefault("changes_on", "long_rest")
+    if len(spellcasting_classes) == 1:
+        only_class, only_contract = spellcasting_classes[0]
+        only_level = int(only_class.get("level", 0) or 0)
+        slot_table = _profile_slot_table(dict(only_contract)).get(only_level, ())
+    elif spellcasting_classes:
+        slot_table = FULL_CASTER_SLOTS.get(caster_level, ())
+    else:
+        slot_table = ()
+    slots = dict(spellcasting.get("spell_slots") or {})
+    changes: list[dict[str, Any]] = []
+    for slot_level in range(1, 10):
+        old = dict(slots.get(str(slot_level)) or {})
+        old_max = int(old.get("max", 0) or 0)
+        new_max = slot_table[slot_level - 1] if slot_level <= len(slot_table) else 0
+        if not new_max:
+            continue
+        resource = old or {
+            "label": f"Level {slot_level} spell slots",
+            "value": 0,
+            "max": 0,
+            "recovers_on": "long_rest",
+            "source_key": "multiclass spellcasting",
+            "slot_level": slot_level,
+        }
+        resize_bounded_resource(
+            resource,
+            maximum=new_max,
+            previous_maximum=old_max,
+        )
+        resource.update(
+            label=f"Level {slot_level} spell slots",
+            recovers_on="long_rest",
+            source_key="multiclass spellcasting",
+            slot_level=slot_level,
+        )
+        slots[str(slot_level)] = resource
+        if old_max != new_max:
+            changes.append({"slot_level": slot_level, "old_max": old_max, "new_max": new_max})
+    spellcasting["spell_slots"] = slots
+
+    if warlock is not None:
+        warlock_level = int(warlock.get("level", 0) or 0)
+        maximum, slot_level = PACT_MAGIC[warlock_level]
+        pact = dict(spellcasting.get("pact_magic") or {})
+        old_max = int(pact.get("max", 0) or 0)
+        if not pact:
+            pact = {
+                "label": "Pact Magic",
+                "value": 0,
+                "max": 0,
+                "recovers_on": "short_rest",
+                "source_key": "Warlock",
+                "slot_level": slot_level,
+            }
+        resize_bounded_resource(pact, maximum=maximum, previous_maximum=old_max)
+        pact.update(
+            label="Pact Magic", recovers_on="short_rest", source_key="Warlock",
+            slot_level=slot_level,
+        )
+        spellcasting["pact_magic"] = pact
+    return {"sheet": value, "caster_level": caster_level, "changes": changes}
+
+
+def _validate_multiclass_prerequisites(sheet: dict[str, Any], classes: list[dict[str, Any]],
+                                       new_class: str) -> None:
+    requirements = MULTICLASS_PREREQUISITES.get(new_class)
+    if requirements is None:
+        raise CombatEngineError("class has no reviewed 2014 multiclass prerequisite contract")
+    class_names = {str(item.get("name") or "").casefold() for item in classes}
+    for name in {*class_names, new_class}:
+        clauses = MULTICLASS_PREREQUISITES.get(name)
+        if clauses is None:
+            raise CombatEngineError(f"class has no reviewed 2014 multiclass prerequisites: {name}")
+        scores = {
+            ability: int(sheet.get("abilities", {}).get(ability, {}).get("score", 10) or 10)
+            for clause in clauses for ability in clause
+        }
+        if not any(all(scores[ability] >= minimum for ability, minimum in clause.items())
+                   for clause in clauses):
+            requirement_text = " or ".join(
+                " and ".join(f"{ability} {minimum}+" for ability, minimum in clause.items())
+                for clause in clauses
+            )
+            raise CombatEngineError(
+                f"multiclass prerequisites are not met for {name}: {requirement_text}"
+            )
+
+
+def _apply_multiclass_proficiencies(
+    sheet: dict[str, Any], *, class_name: str, class_definition: dict[str, Any],
+    choices: dict[str, Any] | None,
+) -> dict[str, list[str]]:
+    normalized = str(class_name).strip().casefold()
+    grants = MULTICLASS_PROFICIENCIES.get(normalized)
+    if grants is None:
+        raise CombatEngineError("class has no reviewed 2014 multiclass proficiency contract")
+    selection = dict(choices or {})
+    if set(selection) - {"skills", "tools"}:
+        raise CombatEngineError("multiclass choices accept only skills and tools")
+    skill_options = {
+        str(item).strip().casefold().replace(" ", "_")
+        for item in class_definition.get("skill_options", [])
+    }
+    skill_count = MULTICLASS_SKILL_CHOICES.get(normalized, 0)
+    skills = _normalized_distinct_names(
+        selection.get("skills", []), field="multiclass skill choices"
+    )
+    if len(skills) != skill_count or any(item not in skill_options for item in skills):
+        raise CombatEngineError("multiclass skill choices do not match the source class options")
+    # The 2014 multiclass proficiency table grants Bard one skill, not an
+    # instrument proficiency. Instruments are part of Bard's starting class.
+    tool_count = 0
+    tool_options = {
+        str(item).strip().casefold() for item in class_definition.get("tool_options", [])
+    }
+    tools = _display_distinct_names(selection.get("tools", []), field="multiclass tool choices")
+    if len(tools) != tool_count or any(item.casefold() not in tool_options for item in tools):
+        raise CombatEngineError("multiclass tool choices do not match the source class options")
+    existing_tools = {
+        str(item).casefold()
+        for item in sheet.get("traits", {}).get("proficiencies", {}).get("tools", [])
+    }
+    if any(item.casefold() in existing_tools for item in tools):
+        raise CombatEngineError("multiclass tool choice is already proficient")
+    for skill in skills:
+        if sheet.get("skills", {}).get(skill, {}).get("proficiency") != "none":
+            raise CombatEngineError("multiclass skill choice is already proficient")
+    proficiencies = sheet.setdefault("traits", {}).setdefault("proficiencies", {})
+    applied = {key: list(values) for key, values in grants.items()}
+    applied["skills"] = skills
+    applied["tools"] = list(dict.fromkeys([*grants.get("tools", []), *tools]))
+    for skill in skills:
+        sheet["skills"][skill]["proficiency"] = "proficient"
+    for category in ("armor", "weapons", "tools"):
+        additions = applied.get(category, [])
+        existing = list(proficiencies.get(category) or [])
+        keys = {str(item).casefold() for item in existing}
+        proficiencies[category] = [
+            *existing, *[item for item in additions if item.casefold() not in keys]
+        ]
+    return applied
 
 
 def _ability_modifier(sheet: dict[str, Any], ability: str) -> int:
@@ -1302,9 +1697,22 @@ def _class_hit_die_resource(
     if match is not None:
         return match
     key = f"d{hit_die}"
-    if key in hit_dice:
-        return key, dict(hit_dice[key])
-    return key, {
+    if key not in hit_dice:
+        return key, {
+            "label": key,
+            "value": 0,
+            "max": 0,
+            "recovers_on": "long_rest",
+            "source_key": class_name,
+            "slot_level": 0,
+        }
+    # Hit Dice are tracked by class even when both classes use the same die
+    # size. Keep legacy/first-class keys stable and add a qualified key.
+    class_key = "_".join(str(class_name).casefold().split())
+    qualified_key = f"{key}:{class_key}"
+    if qualified_key in hit_dice:
+        return qualified_key, dict(hit_dice[qualified_key])
+    return qualified_key, {
         "label": key,
         "value": 0,
         "max": 0,

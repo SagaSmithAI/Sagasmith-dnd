@@ -48,7 +48,6 @@ from sagasmith_dnd.game_time import (
 from sagasmith_dnd.lifecycle import (
     allows_trance_rest,
     minimum_rest_minutes,
-    validate_rest_schedule,
 )
 from sagasmith_dnd.module_profile import DndModuleProfile
 from sagasmith_dnd.playthrough import (
@@ -6540,26 +6539,27 @@ async def _short_rest(
         recovery_members = []
         for member in normalized:
             revision_row = revision_by_entity[("character", member["actor_id"])]
-            recovery_members.append(
-                {
-                    "character_id": member["actor_id"],
-                    "expected_revision": revision_row["before_revision"],
-                    "rest_activity_minutes": member["rest_activity_minutes"],
-                    "derived_rest_timing": validate_rest_schedule(
-                        rest_type="short_rest",
-                        duration_minutes=duration_minutes,
-                    ),
-                    "hit_dice_spends": initial_hit_dice_spends[member["actor_id"]],
-                    "arcane_recovery": member["arcane_recovery"],
-                    "natural_recovery": member["natural_recovery"],
-                    "sorcerous_restoration_points": None,
-                    "song_of_rest_source_actor_id": member["song_of_rest_source_actor_id"],
-                    "attune_item_id": member.get("attune_item_id"),
-                    "attunement_prerequisite_confirmed": (
-                        True if member.get("attune_item_id") else None
-                    ),
-                }
-            )
+            recovery_member: dict[str, Any] = {
+                "character_id": member["actor_id"],
+                "expected_revision": revision_row["before_revision"],
+            }
+            if member["arcane_recovery"]:
+                recovery_member["arcane_recovery"] = member["arcane_recovery"]
+            if member["natural_recovery"]:
+                recovery_member["natural_recovery"] = member["natural_recovery"]
+            if member["song_of_rest_source_actor_id"] is not None:
+                recovery_member["song_of_rest_source_actor_id"] = member[
+                    "song_of_rest_source_actor_id"
+                ]
+            if member.get("attune_item_id"):
+                recovery_member["attune_item_id"] = member["attune_item_id"]
+                recovery_member["attunement_prerequisite_confirmed"] = True
+            member_initial_spends = initial_hit_dice_spends[member["actor_id"]]
+            if member_initial_spends:
+                recovery_member["hit_dice_spends"] = member_initial_spends
+            if member["rest_activity_minutes"]:
+                recovery_member["rest_activity_minutes"] = member["rest_activity_minutes"]
+            recovery_members.append(recovery_member)
         expected_request_hash = _idempotency_request_hash(
             {
                 "members": recovery_members,

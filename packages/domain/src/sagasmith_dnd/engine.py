@@ -123,6 +123,7 @@ def resolve_check(
     disadvantage: bool = False,
     kind: str = "ability",
     reroll_ones: bool = False,
+    reliable_talent: bool = False,
     rng: RandomSource | None = None,
     passive: bool = False,
 ) -> dict:
@@ -149,17 +150,28 @@ def resolve_check(
             "advantage_applied": adjustment > 0, "disadvantage_applied": adjustment < 0,
             "total": total, "success": total >= dc,
         }
+    if not isinstance(reliable_talent, bool):
+        raise ValueError("reliable_talent must be a boolean")
     die = roll_d20(
         advantage=advantage,
         disadvantage=disadvantage,
         reroll_ones=reroll_ones,
         rng=rng,
     )
+    raw_natural = int(die["natural"])
+    reliable_talent_applied = bool(
+        reliable_talent and kind == "ability" and proficient and raw_natural <= 9
+    )
+    if reliable_talent_applied:
+        die["raw_natural"] = raw_natural
+        die["natural"] = 10
+        die["critical"] = False
+        die["fumble"] = False
     modifier = ability_modifier(ability_score)
     proficiency = proficiency_bonus(level) if proficient else 0
     total = die["natural"] + modifier + proficiency + bonus
     success = total >= dc
-    return {
+    result = {
         **die,
         "kind": kind,
         "dc": dc,
@@ -169,6 +181,9 @@ def resolve_check(
         "total": total,
         "success": success,
     }
+    if reliable_talent_applied:
+        result["reliable_talent_applied"] = True
+    return result
 
 
 def resolve_attack(

@@ -137,6 +137,8 @@ def test_2014_search_uses_only_source_allowed_actor_card_skills(
                 "ability": ability,
                 "action": "search",
                 "dc": 15,
+                    **({"rule_facts": {"relies_on_sight": False}}
+                       if ability == "perception" else {}),
                 "expected_revision": started["campaign_revision"],
                 "idempotency_key": f"search-{ability}",
             },
@@ -250,6 +252,7 @@ def test_2014_task_help_advantage_is_consumed_by_matching_search(tmp_path: Path)
                 "ability": "perception",
                 "action": "search",
                 "dc": 15,
+                "rule_facts": {"relies_on_sight": False},
                 "expected_revision": ended_observer["campaign_revision"],
                 "idempotency_key": "helped-search",
             },
@@ -372,6 +375,7 @@ def test_invalid_2014_searches_do_not_roll_pay_or_write_and_retry_is_idempotent(
             "ability": "perception",
             "action": "search",
             "dc": 15,
+            "rule_facts": {"relies_on_sight": False},
             "expected_revision": started["campaign_revision"],
             "idempotency_key": "valid-search",
         }

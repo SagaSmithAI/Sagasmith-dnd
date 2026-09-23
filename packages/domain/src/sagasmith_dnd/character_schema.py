@@ -922,6 +922,18 @@ def _normalize_item_mechanics(kind: str, value: Any, field: str) -> dict[str, An
 
 def _normalize_item_base_mechanics(kind: str, value: Any, field: str) -> dict[str, Any]:
     mechanics = _object(value or {}, field)
+    if kind == "consumable":
+        _reject_unknown(mechanics, field, {"poison_dose"})
+        raw_poison = mechanics.get("poison_dose")
+        if raw_poison is None:
+            return {}
+        from .poisons import normalize_poison_dose_identity
+
+        try:
+            poison_dose = normalize_poison_dose_identity(raw_poison)
+        except ValueError as error:
+            raise ValueError(f"{field}.poison_dose: {error}") from error
+        return {"poison_dose": poison_dose}
     if kind == "weapon":
         _reject_unknown(
             mechanics,
@@ -1558,6 +1570,12 @@ def _normalize_item(value: Any, field: str, *, generate_id: bool = True) -> dict
         ).strip()
         if standard_name in STANDARD_WEAPON_MATERIALS:
             result["mechanics"]["materials"] = list(STANDARD_WEAPON_MATERIALS[standard_name])
+    if result["mechanics"].get("poison_dose") is not None:
+        from .poisons import POISON_ITEM_SOURCE_PREFIX
+
+        poison_id = str(result["mechanics"]["poison_dose"]["poison_id"])
+        if kind != "consumable" or result["source_key"] != POISON_ITEM_SOURCE_PREFIX + poison_id:
+            raise ValueError(f"{field}.poison_dose requires its exact source-bound consumable")
     if item.get("resolution_plan") is not None:
         result["resolution_plan"] = _normalize_embedded_resolution_plan(
             item["resolution_plan"],
@@ -2702,7 +2720,10 @@ def validate_character_sheet(
         _reject_unknown(
             entry,
             f"sheet.progression.classes[{index}]",
-            {"name", "level", "subclass", "hit_die", "spellcasting"},
+            {
+                "name", "level", "subclass", "hit_die", "spellcasting",
+                "source_artifact", "multiclass_proficiencies",
+            },
         )
         normalized_class = {
             "name": _text(
@@ -2731,6 +2752,41 @@ def validate_character_sheet(
                 entry["spellcasting"],
                 f"sheet.progression.classes[{index}].spellcasting",
             )
+        if "source_artifact" in entry:
+            binding = _object(
+                entry["source_artifact"],
+                f"sheet.progression.classes[{index}].source_artifact",
+            )
+            _reject_unknown(
+                binding,
+                f"sheet.progression.classes[{index}].source_artifact",
+                {"artifact_id", "pack_id", "pack_version"},
+            )
+            normalized_class["source_artifact"] = {
+                field: _text(
+                    binding.get(field),
+                    f"sheet.progression.classes[{index}].source_artifact.{field}",
+                    maximum=200,
+                )
+                for field in ("artifact_id", "pack_id", "pack_version")
+            }
+        if "multiclass_proficiencies" in entry:
+            grants = _object(
+                entry["multiclass_proficiencies"],
+                f"sheet.progression.classes[{index}].multiclass_proficiencies",
+            )
+            _reject_unknown(
+                grants,
+                f"sheet.progression.classes[{index}].multiclass_proficiencies",
+                {"armor", "weapons", "tools", "skills"},
+            )
+            normalized_class["multiclass_proficiencies"] = {
+                field: _string_list(
+                    grants.get(field, []),
+                    f"sheet.progression.classes[{index}].multiclass_proficiencies.{field}",
+                )
+                for field in ("armor", "weapons", "tools", "skills")
+            }
         classes.append(normalized_class)
     level = _integer(progression["level"], "sheet.progression.level", minimum=1, maximum=20)
     if classes and sum(item["level"] for item in classes) != level:
@@ -4099,12 +4155,16 @@ def validate_character_notes(
 def validate_party_state(state: dict[str, Any]) -> dict[str, Any]:
     from sagasmith_dnd.dependent_actor_relations import validate_dependent_actor_relations
     from sagasmith_dnd.game_time import (
+        TICKS_PER_DAY,
         game_time_from_ticks,
         validate_game_time,
         validate_world_time,
     )
     from sagasmith_dnd.playthrough import validate_playthrough_manifest
+    from sagasmith_dnd.poisons import validate_poison_coatings
     from sagasmith_dnd.random_stream import validate_random_stream_state
+    from sagasmith_dnd.survival import validate_survival_state
+    from sagasmith_dnd.travel import validate_travel_state
 
     value = copy.deepcopy(_object(state, "campaign.state"))
     if "module_imports" in value:
@@ -4119,6 +4179,24 @@ def validate_party_state(state: dict[str, Any]) -> dict[str, Any]:
         validate_game_time(value["game_time"]) if "game_time" in value else game_time_from_ticks()
     )
     value["game_time"] = game_time
+    value["survival"] = validate_survival_state(
+        value.get("survival"),
+        current_day=int(game_time["elapsed_ticks"]) // TICKS_PER_DAY,
+    )
+    value["travel"] = validate_travel_state(
+        value.get("travel"),
+        current_day=int(game_time["elapsed_ticks"]) // TICKS_PER_DAY,
+    )
+    value["poison_coatings"] = validate_poison_coatings(value.get("poison_coatings"))
+    rogue_choices = [
+        validate_rogue_choice(item, field=f"campaign.state.rogue_choices[{index}]")
+        for index, item in enumerate(
+            _array(value.get("rogue_choices") or [], "campaign.state.rogue_choices")
+        )
+    ]
+    if len({item["id"] for item in rogue_choices}) != len(rogue_choices):
+        raise ValueError("campaign.state.rogue_choices contains duplicate ids")
+    value["rogue_choices"] = rogue_choices
     party = _object(value.get("party") or {}, "campaign.state.party")
     _reject_unknown(party, "campaign.state.party", {"inventory", "notes"})
     value["party"] = {
@@ -4149,6 +4227,47 @@ def validate_party_state(state: dict[str, Any]) -> dict[str, Any]:
             value["dependent_actor_relations"]
         )
     return value
+
+
+def validate_rogue_choice(value: Any, *, field: str) -> dict[str, Any]:
+    choice = _object(value, field)
+    _reject_unknown(
+        choice,
+        field,
+        {
+            "id",
+            "actor_id",
+            "kind",
+            "result",
+            "branch_id",
+            "created_revision",
+            "target_id",
+        },
+    )
+    choice_id = _text(choice.get("id"), f"{field}.id", maximum=200).strip()
+    actor_id_value = _text(choice.get("actor_id"), f"{field}.actor_id", maximum=200).strip()
+    if not choice_id or not actor_id_value:
+        raise ValueError(f"{field}.id and actor_id are required")
+    kind = _text(choice.get("kind"), f"{field}.kind")
+    if kind not in {"stroke_of_luck_check", "stroke_of_luck_attack"}:
+        raise ValueError(f"{field}.kind is unsupported")
+    result = _object(choice.get("result"), f"{field}.result")
+    branch_id = _text(choice.get("branch_id"), f"{field}.branch_id", maximum=200).strip()
+    if not branch_id:
+        raise ValueError(f"{field}.branch_id is required")
+    created_revision = _integer(
+        choice.get("created_revision"), f"{field}.created_revision", minimum=1
+    )
+    target_id = _text(choice.get("target_id"), f"{field}.target_id", maximum=200)
+    return {
+        "id": choice_id,
+        "actor_id": actor_id_value,
+        "kind": kind,
+        "result": result,
+        "branch_id": branch_id,
+        "created_revision": created_revision,
+        "target_id": target_id,
+    }
 
 
 def validate_world_time(value: Any, *, game_time: Any | None = None) -> dict[str, Any]:
@@ -5243,6 +5362,69 @@ def _has_2014_artificer_battle_ready(sheet: dict[str, Any]) -> bool:
     return bool(matches)
 
 
+def has_srd2014_rogue_feature(
+    sheet: dict[str, Any],
+    *,
+    feature_id: str,
+    mechanic_id: str,
+    minimum_level: int,
+) -> bool:
+    """Require the exact bundled feature, its Core mechanic, and Rogue level."""
+    if not isinstance(sheet, dict) or sheet.get("edition") != "2014":
+        return False
+    rogue_level = sum(
+        int(item.get("level", 0) or 0)
+        for item in dict(sheet.get("progression") or {}).get("classes", [])
+        if str(item.get("name") or "").strip().casefold() == "rogue"
+    )
+    if rogue_level < minimum_level:
+        return False
+    matches = [
+        item for item in dict(sheet.get("content") or {}).get("features", [])
+        if isinstance(item, dict)
+        and str(item.get("id") or "") == feature_id
+        and str(item.get("source_key") or "").strip().casefold() == "rogue"
+        and mechanic_id in {str(value) for value in item.get("mechanic_refs") or []}
+    ]
+    if len(matches) > 1:
+        raise ValueError(f"actor card has duplicate source-bound Rogue feature {feature_id}")
+    return bool(matches)
+
+
+def srd2014_rogue_stroke_of_luck_feature(
+    sheet: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Return the exact level-20 Stroke of Luck feature after validating its resource."""
+    feature_id = "dnd5e.content.srd2014.feature.rogue-stroke-of-luck"
+    mechanic_id = "dnd5e.core.rogue.stroke_of_luck"
+    if not has_srd2014_rogue_feature(
+        sheet,
+        feature_id=feature_id,
+        mechanic_id=mechanic_id,
+        minimum_level=20,
+    ):
+        return None
+    matches = [
+        item for item in dict(sheet.get("content") or {}).get("features", [])
+        if isinstance(item, dict)
+        and str(item.get("id") or "") == feature_id
+        and str(item.get("source_key") or "").strip().casefold() == "rogue"
+        and mechanic_id in {str(value) for value in item.get("mechanic_refs") or []}
+    ]
+    if len(matches) != 1:
+        raise ValueError("Stroke of Luck requires one exact source-bound feature")
+    feature = matches[0]
+    uses = dict(feature.get("uses") or {})
+    if (
+        uses.get("max") != 1
+        or uses.get("value") not in {0, 1}
+        or uses.get("recovers_on") != "short_rest"
+        or uses.get("unlimited") is not False
+    ):
+        raise ValueError("Stroke of Luck resource must be one use per short or long rest")
+    return feature
+
+
 def derive_character_sheet(
     sheet: dict[str, Any],
     *,
@@ -5268,6 +5450,13 @@ def derive_character_sheet(
         + (proficiency if entry["save_proficient"] else 0)
         for ability, entry in value["abilities"].items()
     }
+    if has_srd2014_rogue_feature(
+        value,
+        feature_id="dnd5e.content.srd2014.feature.rogue-slippery-mind",
+        mechanic_id="dnd5e.core.save.slippery_mind",
+        minimum_level=15,
+    ):
+        saves["wisdom"] += proficiency
     multipliers = {"none": 0, "half": 0.5, "proficient": 1, "expertise": 2}
     skills = {
         skill: ability_modifiers[SKILL_ABILITIES[skill]]

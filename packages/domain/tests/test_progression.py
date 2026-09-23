@@ -3,8 +3,13 @@ from copy import deepcopy
 import pytest
 
 import sagasmith_dnd.progression as progression_module
-from sagasmith_dnd.character_schema import default_character_sheet, validate_character_sheet
+from sagasmith_dnd.character_schema import (
+    default_character_sheet,
+    derive_character_sheet,
+    validate_character_sheet,
+)
 from sagasmith_dnd.combat_engine import CombatEngineError
+from sagasmith_dnd.core_content import PACK_VERSION as CORE_CONTENT_PACK_VERSION
 from sagasmith_dnd.progression import (
     advance_single_class_level,
     apply_constitution_score_hit_point_change,
@@ -985,12 +990,13 @@ def test_wizard_gains_only_new_slot_capacity_and_reports_spellbook_choices() -> 
     assert updated["combat"]["hp"]["max"] == 11
     assert updated["spellcasting"]["spell_slots"]["1"]["value"] == 1
     assert updated["spellcasting"]["preparation"]["max_prepared"] == 4
-    assert result["spell_choices"]["leveled_spells_to_add"] == 2
+    assert result["spell_choices"]["leveled_spells_to_add"] == 0
+    assert result["spell_choices"]["spellbook_spells_to_add"] == 2
     assert result["hit_points"]["roll"]["expression"] == "1d6"
     assert result["hit_points"]["roll"]["total"] == 3
 
 
-def test_level_advancement_rejects_multiclass_mismatch_and_invalid_method() -> None:
+def test_level_advancement_validates_total_class_levels_and_invalid_method() -> None:
     sheet = _single_class_sheet("Fighter", hit_die=10, constitution=14, hp=(12, 12))
     with pytest.raises(CombatEngineError, match="match"):
         advance_single_class_level(sheet, class_name="Rogue", hp_method="fixed")
@@ -999,8 +1005,12 @@ def test_level_advancement_rejects_multiclass_mismatch_and_invalid_method() -> N
     sheet["progression"]["classes"].append(
         {"name": "Rogue", "level": 1, "subclass": "", "hit_die": 8}
     )
-    with pytest.raises(CombatEngineError, match="single-class"):
+    with pytest.raises(CombatEngineError, match="total character level"):
         advance_single_class_level(sheet, class_name="Fighter", hp_method="fixed")
+    sheet["progression"]["level"] = 2
+    advanced = advance_single_class_level(sheet, class_name="Fighter", hp_method="fixed")
+    assert advanced["sheet"]["progression"]["level"] == 3
+    assert [item["level"] for item in advanced["sheet"]["progression"]["classes"]] == [2, 1]
 
 
 def test_experience_award_reports_eligibility_without_auto_leveling() -> None:
@@ -1164,3 +1174,325 @@ def test_constitution_score_change_can_fill_setup_hp_explicitly() -> None:
     )
 
     assert updated["combat"]["hp"] == {"value": 10, "max": 10, "temp": 0}
+
+
+def test_2014_multiclass_level_up_uses_total_level_and_source_class_contract() -> None:
+    sheet = _single_class_sheet("Fighter", hit_die=10, constitution=14, hp=(40, 40))
+    sheet["progression"]["level"] = 5
+    sheet["progression"]["classes"][0]["level"] = 5
+    sheet["abilities"]["strength"]["score"] = 15
+    sheet["abilities"]["intelligence"]["score"] = 16
+    sheet["combat"]["hit_dice"]["d10"].update(value=3, max=5)
+    source = {
+        "artifact_id": "dnd5e.content.srd2014.class.wizard",
+        "pack_id": "dnd5e.content.srd2014",
+        "pack_version": CORE_CONTENT_PACK_VERSION,
+    }
+    result = advance_single_class_level(
+        sheet,
+        class_name="Wizard",
+        hp_method="fixed",
+        source_ref="bundled:srd2014/03_Characterization/Multiclassing.md",
+        source="Wizard level 1",
+        class_definition={
+            "name": "Wizard",
+            "hit_die": 6,
+            "skill_options": [],
+            "tool_options": [],
+        },
+        source_artifact=source,
+    )
+
+    updated = validate_character_sheet(result["sheet"])
+    derived = derive_character_sheet(updated)
+    assert updated["progression"]["level"] == 6
+    assert [item["level"] for item in updated["progression"]["classes"]] == [5, 1]
+    assert derived["proficiency_bonus"] == 3
+    assert updated["combat"]["hp"] == {"value": 40, "max": 46, "temp": 0}
+    assert updated["combat"]["hit_dice"]["d6"]["max"] == 1
+    assert updated["combat"]["hit_dice"]["d10"]["max"] == 5
+    assert updated["spellcasting"]["spell_slots"]["1"]["max"] == 2
+    assert updated["progression"]["classes"][1]["source_artifact"] == source
+    assert result["spell_choices"] == {
+        "cantrips_to_add": 3,
+        "leveled_spells_to_add": 0,
+        "spellbook_spells_to_add": 6,
+    }
+    assert result["new_total_level"] == 6
+
+
+def test_2014_multiclass_combines_full_and_half_casters_and_keeps_pact_magic_separate() -> None:
+    sheet = _single_class_sheet("Paladin", hit_die=10, constitution=12, hp=(32, 32))
+    sheet["progression"]["level"] = 4
+    sheet["progression"]["classes"][0]["level"] = 4
+    sheet["abilities"]["strength"]["score"] = 15
+    sheet["abilities"]["charisma"]["score"] = 14
+    sheet["abilities"]["wisdom"]["score"] = 14
+    sheet["combat"]["hit_dice"]["d10"].update(value=4, max=4)
+    binding = {
+        "artifact_id": "dnd5e.content.srd2014.class.cleric",
+        "pack_id": "dnd5e.content.srd2014",
+        "pack_version": CORE_CONTENT_PACK_VERSION,
+    }
+    cleric = advance_single_class_level(
+        sheet,
+        class_name="Cleric",
+        hp_method="fixed",
+        class_definition={"name": "Cleric", "hit_die": 8, "skill_options": [], "tool_options": []},
+        source_artifact=binding,
+    )["sheet"]
+    assert cleric["spellcasting"]["spell_slots"]["1"]["max"] == 4
+    assert cleric["spellcasting"]["spell_slots"]["2"]["max"] == 2
+
+    warlock_binding = {
+        "artifact_id": "dnd5e.content.srd2014.class.warlock",
+        "pack_id": "dnd5e.content.srd2014",
+        "pack_version": CORE_CONTENT_PACK_VERSION,
+    }
+    warlock = advance_single_class_level(
+        cleric,
+        class_name="Warlock",
+        hp_method="fixed",
+        class_definition={"name": "Warlock", "hit_die": 8, "skill_options": [], "tool_options": []},
+        source_artifact=warlock_binding,
+    )["sheet"]
+
+    assert warlock["progression"]["level"] == 6
+    assert warlock["spellcasting"]["spell_slots"]["1"]["max"] == 4
+    assert warlock["spellcasting"]["spell_slots"]["2"]["max"] == 2
+    assert warlock["spellcasting"]["pact_magic"]["max"] == 1
+    assert warlock["spellcasting"]["pact_magic"]["slot_level"] == 1
+    assert warlock["spellcasting"]["pact_magic"]["recovers_on"] == "short_rest"
+
+
+def test_2014_multiclass_same_sized_hit_dice_remain_class_specific() -> None:
+    sheet = _single_class_sheet("Fighter", hit_die=10, constitution=12, hp=(24, 24))
+    sheet["progression"]["level"] = 3
+    sheet["progression"]["classes"][0]["level"] = 3
+    sheet["abilities"]["strength"]["score"] = 15
+    sheet["abilities"]["charisma"]["score"] = 13
+    sheet["combat"]["hit_dice"]["d10"].update(value=2, max=3)
+    source = {
+        "artifact_id": "dnd5e.content.srd2014.class.paladin",
+        "pack_id": "dnd5e.content.srd2014",
+        "pack_version": CORE_CONTENT_PACK_VERSION,
+    }
+
+    result = advance_single_class_level(
+        sheet,
+        class_name="Paladin",
+        hp_method="fixed",
+        class_definition={
+            "name": "Paladin",
+            "hit_die": 10,
+            "skill_options": [],
+            "tool_options": [],
+        },
+        source_artifact=source,
+    )
+    updated = validate_character_sheet(result["sheet"])
+
+    assert updated["combat"]["hit_dice"]["d10"]["source_key"] == "Fighter"
+    assert updated["combat"]["hit_dice"]["d10"]["max"] == 3
+    assert updated["combat"]["hit_dice"]["d10:paladin"] == {
+        "label": "d10",
+        "value": 1,
+        "max": 1,
+        "recovers_on": "long_rest",
+        "source_key": "Paladin",
+        "slot_level": 0,
+    }
+
+
+def test_2014_bard_multiclass_grants_one_source_class_skill_not_a_tool() -> None:
+    sheet = _single_class_sheet("Fighter", hit_die=10, constitution=12, hp=(24, 24))
+    sheet["progression"]["level"] = 3
+    sheet["progression"]["classes"][0]["level"] = 3
+    sheet["abilities"]["strength"]["score"] = 15
+    sheet["abilities"]["charisma"]["score"] = 13
+
+    result = advance_single_class_level(
+        sheet,
+        class_name="Bard",
+        hp_method="fixed",
+        class_definition={
+            "name": "Bard",
+            "hit_die": 8,
+            "skill_options": ["arcana", "performance"],
+            "tool_options": ["flute"],
+        },
+        source_artifact={
+            "artifact_id": "dnd5e.content.srd2014.class.bard",
+            "pack_id": "dnd5e.content.srd2014",
+            "pack_version": CORE_CONTENT_PACK_VERSION,
+        },
+        multiclass_choices={"skills": ["Arcana"]},
+    )
+
+    assert result["multiclass_proficiencies"]["skills"] == ["arcana"]
+    assert result["sheet"]["skills"]["arcana"]["proficiency"] == "proficient"
+    assert "flute" not in [
+        str(item).casefold()
+        for item in result["sheet"]["traits"]["proficiencies"]["tools"]
+    ]
+    with pytest.raises(CombatEngineError, match="tool choices"):
+        advance_single_class_level(
+            sheet,
+            class_name="Bard",
+            hp_method="fixed",
+            class_definition={
+                "name": "Bard",
+                "hit_die": 8,
+                "skill_options": ["arcana", "performance"],
+                "tool_options": ["flute"],
+            },
+            source_artifact={
+                "artifact_id": "dnd5e.content.srd2014.class.bard",
+                "pack_id": "dnd5e.content.srd2014",
+                "pack_version": CORE_CONTENT_PACK_VERSION,
+            },
+            multiclass_choices={"skills": ["Arcana"], "tools": ["flute"]},
+        )
+
+
+def test_2014_single_half_caster_keeps_its_class_slots_with_a_non_caster() -> None:
+    sheet = _single_class_sheet("Paladin", hit_die=10, constitution=12, hp=(32, 32))
+    sheet["progression"]["level"] = 4
+    sheet["progression"]["classes"][0]["level"] = 4
+    sheet["progression"]["classes"][0]["spellcasting"] = {
+        "ability": "charisma",
+        "class_list": "paladin",
+        "slot_progression": "half",
+    }
+    sheet["abilities"]["strength"]["score"] = 15
+    sheet["abilities"]["charisma"]["score"] = 14
+    sheet["abilities"]["dexterity"]["score"] = 13
+    sheet["spellcasting"]["spell_slots"] = {
+        "1": {
+            "label": "Level 1 spell slots",
+            "value": 2,
+            "max": 2,
+            "recovers_on": "long_rest",
+            "source_key": "Paladin",
+            "slot_level": 1,
+        }
+    }
+
+    result = advance_single_class_level(
+        sheet,
+        class_name="Fighter",
+        hp_method="fixed",
+        class_definition={
+            "name": "Fighter",
+            "hit_die": 10,
+            "skill_options": [],
+            "tool_options": [],
+        },
+        source_artifact={
+            "artifact_id": "dnd5e.content.srd2014.class.fighter",
+            "pack_id": "dnd5e.content.srd2014",
+            "pack_version": CORE_CONTENT_PACK_VERSION,
+        },
+    )
+
+    assert result["sheet"]["spellcasting"]["spell_slots"]["1"]["max"] == 3
+
+
+def test_2014_cleric_and_paladin_channel_divinity_uses_do_not_stack() -> None:
+    sheet = default_character_sheet()
+    sheet["progression"]["classes"] = [
+        {"name": "Cleric", "level": 6, "subclass": "", "hit_die": 8},
+        {"name": "Paladin", "level": 3, "subclass": "", "hit_die": 10},
+    ]
+    sheet["progression"]["level"] = 9
+    sheet["resources"]["channel_divinity"] = {
+        "label": "Channel Divinity",
+        "value": 1,
+        "max": 1,
+        "recovers_on": "short_rest",
+        "source_key": "Paladin",
+    }
+    cleric_feature = {
+        "id": "cleric-channel-divinity",
+        "resource_scaling": {
+            "target": "channel_divinity",
+            "label": "Channel Divinity",
+            "class_name": "Cleric",
+            "maximum_by_level": {"2": 1, "6": 2, "18": 3},
+            "recovers_on": "short_rest",
+        },
+    }
+    paladin_feature = {
+        "id": "paladin-channel-divinity",
+        "resource_scaling": {
+            "target": "channel_divinity",
+            "label": "Channel Divinity",
+            "class_name": "Paladin",
+            "maximum_by_level": {"3": 1},
+            "recovers_on": "short_rest",
+        },
+    }
+
+    for features in ([cleric_feature, paladin_feature], [paladin_feature, cleric_feature]):
+        sheet["content"]["features"] = deepcopy(list(features))
+        synchronized = synchronize_class_feature_resources(sheet)["sheet"]
+        assert synchronized["resources"]["channel_divinity"]["max"] == 2
+        assert synchronized["resources"]["channel_divinity"]["value"] == 2
+        assert synchronized["resources"]["channel_divinity"]["source_key"] == "Paladin"
+
+
+def test_2014_multiclass_extra_attack_uses_highest_class_progression() -> None:
+    sheet = default_character_sheet()
+    sheet["progression"]["classes"] = [
+        {"name": "Fighter", "level": 5, "subclass": "", "hit_die": 10},
+        {"name": "Paladin", "level": 5, "subclass": "", "hit_die": 10},
+    ]
+    sheet["progression"]["level"] = 10
+    sheet["content"]["features"] = [
+        {
+            "id": "fighter-extra-attack",
+            "attack_scaling": {
+                "class_name": "Fighter",
+                "attacks_per_action_by_level": {"5": 2, "11": 3, "20": 4},
+            },
+        },
+        {
+            "id": "paladin-extra-attack",
+            "attack_scaling": {
+                "class_name": "Paladin",
+                "attacks_per_action_by_level": {"5": 2},
+            },
+        },
+    ]
+
+    synchronized = synchronize_class_feature_resources(sheet)
+
+    assert synchronized["sheet"]["combat"]["attacks_per_action"] == 2
+    attack_change = next(
+        item for item in synchronized["changes"] if item["target"] == "combat.attacks_per_action"
+    )
+    assert attack_change["source_feature_ids"] == ["fighter-extra-attack", "paladin-extra-attack"]
+
+
+def test_2014_new_class_prerequisites_fail_before_mutating_the_source_sheet() -> None:
+    sheet = _single_class_sheet("Fighter", hit_die=10, constitution=12, hp=(20, 20))
+    sheet["progression"]["classes"][0]["level"] = 3
+    sheet["progression"]["level"] = 3
+    sheet["abilities"]["strength"]["score"] = 12
+    sheet["abilities"]["dexterity"]["score"] = 12
+    before = deepcopy(sheet)
+    with pytest.raises(CombatEngineError, match="multiclass prerequisites"):
+        advance_single_class_level(
+            sheet,
+            class_name="Wizard",
+            hp_method="fixed",
+            class_definition={
+                "name": "Wizard", "hit_die": 6, "skill_options": [], "tool_options": []
+            },
+            source_artifact={
+                "artifact_id": "dnd5e.content.srd2014.class.wizard",
+                "pack_id": "dnd5e.content.srd2014",
+                "pack_version": CORE_CONTENT_PACK_VERSION,
+            },
+        )
+    assert sheet == before

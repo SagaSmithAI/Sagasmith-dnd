@@ -203,17 +203,18 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     manifest, artifacts = build_srd2014_content(workspace / "skills")
     counts = Counter(item["kind"] for item in artifacts)
 
-    assert manifest["version"] == PACK_VERSION == "1.48.0"
+    assert manifest["version"] == PACK_VERSION == "1.55.0"
     assert "dnd5e.core.spell.structured_resolution" in manifest["native_mechanic_refs"]
+    assert "dnd5e.core.gamemastering.poisons_2014" in manifest["native_mechanic_refs"]
     registered = {boundary.id for boundary in get_core_rule_pack("2014").boundaries}
     assert set(manifest["native_mechanic_refs"]) <= registered
-    assert len(artifacts) == 1012
+    assert len(artifacts) == 1026
     assert counts == {
         "background": 1,
         "class": 12,
         "feat": 1,
         "feature": 182,
-        "item": 472,
+        "item": 486,
         "species": 13,
         "spell": 319,
         "subclass": 12,
@@ -663,6 +664,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
         "recovers_on": "short_rest",
         "source_key": "Paladin",
     }
+    assert paladin_channel["card"]["resource_scaling"]["maximum_by_level"] == {"3": 1}
     assert paladin_channel["card"]["choices"]["options"] == [
         "Sacred Weapon",
         "Turn the Unholy",

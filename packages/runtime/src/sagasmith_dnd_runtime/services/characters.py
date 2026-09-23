@@ -10,6 +10,41 @@ from sagasmith_dnd.statblocks import synchronize_statblock_armor_proficiencies
 from .. import application_support as _support
 from .sunlight import check_updates, prepare_check_facts
 
+_CORE_POISONS_SOURCE_REF = "bundled:srd2014/08_Gamemastering/Poisons.md"
+
+
+def _source_bound_poison_effects(sheet: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    result = {}
+    for effect in sheet.get("effects", []):
+        metadata = dict(effect.get("metadata") or {})
+        state = dict(metadata.get("poison_state") or {})
+        if (
+            effect.get("kind") == "poison"
+            and effect.get("source") == _CORE_POISONS_SOURCE_REF
+            and state.get("source_ref") == _CORE_POISONS_SOURCE_REF
+            and state.get("edition") == "2014"
+        ):
+            result[str(effect.get("id") or "")] = _support.deepcopy(effect)
+    return result
+
+
+def _source_bound_poison_items(sheet: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        str(item.get("id") or ""): _support.deepcopy(item)
+        for item in dict(sheet.get("inventory") or {}).get("items", [])
+        if dict(item.get("mechanics") or {}).get("poison_dose") is not None
+    }
+
+
+def _require_preserved_source_poison_effects(before: dict[str, Any], after: dict[str, Any]) -> None:
+    if _source_bound_poison_effects(before) != _source_bound_poison_effects(
+        after
+    ) or _source_bound_poison_items(before) != _source_bound_poison_items(after):
+        raise ValueError(
+            "source-bound poison items and lifecycle state change only through "
+            "source-owned operations"
+        )
+
 
 class CharactersService:
     def derive_character_sheet(
@@ -38,14 +73,17 @@ class CharactersService:
         matches: list[dict[str, Any]] = []
         if campaign_id is not None:
             artifacts = [
-                artifact for _, _, artifact in self.available_content_artifacts(
+                artifact
+                for _, _, artifact in self.available_content_artifacts(
                     campaign_id, kind="actor_card", branch_id=branch_id
                 )
             ]
         else:
             artifacts = [
-                artifact for pack in self.rule_packs.list_versions()
-                if pack.status == "installed" for artifact in pack.artifacts
+                artifact
+                for pack in self.rule_packs.list_versions()
+                if pack.status == "installed"
+                for artifact in pack.artifacts
             ]
         for artifact in artifacts:
             if str(artifact.get("id") or "") != identifier:
@@ -982,7 +1020,8 @@ class CharactersService:
                 raise ValueError("scene save classification is valid only for a saving throw")
             source_review = dict(scene_save_source)
             if source_review.get("save_source_kind") not in {
-                "nonmagical_effect", "magical_effect",
+                "nonmagical_effect",
+                "magical_effect",
             }:
                 raise ValueError(
                     "scene_save is for scene hazards; use the source executor for spells"
@@ -991,19 +1030,27 @@ class CharactersService:
             if not reason or len(reason) > 2000:
                 raise ValueError("scene_save reason must contain 1 to 2000 characters")
             _normalized_ref, source, expanded = self.managed_module_source_ref(
-                campaign_id, source_review.get("source_ref"),
-                require_exact=True, require_active_module=True,
+                campaign_id,
+                source_review.get("source_ref"),
+                require_exact=True,
+                require_active_module=True,
             )
             assert expanded is not None
             self.managed_module_source_excerpt(
-                expanded, source_review.get("source_excerpt"),
-                field="scene_save source_excerpt", minimum_length=10,
+                expanded,
+                source_review.get("source_excerpt"),
+                field="scene_save source_excerpt",
+                minimum_length=10,
             )
             source_review["source_ref"] = source
             source_review["source"] = "module"
-            settlement_facts.update(validated_save_source_facts(
-                source_review, citations=[source_review], source_card_kind="scene_hazard",
-            ))
+            settlement_facts.update(
+                validated_save_source_facts(
+                    source_review,
+                    citations=[source_review],
+                    source_card_kind="scene_hazard",
+                )
+            )
             source_review["reason"] = reason
         payload = {
             "actor_id": actor_id,
@@ -1031,6 +1078,18 @@ class CharactersService:
                 "campaign revision conflict: "
                 f"expected {expected_revision}, found {campaign.revision}"
             )
+        if kind in _support.ABILITY_CHECK_KINDS and normalized_ability == "stealth":
+            from sagasmith_dnd.travel import travel_stealth_allowed
+
+            active_travel = dict(dict(campaign.state or {}).get("travel") or {}).get("active")
+            if (
+                isinstance(active_travel, dict)
+                and actor_id in active_travel.get("participant_ids", [])
+                and not travel_stealth_allowed(campaign.state, actor_id)
+            ):
+                raise _support.CombatEngineError(
+                    "traveling stealthily is permitted only at slow pace"
+                )
         result = _support.resolve_actor_check(
             actor_snapshot,
             kind=kind,
@@ -1044,7 +1103,10 @@ class CharactersService:
                 campaign_id,
                 facts={
                     **prepare_check_facts(
-                        self, settlement_facts, campaign_id=campaign_id, actor_id=actor_id,
+                        self,
+                        settlement_facts,
+                        campaign_id=campaign_id,
+                        actor_id=actor_id,
                         principal_id=principal_id,
                     ),
                     "actor_id": actor_id,
@@ -1081,8 +1143,12 @@ class CharactersService:
         from .saving_throws import finalize
 
         next_state, updates, choice_fields, check_receipts = finalize(
-            self, campaign, next_state, check_updates([actor_snapshot], settlement_facts),
-            {}, list(result.get("rule_receipts") or []),
+            self,
+            campaign,
+            next_state,
+            check_updates([actor_snapshot], settlement_facts),
+            {},
+            list(result.get("rule_receipts") or []),
         )
 
         def check_response(revisions: list[Any]) -> dict[str, Any]:
@@ -1535,7 +1601,10 @@ class CharactersService:
                 campaign_id,
                 facts={
                     **prepare_check_facts(
-                        self, settlement_facts, campaign_id=campaign_id, actor_id=actor_id_value,
+                        self,
+                        settlement_facts,
+                        campaign_id=campaign_id,
+                        actor_id=actor_id_value,
                         principal_id=principal_id,
                     ),
                     "actor_id": actor_id_value,
@@ -1570,11 +1639,17 @@ class CharactersService:
 
         from .saving_throws import finalize
 
-        receipts = [*list(result.get("rule_receipts") or []), *[
-            r for p in result["participants"] for r in p["check"].get("rule_receipts", [])
-        ]]
+        receipts = [
+            *list(result.get("rule_receipts") or []),
+            *[r for p in result["participants"] for r in p["check"].get("rule_receipts", [])],
+        ]
         next_state, updates, choice_fields, receipts = finalize(
-            self, campaign, next_state, check_updates(snapshots, settlement_facts), {}, receipts,
+            self,
+            campaign,
+            next_state,
+            check_updates(snapshots, settlement_facts),
+            {},
+            receipts,
         )
 
         def group_check_response(revisions: list[Any]) -> dict[str, Any]:
@@ -1718,7 +1793,10 @@ class CharactersService:
                 campaign_id,
                 facts={
                     **prepare_check_facts(
-                        self, source_facts, campaign_id=campaign_id, actor_id=source_actor_id,
+                        self,
+                        source_facts,
+                        campaign_id=campaign_id,
+                        actor_id=source_actor_id,
                         principal_id=principal_id,
                     ),
                     "actor_id": source_actor_id,
@@ -1731,7 +1809,10 @@ class CharactersService:
                 campaign_id,
                 facts={
                     **prepare_check_facts(
-                        self, target_facts, campaign_id=campaign_id, actor_id=target_actor_id,
+                        self,
+                        target_facts,
+                        campaign_id=campaign_id,
+                        actor_id=target_actor_id,
                         principal_id=principal_id,
                     ),
                     "actor_id": target_actor_id,
@@ -1759,9 +1840,12 @@ class CharactersService:
         from .saving_throws import finalize
 
         next_state, updates, choice_fields, rule_receipts = finalize(
-            self, campaign, next_state,
+            self,
+            campaign,
+            next_state,
             check_updates([source_snapshot, target_snapshot], source_facts, target_facts),
-            {}, rule_receipts,
+            {},
+            rule_receipts,
         )
 
         def contest_response(revisions: list[Any]) -> dict[str, Any]:
@@ -2223,6 +2307,7 @@ class CharactersService:
                 self.effective_rule_context(current.campaign_id) if current.campaign_id else None
             ),
         )
+        _require_preserved_source_poison_effects(current.sheet, normalized_sheet)
         _support._require_preserved_tortle_natural_armor_provenance(
             current.sheet,
             normalized_sheet,
@@ -2302,6 +2387,16 @@ class CharactersService:
         self.require_character_control(current, principal_id)
         self.require_outside_active_combat(current, "effect changes")
         sheet, effect_id = _support.add_effect(current.sheet, effect)
+        metadata = dict(effect.get("metadata") or {})
+        poison_state = dict(metadata.get("poison_state") or {})
+        if effect.get("kind") == "poison" and (
+            effect.get("source") == "bundled:srd2014/08_Gamemastering/Poisons.md"
+            or "poison_state" in metadata
+            or poison_state.get("source_ref") == "bundled:srd2014/08_Gamemastering/Poisons.md"
+        ):
+            raise ValueError(
+                "source-bound poison effects require the atomic poison delivery operation"
+            )
         return self.update_sheet(
             character_id,
             sheet,
@@ -2325,6 +2420,18 @@ class CharactersService:
         current = self.characters.get(character_id)
         self.require_character_control(current, principal_id)
         self.require_outside_active_combat(current, "effect changes")
+        existing_effect = next(
+            (item for item in current.sheet.get("effects", []) if item.get("id") == effect_id),
+            None,
+        )
+        if existing_effect is not None:
+            metadata = dict(existing_effect.get("metadata") or {})
+            poison_state = dict(metadata.get("poison_state") or {})
+            if existing_effect.get("kind") == "poison" and (
+                existing_effect.get("source") == "bundled:srd2014/08_Gamemastering/Poisons.md"
+                or poison_state.get("source_ref") == "bundled:srd2014/08_Gamemastering/Poisons.md"
+            ):
+                raise ValueError("source-owned poison effects require source-bound neutralization")
         return self.update_sheet(
             character_id,
             _support.remove_effect(current.sheet, effect_id),
@@ -2388,9 +2495,12 @@ class CharactersService:
         )
 
     def character_statblock_proficiency_sync(
-        self, character_id: str, reason: str,
+        self,
+        character_id: str,
+        reason: str,
         principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
-        expected_revision: int | None = None, idempotency_key: str | None = None,
+        expected_revision: int | None = None,
+        idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Repair imported armor training without replacing live encounter state."""
         current = self.characters.get(character_id)
@@ -2406,9 +2516,13 @@ class CharactersService:
             raise ValueError("reason must contain 1 to 1000 characters")
         sheet, evidence = synchronize_statblock_armor_proficiencies(current.sheet)
         return self.update_character(
-            current, operation="character.statblock_proficiency.sync", sheet=sheet,
-            principal_id=principal_id, expected_revision=expected_revision,
-            idempotency_key=idempotency_key, payload={"reason": reason},
+            current,
+            operation="character.statblock_proficiency.sync",
+            sheet=sheet,
+            principal_id=principal_id,
+            expected_revision=expected_revision,
+            idempotency_key=idempotency_key,
+            payload={"reason": reason},
             response_extra={"source_equipment": evidence},
         )
 
@@ -2558,8 +2672,9 @@ class CharactersService:
         expected_revision: int | None = None,
         idempotency_key: str | None = None,
         target_level: int | None = None,
+        multiclass_choices: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Advance one existing 2014 class level during the lobby phase."""
+        """Advance an existing class or take a source-bound first 2014 class level."""
         current = self.characters.get(character_id)
         self.require_character_control(current, principal_id)
         self.require_outside_active_combat(current, "level advancement")
@@ -2586,12 +2701,47 @@ class CharactersService:
             source_ref,
             branch_id=branch_id,
         )
+        existing_classes = list(current.sheet.get("progression", {}).get("classes", []))
+        is_new_class = not any(
+            str(item.get("name") or "").strip().casefold() == str(class_name).strip().casefold()
+            for item in existing_classes
+        )
+        class_source: dict[str, Any] | None = None
+        context_sheet = _support.deepcopy(current.sheet)
+        if is_new_class:
+            if _support.normalize_dnd_edition(
+                current.sheet.get("edition")
+            ) != "2014" or not normalized_source_ref.startswith(
+                "bundled:srd2014/03_Characterization/Multiclassing.md"
+            ):
+                raise _support.RulesetUnavailableError(
+                    "a first level in another class requires the bundled 2014 Multiclassing source"
+                )
+            class_source = self.multiclass_level_class_source(
+                current.campaign_id,
+                class_name,
+                branch_id=branch_id,
+            )
+            definition = dict(class_source["class_definition"])
+            provisional_class = {
+                "name": str(definition["name"]),
+                "level": 1,
+                "subclass": "",
+                "hit_die": int(definition["hit_die"]),
+            }
+            if definition.get("spellcasting"):
+                provisional_class["spellcasting"] = definition["spellcasting"]
+            context_sheet.setdefault("progression", {}).setdefault("classes", []).append(
+                provisional_class
+            )
         mutation_payload = {
             "class_name": class_name,
             "hp_method": hp_method,
             "reason": normalized_reason,
             "source_ref": normalized_source_ref,
         }
+        if multiclass_choices is not None:
+            mutation_payload["multiclass_choices"] = multiclass_choices
         if target_level is not None:
             mutation_payload["target_level"] = target_level
         request_payload = {
@@ -2606,6 +2756,17 @@ class CharactersService:
         if current.revision != expected_revision:
             raise ValueError(f"character revision conflict: {character_id}")
         old_level = int(current.sheet.get("progression", {}).get("level", 0) or 0)
+        current_class = next(
+            (
+                item
+                for item in existing_classes
+                if str(item.get("name") or "").strip().casefold()
+                == str(class_name).strip().casefold()
+            ),
+            None,
+        )
+        old_class_level = int(current_class.get("level", 0) or 0) if current_class else 0
+        new_class_level = old_class_level + 1
         if type(target_level) is not int or not 2 <= target_level <= 20:
             raise ValueError("level_advance requires integer target_level between 2 and 20")
         if target_level != old_level + 1:
@@ -2620,9 +2781,9 @@ class CharactersService:
             )
         context = self.level_advancement_content_context(
             current.campaign_id,
-            current.sheet,
+            context_sheet,
             class_name=class_name,
-            new_level=old_level + 1,
+            new_level=new_class_level,
             branch_id=branch_id,
         )
         rules = self.effective_rule_context(
@@ -2631,7 +2792,9 @@ class CharactersService:
                 "actor_id": character_id,
                 "class_name": class_name,
                 "old_level": old_level,
-                "new_level": old_level + 1,
+                "class_level_before": old_class_level,
+                "class_level_after": new_class_level,
+                "total_level_after": old_level + 1,
                 "source_ref": normalized_source_ref,
                 "advancement_mode": advancement_mode,
                 "experience": experience_before["xp"],
@@ -2642,9 +2805,12 @@ class CharactersService:
             class_name=class_name,
             hp_method=hp_method,
             hp_per_level_bonus=int(context["hp_per_level_bonus"]),
-            source=f"{class_name} level {old_level + 1}",
+            source=f"{class_name} level {new_class_level}",
             source_ref=normalized_source_ref,
             reason=normalized_reason,
+            class_definition=(class_source or {}).get("class_definition"),
+            source_artifact=(class_source or {}).get("source_artifact"),
+            multiclass_choices=multiclass_choices,
         )
         applied["species_feature_grants"] = self.refresh_level_unlocked_species_features(
             applied["sheet"]
@@ -2660,6 +2826,7 @@ class CharactersService:
             [
                 "dnd5e.core.progression.hp_hit_dice",
                 "dnd5e.core.progression.spellcasting",
+                *(["dnd5e.core.progression.multiclassing"] if is_new_class else []),
             ],
             "character.level.advance",
         )
@@ -2755,6 +2922,7 @@ class CharactersService:
         principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
         *,
         scope: str = "next_level",
+        multiclass_choices: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Preview all source-bound follow-up work without committing a level."""
         if scope not in {"next_level", "current_level"}:
@@ -2797,21 +2965,89 @@ class CharactersService:
                 **({"spell_selection": spell_status} if spell_status is not None else {}),
             }
         old_level = int(current.sheet.get("progression", {}).get("level", 0) or 0)
+        existing_classes = list(current.sheet.get("progression", {}).get("classes", []))
+        current_class = next(
+            (
+                item
+                for item in existing_classes
+                if str(item.get("name") or "").strip().casefold()
+                == str(class_name).strip().casefold()
+            ),
+            None,
+        )
+        old_class_level = int(current_class.get("level", 0) or 0) if current_class else 0
+        new_class_level = old_class_level + 1
+        class_source: dict[str, Any] | None = None
+        context_sheet = _support.deepcopy(current.sheet)
+        if current_class is None:
+            if _support.normalize_dnd_edition(current.sheet.get("edition")) != "2014":
+                raise _support.RulesetUnavailableError(
+                    "new-class advancement planning requires reviewed 2014 multiclass rules"
+                )
+            class_source = self.multiclass_level_class_source(
+                current.campaign_id,
+                class_name,
+                branch_id=branch_id,
+            )
+            definition = dict(class_source["class_definition"])
+            provisional_class = {
+                "name": str(definition["name"]),
+                "level": 1,
+                "subclass": "",
+                "hit_die": int(definition["hit_die"]),
+            }
+            if definition.get("spellcasting"):
+                provisional_class["spellcasting"] = definition["spellcasting"]
+            context_sheet.setdefault("progression", {}).setdefault("classes", []).append(
+                provisional_class
+            )
         experience = _support.experience_status(current.sheet)
         advancement_mode = self.campaign_advancement_mode(campaign)
         context = self.level_advancement_content_context(
             current.campaign_id,
-            current.sheet,
+            context_sheet,
             class_name=class_name,
-            new_level=old_level + 1,
+            new_level=new_class_level,
             branch_id=branch_id,
         )
+        if class_source is not None:
+            choice_contract = dict(class_source["proficiency_choice_contract"])
+            missing_choices = multiclass_choices is None and any(
+                int(dict(item).get("count", 0) or 0) for item in choice_contract.values()
+            )
+            if missing_choices:
+                return {
+                    "status": "pending_choice",
+                    "scope": "next_level",
+                    "character_id": current.id,
+                    "character_revision": current.revision,
+                    "campaign_id": current.campaign_id,
+                    "campaign_revision": campaign.revision,
+                    "branch_id": branch_id,
+                    "class_name": str(definition["name"]),
+                    "old_total_level": old_level,
+                    "new_total_level": old_level + 1,
+                    "multiclass_source_artifact": class_source["source_artifact"],
+                    "proficiency_choice_contract": choice_contract,
+                    "prerequisite_source_ref": (
+                        "bundled:srd2014/03_Characterization/Multiclassing.md"
+                    ),
+                    "feature_artifacts": context["feature_options"],
+                    "subclass_options": context["subclass_options"],
+                    "spell_choices": {
+                        "cantrips_to_add": 0,
+                        "leveled_spells_to_add": 0,
+                    },
+                }
         preview = _support.advance_single_class_level(
             current.sheet,
             class_name=class_name,
             hp_method="fixed",
             hp_per_level_bonus=int(context["hp_per_level_bonus"]),
             source="read-only advancement plan",
+            class_definition=(class_source or {}).get("class_definition"),
+            source_artifact=(class_source or {}).get("source_artifact"),
+            multiclass_choices=multiclass_choices,
         )
         spellcasting = dict(preview["sheet"].get("spellcasting") or {})
         preparation = dict(spellcasting.get("preparation") or {})
@@ -2847,6 +3083,10 @@ class CharactersService:
             "class_name": str(class_name).strip(),
             "old_level": old_level,
             "new_level": old_level + 1,
+            "old_class_level": old_class_level,
+            "new_class_level": new_class_level,
+            "new_class": current_class is None,
+            "multiclass_source_artifact": (class_source or {}).get("source_artifact"),
             "mode": advancement_mode,
             "experience": experience,
             "hp_bonus_sources": context["hp_bonus_sources"],
@@ -2876,8 +3116,9 @@ class CharactersService:
         if activity_id == rage.FEATURE:
             raise ValueError("Rage requires combat_use_activity on the actor's turn")
         if activity_id == bardic.FEATURE:
-            return grant(self, current, declaration, principal_id,
-                         expected_revision, idempotency_key)
+            return grant(
+                self, current, declaration, principal_id, expected_revision, idempotency_key
+            )
         self.require_character_control(current, principal_id)
         self.require_outside_active_combat(current, "activity use")
         if current.campaign_id is None:
@@ -4020,8 +4261,11 @@ class CharactersService:
                 self.effective_rule_context(current.campaign_id),
                 [
                     *(["dnd5e.core.damage.zero_hp"] if int(applied["after_hp"]) == 0 else []),
-                    *(["dnd5e.core.combat.underwater"]
-                      if "environment_receipts" in applied else []),
+                    *(
+                        ["dnd5e.core.combat.underwater"]
+                        if "environment_receipts" in applied
+                        else []
+                    ),
                 ],
                 "damage.apply",
             ),
@@ -4567,6 +4811,8 @@ class CharactersService:
             if sheet is not None
             else None
         )
+        if normalized_sheet is not None:
+            _require_preserved_source_poison_effects(before.sheet, normalized_sheet)
         normalized_notes = _support.validate_character_notes(notes) if notes is not None else None
         if before.campaign_id is not None:
             self.access.require_actor(before.campaign_id, before.id, principal_id, control=True)
@@ -4989,7 +5235,13 @@ boundary.
         self,
         campaign_id: str,
         action: Literal[
-            "check", "passive", "working_together", "scene_save", "group", "contest", "reroll",
+            "check",
+            "passive",
+            "working_together",
+            "scene_save",
+            "group",
+            "contest",
+            "reroll",
             "source_feature",
         ] = "check",
         payload: dict[str, Any] | None = None,
@@ -5055,31 +5307,52 @@ boundary.
             from .working_together import working_together_check
 
             return working_together_check(
-                self, campaign_id, self.facade_payload(payload), principal_id=principal_id,
-                expected_revision=expected_revision, branch_id=branch_id,
+                self,
+                campaign_id,
+                self.facade_payload(payload),
+                principal_id=principal_id,
+                expected_revision=expected_revision,
+                branch_id=branch_id,
                 idempotency_key=idempotency_key,
             )
         if action == "passive":
             from .passive_checks import resolve_passive_scene_check
 
             return resolve_passive_scene_check(
-                self, campaign_id, self.facade_payload(payload), principal_id=principal_id,
-                expected_revision=expected_revision, branch_id=branch_id,
+                self,
+                campaign_id,
+                self.facade_payload(payload),
+                principal_id=principal_id,
+                expected_revision=expected_revision,
+                branch_id=branch_id,
                 idempotency_key=idempotency_key,
             )
         if action == "scene_save":
             data = self.facade_payload(payload)
             return self.character_check_impl(
-                campaign_id, data["actor_id"], "save", data["ability"], data["dc"],
+                campaign_id,
+                data["actor_id"],
+                "save",
+                data["ability"],
+                data["dc"],
                 bonus=data.get("bonus", 0),
                 advantage=self.facade_bool(data, "advantage"),
                 disadvantage=self.facade_bool(data, "disadvantage"),
-                principal_id=principal_id, expected_revision=expected_revision,
-                branch_id=branch_id, idempotency_key=idempotency_key,
-                scene_save_source={key: data[key] for key in (
-                    "source_ref", "source_excerpt", "reason", "save_source_kind",
-                    "save_effect_conditions", "save_against_poison",
-                )},
+                principal_id=principal_id,
+                expected_revision=expected_revision,
+                branch_id=branch_id,
+                idempotency_key=idempotency_key,
+                scene_save_source={
+                    key: data[key]
+                    for key in (
+                        "source_ref",
+                        "source_excerpt",
+                        "reason",
+                        "save_source_kind",
+                        "save_effect_conditions",
+                        "save_against_poison",
+                    )
+                },
             )
         if action == "source_feature":
             data = self.facade_payload(payload)
@@ -5274,6 +5547,7 @@ boundary.
                 str(self.required(data, "class_name")),
                 principal_id,
                 scope=str(data.get("scope", "next_level")),
+                multiclass_choices=data.get("multiclass_choices"),
             )
         elif view == "rest":
             character_id = str(self.required(data, "character_id"))
@@ -5775,7 +6049,8 @@ boundary.
                 preset_campaign_id = str(data["campaign_id"]) if data.get("campaign_id") else None
                 preset_branch_id = (
                     self.readable_branch(preset_campaign_id, None, principal_id)
-                    if preset_campaign_id else None
+                    if preset_campaign_id
+                    else None
                 )
                 card = self.default_preset_actor_card(
                     artifact_id, preset_campaign_id, preset_branch_id
@@ -6482,12 +6757,12 @@ boundary.
                     path = tuple(str(value).strip() for value in chunk.get("heading_path", []))
                     for index, heading in enumerate(path):
                         if heading.casefold() == requested_heading:
-                            card_paths.add(path[:index + 1])
+                            card_paths.add(path[: index + 1])
                 omitted = []
                 for chunk in available_chunks:
                     path = tuple(str(value).strip() for value in chunk.get("heading_path", []))
                     if str(chunk["id"]) not in selected_chunk_ids and any(
-                        path[:len(prefix)] == prefix for prefix in card_paths
+                        path[: len(prefix)] == prefix for prefix in card_paths
                     ):
                         omitted.append(str(chunk["id"]))
                 if omitted:
@@ -6787,7 +7062,8 @@ boundary.
         effect_add uses {effect}; effect_remove uses {effect_id}; resource_set
         uses {resource,value}; exhaustion_set uses {value}. Keep one stable
         idempotency_key per intended transition and copy its new actor revision.
-        level_advance requires {class_name,hp_method,reason,source_ref,target_level}.
+        level_advance requires {class_name,hp_method,reason,source_ref,target_level};
+        a first 2014 class level also accepts multiclass_choices={skills:[...],tools:[...]}.
         target_level is the intended TOTAL character level, exactly current + 1.
         Read progression before advancing; never repeat a completed milestone.
         source_traits is DM-only, outside combat, for existing non-PC actors:
@@ -6821,11 +7097,14 @@ boundary.
         if action in {"legendary_resistance", "bardic_inspiration", "divine_smite"}:
             from .saving_throws import resolve
 
-            return resolve(self, current, data, principal_id, expected_revision, idempotency_key,
-                           kind=action)
-        if (current.campaign_id is not None
-                and self.authoritative_phase(current.campaign_id) == "combat"
-                and action != "statblock_proficiency_sync"):
+            return resolve(
+                self, current, data, principal_id, expected_revision, idempotency_key, kind=action
+            )
+        if (
+            current.campaign_id is not None
+            and self.authoritative_phase(current.campaign_id) == "combat"
+            and action != "statblock_proficiency_sync"
+        ):
             raise _support.ExposureError(
                 "during combat character_state_change supports only statblock_proficiency_sync"
             )
@@ -6944,13 +7223,22 @@ boundary.
             )
         elif action == "level_advance":
             unexpected = set(data) - {
-                "class_name", "hp_method", "reason", "source_ref", "target_level"
+                "class_name",
+                "hp_method",
+                "reason",
+                "source_ref",
+                "target_level",
+                "multiclass_choices",
             }
             if unexpected:
                 raise ValueError(
                     "level_advance payload accepts only class_name, hp_method, reason, "
-                    f"source_ref, and target_level; unexpected fields: {sorted(unexpected)}"
+                    f"source_ref, target_level, and multiclass_choices; "
+                    f"unexpected fields: {sorted(unexpected)}"
                 )
+            choices = data.get("multiclass_choices")
+            if choices is not None and not isinstance(choices, dict):
+                raise ValueError("multiclass_choices must be an object")
             result = self.character_level_advance(
                 character_id,
                 self.required(data, "class_name"),
@@ -6961,6 +7249,7 @@ boundary.
                 expected_revision,
                 idempotency_key,
                 target_level=data.get("target_level"),
+                multiclass_choices=choices,
             )
         elif action == "resource_sync":
             unexpected = set(data) - {"reason"}
@@ -6980,8 +7269,11 @@ boundary.
             if set(data) - {"reason"}:
                 raise ValueError("statblock proficiency sync accepts only reason")
             result = self.character_statblock_proficiency_sync(
-                character_id, self.required(data, "reason"), principal_id,
-                expected_revision, idempotency_key,
+                character_id,
+                self.required(data, "reason"),
+                principal_id,
+                expected_revision,
+                idempotency_key,
             )
         elif action == "source_traits":
             unexpected = set(data) - {"traits", "source_ref", "reason"}
@@ -7480,9 +7772,17 @@ boundary.
         data = self.facade_payload(payload)
         if action == "add":
             allowed = {
-                "campaign_id", "actor_id", "knowledge_key", "proposition",
-                "subject_ref", "epistemic_status", "confidence", "source_event_id",
-                "cause", "disclosure_scope", "branch_id",
+                "campaign_id",
+                "actor_id",
+                "knowledge_key",
+                "proposition",
+                "subject_ref",
+                "epistemic_status",
+                "confidence",
+                "source_event_id",
+                "cause",
+                "disclosure_scope",
+                "branch_id",
             }
             unknown = sorted(set(data) - allowed)
             if unknown:

@@ -8,14 +8,20 @@ from .. import application_support as _support
 
 
 class SpellsService:
-    def validate_spell_spatial_facts(self, facts: Any) -> dict[str, Any]:
+    def validate_spell_spatial_facts(
+        self, facts: Any, *, ruleset: str | None = None
+    ) -> dict[str, Any]:
         """Validate an explicit DM targeting decision without inventing coordinates."""
-        required = {"decision_id", "reason", "targetable", "in_range", "attacker_can_see_target"}
-        optional = {"cover_degree", "target_can_see_attacker"}
+        required = {"decision_id", "reason", "targetable", "in_range"}
+        if ruleset == "2014":
+            optional = {"cover_degree", "vision_facts"}
+        else:
+            required.add("attacker_can_see_target")
+            optional = {"cover_degree", "target_can_see_attacker"}
         if not isinstance(facts, dict) or required - set(facts) or set(facts) - required - optional:
             raise _support.CombatEngineError(
                 "Agent spell spatial_facts require decision_id, reason, targetable, "
-                "in_range, attacker_can_see_target; optional cover_degree, target_can_see_attacker"
+                "in_range and source-defined visibility facts; optional cover_degree"
             )
         value = _support.deepcopy(facts)
         for key in ("decision_id", "reason"):
@@ -24,6 +30,8 @@ class SpellsService:
         for key in ("targetable", "in_range", "attacker_can_see_target", "target_can_see_attacker"):
             if key in value and not isinstance(value[key], bool):
                 raise _support.CombatEngineError(f"spell spatial fact {key} must be boolean")
+        if "vision_facts" in value:
+            _support.resolve_agent_vision_2014({}, value["vision_facts"])
         if value.get("cover_degree", "none") not in {"none", "half", "three_quarters", "total"}:
             raise _support.CombatEngineError("invalid spell spatial cover_degree")
         if not value["targetable"] or value.get("cover_degree") == "total":
@@ -324,7 +332,12 @@ class SpellsService:
         if "dead" in target_conditions:
             raise _support.CombatEngineError("a dead combatant is not a creature target")
         agent_mode = encounter.get("positioning_mode") == "agent"
-        spatial = self.validate_spell_spatial_facts(spatial_facts) if agent_mode else None
+        spatial = (
+            self.validate_spell_spatial_facts(
+                spatial_facts, ruleset=str(encounter.get("ruleset") or "")
+            )
+            if agent_mode else None
+        )
         distance = (
             None if agent_mode
             else self.combat_distance(caster.get("position"), target.get("position"))
@@ -344,10 +357,22 @@ class SpellsService:
         if range_kind != "self" and distance is not None and distance > maximum:
             raise _support.CombatEngineError("spell target is outside range")
         targeting = dict(resolution.get("targeting") or {})
-        visible = (
-            spatial["attacker_can_see_target"] if spatial is not None
-            else _support.can_see(caster, target)
-        )
+        vision_profile = None
+        if spatial is not None and encounter.get("ruleset") == "2014":
+            if targeting.get("requires_sight"):
+                if "vision_facts" not in spatial:
+                    raise _support.CombatEngineError(
+                        "sight-targeting spells require bounded Agent vision_facts"
+                    )
+                vision_profile = _support.resolve_agent_vision_2014(
+                    caster, spatial["vision_facts"], subject=target
+                )
+            visible = bool(vision_profile and vision_profile["visible"])
+        else:
+            visible = (
+                spatial["attacker_can_see_target"] if spatial is not None
+                else _support.can_see(caster, target, encounter)
+            )
         if targeting.get("requires_sight") and not visible:
             raise _support.CombatEngineError("spell requires a target the caster can see")
         creature_type = str(
@@ -361,6 +386,7 @@ class SpellsService:
         return {
             "target_id": target_id, "distance_ft": distance,
             **({"spatial_facts": spatial} if spatial is not None else {}),
+            **({"vision": vision_profile} if vision_profile is not None else {}),
         }
 
     def advance_spell_attack_resolution(
@@ -447,12 +473,26 @@ class SpellsService:
             if "dead" in conditions:
                 raise _support.CombatEngineError("Magic Missile cannot target a dead creature")
             if agent_mode:
-                spatial = self.validate_spell_spatial_facts(target_spatial_facts[target_id])
-                if not spatial["attacker_can_see_target"]:
+                spatial = self.validate_spell_spatial_facts(
+                    target_spatial_facts[target_id],
+                    ruleset=str(encounter.get("ruleset") or ""),
+                )
+                if encounter.get("ruleset") == "2014":
+                    if "vision_facts" not in spatial:
+                        raise _support.CombatEngineError(
+                            "Agent Magic Missile requires bounded vision_facts"
+                        )
+                    vision = _support.resolve_agent_vision_2014(
+                        caster, spatial["vision_facts"], subject=target
+                    )
+                else:
+                    vision = {"visible": spatial["attacker_can_see_target"]}
+                if not vision["visible"]:
                     raise _support.CombatEngineError(
                         "Magic Missile requires a target the caster can see"
                     )
                 allocation["spatial_facts"] = spatial
+                allocation["vision"] = vision
                 allocation["distance_ft"] = None
                 continue
             target_position = self.combat_coordinates(target.get("position"))
@@ -471,9 +511,7 @@ class SpellsService:
                 raise _support.CombatEngineError(
                     "Magic Missile target is outside its 120-foot range"
                 )
-            concealed = bool(target.get("hidden", False)) or "invisible" in conditions
-            visible_to = {str(item) for item in target.get("visible_to_actor_ids") or []}
-            if concealed and caster_id not in visible_to:
+            if not _support.can_see(caster, target, encounter):
                 raise _support.CombatEngineError(
                     "Magic Missile requires a target the caster can see"
                 )
@@ -890,8 +928,11 @@ class SpellsService:
         determines action/slot cost; never spend them separately. target_allocations
         is only for source-bound Magic Missile, not ordinary spell targets.
         In Agent positioning, native single-target spells use declaration
-        {target_id, spatial_facts:{decision_id,reason,targetable,in_range,
-        attacker_can_see_target}}. Magic Missile uses target_allocations plus
+        {target_id, spatial_facts:{decision_id,reason,targetable,in_range}}.
+        2014 sight-targeting spells add vision_facts containing distance_ft,
+        illumination, obscuration, magical_darkness, opaque_boundary, scene_ref,
+        and scene_excerpt; Runtime derives visibility from these and senses.
+        Magic Missile uses target_allocations plus
         declaration={target_spatial_facts:{target_id: facts}}. Grid uses positions.
         For an Agent-resolved standard spell, omit declaration to obtain the
         agent_ruling_contract, then copy its submission_shape under declaration,
@@ -974,6 +1015,7 @@ class SpellsService:
                 "a magic item spell cannot use a character feature casting source"
             )
         campaign, encounter = self.active_encounter(campaign_id)
+        self.require_mounted_action(encounter, actor_id, "cast")
         if campaign.revision != expected_revision:
             raise ValueError(
                 "campaign revision conflict: "
@@ -2238,6 +2280,18 @@ class SpellsService:
             return self.combat_response(campaign_id, principal_id, response)
         if structured_resolution is not None:
             structured_kind = str(structured_resolution.get("kind") or "")
+            grid_vision_used = (
+                encounter.get("positioning_mode") == "grid"
+                and isinstance(encounter.get("battle_map"), dict)
+                and any(
+                    key in encounter["battle_map"]
+                    for key in ("ambient_illumination", "light_sources", "vision_cells")
+                )
+            )
+            agent_vision_used = (
+                encounter.get("positioning_mode") == "agent"
+                and (magic_missile or bool(dict(structured_target or {}).get("vision")))
+            )
             structured_receipts = [
                 *list(applied.get("rule_receipts") or []),
                 *_support.core_receipts(
@@ -2247,6 +2301,22 @@ class SpellsService:
                         "dnd5e.core.mcp.combat_spell_boundary",
                     ],
                     f"combat.spell.{structured_kind}",
+                ),
+                *_support.core_receipts(
+                    self.effective_rule_context(campaign_id),
+                    (
+                        ["dnd5e.core.vision.light_obscuration_2014"]
+                        if encounter.get("ruleset") == "2014"
+                        and (grid_vision_used or agent_vision_used)
+                        and (
+                            magic_missile
+                            or bool(dict(structured_resolution.get("targeting") or {}).get(
+                                "requires_sight"
+                            ))
+                        )
+                        else []
+                    ),
+                    "combat.spell.target_visibility",
                 ),
             ]
             self.sync_combatant_conditions(next_encounter, actor_id, applied["sheet"])
@@ -2630,6 +2700,37 @@ class SpellsService:
             return self.combat_response(campaign_id, principal_id, response)
         if magic_missile:
             assert normalized_allocations is not None
+            vision_receipts = (
+                _support.core_receipts(
+                    self.effective_rule_context(campaign_id),
+                    ["dnd5e.core.vision.light_obscuration_2014"],
+                    "combat.spell.magic_missile.target_visibility",
+                )
+                if encounter.get("ruleset") == "2014"
+                and (
+                    encounter.get("positioning_mode") == "agent"
+                    or (
+                        isinstance(encounter.get("battle_map"), dict)
+                        and any(
+                            key in encounter["battle_map"]
+                            for key in ("ambient_illumination", "light_sources", "vision_cells")
+                        )
+                    )
+                )
+                else []
+            )
+            magic_missile_receipts = [
+                *list(applied.get("rule_receipts") or []),
+                *vision_receipts,
+                *_support.core_receipts(
+                    self.effective_rule_context(campaign_id),
+                    [
+                        "dnd5e.core.spell.magic_missile_darts",
+                        "dnd5e.core.mcp.magic_missile_atomicity",
+                    ],
+                    "combat.spell.magic_missile.target",
+                ),
+            ]
             resolution_id = f"spell-resolution-{_support.uuid4().hex}"
             resolution = {
                 "id": resolution_id,
@@ -2712,6 +2813,7 @@ class SpellsService:
                                 applied.get("component_receipt")
                             ),
                         },
+                        "rule_receipts": magic_missile_receipts,
                         "choices": defense_windows,
                         "combat": next_encounter,
                     },
@@ -2723,17 +2825,7 @@ class SpellsService:
                             expected_revision=current.revision,
                         )
                     ],
-                    rule_receipts=[
-                        *list(applied.get("rule_receipts") or []),
-                        *_support.core_receipts(
-                            self.effective_rule_context(campaign_id),
-                            [
-                                "dnd5e.core.spell.magic_missile_darts",
-                                "dnd5e.core.mcp.magic_missile_atomicity",
-                            ],
-                            "combat.spell.magic_missile.target",
-                        ),
-                    ],
+                    rule_receipts=magic_missile_receipts,
                 )
                 return self.combat_response(campaign_id, principal_id, response)
             next_encounter, resolved_sheets, result = self.settle_magic_missile_damage(
@@ -2770,17 +2862,15 @@ class SpellsService:
                         "payment": _support.deepcopy(applied.get("payment") or {}),
                         "component_receipt": _support.deepcopy(applied.get("component_receipt")),
                     },
+                    "rule_receipts": magic_missile_receipts,
                     "combat": next_encounter,
                 },
                 character_updates=updates,
                 rule_receipts=[
-                    *list(applied.get("rule_receipts") or []),
+                    *magic_missile_receipts,
                     *_support.core_receipts(
                         self.effective_rule_context(campaign_id),
-                        [
-                            "dnd5e.core.spell.magic_missile_darts",
-                            "dnd5e.core.mcp.magic_missile_atomicity",
-                        ],
+                        ["dnd5e.core.mcp.magic_missile_atomicity"],
                         "combat.spell.magic_missile.resolve",
                     ),
                 ],

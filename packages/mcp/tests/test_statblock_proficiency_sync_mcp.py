@@ -79,7 +79,18 @@ def test_legacy_armor_sync_preserves_live_combat_and_replays(tmp_path):
             "action": {"weapon_id": "club", "context": {"spatial_facts": {
                 "decision_id": "adjacent-guards", "reason": "The guards stand adjacent.",
                 "targetable": True, "in_range": True, "cover_degree": "none",
-                "attacker_can_see_target": True, "target_can_see_attacker": True,
+                "attacker_vision": {
+                    "distance_ft": 5, "illumination": "bright", "obscuration": "none",
+                    "magical_darkness": False, "opaque_boundary": False,
+                    "scene_ref": "fixture:adjacent-guards",
+                    "scene_excerpt": "The guards see each other in bright light.",
+                },
+                "target_vision": {
+                    "distance_ft": 5, "illumination": "bright", "obscuration": "none",
+                    "magical_darkness": False, "opaque_boundary": False,
+                    "scene_ref": "fixture:adjacent-guards",
+                    "scene_excerpt": "The guards see each other in bright light.",
+                },
                 "target_within_5_ft": True,
             }}},
             "expected_revision": after["revision"], "idempotency_key": "attack-after-sync",

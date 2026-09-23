@@ -134,6 +134,7 @@ def protection_candidates(encounter, sheets, attacker_id, target_id, *, facts=No
             eligible = distance_between(pxy, pspace, txy, tspace) <= 5 and can_see(
                 {"sheet": sheets[identifier], **protector},
                 {"sheet": sheets[attacker_id], **attacker},
+                encounter,
             )
         if eligible:
             candidates.append(identifier)
