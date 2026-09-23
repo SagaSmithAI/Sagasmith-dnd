@@ -5,6 +5,7 @@ these helpers keep lifecycle rules on the Domain side and accept only resolved
 facts produced during that authoritative transaction.
 """
 
+from dataclasses import asdict, dataclass
 from typing import Any
 
 from sagasmith_dnd.character_schema import derive_character_sheet
@@ -38,6 +39,38 @@ _DISEASE_CURES = {
     "raise_dead": "bundled:srd2014/07_Spells/Spells_Each/Raise_Dead.md",
 }
 _GNOME_SPECIES_IDS = {"gnome", "forest_gnome", "rock_gnome"}
+EYEBRIGHT_FLOWER_NAME = "Eyebright flower"
+EYEBRIGHT_OINTMENT_SOURCE_KEY = "dnd5e.srd2014.disease.sight_rot.eyebright_ointment"
+EYEBRIGHT_OINTMENT_NAME = "Eyebright ointment"
+
+
+@dataclass(frozen=True)
+class EyebrightCraftingPlan:
+    """Narrow internal extension to the shared campaign-hour transaction."""
+
+    actor_id: str
+    expected_actor_revision: int
+    flower_item_id: str
+    expected_elapsed_ticks: int
+
+    def __post_init__(self) -> None:
+        if not self.actor_id.strip() or not self.flower_item_id.strip():
+            raise ValueError("Eyebright crafting plan requires actor and flower identities")
+        if (
+            isinstance(self.expected_actor_revision, bool)
+            or not isinstance(self.expected_actor_revision, int)
+            or self.expected_actor_revision < 0
+        ):
+            raise ValueError("Eyebright crafting actor revision must be a nonnegative integer")
+        if (
+            isinstance(self.expected_elapsed_ticks, bool)
+            or not isinstance(self.expected_elapsed_ticks, int)
+            or self.expected_elapsed_ticks < 0
+        ):
+            raise ValueError("Eyebright crafting elapsed ticks must be a nonnegative integer")
+
+    def payload(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 def _disease_effect_state(effect: dict[str, Any]) -> dict[str, Any] | None:
@@ -178,6 +211,236 @@ class DiseasesService:
     @staticmethod
     def disease_cure_transition(state: dict[str, Any], *, disease_id: Any) -> dict[str, Any]:
         return cure_disease(state, disease_id=disease_id)
+
+    def character_disease_eyebright_craft(
+        self,
+        campaign_id: str,
+        actor_id: str,
+        flower_item_id: str,
+        *,
+        principal_id: str = support.LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None,
+        expected_actor_revision: int | None = None,
+        expected_elapsed_ticks: int | None = None,
+        branch_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Craft one dose through the existing atomic one-hour clock transaction."""
+        self.access.require_campaign(campaign_id, principal_id, roles=support.CAMPAIGN_DM_ROLES)
+        self.require_write_contract(expected_revision, idempotency_key)
+        if expected_actor_revision is None or expected_elapsed_ticks is None:
+            raise ValueError(
+                "Eyebright crafting requires expected_actor_revision and expected_elapsed_ticks"
+            )
+        if not str(flower_item_id or "").strip():
+            raise ValueError("Eyebright crafting requires an inventory flower_item_id")
+        resolved_branch_id = self.require_current_branch(campaign_id, branch_id)
+        plan = EyebrightCraftingPlan(
+            actor_id=str(actor_id),
+            expected_actor_revision=expected_actor_revision,
+            flower_item_id=str(flower_item_id),
+            expected_elapsed_ticks=expected_elapsed_ticks,
+        )
+        return self.campaign_advance_effects(
+            campaign_id,
+            "hour",
+            1,
+            principal_id,
+            expected_revision,
+            resolved_branch_id,
+            idempotency_key,
+            expected_elapsed_ticks,
+            disease_eyebright_crafting=plan,
+        )
+
+    def character_disease_eyebright_apply(
+        self,
+        campaign_id: str,
+        actor_id: str,
+        disease_effect_id: str,
+        ointment_item_id: str,
+        *,
+        principal_id: str = support.LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None,
+        expected_actor_revision: int | None = None,
+        branch_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Consume one owned Eyebright dose and update one exact Sight Rot instance."""
+        self.access.require_campaign(campaign_id, principal_id, roles=support.CAMPAIGN_DM_ROLES)
+        self.require_write_contract(expected_revision, idempotency_key)
+        if (
+            isinstance(expected_actor_revision, bool)
+            or not isinstance(expected_actor_revision, int)
+            or expected_actor_revision < 0
+        ):
+            raise ValueError("expected_actor_revision is required for Eyebright application")
+        resolved_branch_id = self.require_current_branch(campaign_id, branch_id)
+        payload = {
+            "actor_id": actor_id,
+            "disease_effect_id": disease_effect_id,
+            "ointment_item_id": ointment_item_id,
+            "expected_actor_revision": expected_actor_revision,
+            "branch_id": resolved_branch_id,
+        }
+        scope = (
+            f"character-disease-eyebright-apply:{campaign_id}:"
+            f"{resolved_branch_id}:{principal_id}"
+        )
+        replay = self.replay_idempotent(scope, idempotency_key, payload)
+        if replay is not None:
+            return replay
+        campaign = self.campaigns.get(campaign_id)
+        if campaign.revision != expected_revision:
+            raise ValueError(
+                "campaign revision conflict: "
+                f"expected {expected_revision}, found {campaign.revision}"
+            )
+        if self.campaign_rules_edition(campaign_id) != "2014":
+            raise support.CombatEngineError("Eyebright disease treatment requires a 2014 campaign")
+        actor = self.require_campaign_actor(campaign_id, actor_id)
+        if actor.revision != expected_actor_revision:
+            raise ValueError(
+                "actor revision conflict: "
+                f"expected {expected_actor_revision}, found {actor.revision}"
+            )
+        if str(actor.sheet.get("edition") or "") != "2014":
+            raise support.CombatEngineError("Eyebright disease treatment requires a 2014 actor")
+        sheet = support.deepcopy(actor.sheet)
+        ointment = next(
+            (
+                item
+                for item in sheet.get("inventory", {}).get("items", [])
+                if str(item.get("id") or "") == str(ointment_item_id)
+            ),
+            None,
+        )
+        if (
+            ointment is None
+            or ointment.get("kind") != "consumable"
+            or ointment.get("source_key") != EYEBRIGHT_OINTMENT_SOURCE_KEY
+            or ointment.get("name") != EYEBRIGHT_OINTMENT_NAME
+            or int(ointment.get("quantity", 0) or 0) < 1
+        ):
+            raise support.CombatEngineError(
+                "ointment_item_id must identify an owned source-bound Eyebright dose"
+            )
+        effect = next(
+            (
+                item
+                for item in sheet.get("effects", [])
+                if str(item.get("id") or "") == str(disease_effect_id)
+            ),
+            None,
+        )
+        disease_state = _disease_effect_state(effect or {})
+        if (
+            disease_state is None
+            or not disease_state.get("active")
+            or disease_state.get("disease_id") != "sight_rot"
+        ):
+            raise support.CombatEngineError("selected disease effect is not active Sight Rot")
+        try:
+            transition = apply_sight_rot_ointment(disease_state, doses=1)
+            sheet, consumed = support.remove_inventory_item(sheet, str(ointment_item_id), 1)
+        except ValueError as error:
+            raise support.CombatEngineError(str(error)) from error
+        effect = next(
+            item
+            for item in sheet.get("effects", [])
+            if str(item.get("id") or "") == str(disease_effect_id)
+        )
+        effect.setdefault("metadata", {})["disease_state"] = transition["state"]
+        if not transition["state"].get("active"):
+            effect["active"] = False
+            effect["ended_reason"] = "cured_by_eyebright_ointment"
+        sheet = support.validate_character_sheet(sheet)
+        target_update = support.CharacterStateUpdate(
+            character_id=actor.id,
+            sheet=sheet,
+            notes=support.validate_character_notes(actor.notes),
+            expected_revision=actor.revision,
+        )
+        state = support.validate_party_state(support.deepcopy(campaign.state or {}))
+        rules = self.effective_rule_context(
+            campaign_id,
+            branch_id=resolved_branch_id,
+            facts={
+                "actor_id": actor_id,
+                "disease_id": "sight_rot",
+                "disease_effect_id": disease_effect_id,
+                "ointment_item_id": ointment_item_id,
+                "dose_count": 1,
+            },
+        )
+        receipt = {
+            "mechanic_id": "dnd5e.core.gamemastering.disease.sight_rot.2014",
+            "event": "character.disease.eyebright_apply",
+            "operations": [
+                {
+                    "op": "inventory.consume",
+                    "item_id": str(ointment_item_id),
+                    "quantity": 1,
+                }
+            ],
+            "citations": [{"source": DISEASE_SOURCE_REF, "edition": "2014"}],
+            "ruleset_fingerprint": rules.fingerprint,
+            "facts": {
+                "actor_id": actor_id,
+                "disease_effect_id": disease_effect_id,
+                "ointment_item_id": ointment_item_id,
+                "dose_count": 1,
+                "total_doses_applied": transition["state"]["ointment_doses_applied"],
+            },
+        }
+        result = {
+            "status": "committed",
+            "disease_id": "sight_rot",
+            "disease_effect_id": disease_effect_id,
+            "ointment_item_id": ointment_item_id,
+            "consumed": consumed,
+            "disease_state": transition["state"],
+            "events": transition["events"],
+        }
+        resolution_id = f"resolution-{support.uuid4().hex}"
+        state["resolution_log"] = [
+            *list(state.get("resolution_log") or []),
+            {
+                "id": resolution_id,
+                "thread_id": resolution_id,
+                "event_sequence": 1,
+                "type": "disease_eyebright_apply",
+                "operation": "character.disease.eyebright_apply",
+                "actor_id": actor_id,
+                "audience": {
+                    "scope": "actors",
+                    "actor_refs": [actor_id],
+                    "disclosure": "private",
+                },
+                "branch_id": resolved_branch_id,
+                "campaign_revision": campaign.revision + 1,
+                "result": result,
+            },
+        ][-100:]
+        return self.commit_campaign_state(
+            campaign,
+            state,
+            operation="character.disease.eyebright_apply",
+            principal_id=principal_id,
+            branch_id=resolved_branch_id,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=payload,
+            response_fields={
+                "status": "committed",
+                "resolution_id": resolution_id,
+                "result": result,
+                "rule_receipts": [receipt],
+            },
+            character_updates=[target_update],
+            rule_receipts=[receipt],
+            expected_campaign_revision=expected_revision,
+        )
 
     def character_disease_stress(
         self,

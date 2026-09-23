@@ -14,6 +14,8 @@ from sagasmith_dnd.diseases import (
     resolve_cackle_stress,
     resolve_long_rest,
     resolve_sewer_plague_rest_exhaustion,
+    sewer_plague_hit_die_healing,
+    sight_rot_ability_check_penalty,
     sight_rot_attack_penalty,
 )
 
@@ -333,6 +335,17 @@ def test_sewer_exhaustion_order_applies_ordinary_recovery_before_disease_delta_a
     )
 
 
+def test_sewer_plague_halves_normal_hit_die_healing_before_hp_cap():
+    healing = sewer_plague_hit_die_healing(
+        [{"total": 4}, {"total": 4}], constitution_modifier=1
+    )
+    assert healing == {"normal_hit_die_healing": 10, "disease_hit_die_healing": 5}
+    negative_modifier = sewer_plague_hit_die_healing(
+        [{"total": 1}, {"total": 1}], constitution_modifier=-2
+    )
+    assert negative_modifier == {"normal_hit_die_healing": 0, "disease_hit_die_healing": 0}
+
+
 def test_sight_rot_ointment_prevents_one_rest_and_three_doses_cure_without_restoring_blindness():
     state = infection_state("sight_rot", actor_id="actor-1", elapsed_ticks=0, save_succeeded=False)
     state = advance_disease_clock(state, elapsed_ticks=14400)
@@ -349,6 +362,8 @@ def test_sight_rot_ointment_prevents_one_rest_and_three_doses_cure_without_resto
         "rest_worsening_prevented",
         "disease_cured",
     }
+    with pytest.raises(DiseaseError, match="extra doses are not consumed"):
+        apply_sight_rot_ointment(rested["state"], doses=3)
     magic_cure = cure_disease(cured["state"], disease_id="sight_rot")
     assert magic_cure["state"]["blindness_owned"] is True
     assert any(event["kind"] == "blindness_restoration_required" for event in magic_cure["events"])
@@ -361,12 +376,16 @@ def test_sight_rot_long_rest_needs_no_save_and_ointment_can_be_pre_symptom():
     assert rested["state"]["sight_penalty"] == 0
 
 
-def test_sight_rot_attack_penalty_is_disease_owned_and_only_active_during_symptoms():
+def test_sight_rot_penalty_is_attack_and_contextual_sight_check_only():
     state = infection_state("sight_rot", actor_id="actor-1", elapsed_ticks=0, save_succeeded=False)
     assert sight_rot_attack_penalty(state) == 0
     state = advance_disease_clock(state, elapsed_ticks=14400)
     state["sight_penalty"] = 3
     assert sight_rot_attack_penalty(state) == -3
+    assert sight_rot_ability_check_penalty(state, relies_on_sight=True) == -3
+    assert sight_rot_ability_check_penalty(state, relies_on_sight=False) == 0
+    with pytest.raises(DiseaseError, match="resolved check context"):
+        sight_rot_ability_check_penalty(state, relies_on_sight="caller says so")
     sheet = default_character_sheet()
     sheet["effects"].append(
         {
@@ -381,17 +400,12 @@ def test_sight_rot_attack_penalty_is_disease_owned_and_only_active_during_sympto
                     "mode": "add",
                     "value": sight_rot_attack_penalty(state),
                 },
-                {
-                    "path": "rolls.ability_check.bonus",
-                    "mode": "add",
-                    "value": sight_rot_attack_penalty(state),
-                },
             ],
             "metadata": {"disease_state": state},
         }
     )
     assert active_effect_roll_bonus(sheet, "attack") == -3
-    assert active_effect_roll_bonus(sheet, "ability") == -3
+    assert active_effect_roll_bonus(sheet, "ability") == 0
     state = apply_sight_rot_ointment(state, doses=3)["state"]
     assert sight_rot_attack_penalty(state) == 0
 

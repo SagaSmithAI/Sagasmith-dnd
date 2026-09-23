@@ -393,15 +393,15 @@ def test_grid_2014_light_sources_are_source_receipted_and_survive_restart(
                 {
                     "positioning_mode": "grid",
                     "battle_map": {
-                        "width_cells": 7,
+                        "width_cells": 14,
                         "height_cells": 2,
                         "ambient_illumination": "dark",
                         "light_sources": [
                             {
                                 "id": "torch-1",
                                 "position": {"x": 0, "y": 0},
-                                "bright_radius_ft": 0,
-                                "dim_radius_ft": 5,
+                                "bright_radius_ft": 20,
+                                "dim_radius_ft": 40,
                                 "source_ref": (
                                     "bundled:srd2014/04_Equipment/Adventuring_Gear.md#Torch"
                                 ),
@@ -428,32 +428,32 @@ def test_grid_2014_light_sources_are_source_receipted_and_survive_restart(
                         {
                             "actor_id": lit_attacker["id"],
                             "initiative": 30,
-                            "position": {"x": 0, "y": 0},
+                            "position": {"x": 4, "y": 0},
                         },
                         {
                             "actor_id": lit_target["id"],
                             "initiative": 29,
-                            "position": {"x": 1, "y": 0},
+                            "position": {"x": 5, "y": 0},
                         },
                         {
                             "actor_id": dark_attacker["id"],
                             "initiative": 28,
-                            "position": {"x": 2, "y": 0},
+                            "position": {"x": 10, "y": 0},
                         },
                         {
                             "actor_id": dark_target["id"],
                             "initiative": 27,
-                            "position": {"x": 3, "y": 0},
+                            "position": {"x": 11, "y": 0},
                         },
                         {
                             "actor_id": darkvision_attacker["id"],
                             "initiative": 26,
-                            "position": {"x": 4, "y": 0},
+                            "position": {"x": 12, "y": 0},
                         },
                         {
                             "actor_id": darkvision_target["id"],
                             "initiative": 25,
-                            "position": {"x": 5, "y": 0},
+                            "position": {"x": 13, "y": 0},
                         },
                     ],
                     "expected_revision": campaign_state["revision"],

@@ -88,7 +88,7 @@ _SRD_TRAPS: dict[str, dict[str, Any]] = {
             "half_on_success": True,
             "dispel_magic_dc": 13,
         },
-        "settlement": "unsupported_area_effect",
+        "settlement": "supported_confirmed_area_save_damage",
     },
     "srd5.1.simple_pit": {
         "name": "Simple Pit",
@@ -96,7 +96,7 @@ _SRD_TRAPS: dict[str, dict[str, Any]] = {
         "disable": None,
         "bypass_methods": ["avoid_pit"],
         "trigger": {"kind": "fall", "depth_ft": "source_defined", "save": None},
-        "settlement": "unsupported_variable_fall",
+        "settlement": "supported_confirmed_source_depth_fall",
     },
     "srd5.1.hidden_pit": {
         "name": "Hidden Pit",
@@ -110,7 +110,7 @@ _SRD_TRAPS: dict[str, dict[str, Any]] = {
         "disable": None,
         "bypass_methods": ["wedge_cover"],
         "trigger": {"kind": "fall", "depth_ft": [10, 20], "save": None},
-        "settlement": "unsupported_variable_fall",
+        "settlement": "supported_confirmed_source_depth_fall",
     },
     "srd5.1.locking_pit": {
         "name": "Locking Pit",
@@ -129,7 +129,7 @@ _SRD_TRAPS: dict[str, dict[str, Any]] = {
         },
         "bypass_methods": ["wedge_cover"],
         "trigger": {"kind": "fall_and_contain", "depth_ft": [10, 20], "escape_strength_dc": 20},
-        "settlement": "unsupported_variable_fall_and_containment",
+        "settlement": "supported_confirmed_depth_fall_and_containment_escape",
     },
     "srd5.1.spiked_simple_pit": {
         "name": "Spiked Simple Pit",
@@ -142,7 +142,7 @@ _SRD_TRAPS: dict[str, dict[str, Any]] = {
             "spike_damage_type": "piercing",
             "depth_ft": "source_defined",
         },
-        "settlement": "unsupported_variable_fall",
+        "settlement": "supported_confirmed_source_depth_fall_and_spike_damage",
     },
     "srd5.1.spiked_hidden_pit": {
         "name": "Spiked Hidden Pit",
@@ -161,7 +161,7 @@ _SRD_TRAPS: dict[str, dict[str, Any]] = {
             "spike_damage_type": "piercing",
             "depth_ft": [10, 20],
         },
-        "settlement": "unsupported_variable_fall",
+        "settlement": "supported_confirmed_source_depth_fall_and_spike_damage",
     },
     "srd5.1.spiked_locking_pit": {
         "name": "Spiked Locking Pit",
@@ -186,7 +186,7 @@ _SRD_TRAPS: dict[str, dict[str, Any]] = {
             "depth_ft": [10, 20],
             "escape_strength_dc": 20,
         },
-        "settlement": "unsupported_variable_fall_and_containment",
+        "settlement": "supported_confirmed_depth_fall_spike_damage_and_containment_escape",
     },
     "srd5.1.poisoned_spiked_simple_pit": {
         "name": "Poisoned Spiked Simple Pit",
@@ -204,7 +204,7 @@ _SRD_TRAPS: dict[str, dict[str, Any]] = {
             "poison_half_on_success": True,
             "depth_ft": "source_defined",
         },
-        "settlement": "unsupported_variable_fall_and_poison_damage",
+        "settlement": "supported_confirmed_source_depth_fall_spikes_and_poison_save",
     },
     "srd5.1.poisoned_spiked_hidden_pit": {
         "name": "Poisoned Spiked Hidden Pit",
@@ -225,7 +225,7 @@ _SRD_TRAPS: dict[str, dict[str, Any]] = {
             "poison_half_on_success": True,
             "depth_ft": [10, 20],
         },
-        "settlement": "unsupported_variable_fall_and_poison_damage",
+        "settlement": "supported_confirmed_depth_fall_spikes_and_poison_save",
     },
     "srd5.1.poisoned_spiked_locking_pit": {
         "name": "Poisoned Spiked Locking Pit",
@@ -252,7 +252,7 @@ _SRD_TRAPS: dict[str, dict[str, Any]] = {
             "depth_ft": [10, 20],
             "escape_strength_dc": 20,
         },
-        "settlement": "unsupported_variable_fall_containment_and_poison_damage",
+        "settlement": "supported_confirmed_depth_fall_spikes_poison_and_containment_escape",
     },
     "srd5.1.poison_darts": {
         "name": "Poison Darts",
@@ -287,7 +287,12 @@ _SRD_TRAPS: dict[str, dict[str, Any]] = {
             "passive_dc": None,
             "requires_inspect_lock": True,
         },
-        "disable": {"ability": "dexterity", "dc": 15, "tool": "thieves_tools"},
+        "disable": {
+            "ability": "dexterity",
+            "dc": 15,
+            "tool": "thieves_tools",
+            "failed_check": "trigger",
+        },
         "bypass_methods": ["use_proper_key"],
         "trigger": {
             "kind": "single_target_damage_condition",
@@ -348,7 +353,10 @@ def build_poison_needle_condition_effect(
     source = str(source_ref or "").strip()
     instance_id = str(trap_id or "").strip()
     target_id = str(target_actor_id or "").strip()
-    if not source or len(source) > 300:
+    # Runtime passes the verified, canonical module/scene/chunk source identity,
+    # which is larger than a short citation URL. Keep the bound generous enough
+    # for that stable JSON reference while still limiting persisted effect size.
+    if not source or len(source) > 8192:
         raise ValueError("Poison Needle condition requires a bounded exact source reference")
     if not instance_id or len(instance_id) > 200:
         raise ValueError("Poison Needle condition requires a bounded trap id")
@@ -356,11 +364,14 @@ def build_poison_needle_condition_effect(
         raise ValueError("Poison Needle condition requires a bounded target actor id")
     identity = "\0".join((source, instance_id, target_id)).encode("utf-8")
     effect_id = f"trap-poison-needle:{hashlib.sha256(identity).hexdigest()[:32]}"
+    source_label = f"trap-poison-needle:{hashlib.sha256(source.encode('utf-8')).hexdigest()[:24]}"
     return {
         "id": effect_id,
         "name": "Poison Needle",
         "kind": "poison",
-        "source": source,
+        # Character effect source labels are intentionally short. The complete
+        # source identity remains in trap_state metadata for audit and cleanup.
+        "source": source_label,
         "active": True,
         "concentration": False,
         "duration": {"period": "hour", "remaining": 1},
@@ -417,6 +428,30 @@ def source_trap_profile(profile: Any, source_excerpt: Any) -> dict[str, Any]:
     return {"profile_id": profile_id, **deepcopy(_SRD_TRAPS[profile_id])}
 
 
+def validate_source_pit_depth(profile: Any, depth_ft: Any) -> int:
+    """Validate a scene-confirmed pit dimension against its selected SRD profile."""
+    if not isinstance(profile, dict):
+        raise ValueError("source-bound pit profile is required")
+    if profile.get("profile_id") not in {
+        "srd5.1.simple_pit",
+        "srd5.1.hidden_pit",
+        "srd5.1.spiked_simple_pit",
+        "srd5.1.spiked_hidden_pit",
+        "srd5.1.poisoned_spiked_simple_pit",
+        "srd5.1.poisoned_spiked_hidden_pit",
+        "srd5.1.locking_pit",
+        "srd5.1.spiked_locking_pit",
+        "srd5.1.poisoned_spiked_locking_pit",
+    }:
+        raise ValueError("pit depth is accepted only for supported source-bound pit profiles")
+    if isinstance(depth_ft, bool) or not isinstance(depth_ft, int) or depth_ft <= 0:
+        raise ValueError("pit depth must be a positive integer scene dimension in feet")
+    declared = dict(profile.get("trigger") or {}).get("depth_ft")
+    if isinstance(declared, list) and depth_ft not in declared:
+        raise ValueError("pit depth is outside the fixed source profile")
+    return depth_ft
+
+
 def transition_trap_state(
     state: dict[str, Any],
     *,
@@ -425,6 +460,9 @@ def transition_trap_state(
     action: str,
     success: bool | None = None,
     actor_id: str | None = None,
+    contained_actor_ids: list[str] | None = None,
+    destroyed_object_id: str | None = None,
+    destroyed_hit_points: int | None = None,
 ) -> dict[str, Any]:
     """Apply an explicit, source-bound trap lifecycle transition."""
     if not isinstance(state, dict):
@@ -433,7 +471,15 @@ def transition_trap_state(
         raise ValueError("trap source_ref is required")
     if not isinstance(trap_id, str) or not trap_id.strip():
         raise ValueError("trap_id is required")
-    if action not in {"detect", "disable", "bypass", "trigger", "settle", "escape"}:
+    if action not in {
+        "detect",
+        "disable",
+        "bypass",
+        "trigger",
+        "settle",
+        "escape",
+        "destroy_object",
+    }:
         raise ValueError("unsupported trap action")
     if action in {"disable", "bypass"} and type(success) is not bool:
         raise ValueError("disable and bypass require an engine-resolved success value")
@@ -443,6 +489,23 @@ def transition_trap_state(
         raise ValueError("escape requires a trapped actor id")
     if action != "escape" and actor_id is not None:
         raise ValueError("actor_id is accepted only for trap escape")
+    if action == "destroy_object":
+        if not isinstance(destroyed_object_id, str) or not destroyed_object_id.strip():
+            raise ValueError("destroy_object requires a destroyed object id")
+        if destroyed_hit_points != 0:
+            raise ValueError("destroy_object requires zero authoritative remaining hit points")
+    elif destroyed_object_id is not None or destroyed_hit_points is not None:
+        raise ValueError("destroyed object facts are accepted only for destroy_object")
+    if contained_actor_ids is not None:
+        if action != "trigger":
+            raise ValueError("contained_actor_ids are accepted only when a trap triggers")
+        if (
+            not isinstance(contained_actor_ids, list)
+            or not contained_actor_ids
+            or any(not isinstance(item, str) or not item.strip() for item in contained_actor_ids)
+            or len(set(contained_actor_ids)) != len(contained_actor_ids)
+        ):
+            raise ValueError("contained_actor_ids must be distinct non-empty actor ids")
 
     result = {**state}
     instances = dict(result.get("traps") or {})
@@ -473,14 +536,38 @@ def transition_trap_state(
         if status != "armed":
             raise ValueError("only an armed trap can trigger")
         current["status"] = "triggered"
+        if contained_actor_ids is not None:
+            current["contained_actor_ids"] = list(contained_actor_ids)
     elif action == "escape":
         if status != "triggered":
             raise ValueError("only a triggered trap can be escaped")
+        contained = list(current.get("contained_actor_ids") or [])
         restrained = list(current.get("restrained_actor_ids") or [])
-        if actor_id not in restrained:
+        if actor_id in contained:
+            contained.remove(actor_id)
+            current["contained_actor_ids"] = contained
+            if not contained:
+                current["status"] = "spent"
+        elif actor_id in restrained:
+            restrained.remove(actor_id)
+            current["restrained_actor_ids"] = restrained
+        else:
             raise ValueError("actor is not restrained by this trap")
-        current["restrained_actor_ids"] = [item for item in restrained if item != actor_id]
         current["last_escaped_actor_id"] = actor_id
+    elif action == "destroy_object":
+        if status != "triggered":
+            raise ValueError("only a triggered trap can be released by object destruction")
+        if current.get("profile_id") != "srd5.1.falling_net":
+            raise ValueError("object destruction release is supported only for Falling Net")
+        if current.get("object_id") != destroyed_object_id:
+            raise ValueError("destroyed object is not the source-bound Falling Net")
+        restrained = list(current.get("restrained_actor_ids") or [])
+        current["status"] = "spent"
+        current["restrained_actor_ids"] = []
+        current["trap_added_restrained_actor_ids"] = []
+        current["released_actor_ids"] = restrained
+        current["object_destroyed"] = True
+        current["object_hit_points"] = 0
     elif action == "settle":
         if status != "triggered":
             raise ValueError("only a triggered trap can settle")

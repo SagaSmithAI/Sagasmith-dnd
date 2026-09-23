@@ -73,12 +73,14 @@ ACTION_PAYLOADS: dict[str, dict[str, type[Payload]]] = {
             kind=(Literal["ability", "check", "save", "death_save"], ...),
             ability=(str, ...), dc=(int, 0), proficient=(bool, False), bonus=(int, 0),
             advantage=(bool, False), disadvantage=(bool, False),
+            relies_on_sight=_optional(bool),
             rule_facts=_optional(dict[str, Any]),
         ),
         "group": _payload(
             "CharacterGroupCheck", actor_ids=(list[Identifier], ...),
             ability=(str, ...), dc=(int, ...), proficient=(bool, False), bonus=(int, 0),
             advantage=(bool, False), disadvantage=(bool, False),
+            relies_on_sight=_optional(bool),
             rule_facts=_optional(dict[str, Any]),
         ),
         "contest": _payload(

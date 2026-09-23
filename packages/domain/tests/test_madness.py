@@ -34,6 +34,12 @@ def test_madness_durations_and_conditional_long_term_result() -> None:
     assert long["runtime_effect"]["duration"] == {"period": "hour", "remaining": 70}
     assert blind["mechanics"]["condition"] == "blinded"
     assert deaf["mechanics"]["condition"] == "deafened"
+    assert blind["runtime_effect"]["changes"] == [
+        {"path": "conditions", "mode": "add", "value": "blinded"}
+    ]
+    assert deaf["runtime_effect"]["changes"] == [
+        {"path": "conditions", "mode": "add", "value": "deafened"}
+    ]
 
 
 @pytest.mark.parametrize(
@@ -179,6 +185,39 @@ def test_table_effects_validate_as_source_owned_character_effects() -> None:
     ]
 
 
+@pytest.mark.parametrize(("conditional_roll", "condition"), [(25, "blinded"), (26, "deafened")])
+def test_long_term_sensory_madness_projects_selected_condition(
+    conditional_roll: int, condition: str
+) -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2014"
+    effect = madness.resolve_madness(
+        "long_term", 56, duration_die=1, conditional_d100=conditional_roll
+    )["runtime_effect"]
+    effect.update({"id": f"sensory-madness-{condition}", "name": "Sensory Madness"})
+
+    affected, _ = add_effect(sheet, effect)
+
+    assert condition in affected["conditions"]
+    assert effect["changes"] == [
+        {"path": "conditions", "mode": "add", "value": condition}
+    ]
+
+
+def test_spellcasting_restriction_is_source_owned_and_respects_suppression() -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2014"
+    effect = madness.resolve_madness("short_term", 41, duration_die=2)["runtime_effect"]
+    effect.update({"id": "babbling", "name": "Babbling Madness"})
+    sheet, _ = add_effect(sheet, effect)
+
+    assert madness.spellcasting_prohibited_effect_ids(sheet) == ["babbling"]
+    suppressed = madness.suppress_madness_effect(
+        sheet, effect_id="babbling", started_elapsed_ticks=0
+    )
+    assert madness.spellcasting_prohibited_effect_ids(suppressed) == []
+
+
 def test_damage_triggered_confusion_requires_actual_damage_and_exact_source_effect() -> None:
     sheet = default_character_sheet()
     sheet["edition"] = "2014"
@@ -262,6 +301,28 @@ def test_confusion_turn_table_maps_all_boundaries(roll: int, outcome: str) -> No
 def test_confusion_turn_table_rejects_unowned_rolls(roll: int) -> None:
     with pytest.raises(madness.MadnessError, match="d10"):
         madness.resolve_confusion_turn(roll)
+
+
+def test_nearest_creature_ties_are_all_legal_and_confusion_target_uses_engine_index() -> None:
+    assert madness.nearest_creature_ids({"near-b": 10, "far": 15, "near-a": 10}) == [
+        "near-a",
+        "near-b",
+    ]
+    assert madness.nearest_creature_ids({}) == []
+    assert madness.choose_confusion_random_target(["target-a", "target-b"], 2) == "target-b"
+
+
+def test_confusion_direction_map_requires_explicit_eight_face_grid_vectors() -> None:
+    directions = {
+        str(face): {"dx": 1 if face % 2 else -1, "dy": 0 if face < 5 else 1}
+        for face in range(1, 9)
+    }
+    assert madness.validate_confusion_direction_map(directions) == directions
+    with pytest.raises(madness.MadnessError, match="faces 1 through 8"):
+        madness.validate_confusion_direction_map({"1": {"dx": 1, "dy": 0}})
+    invalid = {**directions, "8": {"dx": 0, "dy": 0}}
+    with pytest.raises(madness.MadnessError, match="one-cell Grid vectors"):
+        madness.validate_confusion_direction_map(invalid)
 
 
 def test_calm_emotions_suppression_keeps_duration_and_resumes_at_campaign_deadline() -> None:

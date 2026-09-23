@@ -21,7 +21,8 @@ def _key(value: str) -> str:
 def resolve_working_together(
     actors: list[dict[str, Any]], *, ability: str, dc: int, task: dict[str, Any],
     leader_id: str | None = None, skill_ability: str | None = None, tool: str | None = None,
-    rules_by_actor_id: dict[str, ResolutionContext] | None = None, rng: Any = None,
+    rules_by_actor_id: dict[str, ResolutionContext] | None = None,
+    check_bonus_adjustments: dict[str, int] | None = None, rng: Any = None,
 ) -> dict[str, Any]:
     """The DM classifies a sourced task; no caller may supply actor eligibility."""
     identifiers = [actor.get("id") for actor in actors]
@@ -37,6 +38,15 @@ def resolve_working_together(
     if tool is not None and (not isinstance(tool, str) or not tool.strip()
                              or ability not in ABILITY_NAMES):
         raise CombatEngineError("tool checks require one tool and a base ability")
+    if check_bonus_adjustments is not None and not isinstance(check_bonus_adjustments, dict):
+        raise CombatEngineError("working together check bonus adjustments must be an actor map")
+    adjustments = dict(check_bonus_adjustments or {})
+    if set(adjustments) - set(identifiers) or any(
+        not isinstance(key, str) or type(value) is not int for key, value in adjustments.items()
+    ):
+        raise CombatEngineError(
+            "working together check bonus adjustments must be actor-bound integers"
+        )
     if type(dc) is not int or not 0 <= dc <= 100:
         raise CombatEngineError("working together requires an integer dc from 0 to 100")
     if task.get("productive") is not True:
@@ -114,7 +124,8 @@ def resolve_working_together(
     result = resolve_actor_check(
         leader, kind="check", ability=ability, skill_ability=skill_ability,
         dc=dc, advantage=True, proficient=tool_proficient,
-        bonus=proficiency_bonus(cards[leader_id]["progression"]["level"]) if tool_expertise else 0,
+        bonus=(proficiency_bonus(cards[leader_id]["progression"]["level"]) if tool_expertise else 0)
+        + adjustments.get(leader_id, 0),
         rules=rules, rng=rng,
     )
     result["rule_receipts"] = [*result["rule_receipts"], *core_receipts(

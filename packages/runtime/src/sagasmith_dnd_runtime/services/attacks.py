@@ -927,6 +927,12 @@ class AttacksService:
                     facts={"actor_id": actor_id, "target_id": target_id, "kind": "attack"},
                 ),
             )
+            self.require_madness_attack_target(
+                encounter,
+                actor_id,
+                target_id,
+                attack_mode=str(plan.get("attack_mode") or "melee"),
+            )
             _support.pay_attack_action(
                 encounter,
                 attacker,
@@ -1120,6 +1126,7 @@ class AttacksService:
             )
         _, encounter = self.active_encounter(campaign_id)
         self.require_mounted_action(encounter, actor_id, "attack")
+        self.require_madness_attack_target(encounter, actor_id, target_id)
         if spell_release:
             encounter = spell_release["encounter"]
         encounter, protection_accepted = protection.resume(encounter, protection_binding)
@@ -1363,6 +1370,12 @@ class AttacksService:
                     action=action_payload,
                     encounter=encounter,
                     rules=rule_context,
+                )
+                self.require_madness_attack_target(
+                    encounter,
+                    actor_id,
+                    target_id,
+                    attack_mode=str(plan.get("attack_mode") or "melee"),
                 )
                 weapon_id = str(plan.get("weapon_id") or "")
                 item_card = next(
@@ -2780,6 +2793,7 @@ class AttacksService:
                     idempotency_key,
                 )
         _, encounter = self.active_encounter(campaign_id)
+        self.require_madness_reaction(actor_id)
         window = next(
             (item for item in encounter.get("pending", []) if item.get("id") == choice_id),
             None,
@@ -2842,6 +2856,7 @@ class AttacksService:
             else "dnd5e.core.mcp.opportunity_melee_only"
         )
         reacting = next(a for a in encounter["combatants"] if a["actor_id"] == actor_id)
+        self.require_madness_reaction(actor_id)
         if int(reacting.get("turn_budget", {}).get("reaction", 0)) < 1:
             raise _support.CombatEngineError("actor has no reaction remaining")
         self.require_campaign_actor(campaign_id, target_id)
@@ -3235,6 +3250,7 @@ class AttacksService:
         if replay is not None:
             return self.combat_response(campaign_id, principal_id, replay)
         campaign, encounter = self.active_encounter(campaign_id)
+        self.require_madness_reaction(actor_id)
         if campaign.revision != expected_revision:
             raise ValueError(
                 "campaign revision conflict: "
@@ -3744,6 +3760,7 @@ class AttacksService:
         misses underwater. No coordinates are inferred from the source.
         """
         from sagasmith_dnd.objects import object_attack_plan, resolve_object_attack
+        from sagasmith_dnd.traps import transition_trap_state
 
         from .source_objects import approved_attack_context, approved_profile, project_response
 
@@ -3817,6 +3834,30 @@ class AttacksService:
                 "campaign revision conflict: "
                 f"expected {expected_campaign_revision}, found {campaign.revision}"
             )
+        if _support.active_random_stream() is None:
+            with self.campaign_random_context(
+                campaign_id,
+                "character.source_object.attack",
+                {"idempotency_key": idempotency_key},
+            ):
+                return self.character_source_object_attack(
+                    character_id,
+                    object_state,
+                    weapon_id,
+                    source_ref,
+                    reason,
+                    advantage=advantage,
+                    disadvantage=disadvantage,
+                    principal_id=principal_id,
+                    expected_revision=expected_revision,
+                    expected_campaign_revision=expected_campaign_revision,
+                    idempotency_key=idempotency_key,
+                    object_ruling=object_ruling,
+                    attack_ruling=attack_ruling,
+                    sunlight=sunlight,
+                    weapon_grip=weapon_grip,
+                    use_great_weapon_fighting=use_great_weapon_fighting,
+                )
 
         attacker = self.combat_actor_snapshot(character_id)
         scene_objects = _support.deepcopy(dict(campaign.state.get("scene_objects") or {}))
@@ -3942,9 +3983,101 @@ class AttacksService:
                 "context_approval": context_approval,
             },
         }
+        next_campaign_state = _support.deepcopy(dict(campaign.state or {}))
+        trap_state = _support.deepcopy(dict(next_campaign_state.get("trap_state") or {}))
+        trap_instances = dict(trap_state.get("traps") or {})
+        bound_net = trap_instances.get(object_id)
+        net_released_actors: list[str] = []
+        character_updates: list[Any] = []
+        if isinstance(bound_net, dict) and bound_net.get("profile_id") == "srd5.1.falling_net":
+            net_source_ref = _support.canonical_json(exact_source)
+            if (
+                bound_net.get("object_id") != object_id
+                or bound_net.get("scene_id") != scene_id
+                or bound_net.get("source_ref") != net_source_ref
+                or bound_net.get("status") != "triggered"
+            ):
+                raise _support.CombatEngineError(
+                    "Falling Net object attack does not match its triggered source and scene"
+                )
+            if (
+                profile["armor_class"] != 10
+                or profile["hit_points"] != 20
+                or profile["damage_filter"]["allowed_damage_types"] != ["slashing"]
+            ):
+                raise _support.CombatEngineError(
+                    "Falling Net object profile must preserve source AC 10, HP 20, "
+                    "and slashing-only damage"
+                )
+            if object_after["destroyed"]:
+                attack_facts = dict(object_after.get("last_attack") or {})
+                attack_result = dict(attack_facts.get("attack") or {})
+                damage_result = dict(attack_facts.get("damage") or {})
+                damage_parts = list(damage_result.get("parts") or [])
+                if (
+                    attack_result.get("hit") is not True
+                    or damage_result.get("hit_points_after") != 0
+                    or damage_result.get("applied_amount", 0) <= 0
+                    or "slashing" not in {
+                        str(item.get("damage_type"))
+                        for item in damage_parts
+                        if item.get("adjusted_amount", 0) > 0
+                    }
+                ):
+                    raise _support.CombatEngineError(
+                        "Falling Net release requires a source-bound successful "
+                        "slashing object attack"
+                    )
+                old_restrained_ids = list(bound_net.get("restrained_actor_ids") or [])
+                added_restrained_ids = set(
+                    bound_net.get("trap_added_restrained_actor_ids") or []
+                )
+                trap_state = transition_trap_state(
+                    trap_state,
+                    source_ref=net_source_ref,
+                    trap_id=object_id,
+                    action="destroy_object",
+                    destroyed_object_id=object_id,
+                    destroyed_hit_points=hit_points_after,
+                )
+                net_released_actors = old_restrained_ids
+                updated_character_sheets: dict[str, tuple[Any, dict[str, Any]]] = {
+                    character_id: (current, next_attacker_sheet)
+                }
+                for released_id in sorted(added_restrained_ids):
+                    if released_id not in old_restrained_ids:
+                        raise _support.CombatEngineError(
+                            "Falling Net added-restraint record does not match its "
+                            "restrained actors"
+                        )
+                    if released_id == character_id:
+                        released_sheet = next_attacker_sheet
+                    else:
+                        released_record = self.characters.get(released_id)
+                        released_snapshot = self.combat_actor_snapshot(released_id)
+                        released_sheet = _support.deepcopy(released_snapshot["sheet"])
+                        updated_character_sheets[released_id] = (released_record, released_sheet)
+                    _support.apply_condition_change(
+                        released_sheet, condition_id="restrained", add=False
+                    )
+                for released_id, (released_record, released_sheet) in (
+                    updated_character_sheets.items()
+                ):
+                    if released_id == character_id:
+                        next_attacker_sheet = released_sheet
+                    else:
+                        character_updates.append(
+                            _support.CharacterStateUpdate(
+                                character_id=released_id,
+                                sheet=_support.validate_character_sheet(released_sheet),
+                                notes=_support.validate_character_notes(released_record.notes),
+                                expected_revision=released_record.revision,
+                            )
+                        )
+                trap_instances = dict(trap_state.get("traps") or {})
+                next_campaign_state["trap_state"] = trap_state
         scene_state[object_id] = object_after
         scene_objects[scene_id] = scene_state
-        next_campaign_state = _support.deepcopy(dict(campaign.state or {}))
         next_campaign_state["scene_objects"] = scene_objects
         next_campaign_state["resolution_log"] = [
             *list(next_campaign_state.get("resolution_log") or []),
@@ -3961,14 +4094,14 @@ class AttacksService:
         ][-100:]
         # Even a miss with no expenditure depends on this exact attacker card.
         # Keep its CAS in the same transaction as object HP and the RNG receipt.
-        character_updates = [
+        character_updates.append(
             _support.CharacterStateUpdate(
                 character_id=character_id,
                 sheet=_support.validate_character_sheet(next_attacker_sheet),
                 notes=_support.validate_character_notes(current.notes),
                 expected_revision=current.revision,
             )
-        ]
+        )
         updated_character = (
             _support.replace(
                 current,
@@ -3997,6 +4130,12 @@ class AttacksService:
                 "damage": settled.get("damage"),
                 "ammunition": ammunition,
                 "limited_use": limited_use,
+                **({"released_actors": net_released_actors} if net_released_actors else {}),
+                **(
+                    {"trap": trap_instances.get(object_id)}
+                    if net_released_actors
+                    else {}
+                ),
                 "campaign_revision": campaign.revision + 1,
                 "revisions": [_support.asdict(item) for item in revisions],
                 "rule_receipts": object_receipts,

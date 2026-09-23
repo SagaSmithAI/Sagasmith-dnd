@@ -190,6 +190,10 @@ def resolve_madness(
         ):
             raise MadnessError("this table result requires an engine-owned conditional d100")
         mechanics["condition"] = "blinded" if conditional_d100 <= 25 else "deafened"
+        # The table's subroll selects an actual condition, not just descriptive
+        # metadata. Keep the selected condition in the effect projection so the
+        # normal condition and recovery machinery can enforce it.
+        mechanics["conditions"] = [mechanics["condition"]]
         mechanics.pop("conditional_subroll", None)
     elif conditional_d100 is not None:
         raise MadnessError("conditional_d100 is only used by the 56-65 long-term result")
@@ -262,6 +266,45 @@ def damage_triggered_confusion_effect_ids(sheet: dict[str, Any]) -> list[str]:
     return [effect_id for effect_id in result if effect_id]
 
 
+def spellcasting_prohibited_effect_ids(sheet: dict[str, Any]) -> list[str]:
+    """Return active, unsuppressed 2014 madness effects that prohibit casting."""
+    result: list[str] = []
+    for effect in sheet.get("effects", []):
+        if (
+            not isinstance(effect, dict)
+            or effect.get("active") is not True
+            or effect.get("source") != SOURCE_REF
+        ):
+            continue
+        madness = dict(dict(effect.get("metadata") or {}).get("madness") or {})
+        if madness.get("suppression"):
+            continue
+        mechanics = dict(madness.get("mechanics") or {})
+        if mechanics.get("spellcasting") is False:
+            effect_id = str(effect.get("id") or "")
+            if effect_id:
+                result.append(effect_id)
+    return result
+
+
+def active_confusion_effect_ids(sheet: dict[str, Any]) -> list[str]:
+    """Return active source-owned madness effects that impose Confusion behavior."""
+    result: list[str] = []
+    for effect in sheet.get("effects", []):
+        if (
+            not isinstance(effect, dict)
+            or effect.get("kind") != "madness_confusion"
+            or effect.get("active") is not True
+            or effect.get("source") != SOURCE_REF
+            or not isinstance(dict(effect.get("metadata") or {}).get("madness_confusion"), dict)
+        ):
+            continue
+        effect_id = str(effect.get("id") or "")
+        if effect_id:
+            result.append(effect_id)
+    return result
+
+
 def resolve_confusion_turn(d10: int) -> dict[str, Any]:
     """Resolve the 2014 Confusion spell's turn table to a typed action constraint."""
     if isinstance(d10, bool) or not isinstance(d10, int) or not 1 <= d10 <= 10:
@@ -283,6 +326,65 @@ def resolve_confusion_turn(d10: int) -> dict[str, Any]:
         key = "act_normally"
         mechanics = {"movement": "normal", "action": "normal"}
     return {"roll": d10, "outcome": key, "mechanics": mechanics, "source_ref": SOURCE_REF}
+
+
+def nearest_creature_ids(distances_ft: dict[str, int]) -> list[str]:
+    """Return every creature tied for the shortest authoritative distance."""
+    normalized: dict[str, int] = {}
+    for actor_id, distance in distances_ft.items():
+        key = str(actor_id).strip()
+        if (
+            not key
+            or isinstance(distance, bool)
+            or not isinstance(distance, int)
+            or distance < 0
+        ):
+            raise MadnessError("nearest-creature distances require actor IDs and nonnegative feet")
+        normalized[key] = distance
+    if not normalized:
+        return []
+    nearest = min(normalized.values())
+    return sorted(actor_id for actor_id, distance in normalized.items() if distance == nearest)
+
+
+def choose_confusion_random_target(candidate_actor_ids: list[str], d_n: int) -> str:
+    """Select the engine-rolled index from an authoritative in-reach candidate list."""
+    candidates = [str(actor_id).strip() for actor_id in candidate_actor_ids]
+    if not candidates or any(not actor_id for actor_id in candidates):
+        raise MadnessError("random Confusion target requires nonempty actor IDs")
+    if len(candidates) != len(set(candidates)):
+        raise MadnessError("random Confusion target candidates must be unique")
+    if isinstance(d_n, bool) or not isinstance(d_n, int) or not 1 <= d_n <= len(candidates):
+        raise MadnessError("random Confusion target roll must select a candidate index")
+    return candidates[d_n - 1]
+
+
+def validate_confusion_direction_map(value: Any) -> dict[str, dict[str, int]]:
+    """Validate the DM-authored die-face vectors used by 2014 Confusion."""
+    if not isinstance(value, dict) or set(value) != {str(face) for face in range(1, 9)}:
+        raise MadnessError("Confusion direction map must assign a direction to faces 1 through 8")
+    allowed = {
+        (dx, dy)
+        for dx in (-1, 0, 1)
+        for dy in (-1, 0, 1)
+        if (dx, dy) != (0, 0)
+    }
+    result: dict[str, dict[str, int]] = {}
+    for face in range(1, 9):
+        direction = value[str(face)]
+        if not isinstance(direction, dict) or set(direction) != {"dx", "dy"}:
+            raise MadnessError("each Confusion direction must contain exactly dx and dy")
+        dx, dy = direction["dx"], direction["dy"]
+        if (
+            isinstance(dx, bool)
+            or not isinstance(dx, int)
+            or isinstance(dy, bool)
+            or not isinstance(dy, int)
+            or (dx, dy) not in allowed
+        ):
+            raise MadnessError("Confusion directions must be one-cell Grid vectors")
+        result[str(face)] = {"dx": dx, "dy": dy}
+    return result
 
 
 def apply_damage_triggered_confusion(

@@ -4,11 +4,12 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from sagasmith_dnd.character_schema import derive_character_sheet
+from sagasmith_dnd.character_schema import derive_character_sheet, effective_ability_modifier
 from sagasmith_dnd.diseases import (
     DISEASE_SOURCE_REF,
     advance_disease_clock,
     resolve_sewer_plague_rest_exhaustion,
+    sewer_plague_hit_die_healing,
     sight_rot_attack_penalty,
 )
 from sagasmith_dnd.diseases import (
@@ -25,6 +26,12 @@ from sagasmith_dnd.travel import (
 
 from .. import application_support as _support
 from ..result_contracts import affected_state_slice
+from .diseases import (
+    EYEBRIGHT_FLOWER_NAME,
+    EYEBRIGHT_OINTMENT_NAME,
+    EYEBRIGHT_OINTMENT_SOURCE_KEY,
+    EyebrightCraftingPlan,
+)
 from .grapples import reconcile_grapples
 from .mounted_combat import needs_mounted_rider_save, reconcile_mounted_conditions
 from .movement_continuations import reconcile_movement
@@ -63,10 +70,54 @@ def _advance_disease_effects(
                 )
             effect.setdefault("metadata", {})["disease_state"] = advanced
         if advanced.get("disease_id") == "sight_rot":
-            effect.setdefault("metadata", {})["attack_roll_penalty"] = (
-                sight_rot_attack_penalty(advanced)
+            penalty = sight_rot_attack_penalty(advanced)
+            effect.setdefault("metadata", {})["attack_roll_penalty"] = penalty
+            # Sight Rot penalizes attacks unconditionally and ability checks
+            # only when their authoritative task context relies on sight. Never
+            # project the latter as a global sheet modifier.
+            expected_changes = (
+                [{"path": "rolls.attack.bonus", "mode": "add", "value": penalty}]
+                if penalty
+                else []
             )
+            if effect.get("changes", []) != expected_changes:
+                effect["changes"] = expected_changes
+                effect_id = str(effect.get("id") or advanced["disease_id"])
+                if effect_id not in changed:
+                    changed.append(effect_id)
     return value, changed
+
+
+def _apply_sewer_plague_hit_die_limit(
+    sheet: dict[str, Any], applied: dict[str, Any]
+) -> dict[str, Any]:
+    """Apply Sewer Plague's half Hit Die healing before the HP cap."""
+    original_hp = int(sheet.get("combat", {}).get("hp", {}).get("value", 0) or 0)
+    maximum_hp = int(
+        applied["sheet"].get("combat", {}).get("hp", {}).get("max", original_hp)
+        or original_hp
+    )
+    disease_healing = sewer_plague_hit_die_healing(
+        list(applied.get("hit_die_rolls") or []),
+        constitution_modifier=effective_ability_modifier(sheet, "constitution"),
+    )
+    song_of_rest = dict(applied.get("song_of_rest") or {})
+    song_healing = int(song_of_rest.get("rolled_healing", 0) or 0)
+    hit_die_applied = min(
+        disease_healing["disease_hit_die_healing"], max(0, maximum_hp - original_hp)
+    )
+    song_applied = min(
+        song_healing, max(0, maximum_hp - original_hp - hit_die_applied)
+    )
+    applied["sheet"].setdefault("combat", {}).setdefault("hp", {})["value"] = (
+        original_hp + hit_die_applied + song_applied
+    )
+    applied["hit_die_applied_healing"] = hit_die_applied
+    if song_of_rest:
+        song_of_rest["applied_healing"] = song_applied
+        applied["song_of_rest"] = song_of_rest
+    applied["sewer_plague_hit_die_healing"] = disease_healing
+    return applied
 
 
 class CampaignsService:
@@ -1416,6 +1467,8 @@ class CampaignsService:
         branch_id: str | None = None,
         idempotency_key: str | None = None,
         expected_elapsed_ticks: int | None = None,
+        *,
+        disease_eyebright_crafting: EyebrightCraftingPlan | None = None,
     ) -> dict[str, Any]:
         """Advance the campaign clock and matching timed effects atomically."""
         self.access.require_campaign(campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES)
@@ -1442,6 +1495,10 @@ class CampaignsService:
                 "expected_elapsed_ticks is invalid for an encounter advance "
                 "because it has no fixed elapsed duration"
             )
+        if disease_eyebright_crafting is not None and type(
+            disease_eyebright_crafting
+        ) is not EyebrightCraftingPlan:
+            raise ValueError("clock disease mutation must be a typed EyebrightCraftingPlan")
         payload = {
             "period": normalized_period,
             "count": count,
@@ -1449,6 +1506,8 @@ class CampaignsService:
         }
         if expected_elapsed_ticks is not None:
             payload["expected_elapsed_ticks"] = expected_elapsed_ticks
+        if disease_eyebright_crafting is not None:
+            payload["disease_eyebright_crafting"] = disease_eyebright_crafting.payload()
         scope = f"campaign-advance-effects:{campaign_id}:{resolved_branch_id}:{principal_id}"
         replay = self.replay_idempotent(scope, idempotency_key, payload)
         if replay is not None:
@@ -1459,6 +1518,46 @@ class CampaignsService:
                 "campaign revision conflict: "
                 f"expected {expected_revision}, found {campaign.revision}"
             )
+        eyb_actor = None
+        if disease_eyebright_crafting is not None:
+            if normalized_period != "hour" or count != 1 or expected_elapsed_ticks is None:
+                raise ValueError("Eyebright crafting is exactly one expected campaign hour")
+            if self.campaign_rules_edition(campaign_id) != "2014":
+                raise _support.CombatEngineError("Eyebright crafting requires a 2014 campaign")
+            eyb_actor = self.require_campaign_actor(
+                campaign_id, disease_eyebright_crafting.actor_id
+            )
+            if eyb_actor.revision != disease_eyebright_crafting.expected_actor_revision:
+                raise ValueError(
+                    "actor revision conflict: "
+                    f"expected {disease_eyebright_crafting.expected_actor_revision}, "
+                    f"found {eyb_actor.revision}"
+                )
+            if str(eyb_actor.sheet.get("edition") or "") != "2014":
+                raise _support.CombatEngineError("Eyebright crafting requires a 2014 actor")
+            proficiencies = dict(eyb_actor.sheet.get("traits") or {}).get("proficiencies") or {}
+            tools = {str(item).strip().casefold() for item in proficiencies.get("tools", [])}
+            if "herbalism kit" not in tools:
+                raise _support.CombatEngineError(
+                    "Eyebright crafting requires herbalism kit proficiency"
+                )
+            flower = next(
+                (
+                    item
+                    for item in dict(eyb_actor.sheet.get("inventory") or {}).get("items", [])
+                    if str(item.get("id") or "") == disease_eyebright_crafting.flower_item_id
+                ),
+                None,
+            )
+            if (
+                flower is None
+                or str(flower.get("name") or "").strip().casefold()
+                != EYEBRIGHT_FLOWER_NAME.casefold()
+                or int(flower.get("quantity", 0) or 0) < 1
+            ):
+                raise _support.CombatEngineError(
+                    "flower_item_id must identify one owned Eyebright flower"
+                )
         next_state = _support.validate_party_state(_support.deepcopy(campaign.state or {}))
         self.require_resolved_short_rest_hit_dice(
             campaign_id,
@@ -1503,6 +1602,7 @@ class CampaignsService:
                         resolved_branch_id,
                         idempotency_key,
                         expected_elapsed_ticks,
+                        disease_eyebright_crafting=disease_eyebright_crafting,
                     )
         elapsed_ticks = int(time_transition["elapsed_ticks"]) if time_transition is not None else 0
         elapsed_minutes = (
@@ -1527,6 +1627,7 @@ class CampaignsService:
         expired: dict[str, list[str]] = {}
         madness_suppression_resumed: dict[str, list[str]] = {}
         rule_receipts: list[dict[str, Any]] = []
+        eyb_craft_result: dict[str, Any] | None = None
         rule_context = self.effective_rule_context(campaign_id)
         elapsed_after_ticks = (
             int(time_transition["after"]["elapsed_ticks"])
@@ -1593,6 +1694,61 @@ class CampaignsService:
                     madness_suppression_resumed[character.id] = suppression[
                         "resumed_effect_ids"
                     ]
+            if (
+                disease_eyebright_crafting is not None
+                and character.id == disease_eyebright_crafting.actor_id
+            ):
+                sheet, flower_consumed = _support.remove_inventory_item(
+                    sheet, disease_eyebright_crafting.flower_item_id, 1
+                )
+                sheet, ointment_id = _support.add_inventory_item(
+                    sheet,
+                    {
+                        "id": _support.uuid4().hex,
+                        "name": EYEBRIGHT_OINTMENT_NAME,
+                        "kind": "consumable",
+                        "quantity": 1,
+                        "source_key": EYEBRIGHT_OINTMENT_SOURCE_KEY,
+                        "description": (
+                            "One source-bound dose of Sight Rot ointment made from an Eyebright "
+                            "flower using an herbalism kit."
+                        ),
+                    },
+                )
+                eyb_craft_result = {
+                    "status": "committed",
+                    "actor_id": character.id,
+                    "flower_item_id": disease_eyebright_crafting.flower_item_id,
+                    "flower_consumed": flower_consumed,
+                    "ointment_item_id": ointment_id,
+                    "ointment_name": EYEBRIGHT_OINTMENT_NAME,
+                    "doses_created": 1,
+                    "game_time_elapsed_ticks": 600,
+                }
+                rule_receipts.append(
+                    {
+                        "mechanic_id": "dnd5e.core.gamemastering.disease.sight_rot.2014",
+                        "event": "character.disease.eyebright_craft",
+                        "operations": [
+                            {
+                                "op": "inventory.consume",
+                                "item_id": disease_eyebright_crafting.flower_item_id,
+                                "quantity": 1,
+                            },
+                            {"op": "inventory.create", "item_id": ointment_id, "quantity": 1},
+                            {"op": "game_time.advance", "period": "hour", "count": 1},
+                        ],
+                        "citations": [
+                            {"source": DISEASE_SOURCE_REF, "edition": "2014"}
+                        ],
+                        "ruleset_fingerprint": rule_context.fingerprint,
+                        "facts": {
+                            **disease_eyebright_crafting.payload(),
+                            "flower_name": EYEBRIGHT_FLOWER_NAME,
+                            "doses_created": 1,
+                        },
+                    }
+                )
             if not character_advanced and not character_expired and sheet == character.sheet:
                 continue
             updates.append(
@@ -1631,6 +1787,7 @@ class CampaignsService:
                 "world_advanced": list(dict.fromkeys(world_advanced)),
                 "world_expired": list(dict.fromkeys(world_expired)),
                 "poison_events": poison_events,
+                "eyebright_crafting": eyb_craft_result,
                 "rule_receipts": rule_receipts,
                 "ruleset_fingerprint": rule_context.fingerprint,
                 "campaign_revision": campaign.revision + (1 if mutation_required else 0),
@@ -3620,22 +3777,7 @@ class CampaignsService:
                         for effect in sheet.get("effects", [])
                     )
                     if sewer_active:
-                        original_hp = int(
-                            sheet.get("combat", {}).get("hp", {}).get("value", 0) or 0
-                        )
-                        hit_die_healing = int(applied.get("hit_die_applied_healing", 0) or 0)
-                        song_healing = int(
-                            dict(applied.get("song_of_rest") or {}).get("applied_healing", 0) or 0
-                        )
-                        allowed_healing = hit_die_healing // 2 + song_healing
-                        maximum_hp = int(
-                            applied["sheet"].get("combat", {}).get("hp", {}).get("max", original_hp)
-                            or original_hp
-                        )
-                        applied["sheet"].setdefault("combat", {}).setdefault("hp", {})["value"] = (
-                            min(maximum_hp, original_hp + allowed_healing)
-                        )
-                        applied["hit_die_applied_healing"] = hit_die_healing // 2
+                        applied = _apply_sewer_plague_hit_die_limit(sheet, applied)
                 if normalized_rest_type == "short_rest":
                     applied["sheet"], _ = _advance_disease_effects(
                         applied["sheet"], completed_elapsed_ticks
@@ -3839,14 +3981,7 @@ class CampaignsService:
                                 penalty
                             )
                             disease_effect["changes"] = (
-                                [
-                                    {"path": "rolls.attack.bonus", "mode": "add", "value": penalty},
-                                    {
-                                        "path": "rolls.ability_check.bonus",
-                                        "mode": "add",
-                                        "value": penalty,
-                                    },
-                                ]
+                                [{"path": "rolls.attack.bonus", "mode": "add", "value": penalty}]
                                 if penalty
                                 else []
                             )

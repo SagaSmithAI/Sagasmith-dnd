@@ -8,6 +8,7 @@ from typing import Any
 from sagasmith_dnd.working_together import resolve_working_together
 
 from .. import application_support as support
+from .disease_checks import sight_rot_check_modifier, sight_rot_check_receipt
 from .passive_checks import _fields
 from .sunlight import prepare_check_facts
 
@@ -95,11 +96,39 @@ def working_together_check(
                    if key in task},
             },
         )
+    sight_modifiers = {
+        snapshot["id"]: modifier
+        for snapshot in snapshots
+        if (modifier := sight_rot_check_modifier(
+            snapshot, relies_on_sight=task.get("relies_on_sight")
+        )) is not None
+    }
     result = resolve_working_together(
         snapshots, ability=data["ability"], dc=task["dc"], task=task,
         leader_id=data.get("leader_id"), skill_ability=data.get("skill_ability"),
         tool=data.get("tool"), rules_by_actor_id=contexts,
+        check_bonus_adjustments={
+            actor_id: modifier["penalty"]
+            for actor_id, modifier in sight_modifiers.items()
+        },
     )
+    leader_modifier = sight_modifiers.get(result["leader_id"])
+    if leader_modifier is not None:
+        disease_receipt = sight_rot_check_receipt(
+            services,
+            campaign_id=campaign_id,
+            branch_id=branch,
+            actor_id=result["leader_id"],
+            kind="check",
+            ability=data["ability"],
+            modifier=leader_modifier,
+            event="character.working_together",
+        )
+        result["check"]["disease_modifier"] = disease_receipt
+        result["check"]["rule_receipts"] = [
+            *list(result["check"].get("rule_receipts") or []), disease_receipt,
+        ]
+        result["rule_receipts"] = [*result["rule_receipts"], disease_receipt]
     resolution_id = f"resolution-{support.uuid4().hex}"
     audience = {"scope": "actors", "actor_refs": identifiers, "disclosure": "private"}
     next_state = deepcopy(campaign.state)

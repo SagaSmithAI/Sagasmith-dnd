@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, TypedDict
 
 from sagasmith_dnd.adventuring_gear import (
     ADVENTURING_GEAR_SOURCE_REF,
@@ -12,8 +12,11 @@ from sagasmith_dnd.madness import (
     SOURCE_REF as MADNESS_SOURCE_REF,
 )
 from sagasmith_dnd.madness import (
+    choose_confusion_random_target,
     damage_triggered_confusion_effect_ids,
+    nearest_creature_ids,
     resolve_confusion_turn,
+    validate_confusion_direction_map,
 )
 from sagasmith_dnd.traps import transition_trap_state
 
@@ -21,6 +24,12 @@ from .. import application_support as _support
 from .madness import settle_damage_triggered_confusion
 from .passive_checks import chase_passive_contexts
 from .sunlight import check_updates, prepare_check_facts
+
+
+class GridCellSearchTarget(TypedDict):
+    kind: Literal["grid_cell"]
+    x: int
+    y: int
 
 
 def _without_repeated_preflight_cards(encounter: dict[str, Any]) -> dict[str, Any]:
@@ -73,6 +82,41 @@ def _active_madness_confusion_effects(sheet: dict[str, Any]) -> list[dict[str, A
         and effect.get("source") == MADNESS_SOURCE_REF
         and isinstance(dict(effect.get("metadata") or {}).get("madness_confusion"), dict)
     ]
+
+
+def _set_confusion_movement_status(
+    encounter: dict[str, Any],
+    actor_id: str,
+    status: str,
+    *,
+    travel_mode: str | None = None,
+    movement_cost_ft: int | None = None,
+) -> None:
+    """Update the durable turn constraint and its matching audit event together."""
+    combatant = next(
+        item
+        for item in encounter.get("combatants", [])
+        if str(item.get("actor_id") or "") == str(actor_id)
+    )
+    flags = dict(combatant.get("turn_flags") or {})
+    confusion = dict(flags.get("madness_confusion") or {})
+    constraint = dict(confusion.get("movement_constraint") or {})
+    constraint["status"] = status
+    if travel_mode is not None:
+        constraint["travel_mode"] = travel_mode
+    if movement_cost_ft is not None:
+        constraint["movement_cost_ft"] = movement_cost_ft
+    confusion["movement_constraint"] = constraint
+    flags["madness_confusion"] = confusion
+    combatant["turn_flags"] = flags
+    for event in reversed(encounter.get("log", [])):
+        if (
+            event.get("type") == "madness_confusion_turn"
+            and str(event.get("actor_id") or "") == str(actor_id)
+            and event.get("turn_token") == confusion.get("turn_token")
+        ):
+            event["movement_constraint"] = _support.deepcopy(constraint)
+            break
 
 
 def _settle_adventuring_gear_burning_turn_start(
@@ -1662,6 +1706,7 @@ class CombatService:
             dict((combatant or {}).get("turn_flags") or {}).get("madness_confusion") or {}
         )
         if current_actor_id == str(actor_id_value):
+            turn_flags = dict((combatant or {}).get("turn_flags") or {})
             outcome = confusion.get("outcome")
             if outcome == "no_action_or_movement":
                 raise _support.CombatEngineError(
@@ -1675,6 +1720,15 @@ class CombatService:
                 raise _support.CombatEngineError(
                     "Confusion turn result requires a random melee attack"
                 )
+            if outcome == "no_creature_in_reach":
+                raise _support.CombatEngineError(
+                    "Confusion turn result with no creature in reach prohibits movement and actions"
+                )
+            nearest = dict(turn_flags.get("madness_nearest_attack") or {})
+            if nearest and action not in {"move", "attack"}:
+                raise _support.CombatEngineError(
+                    "short-term madness requires an attack against the nearest creature"
+                )
         contract = dict((combatant or {}).get("mounted_turn") or {})
         if contract.get("mode") == "controlled" and action not in {
             "move",
@@ -1686,6 +1740,143 @@ class CombatService:
             raise _support.CombatEngineError(
                 "a controlled mount may only Dash, Disengage, or Dodge as an action"
             )
+
+    def require_madness_attack_target(
+        self,
+        encounter: dict[str, Any],
+        actor_id_value: str,
+        target_id: str,
+        *,
+        attack_mode: str | None = None,
+    ) -> None:
+        """Enforce source-owned nearest/random target contracts on an attack."""
+        combatant = next(
+            (
+                item
+                for item in encounter.get("combatants", [])
+                if str(item.get("actor_id") or "") == str(actor_id_value)
+            ),
+            None,
+        )
+        if combatant is None:
+            return
+        turn_flags = dict(combatant.get("turn_flags") or {})
+        confusion = dict(turn_flags.get("madness_confusion") or {})
+        if confusion.get("outcome") == "attack_random_creature_in_reach":
+            selected = str(confusion.get("random_target_actor_id") or "")
+            if not selected:
+                raise _support.NeedsRulingError(
+                    "Confusion requires an engine-selected Grid target within melee reach",
+                    missing=("madness.confusion.random_target_grid",),
+                    ruling_kind="agent_dm_adjudication",
+                )
+            if str(target_id) != selected:
+                raise _support.CombatEngineError(
+                    "Confusion requires attacking its engine-selected random creature"
+                )
+            if attack_mode is not None and str(attack_mode).casefold() != "melee":
+                raise _support.CombatEngineError(
+                    "Confusion requires a melee attack against its random creature"
+                )
+        nearest = dict(turn_flags.get("madness_nearest_attack") or {})
+        if nearest:
+            distances: dict[str, int] = {}
+            for candidate in [
+                *encounter.get("combatants", []),
+                *encounter.get("reinforcements", []),
+            ]:
+                candidate_id = str(candidate.get("actor_id") or "")
+                if not candidate_id or candidate_id == str(actor_id_value):
+                    continue
+                candidate_record = self.characters.get(candidate_id)
+                if candidate_record is None or "dead" in _support.condition_ids(
+                    candidate_record.sheet.get("conditions")
+                ):
+                    continue
+                distances[candidate_id] = self.madness_grid_distance_ft(
+                    encounter, str(actor_id_value), candidate_id
+                )
+            current_nearest = set(nearest_creature_ids(distances))
+            if str(target_id) not in current_nearest:
+                raise _support.CombatEngineError(
+                    "short-term madness requires attacking a nearest creature"
+                )
+
+    def require_madness_reaction(self, actor_id_value: str) -> None:
+        """Confusion copied from its 2014 spell source removes reactions."""
+        from sagasmith_dnd.madness import active_confusion_effect_ids
+
+        record = self.characters.get(actor_id_value)
+        effect_ids = active_confusion_effect_ids(record.sheet)
+        if effect_ids:
+            raise _support.CombatEngineError(
+                "Confusion madness prohibits reactions: " + ", ".join(effect_ids)
+            )
+
+    def madness_grid_distance_ft(
+        self,
+        encounter: dict[str, Any],
+        left_id: str,
+        right_id: str,
+    ) -> int:
+        """Resolve a source-owned madness distance from canonical Grid spaces."""
+        if encounter.get("positioning_mode") != "grid":
+            raise _support.NeedsRulingError(
+                "madness distance behavior requires engine-owned Grid positions",
+                missing=("madness.spatial_facts.grid_positions",),
+                ruling_kind="agent_dm_adjudication",
+            )
+        from sagasmith_dnd.character_schema import effective_size
+        from sagasmith_dnd.spaces import distance_between, grid_space
+
+        combatants = {
+            str(item.get("actor_id") or ""): item
+            for item in [
+                *encounter.get("combatants", []),
+                *encounter.get("reinforcements", []),
+            ]
+            if isinstance(item, dict)
+        }
+        left, right = combatants.get(left_id), combatants.get(right_id)
+        if left is None or right is None:
+            raise _support.NeedsRulingError(
+                "madness distance behavior requires both creatures in this encounter",
+                missing=("madness.spatial_facts.encounter_creatures",),
+                ruling_kind="agent_dm_adjudication",
+            )
+        left_position, right_position = left.get("position"), right.get("position")
+        if (
+            not isinstance(left_position, dict)
+            or not isinstance(right_position, dict)
+            or not isinstance(left_position.get("x"), (int, float))
+            or not isinstance(left_position.get("y"), (int, float))
+            or not isinstance(right_position.get("x"), (int, float))
+            or not isinstance(right_position.get("y"), (int, float))
+        ):
+            raise _support.NeedsRulingError(
+                "madness distance behavior requires authoritative Grid positions",
+                missing=("madness.spatial_facts.grid_positions",),
+                ruling_kind="agent_dm_adjudication",
+            )
+        left_point = (left_position["x"], left_position["y"])
+        right_point = (right_position["x"], right_position["y"])
+        left_sheet = self.characters.get(left_id).sheet
+        right_sheet = self.characters.get(right_id).sheet
+        battle_map = dict(encounter.get("battle_map") or {})
+        left_space = grid_space(
+            {"size": effective_size(left_sheet)}, left_point, battle_map
+        )
+        right_space = grid_space(
+            {"size": effective_size(right_sheet)}, right_point, battle_map
+        )
+        return int(
+            distance_between(
+                left_point,
+                left_space["space_ft"],
+                right_point,
+                right_space["space_ft"],
+            )
+        )
 
     def reviewed_chase_source(
         self,
@@ -3278,15 +3469,31 @@ class CombatService:
         expected_revision: int | None = None,
         branch_id: str | None = None,
         idempotency_key: str | None = None,
+        confusion_direction_map: dict[str, dict[str, int]] | None = None,
     ) -> dict[str, Any]:
-        """Advance a structured encounter turn with optimistic concurrency."""
+        """Advance a turn; DM-authored Confusion directions are explicit scene facts."""
         self.require_combat_actor_or_steel_defender_owner_control(
             campaign_id, actor_id, principal_id, branch_id=branch_id
         )
         self.require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = self.require_current_branch(campaign_id, branch_id)
         campaign = self.campaigns.get(campaign_id)
-        payload = {"actor_id": actor_id, "branch_id": resolved_branch_id}
+        normalized_confusion_direction_map = None
+        if confusion_direction_map is not None:
+            try:
+                normalized_confusion_direction_map = validate_confusion_direction_map(
+                    confusion_direction_map
+                )
+            except ValueError as error:
+                raise _support.CombatEngineError(str(error)) from error
+            self.access.require_campaign(
+                campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES
+            )
+        payload = {
+            "actor_id": actor_id,
+            "branch_id": resolved_branch_id,
+            "confusion_direction_map": normalized_confusion_direction_map,
+        }
         scope = f"combat-end-turn:{campaign_id}:{resolved_branch_id}:{principal_id}"
         replay = self.replay_idempotent(scope, idempotency_key, payload)
         if replay is not None:
@@ -3297,10 +3504,28 @@ class CombatService:
                 f"expected {expected_revision}, found {campaign.revision}"
             )
         _, encounter = self.active_encounter(campaign_id)
+        current_combatant = next(
+            item
+            for item in encounter.get("combatants", [])
+            if str(item.get("actor_id") or "") == str(actor_id)
+        )
+        current_confusion = dict(
+            dict(current_combatant.get("turn_flags") or {}).get("madness_confusion") or {}
+        )
+        current_pending_movement = dict(current_confusion.get("movement_constraint") or {})
+        if (
+            current_confusion.get("turn_token") == self.encounter_turn_token(encounter)
+            and current_pending_movement.get("status") in {"pending", "pending_reaction"}
+        ):
+            raise _support.CombatEngineError(
+                "Confusion random movement must be completed before ending this turn"
+            )
         before_readied = list(encounter.get("readied", []))
         current = self.characters.get(actor_id)
         current_sheet = _support.deepcopy(current.sheet)
         next_encounter = _support.deepcopy(encounter)
+        if normalized_confusion_direction_map is not None:
+            next_encounter["confusion_direction_map"] = normalized_confusion_direction_map
         self.require_no_blocking_pending(next_encounter)
         from sagasmith_dnd import rage
 
@@ -3373,6 +3598,7 @@ class CombatService:
                         expected_revision,
                         resolved_branch_id,
                         idempotency_key,
+                        confusion_direction_map=normalized_confusion_direction_map,
                     )
             if needs_gear_rng and _support.active_random_stream() is None:
                 with self.campaign_random_context(
@@ -3387,6 +3613,7 @@ class CombatService:
                         expected_revision,
                         resolved_branch_id,
                         idempotency_key,
+                        confusion_direction_map=normalized_confusion_direction_map,
                     )
             if needs_madness_rng and _support.active_random_stream() is None:
                 with self.campaign_random_context(
@@ -3401,6 +3628,7 @@ class CombatService:
                         expected_revision,
                         resolved_branch_id,
                         idempotency_key,
+                        confusion_direction_map=normalized_confusion_direction_map,
                     )
         poison_turn_events = list(poison_end_events)
         poison_turn_receipts = list(poison_end_receipts)
@@ -3542,9 +3770,118 @@ class CombatService:
                     raise _support.CombatEngineError(
                         "Confusion turn requires the campaign random stream"
                     )
-                confusion_roll = int(_support.roll("1d10", rng=stream).total)
+                confusion_roll_result = _support.asdict(_support.roll("1d10", rng=stream))
+                confusion_roll = int(confusion_roll_result["total"])
                 turn_outcome = resolve_confusion_turn(confusion_roll)
+                turn_outcome["roll_result"] = confusion_roll_result
                 turn_token = self.encounter_turn_token(next_state["combat"])
+                if turn_outcome["outcome"] == "move_random_direction":
+                    if next_state["combat"].get("positioning_mode") != "grid":
+                        raise _support.NeedsRulingError(
+                            "2014 Confusion movement requires engine-owned Grid coordinates",
+                            missing=("combat.confusion.grid_positions",),
+                            ruling_kind="agent_dm_adjudication",
+                        )
+                    raw_direction_map = next_state["combat"].get("confusion_direction_map")
+                    if raw_direction_map is None:
+                        raise _support.NeedsRulingError(
+                            "2014 Confusion movement requires the DM's die-face direction map",
+                            missing=("combat.confusion.direction_map",),
+                            ruling_kind="source_or_scene_fact",
+                        )
+                    try:
+                        direction_map = validate_confusion_direction_map(raw_direction_map)
+                    except ValueError as error:
+                        raise _support.CombatEngineError(
+                            f"persisted Confusion direction map is invalid: {error}"
+                        ) from error
+                    target_for_movement = next(
+                        item
+                        for item in next_state["combat"].get("combatants", [])
+                        if str(item.get("actor_id") or "") == next_actor_id
+                    )
+                    origin = target_for_movement.get("position")
+                    if (
+                        not isinstance(origin, dict)
+                        or not isinstance(origin.get("x"), (int, float))
+                        or isinstance(origin.get("x"), bool)
+                        or not isinstance(origin.get("y"), (int, float))
+                        or isinstance(origin.get("y"), bool)
+                    ):
+                        raise _support.NeedsRulingError(
+                            "2014 Confusion movement requires a recorded Grid origin",
+                            missing=("combat.confusion.grid_positions",),
+                            ruling_kind="agent_dm_adjudication",
+                        )
+                    direction_roll = _support.asdict(_support.roll("1d8", rng=stream))
+                    direction_vector = direction_map[str(direction_roll["total"])]
+                    turn_outcome["direction_roll"] = direction_roll
+                    turn_outcome["direction_vector"] = dict(direction_vector)
+                    turn_outcome["movement_constraint"] = {
+                        "status": "pending",
+                        "turn_token": turn_token,
+                        "direction_face": int(direction_roll["total"]),
+                        "direction_vector": dict(direction_vector),
+                        "origin": {"x": origin["x"], "y": origin["y"]},
+                        "effect_ids": [str(effect.get("id") or "") for effect in confusion_effects],
+                        "rule": "consume_all_available_movement",
+                    }
+                if turn_outcome["outcome"] == "attack_random_creature_in_reach":
+                    if next_state["combat"].get("positioning_mode") != "grid":
+                        raise _support.NeedsRulingError(
+                            "2014 Confusion target selection requires engine-owned Grid reach",
+                            missing=("combat.confusion.grid_reach_candidates",),
+                            ruling_kind="agent_dm_adjudication",
+                        )
+                    attacker = self.combat_actor_snapshot(next_actor_id)
+                    weapon_attacks = list(
+                        dict(dict(attacker.get("derived") or {}).get("inventory") or {}).get(
+                            "weapon_attacks"
+                        )
+                        or []
+                    )
+                    reach_ft = max(
+                        (
+                            int(item.get("reach_ft", 5) or 5)
+                            for item in weapon_attacks
+                            if str(item.get("attack_type") or "melee").casefold() == "melee"
+                        ),
+                        default=5,
+                    )
+                    candidates = []
+                    for candidate in [
+                        *next_state["combat"].get("combatants", []),
+                        *next_state["combat"].get("reinforcements", []),
+                    ]:
+                        candidate_id = str(candidate.get("actor_id") or "")
+                        if not candidate_id or candidate_id == next_actor_id:
+                            continue
+                        candidate_record = self.characters.get(candidate_id)
+                        if candidate_record is None or "dead" in _support.condition_ids(
+                            candidate_record.sheet.get("conditions")
+                        ):
+                            continue
+                        distance = self.madness_grid_distance_ft(
+                            next_state["combat"], next_actor_id, candidate_id
+                        )
+                        if distance <= reach_ft:
+                            candidates.append(candidate_id)
+                    if candidates:
+                        target_roll = _support.asdict(
+                            _support.roll(f"1d{len(candidates)}", rng=stream)
+                        )
+                        target_id = choose_confusion_random_target(
+                            candidates, int(target_roll["total"])
+                        )
+                        turn_outcome["random_target_roll"] = target_roll
+                        turn_outcome["random_target_candidates"] = list(candidates)
+                        turn_outcome["random_target_actor_id"] = target_id
+                    else:
+                        turn_outcome = {
+                            **turn_outcome,
+                            "outcome": "no_creature_in_reach",
+                            "mechanics": {"movement": "none", "action": "none"},
+                        }
                 target_combatant = next(
                     item
                     for item in next_state["combat"].get("combatants", [])
@@ -3569,6 +3906,90 @@ class CombatService:
                         rule_context,
                         ["dnd5e.core.madness.2014"],
                         "madness.confusion.turn_start",
+                    )
+                )
+            nearest_effects = []
+            flee_effects = []
+            for effect in source_sheets[next_actor_id].get("effects", []):
+                if (
+                    not isinstance(effect, dict)
+                    or effect.get("active") is not True
+                    or effect.get("source") != MADNESS_SOURCE_REF
+                ):
+                    continue
+                madness_metadata = dict(dict(effect.get("metadata") or {}).get("madness") or {})
+                mechanics = dict(madness_metadata.get("mechanics") or {})
+                if (
+                    mechanics.get("turn_constraint")
+                    == "use_action_to_attack_nearest_creature"
+                    and not madness_metadata.get("suppression")
+                ):
+                    nearest_effects.append(str(effect.get("id") or ""))
+                if (
+                    mechanics.get("turn_constraint")
+                    == "spend_action_and_movement_fleeing_source"
+                    and not madness_metadata.get("suppression")
+                ):
+                    flee_effects.append(str(effect.get("id") or ""))
+            if flee_effects:
+                raise _support.NeedsRulingError(
+                    "fleeing madness requires an exact fear-source position and verified flee path",
+                    missing=tuple(
+                        f"madness.{effect_id}.fear_source_grid_position"
+                        for effect_id in flee_effects
+                    ),
+                    ruling_kind="agent_dm_adjudication",
+                )
+            if nearest_effects:
+                if next_state["combat"].get("positioning_mode") != "grid":
+                    raise _support.NeedsRulingError(
+                        "nearest-creature madness requires engine-owned Grid positions",
+                        missing=("madness.nearest_attack.grid_distances",),
+                        ruling_kind="agent_dm_adjudication",
+                    )
+                distances = {}
+                for candidate in [
+                    *next_state["combat"].get("combatants", []),
+                    *next_state["combat"].get("reinforcements", []),
+                ]:
+                    candidate_id = str(candidate.get("actor_id") or "")
+                    if not candidate_id or candidate_id == next_actor_id:
+                        continue
+                    candidate_record = self.characters.get(candidate_id)
+                    if candidate_record is None or "dead" in _support.condition_ids(
+                        candidate_record.sheet.get("conditions")
+                    ):
+                        continue
+                    distances[candidate_id] = self.madness_grid_distance_ft(
+                        next_state["combat"], next_actor_id, candidate_id
+                    )
+                nearest_ids = nearest_creature_ids(distances)
+                if not nearest_ids:
+                    raise _support.NeedsRulingError(
+                        "nearest-creature madness needs another encounter creature",
+                        missing=("madness.nearest_attack.encounter_creature",),
+                        ruling_kind="agent_dm_adjudication",
+                    )
+                next_combatant = next(
+                    item
+                    for item in next_state["combat"].get("combatants", [])
+                    if str(item.get("actor_id") or "") == next_actor_id
+                )
+                flags = dict(next_combatant.get("turn_flags") or {})
+                flags["madness_nearest_attack"] = {
+                    "effect_ids": nearest_effects,
+                    "nearest_actor_ids": nearest_ids,
+                    "turn_token": self.encounter_turn_token(next_state["combat"]),
+                }
+                next_combatant["turn_flags"] = flags
+                madness_turn_events.append(
+                    {"actor_id": next_actor_id, **flags["madness_nearest_attack"]}
+                )
+                madness_turn_receipts.extend(
+                    _support.core_receipts(
+                        rule_context,
+                        ["dnd5e.core.madness.2014"],
+                        "madness.nearest_attack.turn_start",
                     )
                 )
         combat_updates: list[_support.CharacterStateUpdate] = []
@@ -3829,6 +4250,122 @@ class CombatService:
         _, encounter = self.active_encounter(campaign_id)
         self.require_no_blocking_pending(encounter)
         self.require_mounted_action(encounter, actor_id, "move")
+        moving_combatant = next(
+            (
+                item
+                for item in encounter.get("combatants", [])
+                if str(item.get("actor_id") or "") == str(actor_id)
+            ),
+            None,
+        )
+        confusion_event = dict(
+            dict((moving_combatant or {}).get("turn_flags") or {}).get("madness_confusion")
+            or {}
+        )
+        confusion_constraint = dict(confusion_event.get("movement_constraint") or {})
+        confusion_move_pending = (
+            confusion_event.get("turn_token") == self.encounter_turn_token(encounter)
+            and confusion_event.get("outcome") == "move_random_direction"
+            and confusion_constraint.get("status") == "pending"
+        )
+        if (
+            confusion_event.get("turn_token") == self.encounter_turn_token(encounter)
+            and confusion_event.get("outcome") == "move_random_direction"
+            and confusion_constraint.get("status") == "completed"
+        ):
+            raise _support.CombatEngineError(
+                "Confusion random movement is already completed for this turn"
+            )
+        if confusion_move_pending:
+            if encounter.get("positioning_mode") != "grid":
+                raise _support.NeedsRulingError(
+                    "Confusion random movement requires Grid path validation",
+                    missing=("combat.confusion.grid_path",),
+                    ruling_kind="agent_dm_adjudication",
+                )
+            if (
+                str(movement_mode).casefold().replace("-", "_") != "voluntary"
+                or crawl
+                or jump is not None
+                or drag_grapple_ids
+                or spatial_facts is not None
+                or path is None
+                or not path
+            ):
+                raise _support.CombatEngineError(
+                    "Confusion movement requires one voluntary Grid path "
+                    "using all available movement"
+                )
+            direction = dict(confusion_constraint.get("direction_vector") or {})
+            dx, dy = direction.get("dx"), direction.get("dy")
+            if (
+                isinstance(dx, bool)
+                or not isinstance(dx, int)
+                or isinstance(dy, bool)
+                or not isinstance(dy, int)
+                or max(abs(dx), abs(dy)) != 1
+            ):
+                raise _support.CombatEngineError(
+                    "Confusion movement constraint has an invalid mapped direction"
+                )
+            from sagasmith_dnd.combat_engine import _position
+
+            origin = _position((moving_combatant or {}).get("position"))
+            if origin is None:
+                raise _support.NeedsRulingError(
+                    "Confusion movement requires the actor's recorded Grid origin",
+                    missing=("combat.confusion.grid_positions",),
+                    ruling_kind="agent_dm_adjudication",
+                )
+            path_points = [_position(point) for point in path]
+            if any(
+                point is None
+                or any(
+                    isinstance(coordinate, bool)
+                    or not isinstance(coordinate, (int, float))
+                    or not float(coordinate).is_integer()
+                    for coordinate in point
+                )
+                for point in path_points
+            ):
+                raise _support.CombatEngineError(
+                    "Confusion Grid paths require integer cell coordinates"
+                )
+            if any(not coordinate.is_integer() for coordinate in origin):
+                raise _support.NeedsRulingError(
+                    "Confusion movement requires an integer Grid origin",
+                    missing=("combat.confusion.grid_positions",),
+                    ruling_kind="agent_dm_adjudication",
+                )
+            normalized_points = [
+                (int(point[0]), int(point[1]))
+                for point in path_points
+                if point is not None
+            ]
+            origin = (int(origin[0]), int(origin[1]))
+            if normalized_points[0] != origin:
+                normalized_points.insert(0, origin)
+            if destination is not None and _position(destination) != normalized_points[-1]:
+                raise _support.CombatEngineError(
+                    "Confusion destination must match the mapped-direction path endpoint"
+                )
+            previous = origin
+            for point in normalized_points[1:]:
+                step_x, step_y = point[0] - previous[0], point[1] - previous[1]
+                scale_x = step_x // dx if dx and step_x % dx == 0 else None
+                scale_y = step_y // dy if dy and step_y % dy == 0 else None
+                scales = [scale for scale in (scale_x, scale_y) if scale is not None]
+                if (
+                    (dx == 0 and step_x != 0)
+                    or (dy == 0 and step_y != 0)
+                    or not scales
+                    or any(scale <= 0 for scale in scales)
+                    or len(set(scales)) != 1
+                ):
+                    raise _support.CombatEngineError(
+                        "Confusion path must follow its engine-mapped direction"
+                    )
+                previous = point
         mounted_riders: list[str] = []
         if str(movement_mode).strip().casefold().replace("-", "_") in {"forced", "teleport"}:
             from sagasmith_dnd.mounted_combat import riders_of
@@ -4177,6 +4714,38 @@ class CombatService:
         moving_conditions = {
             str(item).casefold() for item in moving_combatant.get("conditions", [])
         }
+        confusion_movement_cost = None
+        if confusion_move_pending:
+            from sagasmith_dnd.combat_engine import (
+                _remaining_movement_ft,
+                _spend_movement_uninterrupted,
+            )
+
+            confusion_movement_cost = _remaining_movement_ft(
+                moving_combatant, travel_mode
+            )
+            planned = _spend_movement_uninterrupted(
+                encounter,
+                actor_id,
+                movement_distance,
+                destination=movement_destination,
+                path=movement_path,
+                movement_mode=movement_mode,
+                travel_mode=travel_mode,
+                crawl=crawl,
+                spatial_facts=normalized_spatial_facts,
+                _grapple_drag_ids=drag_ids,
+                jump_kind=movement_jump_kind,
+            )
+            planned_combatant = next(
+                item
+                for item in planned.get("combatants", [])
+                if str(item.get("actor_id") or "") == str(actor_id)
+            )
+            if _remaining_movement_ft(planned_combatant, travel_mode) != 0:
+                raise _support.CombatEngineError(
+                    "Confusion requires spending all available movement in its mapped direction"
+                )
         pending_before = {str(item.get("id")) for item in encounter.get("pending", [])}
         next_encounter = _support.spend_movement(
             encounter,
@@ -4191,6 +4760,16 @@ class CombatService:
             grapple_drag_ids=drag_ids,
             jump_kind=movement_jump_kind,
         )
+        if confusion_move_pending:
+            _set_confusion_movement_status(
+                next_encounter,
+                actor_id,
+                "pending_reaction"
+                if next_encounter.get("movement_continuation")
+                else "completed",
+                travel_mode=travel_mode,
+                movement_cost_ft=confusion_movement_cost,
+            )
         mount_fall_resolutions: list[dict[str, Any]] = []
         if mounted_riders:
             stream = _support.active_random_stream()
@@ -4453,6 +5032,19 @@ class CombatService:
                 f"expected {expected_revision}, found {campaign.revision}"
             )
         self.require_no_blocking_pending(encounter)
+        combatant = next(
+            item
+            for item in encounter.get("combatants", [])
+            if str(item.get("actor_id") or "") == str(actor_id)
+        )
+        confusion = dict(dict(combatant.get("turn_flags") or {}).get("madness_confusion") or {})
+        if (
+            confusion.get("turn_token") == self.encounter_turn_token(encounter)
+            and confusion.get("outcome") == "move_random_direction"
+        ):
+            raise _support.CombatEngineError(
+                "Confusion requires its mapped movement path; standing is not that movement"
+            )
         next_encounter = _support.stand_up(encounter, actor_id)
         stand_receipts = _support.core_receipts(
             self.effective_rule_context(campaign_id),
@@ -8380,6 +8972,14 @@ class CombatService:
         self.require_no_blocking_pending(encounter)
         self.require_encounter_combatant(encounter, actor_id, role="Hide actor")
         actor = self.combat_actor_snapshot(actor_id)
+        vision_subject = next(
+            (
+                item
+                for item in encounter.get("combatants", [])
+                if str(item.get("actor_id") or "") == actor_id
+            ),
+            actor,
+        )
         observer_passive_perceptions: dict[str, int | None] = {}
         passive_receipts: list[dict[str, Any]] = []
         hide_snapshots = {actor_id: actor}
@@ -8395,6 +8995,7 @@ class CombatService:
                 dc=0,
                 passive=True,
                 encounter=encounter,
+                vision_subject=vision_subject,
                 rules=self.effective_rule_context(
                     campaign_id,
                     branch_id=resolved_branch_id,
@@ -8533,6 +9134,7 @@ class CombatService:
         advantage: _support.StrictBool = False,
         disadvantage: _support.StrictBool = False,
         rule_facts: dict[str, Any] | None = None,
+        search_target: GridCellSearchTarget | None = None,
         spatial_facts: dict[str, Any] | None = None,
         principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
         expected_revision: int | None = None,
@@ -8544,6 +9146,9 @@ class CombatService:
         kind=stabilize pays the action and rolls DC10 Medicine atomically. In
         Agent positioning supply spatial_facts={decision_id,reason,within_5_ft:true}.
         Grid positioning uses recorded positions. Do not prepay common_action.
+        Grid 2014 Perception Search may select search_target={kind:grid_cell,x,y};
+        the selected cell is used only for authoritative vision settlement and
+        its coordinates are not included in the result.
         """
         if spatial_facts is not None and kind != "stabilize":
             raise _support.CombatEngineError("spatial_facts is accepted only for stabilization")
@@ -8581,6 +9186,32 @@ class CombatService:
             str(action).strip().lower().replace("-", "_") if action is not None else None
         )
         normalized_ability = str(ability).strip().casefold().replace(" ", "_")
+        normalized_search_target: GridCellSearchTarget | None = None
+        if search_target is not None:
+            if (
+                not isinstance(search_target, dict)
+                or set(search_target) != {"kind", "x", "y"}
+                or search_target.get("kind") != "grid_cell"
+                or type(search_target.get("x")) is not int
+                or type(search_target.get("y")) is not int
+            ):
+                raise _support.CombatEngineError(
+                    "search_target must be {kind:'grid_cell', x:<integer>, y:<integer>}"
+                )
+            if (
+                normalized_check_action != "search"
+                or kind not in _support.ABILITY_CHECK_KINDS
+                or normalized_ability not in {"perception", "investigation"}
+                or self.campaign_rules_edition(campaign_id) != "2014"
+            ):
+                raise _support.CombatEngineError(
+                    "search_target is accepted only for 2014 Search Perception or Investigation"
+                )
+            normalized_search_target = {
+                "kind": "grid_cell",
+                "x": search_target["x"],
+                "y": search_target["y"],
+            }
         social_ability_names = {
             "charisma",
             "deception",
@@ -8692,6 +9323,11 @@ class CombatService:
             "advantage": advantage,
             "disadvantage": disadvantage,
             "rule_facts": settlement_facts,
+            **(
+                {"search_target": normalized_search_target}
+                if normalized_search_target is not None
+                else {}
+            ),
             **({"spatial_facts": spatial_facts} if spatial_facts is not None else {}),
             "branch_id": resolved_branch_id,
         }
@@ -8723,6 +9359,43 @@ class CombatService:
                     target_id,
                     role="social check target",
                 )
+        search_vision_subject: dict[str, Any] | None = None
+        if normalized_search_target is not None:
+            if not isinstance(active_state, dict) or not active_state.get("active", False):
+                raise _support.CombatEngineError("search_target requires active combat")
+            if active_state.get("positioning_mode") != "grid":
+                raise _support.CombatEngineError(
+                    "search_target grid cells require Grid positioning"
+                )
+            battle_map = dict(active_state.get("battle_map") or {})
+            position = {
+                "x": normalized_search_target["x"],
+                "y": normalized_search_target["y"],
+            }
+            try:
+                _support.validate_position(battle_map, position)
+            except _support.BattleMapError as error:
+                raise _support.CombatEngineError(
+                    f"search_target is not a legal Grid cell: {error}"
+                ) from error
+            if normalized_ability == "perception":
+                search_vision_subject = {"position": position}
+        elif (
+            normalized_check_action == "search"
+            and kind in _support.ABILITY_CHECK_KINDS
+            and normalized_ability == "perception"
+            and isinstance(active_state, dict)
+            and active_state.get("active") is True
+            and active_state.get("positioning_mode") == "grid"
+            and self.campaign_rules_edition(campaign_id) == "2014"
+            and any(
+                key in dict(active_state.get("battle_map") or {})
+                for key in ("ambient_illumination", "light_sources", "vision_cells")
+            )
+        ):
+            raise _support.CombatEngineError(
+                "Grid Perception Search with vision facts requires search_target grid_cell"
+            )
         prepaid_search_encounter: dict[str, Any] | None = None
         if normalized_check_action == "search":
             if not isinstance(active_state, dict) or not active_state.get("active", False):
@@ -8990,6 +9663,7 @@ class CombatService:
                 advantage=advantage,
                 disadvantage=disadvantage,
                 ruleset=encounter.get("ruleset") if encounter else None,
+                vision_subject=search_vision_subject,
                 rules=self.effective_rule_context(
                     campaign_id,
                     facts={
@@ -9009,6 +9683,16 @@ class CombatService:
                     branch_id=resolved_branch_id,
                 ),
             )
+            if search_vision_subject is not None and isinstance(result.get("vision"), dict):
+                safe_vision = dict(result["vision"])
+                safe_vision.pop("source_cells", None)
+                if isinstance(safe_vision.get("source_lights"), list):
+                    safe_vision["source_lights"] = [
+                        {key: value for key, value in item.items() if key != "position"}
+                        for item in safe_vision["source_lights"]
+                        if isinstance(item, dict)
+                    ]
+                result = {**result, "vision": safe_vision}
             if social_charm_advantage:
                 result = {
                     **result,

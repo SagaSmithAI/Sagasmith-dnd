@@ -259,6 +259,7 @@ async def _campaign_with_combat(
     *,
     positions: list[tuple[int, int]] | None = None,
     positioning_mode: str = "grid",
+    battle_map: dict | None = None,
 ) -> tuple[str, int, list[dict]]:
     campaign = await _call(
         server,
@@ -301,7 +302,7 @@ async def _campaign_with_combat(
         "combat_start",
         {
             "positioning_mode": positioning_mode,
-            **({"battle_map": {"width_cells": 40, "height_cells": 40}}
+            **({"battle_map": battle_map or {"width_cells": 40, "height_cells": 40}}
                if positioning_mode == "grid" else {}),
             "campaign_id": campaign["id"],
             "participant_ids": [item["id"] for item in actors],
@@ -643,7 +644,7 @@ def test_charmed_caster_cannot_target_charmer_with_harmful_save_spell(
     asyncio.run(exercise())
 
 
-def test_sight_required_spell_rejects_blinded_caster_without_writes(
+def test_sight_required_spell_rejects_dark_target_without_writes(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -658,7 +659,6 @@ def test_sight_required_spell_rejects_blinded_caster_without_writes(
     async def exercise() -> None:
         server = create_server(_config(tmp_path))
         caster = _equipped_caster()
-        caster["conditions"] = ["blinded"]
         caster["spellcasting"].update(ability="wisdom", spell_slots=_slot(1, 2))
         healing_word = _spell("Healing Word", 1, casting_time="1 bonus action", range_ft=60)
         cure_wounds = _spell("Cure Wounds", 1, casting_time="1 action", range_ft=5)
@@ -681,8 +681,13 @@ def test_sight_required_spell_rejects_blinded_caster_without_writes(
         target["combat"]["hp"] = {"value": 1, "max": 20, "temp": 0}
         campaign_id, revision, actors = await _campaign_with_combat(
             server,
-            [("Blinded cleric", caster), ("Ally", target)],
+            [("Unlit cleric", caster), ("Ally", target)],
             positions=[(0, 0), (1, 0)],
+            battle_map={
+                "width_cells": 4,
+                "height_cells": 2,
+                "ambient_illumination": "dark",
+            },
         )
         actor_ids = [item["id"] for item in actors]
         before = await _campaign_actor_snapshot(
@@ -766,7 +771,23 @@ def test_sight_required_spell_honors_authoritative_visibility_acl(
         campaign_id, revision, actors = await _campaign_with_combat(
             server,
             [("Cleric", caster), ("Hidden ally", target)],
-            positions=[(0, 0), (4, 0)],
+            positions=[(4, 0), (5, 0)],
+            battle_map={
+                "width_cells": 10,
+                "height_cells": 2,
+                "ambient_illumination": "dark",
+                "light_sources": [{
+                    "id": "spell-vision-torch",
+                    "position": {"x": 0, "y": 0},
+                    "bright_radius_ft": 20,
+                    "dim_radius_ft": 40,
+                    "source_ref": "bundled:srd2014/04_Equipment/Adventuring_Gear.md#Torch",
+                    "source_excerpt": (
+                        "A torch sheds bright light in a 20-foot radius and dim light "
+                        "for an additional 20 feet."
+                    ),
+                }],
+            },
         )
         excluded = await _raw(
             server,
@@ -843,6 +864,15 @@ def test_sight_required_spell_honors_authoritative_visibility_acl(
             },
         )
         assert succeeded["status"] == "committed"
+        assert succeeded["result"]["target"]["vision"]["light_level"] == "dim"
+        assert succeeded["result"]["target"]["vision"]["visible"] is True
+        assert (
+            succeeded["result"]["target"]["vision"]["mechanic_id"]
+            == "dnd5e.core.vision.light_obscuration_2014"
+        )
+        assert succeeded["result"]["target"]["vision"]["source_lights"][0][
+            "source_ref"
+        ].endswith("Adventuring_Gear.md#Torch")
         assert roll_expressions == ["1d4"]
         target_after_cast = await _call(
             server,

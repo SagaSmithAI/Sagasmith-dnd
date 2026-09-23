@@ -511,6 +511,28 @@ def resolve_sewer_plague_rest_exhaustion(
     }
 
 
+def sewer_plague_hit_die_healing(
+    hit_die_rolls: Any, *, constitution_modifier: Any
+) -> dict[str, int]:
+    """Halve ordinary per-die healing before HP-cap application (2014 Sewer Plague)."""
+    if not isinstance(hit_die_rolls, list):
+        raise DiseaseError("Sewer Plague healing requires the authoritative Hit Die rolls")
+    if (
+        isinstance(constitution_modifier, bool)
+        or not isinstance(constitution_modifier, int)
+    ):
+        raise DiseaseError("Sewer Plague healing requires the Constitution modifier")
+    normal = 0
+    for entry in hit_die_rolls:
+        if not isinstance(entry, dict):
+            raise DiseaseError("Sewer Plague healing requires per-die roll records")
+        rolled = entry.get("total")
+        if isinstance(rolled, bool) or not isinstance(rolled, int) or rolled < 0:
+            raise DiseaseError("Sewer Plague requires non-negative authoritative Hit Die rolls")
+        normal += max(0, rolled + constitution_modifier)
+    return {"normal_hit_die_healing": normal, "disease_hit_die_healing": normal // 2}
+
+
 def apply_sight_rot_ointment(state: dict[str, Any], *, doses: Any = 1) -> dict[str, Any]:
     """Record a dose applied before a rest; inventory consumption is Runtime-owned."""
     result = deepcopy(state)
@@ -520,6 +542,10 @@ def apply_sight_rot_ointment(state: dict[str, Any], *, doses: Any = 1) -> dict[s
     if isinstance(doses, bool) or not isinstance(doses, int) or doses < 1 or doses > 3:
         raise DiseaseError("ointment application requires one to three whole doses")
     total = int(result["ointment_doses_applied"]) + doses
+    if total > 3:
+        raise DiseaseError(
+            "Sight Rot ends after three ointment doses; extra doses are not consumed"
+        )
     result["ointment_doses_applied"] = total
     result["ointment_prevent_next_rest"] = True
     events = [{"kind": "rest_worsening_prevented"}]
@@ -543,6 +569,23 @@ def sight_rot_attack_penalty(state: dict[str, Any]) -> int:
     if isinstance(penalty, bool) or not isinstance(penalty, int) or not 0 <= penalty <= 5:
         raise DiseaseError("Sight Rot penalty must be an integer from 0 through 5")
     return -penalty
+
+
+def sight_rot_ability_check_penalty(
+    state: dict[str, Any], *, relies_on_sight: Any
+) -> int:
+    """Return Sight Rot's check modifier only for a sight-dependent check.
+
+    ``relies_on_sight`` must be resolved from the authoritative check/action
+    context by Runtime. This helper intentionally does not project a global
+    ability-check penalty onto the actor sheet.
+    """
+    if type(relies_on_sight) is not bool:
+        raise DiseaseError("Sight Rot check penalty requires resolved check context")
+    if not relies_on_sight:
+        _validate_state(state)
+        return 0
+    return sight_rot_attack_penalty(state)
 
 
 def cure_disease(state: dict[str, Any], *, disease_id: Any) -> dict[str, Any]:

@@ -136,7 +136,8 @@ class InventoryService:
         # legacy materialized templates do not duplicate source_ref on each item.
         source_item = {**item, "source_ref": ADVENTURING_GEAR_SOURCE_REF}
         plan = resolve_adventuring_gear_intent(source_item, normalized_intent)
-        if str(item.get("name") or "").casefold() == "manacles":
+        gear_name = str(item.get("name") or "").casefold()
+        if gear_name == "manacles":
             self.require_authoritative_manacles_binding(
                 state=state,
                 target_actor_id=normalized_target_id,
@@ -198,6 +199,9 @@ class InventoryService:
             and normalized_intent == "pick"
         ) or (
             str(item.get("name") or "").casefold() == "rope, hempen (50 feet)"
+            and normalized_intent == "burst"
+        ) or (
+            str(item.get("name") or "").casefold() == "chain (10 feet)"
             and normalized_intent == "burst"
         ):
             return self.settle_adventuring_gear_object_check(
@@ -459,7 +463,7 @@ class InventoryService:
         request_payload: dict[str, Any],
         action_context: dict[str, Any] | None,
     ) -> dict[str, Any]:
-        """Roll the source-fixed Lock or Rope check and persist its object state atomically."""
+        """Settle source-fixed object checks and persist object state atomically."""
         if action_context is not None:
             raise _support.CombatEngineError(
                 "adventuring gear object checks do not accept caller rule or outcome context"
@@ -478,7 +482,9 @@ class InventoryService:
             )
         name = str(item.get("name") or "")
         item_key = str(item.get("source_key") or "")
-        state_key = "lock" if name.casefold() == "lock" else "rope"
+        state_key = "lock" if name.casefold() == "lock" else (
+            "chain" if name.casefold() == "chain (10 feet)" else "rope"
+        )
         object_states = dict(state.get("adventuring_gear_objects") or {})
         object_state_key = f"{actor_id}:{item_id}"
         gear_state = dict(object_states.get(object_state_key) or {})
@@ -580,6 +586,8 @@ class InventoryService:
                 "item_id": item_id,
                 "state": dict(plan.get("effect") or {}).get("success_state"),
             }
+            if state_key in {"chain", "rope"}:
+                gear_state["object_hit_points"] = 0
         elif state_key == "lock":
             gear_state = {
                 "source_ref": ADVENTURING_GEAR_SOURCE_REF,
@@ -598,6 +606,8 @@ class InventoryService:
                 "item_id": item_id,
                 "state": current_state,
             }
+            if state_key in {"chain", "rope"}:
+                gear_state["object_hit_points"] = int(plan.get("object_hit_points") or 0)
         object_states[object_state_key] = gear_state
         campaign_state["adventuring_gear_objects"] = object_states
 

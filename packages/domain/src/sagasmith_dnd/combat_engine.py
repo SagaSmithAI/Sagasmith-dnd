@@ -9089,6 +9089,7 @@ def resolve_actor_check(
     rng: Any = None,
     passive: bool = False,
     skill_ability: str | None = None,
+    vision_subject: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if kind not in ACTOR_CHECK_KINDS:
         raise CombatEngineError("unsupported check kind")
@@ -9255,7 +9256,11 @@ def resolve_actor_check(
             None,
         )
         if viewer is not None:
-            vision = vision_profile_2014(encounter, viewer, viewer)
+            # A Perception check may be directed at another creature or area.
+            # Use its Grid position for illumination and obscuration while
+            # leaving hidden-state detection to the check's normal resolution.
+            vision_target = vision_subject or viewer
+            vision = vision_profile_2014(encounter, viewer, vision_target)
             facts = dict(rules.facts) if rules else {}
             if vision is None and encounter.get("positioning_mode") == "agent":
                 raw_vision_facts = facts.get("vision_facts")
@@ -9727,6 +9732,7 @@ def resolve_actor_group_check(
     bonus: int = 0,
     advantage: bool = False,
     disadvantage: bool = False,
+    bonus_adjustments: dict[str, int] | None = None,
     rules_by_actor_id: dict[str, ResolutionContext] | None = None,
     rng: Any = None,
 ) -> dict[str, Any]:
@@ -9748,6 +9754,14 @@ def resolve_actor_group_check(
         raise CombatEngineError(
             "group ability check cannot have both source advantage and disadvantage"
         )
+    if bonus_adjustments is not None and not isinstance(bonus_adjustments, dict):
+        raise CombatEngineError("group check bonus adjustments must be an actor map")
+    normalized_bonus_adjustments = dict(bonus_adjustments or {})
+    if set(normalized_bonus_adjustments) - set(actor_ids) or any(
+        not isinstance(key, str) or type(value) is not int
+        for key, value in normalized_bonus_adjustments.items()
+    ):
+        raise CombatEngineError("group check bonus adjustments must be actor-bound integers")
     normalized_rules = dict(rules_by_actor_id or {})
     unknown_rule_actor_ids = sorted(set(normalized_rules) - set(actor_ids))
     if unknown_rule_actor_ids:
@@ -9791,7 +9805,7 @@ def resolve_actor_group_check(
             ability=ability,
             dc=dc,
             proficient=proficient,
-            bonus=bonus,
+            bonus=bonus + normalized_bonus_adjustments.get(participant_id, 0),
             advantage=advantage,
             disadvantage=disadvantage,
             rules=normalized_rules.get(participant_id),
@@ -10872,7 +10886,11 @@ def vision_profile_2014(
         "light_level": level,
         "obscuration": "heavily" if heavy else "lightly" if lightly else "none",
         "magical_darkness": magical_darkness,
-        "perception_disadvantage": bool(visible and (lightly or level == "dim")),
+        "perception_disadvantage": bool(
+            visible
+            and not (used_blindsight or used_truesight)
+            and (lightly or level == "dim")
+        ),
         "darkvision_used": used_darkvision,
         "blindsight_used": used_blindsight,
         "truesight_used": used_truesight,
@@ -10926,10 +10944,10 @@ def resolve_agent_vision_2014(
     ):
         raise CombatEngineError("Agent vision distance_ft must be a bounded non-negative integer")
     illumination = facts.get("illumination")
-    if illumination not in {"bright", "dim", "dark"}:
+    if not isinstance(illumination, str) or illumination not in {"bright", "dim", "dark"}:
         raise CombatEngineError("Agent vision illumination must be bright, dim, or dark")
     obscuration = facts.get("obscuration")
-    if obscuration not in {"none", "lightly", "heavily"}:
+    if not isinstance(obscuration, str) or obscuration not in {"none", "lightly", "heavily"}:
         raise CombatEngineError("Agent vision obscuration must be none, lightly, or heavily")
     for key in ("magical_darkness", "opaque_boundary"):
         if not isinstance(facts.get(key), bool):
@@ -10997,7 +11015,9 @@ def resolve_agent_vision_2014(
         "obscuration": obscuration,
         "magical_darkness": facts["magical_darkness"],
         "perception_disadvantage": bool(
-            visible and (obscuration == "lightly" or perceived_light == "dim")
+            visible
+            and not (in_blindsight or in_truesight)
+            and (obscuration == "lightly" or perceived_light == "dim")
         ),
         "darkvision_used": darkvision_applies,
         "blindsight_used": in_blindsight,

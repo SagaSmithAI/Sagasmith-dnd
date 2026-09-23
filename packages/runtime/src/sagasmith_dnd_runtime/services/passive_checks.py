@@ -9,6 +9,7 @@ from sagasmith_dnd.combat_engine import resolve_actor_check
 from sagasmith_dnd.travel import travel_passive_perception_bonus
 
 from .. import application_support as support
+from .disease_checks import sight_rot_check_modifier, sight_rot_check_receipt
 from .sunlight import prepare_check_facts
 
 
@@ -129,15 +130,33 @@ def resolve_passive_scene_check(
             if str(selection["ability"]).strip().casefold() == "perception"
             else 0
         )
+        sight_modifier = sight_rot_check_modifier(
+            snapshot, relies_on_sight=task.get("relies_on_sight")
+        )
         result = resolve_actor_check(
             snapshot, kind="check", ability=selection["ability"], dc=dc, passive=True,
             skill_ability=selection.get("skill_ability"), rules=rules,
-            bonus=travel_bonus,
+            bonus=travel_bonus + (sight_modifier["penalty"] if sight_modifier else 0),
             advantage=circumstance and task.get("advantage", False),
             disadvantage=circumstance and task.get("disadvantage", False),
         )
         result["actor_id"] = actor.id
         result["ability"] = selection["ability"]
+        if sight_modifier is not None:
+            disease_receipt = sight_rot_check_receipt(
+                services,
+                campaign_id=campaign_id,
+                branch_id=resolved_branch,
+                actor_id=actor.id,
+                kind="check",
+                ability=selection["ability"],
+                modifier=sight_modifier,
+                event="character.passive",
+            )
+            result["disease_modifier"] = disease_receipt
+            result["rule_receipts"] = [
+                *list(result.get("rule_receipts") or []), disease_receipt,
+            ]
         if travel_bonus:
             result["travel_pace_modifier"] = travel_bonus
         if selection.get("skill_ability"):

@@ -369,10 +369,20 @@ class SpellsService:
                 )
             visible = bool(vision_profile and vision_profile["visible"])
         else:
-            visible = (
-                spatial["attacker_can_see_target"] if spatial is not None
-                else _support.can_see(caster, target, encounter)
-            )
+            if (
+                targeting.get("requires_sight")
+                and encounter.get("positioning_mode") == "grid"
+                and encounter.get("ruleset") == "2014"
+            ):
+                vision_profile = _support.vision_profile_2014(encounter, caster, target)
+            if vision_profile is not None:
+                visible = bool(vision_profile["visible"]) and _support.can_see(
+                    caster, target, encounter
+                )
+            elif spatial is not None:
+                visible = bool(spatial["attacker_can_see_target"])
+            else:
+                visible = _support.can_see(caster, target, encounter)
         if targeting.get("requires_sight") and not visible:
             raise _support.CombatEngineError("spell requires a target the caster can see")
         creature_type = str(
@@ -1022,6 +1032,14 @@ class SpellsService:
                 f"expected {expected_revision}, found {campaign.revision}"
             )
         current = self.characters.get(actor_id)
+        from sagasmith_dnd.madness import spellcasting_prohibited_effect_ids
+
+        madness_effect_ids = spellcasting_prohibited_effect_ids(current.sheet)
+        if madness_effect_ids:
+            raise _support.CombatEngineError(
+                "source-owned madness prohibits spellcasting: "
+                + ", ".join(madness_effect_ids)
+            )
         if ready_context:
             from dataclasses import replace
 
@@ -1059,6 +1077,13 @@ class SpellsService:
         )
         if spell_entry is None:
             raise _support.CombatEngineError("spell is not recorded on the caster card")
+        casting_time = str(
+            spell_entry.get("casting_time")
+            or dict(spell_entry.get("definition") or {}).get("casting_time")
+            or ""
+        ).casefold()
+        if ready_context or "reaction" in casting_time:
+            self.require_madness_reaction(actor_id)
         magic_missile = _support.is_core_magic_missile_spell(spell_entry)
         fly = _support.is_core_fly_spell(spell_entry)
         invisibility = _support.is_core_invisibility_spell(spell_entry)
@@ -3594,6 +3619,14 @@ class SpellsService:
             & _support.INCAPACITATING_STATE_IDS
         ):
             raise _support.CombatEngineError("an incapacitated character cannot cast a spell")
+        from sagasmith_dnd.madness import spellcasting_prohibited_effect_ids
+
+        madness_effect_ids = spellcasting_prohibited_effect_ids(current.sheet)
+        if madness_effect_ids:
+            raise _support.CombatEngineError(
+                "source-owned madness prohibits spellcasting: "
+                + ", ".join(madness_effect_ids)
+            )
         if source_item_id and (signature_free_cast or feature_cast_source):
             raise _support.CombatEngineError(
                 "a magic item spell cannot use a character feature casting source"

@@ -250,6 +250,7 @@ from sagasmith_dnd.combat_engine import (
     timed_condition_sources,
     trigger_readied_action,
     trigger_readied_spell,
+    vision_profile_2014,
 )
 from sagasmith_dnd.conditions import (
     DEATH_SAVE_SETTLED_CONDITIONS,
@@ -5558,6 +5559,7 @@ __all__ = [
     "calendar_minute_point",
     "campaign_phase",
     "can_see",
+    "vision_profile_2014",
     "candidate_draft_issues",
     "canonical_heading_path",
     "canonical_json",

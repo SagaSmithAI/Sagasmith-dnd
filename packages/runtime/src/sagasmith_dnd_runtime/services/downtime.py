@@ -6,6 +6,7 @@ exact coin payment; the Domain validates activity-specific requirements.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -33,7 +34,7 @@ _POISON_REF = "bundled:srd2014/08_Gamemastering/Poisons.md"
 _SOURCE_BY_ACTIVITY = {
     "lifestyle": _EXPENSES_REF,
     "crafting": _ADVENTURING_REF,
-    "profession": _ADVENTURING_REF,
+    "profession": _EXPENSES_REF,
     "recuperating": _ADVENTURING_REF,
     "research": _ADVENTURING_REF,
     "training": _ADVENTURING_REF,
@@ -79,7 +80,7 @@ class DowntimeService:
             / "skills/full/skills/dnd-dm/srd/references-2014-en"
             / (
                 "04_Equipment/Expenses.md"
-                if activity_key == "lifestyle"
+                if activity_key in {"lifestyle", "profession"}
                 else "06_Gameplay/Adventuring.md"
             )
         )
@@ -229,6 +230,23 @@ class DowntimeService:
         elif activity_key == "crafting":
             tools = str(payload.get("required_tools") or "").casefold()
             market_remaining = payload.get("market_value_remaining_gp")
+            if type(market_remaining) is not int or market_remaining < 0:
+                raise support.CombatEngineError(
+                    "market_value_remaining_gp must be a non-negative integer"
+                )
+            stored_market_remaining = activity_state.get("market_value_remaining_gp")
+            if stored_market_remaining is not None and stored_market_remaining != market_remaining:
+                raise support.CombatEngineError(
+                    "crafting market value cannot be reset or changed mid-activity"
+                )
+            crafting_identity = {"required_tools": tools}
+            existing_crafting_plan = activity_state.get("crafting_plan")
+            if existing_crafting_plan is None:
+                activity_state["crafting_plan"] = crafting_identity
+            elif existing_crafting_plan != crafting_identity:
+                raise support.CombatEngineError(
+                    "crafting tool requirement cannot change mid-activity"
+                )
             if hours < 8:
                 craft = {"progress_gp": 0, "materials_cost_cp": 0}
             else:
@@ -324,8 +342,9 @@ class DowntimeService:
                 }
             )
             activity_state["market_value_remaining_gp"] = max(
-                0, int(market_remaining) - craft["progress_gp"]
+                0, market_remaining - craft["progress_gp"]
             )
+            result["market_value_remaining_gp"] = activity_state["market_value_remaining_gp"]
         elif activity_key == "profession":
             if hours >= 8:
                 tier = profession_support_tier(
@@ -394,18 +413,16 @@ class DowntimeService:
                                 dict(item.get("metadata") or {}).get("poison_state"), dict
                             )
                         )
-                        or dict(item.get("metadata") or {}).get("condition_kind")
-                        in {"disease", "poison"}
                     )
                 ]
                 recuperation = recuperation_outcome(
                     qualifying_days=counted_days,
                     save_success=bool(save.get("success")),
-                    choice=payload.get("choice"),
-                    effect_id=payload.get("effect_id"),
+                    choice=payload.get("choice") if save.get("success") else None,
+                    effect_id=payload.get("effect_id") if save.get("success") else None,
                     blocking_effect_ids=current_effect_ids,
-                    condition_id=payload.get("condition_id"),
-                    condition_kind=payload.get("condition_kind"),
+                    condition_id=payload.get("condition_id") if save.get("success") else None,
+                    condition_kind=payload.get("condition_kind") if save.get("success") else None,
                     current_condition_ids=current_conditions,
                 )
                 if (
@@ -451,42 +468,90 @@ class DowntimeService:
                 field="research plan source_excerpt",
                 minimum_length=10,
             )
-            if counted_days >= int(plan.get("required_days", 1)):
-                required_checks = set(plan.get("required_check_ids") or [])
-                passed_checks = set(plan.get("passed_check_ids") or [])
-            else:
-                required_checks = set(plan.get("required_check_ids") or [])
-                passed_checks = set(plan.get("passed_check_ids") or [])
-            research_complete = (
-                plan.get("available") is True
-                and plan.get("restrictions_satisfied") is True
-                and counted_days >= int(plan.get("required_days", 1))
-                and required_checks <= passed_checks
-            )
-            if research_complete:
-                normalized_information_source_ref, _, info_expanded = (
-                    self.managed_module_source_ref(
+            normalized_information_source_ref, _, info_expanded = (
+                self.managed_module_source_ref(
                     campaign_id,
-                    str(plan.get("information_source_ref") or ""),
+                    plan.get("information_source_ref") or "",
                     require_exact=True,
                     require_active_module=True,
+                )
+            )
+            if info_expanded is None:
+                raise support.CombatEngineError(
+                    "research information source is unavailable"
+                )
+            plan["information_source_ref"] = normalized_information_source_ref
+            plan["information_source_excerpt"] = self.managed_module_source_excerpt(
+                info_expanded,
+                plan.get("information_source_excerpt"),
+                field="research information source_excerpt",
+                minimum_length=10,
+            )
+            required_days = plan.get("required_days")
+            required_check_ids = plan.get("required_check_ids") or []
+            passed_check_ids = plan.get("passed_check_ids") or []
+            if type(required_days) is not int or required_days < 1:
+                raise support.CombatEngineError("research required_days must be a positive integer")
+            if not isinstance(required_check_ids, list) or not isinstance(passed_check_ids, list):
+                raise support.CombatEngineError("research check ids must be lists")
+            if any(
+                not isinstance(item, str) or not item.strip()
+                for item in [*required_check_ids, *passed_check_ids]
+            ):
+                raise support.CombatEngineError("research check ids must be non-empty strings")
+            research_identity = {
+                "source_ref": plan["source_ref"],
+                "source_excerpt": plan["source_excerpt"],
+                "information_source_ref": plan["information_source_ref"],
+                "information_source_excerpt": plan["information_source_excerpt"],
+                "required_days": required_days,
+                "required_check_ids": sorted(set(required_check_ids)),
+            }
+            existing_research_plan = activity_state.get("research_plan")
+            if existing_research_plan is None:
+                research_plan = {
+                    **research_identity,
+                    "available": plan.get("available") is True,
+                    "restrictions_satisfied": plan.get("restrictions_satisfied") is True,
+                    "passed_check_ids": sorted(set(passed_check_ids)),
+                }
+            else:
+                stored_identity = {
+                    key: existing_research_plan.get(key) for key in research_identity
+                }
+                if stored_identity != research_identity:
+                    raise support.CombatEngineError(
+                        "research sources, duration, and required checks cannot change mid-activity"
                     )
-                )
-                assert info_expanded is not None
-                plan["information_source_ref"] = normalized_information_source_ref
-                plan["information_source_excerpt"] = self.managed_module_source_excerpt(
-                    info_expanded,
-                    plan.get("information_source_excerpt"),
-                    field="research information source_excerpt",
-                    minimum_length=10,
-                )
+                research_plan = {
+                    **research_identity,
+                    "available": existing_research_plan.get("available") is True
+                    or plan.get("available") is True,
+                    "restrictions_satisfied": (
+                        existing_research_plan.get("restrictions_satisfied") is True
+                        or plan.get("restrictions_satisfied") is True
+                    ),
+                    "passed_check_ids": sorted(
+                        set(existing_research_plan.get("passed_check_ids") or [])
+                        | set(passed_check_ids)
+                    ),
+                }
+            activity_state["research_plan"] = research_plan
+            required_checks = set(research_plan["required_check_ids"])
+            passed_checks = set(research_plan["passed_check_ids"])
+            research_complete = (
+                research_plan["available"] is True
+                and research_plan["restrictions_satisfied"] is True
+                and counted_days >= required_days
+                and required_checks <= passed_checks
+            )
             research = research_result(
-                available=plan.get("available") is True,
-                required_days=plan.get("required_days"),
+                available=research_plan["available"],
+                required_days=required_days,
                 qualifying_days=counted_days,
-                restrictions_satisfied=plan.get("restrictions_satisfied") is True,
-                required_check_ids=list(plan.get("required_check_ids") or []),
-                passed_check_ids=list(plan.get("passed_check_ids") or []),
+                restrictions_satisfied=research_plan["restrictions_satisfied"],
+                required_check_ids=required_check_ids,
+                passed_check_ids=list(passed_checks),
                 lifestyle=str(payload.get("lifestyle") or "modest"),
                 plan_source_ref=str(plan.get("source_ref") or ""),
                 plan_source_excerpt=str(plan.get("source_excerpt") or ""),
@@ -513,6 +578,65 @@ class DowntimeService:
             instructor = self.require_campaign_actor(campaign_id, instructor_id)
             if plan.get("instructor_willing") is not True:
                 raise support.CombatEngineError("downtime training requires a willing instructor")
+            if not self.narrative_only_actor(instructor):
+                raise support.CombatEngineError(
+                    "downtime training instructor must be a persisted source-bound NPC"
+                )
+            instructor_notes = dict(instructor.notes or {})
+            instructor_profile = dict(instructor_notes.get("profile") or {})
+            instructor_record = str(instructor_profile.get("dm_notes") or "")
+            record_prefix = "sagasmith:narrative-npc-source:"
+            if not instructor_record.startswith(record_prefix):
+                raise support.CombatEngineError(
+                    "downtime instructor is missing persisted source evidence"
+                )
+            try:
+                instructor_evidence = json.loads(instructor_record[len(record_prefix) :])
+            except (TypeError, json.JSONDecodeError) as error:
+                raise support.CombatEngineError(
+                    "downtime instructor source evidence is malformed"
+                ) from error
+            if (
+                not isinstance(instructor_evidence, dict)
+                or instructor_evidence.get("kind") != "source_bound_narrative_npc"
+            ):
+                raise support.CombatEngineError(
+                    "downtime instructor is missing persisted source evidence"
+                )
+            normalized_instructor_ref, _, instructor_expanded = self.managed_module_source_ref(
+                campaign_id,
+                instructor_evidence.get("source_ref"),
+                require_exact=True,
+                require_active_module=True,
+            )
+            if instructor_expanded is None:
+                raise support.CombatEngineError(
+                    "downtime instructor source evidence is unavailable"
+                )
+            instructor_excerpt = self.managed_module_source_excerpt(
+                instructor_expanded,
+                instructor_evidence.get("source_excerpt"),
+                field="training instructor source_excerpt",
+                minimum_length=8,
+            )
+            target_id = str(plan.get("target_id") or "")
+            target_identity = {
+                "instructor_id": instructor_id,
+                "instructor_source_ref": normalized_instructor_ref,
+                "target_kind": str(plan.get("target_kind") or ""),
+                "target_id": target_id,
+            }
+            existing_training_plan = activity_state.get("training_plan")
+            if existing_training_plan is None:
+                activity_state["training_plan"] = target_identity
+            elif existing_training_plan != target_identity:
+                raise support.CombatEngineError(
+                    "training instructor and selected proficiency cannot change mid-activity"
+                )
+            if target_id.casefold() not in instructor_excerpt.casefold():
+                raise support.CombatEngineError(
+                    "instructor source evidence must identify the selected language or tool"
+                )
             training = training_progress(
                 qualifying_days=counted_days - (1 if hours >= 8 else 0),
                 days_to_add=1 if hours >= 8 else 0,
@@ -536,6 +660,10 @@ class DowntimeService:
                     if training["target"]["id"] not in tools:
                         tools.append(training["target"]["id"])
             result["training"] = training
+            result["training"]["instructor_source"] = {
+                "source_ref": normalized_instructor_ref,
+                "source_excerpt": instructor_excerpt,
+            }
 
         if activity_key != "lifestyle":
             days_state[activity_key] = activity_state
@@ -603,6 +731,15 @@ class DowntimeService:
                 "downtime_state": actor_downtime,
             },
         ]
+        response_fields = {
+            "status": "committed",
+            "resolution_id": resolution_id,
+            "result": result,
+            "rule_receipts": [receipt],
+        }
+        random_stream = support.active_random_stream()
+        if random_stream is not None and random_stream.draw_count > 0:
+            response_fields["random_stream_receipt"] = random_stream.receipt()
         return self.commit_campaign_state(
             campaign,
             state,
@@ -612,12 +749,7 @@ class DowntimeService:
             idempotency_key=idempotency_key,
             scope=scope,
             payload=request,
-            response_fields={
-                "status": "committed",
-                "resolution_id": resolution_id,
-                "result": result,
-                "rule_receipts": [receipt],
-            },
+            response_fields=response_fields,
             character_updates=character_updates,
             rule_receipts=[receipt],
             expected_campaign_revision=expected_revision,

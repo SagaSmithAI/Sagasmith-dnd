@@ -8,6 +8,7 @@ from sagasmith_dnd.character_schema import default_character_sheet
 
 from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.server import create_server
+from tests.sight_rot_test_support import install_symptomatic_sight_rot
 
 
 async def _call(server, name: str, arguments: dict):
@@ -295,6 +296,7 @@ def test_character_check_group_is_atomic_branch_scoped_and_replayable(
         actors = []
         for index in range(6):
             sheet = default_character_sheet()
+            sheet["progression"]["species"] = "human"
             sheet["abilities"]["dexterity"]["score"] = 12 + index
             actors.append(
                 await _call(
@@ -312,6 +314,19 @@ def test_character_check_group_is_atomic_branch_scoped_and_replayable(
                     },
                 )
             )
+        affected = actors[0]
+        infected_affected = await install_symptomatic_sight_rot(
+            lambda name, arguments: _call(server, name, arguments),
+            campaign["id"], affected["id"], key="group-sight-rot",
+            member_ids=[actor["id"] for actor in actors],
+        )
+        disease_state = next(
+            item["metadata"]["disease_state"]
+            for item in infected_affected["sheet"]["effects"]
+            if item.get("kind") == "disease_state"
+            and item["metadata"]["disease_state"]["disease_id"] == "sight_rot"
+        )
+        disease_penalty = -disease_state["sight_penalty"]
         current = await _call(
             server,
             "campaign_query",
@@ -390,6 +405,50 @@ def test_character_check_group_is_atomic_branch_scoped_and_replayable(
         )
         assert after["revision"] == current["revision"] + 1
         assert after["state"]["resolution_log"][-1]["type"] == "ability_group_check"
+
+        sight_arguments = {
+            **arguments, "expected_revision": after["revision"],
+            "idempotency_key": "group-sight-task",
+            "payload": {**arguments["payload"], "relies_on_sight": True},
+        }
+        sight_result = await _call(server, "character_check", sight_arguments)
+        participants_by_id = {
+            participant["actor_id"]: participant
+            for participant in sight_result["participants"]
+        }
+        affected_check = participants_by_id[affected["id"]]["check"]
+        assert "disease_modifier" in affected_check, affected_check
+        assert affected_check["total"] == max(affected_check["rolls"]) + 1 + disease_penalty
+        assert affected_check["disease_modifier"]["facts"]["penalty"] == disease_penalty
+        assert len([
+            receipt for receipt in sight_result["rule_receipts"]
+            if receipt["mechanic_id"].endswith("sight_dependent_checks.2014")
+        ]) == 1
+        assert all(
+            "disease_modifier" not in participants_by_id[actor["id"]]["check"]
+            for actor in actors[1:]
+        )
+
+        after_sight = await _call(server, "campaign_query", {
+            "view": "get", "payload": {"campaign_id": campaign["id"]},
+            "principal_id": "system:local",
+        })
+        nonvisual_arguments = {
+            **sight_arguments, "expected_revision": after_sight["revision"],
+            "idempotency_key": "group-nonvisual-task",
+            "payload": {**arguments["payload"], "relies_on_sight": False},
+        }
+        nonvisual = await _call(server, "character_check", nonvisual_arguments)
+        first_check = next(
+            participant["check"] for participant in nonvisual["participants"]
+            if participant["actor_id"] == affected["id"]
+        )
+        assert first_check["total"] == max(first_check["rolls"]) + 1
+        assert "disease_modifier" not in first_check
+        after = await _call(server, "campaign_query", {
+            "view": "get", "payload": {"campaign_id": campaign["id"]},
+            "principal_id": "system:local",
+        })
 
         with pytest.raises(Exception, match="must be unique"):
             await _call(

@@ -2012,6 +2012,12 @@ def _create_application(config: McpConfig | None = None, *, resources) -> DndRun
     _services.character_disease_cure = _services.public_tool()(
         _services.bind("character_disease_cure", "character_disease_cure")
     )
+    _services.character_disease_eyebright_craft = _services.public_tool()(
+        _services.bind("character_disease_eyebright_craft", "character_disease_eyebright_craft")
+    )
+    _services.character_disease_eyebright_apply = _services.public_tool()(
+        _services.bind("character_disease_eyebright_apply", "character_disease_eyebright_apply")
+    )
     _services.character_disease_stress = _services.public_tool()(
         _services.bind("character_disease_stress", "character_disease_stress")
     )

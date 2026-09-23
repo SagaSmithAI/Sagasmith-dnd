@@ -131,11 +131,12 @@ def test_damage_triggered_confusion_save_commits_with_damage_and_replays_after_r
                 "combat_start",
                 {
                     "campaign_id": campaign["id"],
-                    "positioning_mode": "agent",
+                "positioning_mode": "grid",
+                "battle_map": {"width_cells": 4, "height_cells": 4},
                     "participant_ids": [other["id"], actor["id"]],
                     "participant_config": [
-                        {"actor_id": other["id"], "initiative": 20},
-                        {"actor_id": actor["id"], "initiative": 10},
+                    {"actor_id": other["id"], "initiative": 20, "position": {"x": 0, "y": 0}},
+                    {"actor_id": actor["id"], "initiative": 10, "position": {"x": 1, "y": 0}},
                     ],
                     "expected_revision": current["revision"],
                     "idempotency_key": "start-combat",
@@ -164,6 +165,9 @@ def test_damage_triggered_confusion_save_commits_with_damage_and_replays_after_r
                 if item["actor_id"] == actor["id"]
             )
             assert next_actor["turn_flags"]["madness_confusion"] == madness_turn
+            if madness_turn["outcome"] == "attack_random_creature_in_reach":
+                assert madness_turn["random_target_actor_id"] == other["id"]
+                assert madness_turn["random_target_roll"]["die"] == "1d1"
             close_server(server)
             server = create_server(_config(tmp_path))
             assert await _call(server, "combat_end_turn", end_turn_request) == turn

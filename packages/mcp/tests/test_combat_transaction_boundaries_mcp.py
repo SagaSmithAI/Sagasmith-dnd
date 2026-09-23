@@ -2773,24 +2773,39 @@ def test_cunning_action_hide_resolves_paid_declaration_with_passive_perception(
             "combat_start",
             {
                 "positioning_mode": "grid",
-                "battle_map": {"width_cells": 8, "height_cells": 4},
+                "battle_map": {
+                    "width_cells": 10,
+                    "height_cells": 4,
+                    "ambient_illumination": "dark",
+                    "light_sources": [{
+                        "id": "hide-test-torch",
+                        "position": {"x": 0, "y": 0},
+                        "bright_radius_ft": 20,
+                        "dim_radius_ft": 40,
+                        "source_ref": "bundled:srd2014/04_Equipment/Adventuring_Gear.md#Torch",
+                        "source_excerpt": (
+                            "A torch sheds bright light in a 20-foot radius and dim light "
+                            "for an additional 20 feet."
+                        ),
+                    }],
+                },
                 "campaign_id": campaign["id"],
                 "participant_ids": [rogue["id"], observer["id"], low_observer["id"]],
                 "participant_config": [
                     {
                         "actor_id": rogue["id"],
                         "initiative": 20,
-                        "position": {"x": 0, "y": 0},
+                        "position": {"x": 5, "y": 0},
                     },
                     {
                         "actor_id": observer["id"],
                         "initiative": 10,
-                        "position": {"x": 1, "y": 0},
+                        "position": {"x": 4, "y": 0},
                     },
                     {
                         "actor_id": low_observer["id"],
                         "initiative": 5,
-                        "position": {"x": 2, "y": 0},
+                        "position": {"x": 6, "y": 0},
                     },
                 ],
                 "expected_revision": campaign["revision"],
@@ -2828,7 +2843,10 @@ def test_cunning_action_hide_resolves_paid_declaration_with_passive_perception(
                     "can_hide": True,
                     "reason": "The rogue is obscured behind the larger ally.",
                     "observers": [observer["id"], low_observer["id"]],
-                    "observer_rule_facts": {observer["id"]: {"relies_on_sight": True}},
+                    "observer_rule_facts": {
+                        observer["id"]: {"relies_on_sight": True},
+                        low_observer["id"]: {"relies_on_sight": True},
+                    },
                 },
                 "expected_revision": paid["campaign_revision"],
                 "idempotency_key": "hide-settlement",
@@ -2840,9 +2858,8 @@ def test_cunning_action_hide_resolves_paid_declaration_with_passive_perception(
         passives = {entry["observer_id"]: entry["passive_perception"]
                     for entry in effect["observers"]}
         assert passives == {
-            observer["id"]: (None if observer_condition == "blinded"
-                             else 15 if observer_condition == "none" else 10),
-            low_observer["id"]: 10,
+            observer["id"]: (None if observer_condition == "blinded" else 10),
+            low_observer["id"]: 5,
         }
         assert len(effect["stealth_check"]["rolls"]) == 1
         assert settled["result"]["payment"]["already_paid"] is True
@@ -2859,7 +2876,10 @@ def test_cunning_action_hide_resolves_paid_declaration_with_passive_perception(
                     "can_hide": True,
                     "reason": "The rogue is obscured behind the larger ally.",
                     "observers": [observer["id"], low_observer["id"]],
-                    "observer_rule_facts": {observer["id"]: {"relies_on_sight": True}},
+                    "observer_rule_facts": {
+                        observer["id"]: {"relies_on_sight": True},
+                        low_observer["id"]: {"relies_on_sight": True},
+                    },
                 },
                 "expected_revision": paid["campaign_revision"],
                 "idempotency_key": "hide-settlement",

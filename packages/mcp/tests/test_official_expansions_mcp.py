@@ -1207,7 +1207,7 @@ def test_official_expansion_lock_matches_seeded_core_content(tmp_path: Path) -> 
                 SRD2014_PRESET_PACK_VERSION,
                 CORE_CONTENT_PACK_ID,
                 CORE_CONTENT_PACK_VERSION,
-                "2.16.0",
+                "2.17.0",
             ),
             (
                 SRD2024_PRESET_PACK_ID,

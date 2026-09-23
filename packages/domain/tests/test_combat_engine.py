@@ -2249,7 +2249,7 @@ def test_2014_grid_vision_resolves_light_and_senses() -> None:
         subject.update(initiative=10, tie_breaker=1, position={"x": subject_x, "y": 0})
         battle_map = compile_battle_map(
             {"scene_id": "vision-test", "spatial": {}},
-            {"width_cells": 8, "height_cells": 8, **map_request},
+            {"width_cells": 10, "height_cells": 8, **map_request},
         )
         encounter = start_encounter(
             [viewer, subject], ruleset="2014", positioning_mode="grid", battle_map=battle_map,
@@ -2303,6 +2303,35 @@ def test_2014_grid_vision_resolves_light_and_senses() -> None:
     assert profile["perception_disadvantage"] is True
     assert profile["source_lights"][0]["source_ref"] == source_ref
 
+    for sense in ("blindsight", "truesight"):
+        encounter, alternative_sense, subject = actors(
+            viewer_senses={sense: 30}, map_request=torch_map,
+        )
+        profile = vision_profile_2014(encounter, alternative_sense, subject)
+        assert profile["visible"] is True
+        assert profile["perception_disadvantage"] is False
+
+    encounter, ordinary, subject = actors(
+        viewer_senses={}, map_request=torch_map, subject_x=4,
+    )
+    profile = vision_profile_2014(encounter, ordinary, subject)
+    assert profile["light_level"] == "bright"
+    assert profile["perception_disadvantage"] is False
+
+    encounter, ordinary, subject = actors(
+        viewer_senses={}, map_request=torch_map, subject_x=8,
+    )
+    profile = vision_profile_2014(encounter, ordinary, subject)
+    assert profile["light_level"] == "dim"
+    assert profile["visible"] is True
+
+    encounter, ordinary, subject = actors(
+        viewer_senses={}, map_request=torch_map, subject_x=9,
+    )
+    profile = vision_profile_2014(encounter, ordinary, subject)
+    assert profile["light_level"] == "dark"
+    assert profile["visible"] is False
+
     blocked_torch_map = {
         **torch_map,
         "vision_cells": [{
@@ -2346,6 +2375,15 @@ def test_2014_agent_vision_derives_sight_from_bounded_scene_facts() -> None:
     assert profile["color_detail"] == "grayscale"
     assert profile["perception_disadvantage"] is True
 
+    for sense in ("blindsight", "truesight"):
+        alternative_sense = _actor(f"agent-{sense}")
+        alternative_sense["sheet"]["traits"]["senses"][sense] = 30
+        alternative_sense["derived"] = derive_character_sheet(alternative_sense["sheet"])
+        dim_facts = {**facts, "illumination": "dim"}
+        profile = resolve_agent_vision_2014(alternative_sense, dim_facts)
+        assert profile["visible"] is True
+        assert profile["perception_disadvantage"] is False
+
     magical = {**facts, "magical_darkness": True}
     assert resolve_agent_vision_2014(darkvision, magical)["visible"] is False
     truesight = _actor("truesight")
@@ -2358,6 +2396,9 @@ def test_2014_agent_vision_derives_sight_from_bounded_scene_facts() -> None:
     malformed = {**facts, "attacker_can_see_target": True}
     with pytest.raises(CombatEngineError, match="exact bounded scene fields"):
         resolve_agent_vision_2014(ordinary, malformed)
+    malformed_illumination = {**facts, "illumination": ["bright"]}
+    with pytest.raises(CombatEngineError, match="illumination must be bright, dim, or dark"):
+        resolve_agent_vision_2014(ordinary, malformed_illumination)
 
 
 def test_2014_sight_perception_applies_dim_disadvantage_and_heavy_failure() -> None:
@@ -2404,6 +2445,83 @@ def test_2014_sight_perception_applies_dim_disadvantage_and_heavy_failure() -> N
         for receipt in result["rule_receipts"]
     )
 
+    lightly_obscured_map = compile_battle_map(
+        {"scene_id": "perception-foliage-test", "spatial": {}},
+        {
+            "width_cells": 10,
+            "height_cells": 2,
+            "ambient_illumination": "bright",
+            "vision_cells": [{
+                "x": 5,
+                "y": 0,
+                "illumination": None,
+                "obscuration": "lightly",
+                "magical_darkness": False,
+                "opaque": False,
+                "source_ref": "scene:perception-foliage-test:moderate-foliage",
+                "source_excerpt": "Moderate foliage lightly obscures the searched space.",
+            }],
+        },
+    )
+    lightly_obscured_encounter = start_encounter(
+        [observer, subject],
+        ruleset="2014",
+        positioning_mode="grid",
+        battle_map=lightly_obscured_map,
+    )
+    lightly_obscured = resolve_actor_check(
+        observer,
+        kind="check",
+        ability="perception",
+        dc=12,
+        encounter=lightly_obscured_encounter,
+        ruleset="2014",
+        rules=rules,
+        vision_subject=subject,
+        rng=_SequenceRng(15, 5),
+    )
+    assert lightly_obscured["vision"]["obscuration"] == "lightly"
+    assert lightly_obscured["disadvantage_applied"] is True
+
+    heavily_obscured_map = compile_battle_map(
+        {"scene_id": "perception-fog-test", "spatial": {}},
+        {
+            "width_cells": 10,
+            "height_cells": 2,
+            "ambient_illumination": "bright",
+            "vision_cells": [{
+                "x": 5,
+                "y": 0,
+                "illumination": None,
+                "obscuration": "heavily",
+                "magical_darkness": False,
+                "opaque": False,
+                "source_ref": "scene:perception-fog-test:opaque-fog",
+                "source_excerpt": "Opaque fog heavily obscures the searched space.",
+            }],
+        },
+    )
+    heavily_obscured_encounter = start_encounter(
+        [observer, subject],
+        ruleset="2014",
+        positioning_mode="grid",
+        battle_map=heavily_obscured_map,
+    )
+    unused_rng = _SequenceRng(15)
+    heavily_obscured = resolve_actor_check(
+        observer,
+        kind="check",
+        ability="perception",
+        dc=12,
+        encounter=heavily_obscured_encounter,
+        ruleset="2014",
+        rules=rules,
+        vision_subject=subject,
+        rng=unused_rng,
+    )
+    assert heavily_obscured["automatic_failure"] is True
+    assert unused_rng.values == [15]
+
     blocked_map = compile_battle_map(
         {"scene_id": "perception-blocked-test", "spatial": {}},
         {
@@ -2433,6 +2551,61 @@ def test_2014_sight_perception_applies_dim_disadvantage_and_heavy_failure() -> N
     )
     assert blocked["automatic_failure"] is True
     assert unused_rng.values == [15]
+
+
+def test_2014_grid_perception_uses_the_observed_area_illumination() -> None:
+    battle_map = compile_battle_map(
+        {"scene_id": "perception-target-vision-test", "spatial": {}},
+        {
+            "width_cells": 10,
+            "height_cells": 2,
+            "ambient_illumination": "dark",
+            "light_sources": [{
+                "id": "torch",
+                "position": {"x": 0, "y": 0},
+                "bright_radius_ft": 20,
+                "dim_radius_ft": 40,
+                "source_ref": "bundled:srd2014/04_Equipment/Adventuring_Gear.md#Torch",
+                "source_excerpt": (
+                    "A torch sheds bright light in a 20-foot radius and dim light "
+                    "for an additional 20 feet."
+                ),
+            }],
+        },
+    )
+    observer = _actor("perception-area-observer")
+    observer.update(initiative=20, position={"x": 0, "y": 0})
+    target = _actor("perception-area-target")
+    target.update(initiative=10, position={"x": 5, "y": 0})
+    encounter = start_encounter(
+        [observer, target],
+        ruleset="2014",
+        positioning_mode="grid",
+        battle_map=battle_map,
+    )
+    rules = resolution_context(
+        {"edition": "2014", "fingerprint": "", "lock": []},
+        facts={"relies_on_sight": True},
+    )
+
+    result = resolve_actor_check(
+        observer,
+        kind="check",
+        ability="perception",
+        dc=12,
+        encounter=encounter,
+        ruleset="2014",
+        rules=rules,
+        vision_subject=target,
+        rng=_SequenceRng(15, 5),
+    )
+
+    assert result["vision"]["light_level"] == "dim"
+    assert result["disadvantage_applied"] is True
+    assert any(
+        receipt["mechanic_id"] == "dnd5e.core.vision.light_obscuration_2014"
+        for receipt in result["rule_receipts"]
+    )
 
 
 def test_2014_agent_perception_and_passive_hide_observer_use_sight_facts() -> None:

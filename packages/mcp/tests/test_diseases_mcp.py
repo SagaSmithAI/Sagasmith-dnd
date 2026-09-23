@@ -178,6 +178,152 @@ def test_disease_exposure_is_campaign_random_cas_persisted_and_cure_is_source_bo
                 "campaign_query",
                 {"view": "get", "payload": {"campaign_id": campaign["id"]}},
             )
+            clocked = await _call(
+                server,
+                "campaign_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "clock_advance",
+                    "payload": {"period": "hour", "count": 16, "expected_elapsed_ticks": 9600},
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "disease-sight-rot-incubation-day",
+                },
+            )
+            current_actor = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": actor["id"]}},
+            )
+            disease_effect = next(
+                item
+                for item in current_actor["sheet"]["effects"]
+                if item["id"] == effect["id"]
+            )
+            assert disease_effect["metadata"]["disease_state"]["symptomatic"] is False
+            assert disease_effect["changes"] == []
+            assert disease_effect["metadata"]["attack_roll_penalty"] == 0
+
+            rest_request = {
+                "campaign_id": campaign["id"],
+                "action": "party_rest",
+                "payload": {
+                    "rest_type": "long_rest",
+                    "duration_minutes": 480,
+                    "members": [
+                        {
+                            "character_id": actor["id"],
+                            "expected_revision": current_actor["revision"],
+                            "survival_intake": {
+                                "food_lb": 1,
+                                "water_gallons": 1,
+                                "hot_weather": False,
+                            },
+                        }
+                    ],
+                },
+                "expected_revision": clocked["campaign_revision"],
+                "idempotency_key": "disease-sight-rot-long-rest-worsening",
+            }
+            rested = await _call(server, "campaign_change", rest_request)
+            disease_rest = rested.get("recovered", {}).get(actor["id"], {}).get("disease_rest", [])
+            assert disease_rest and disease_rest[0]["disease_id"] == "sight_rot", (
+                rested.get("reason"), rested.get("missing"), rested.get("committed")
+            )
+            post_rest_actor = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": actor["id"]}},
+            )
+            disease_effect = next(
+                item
+                for item in post_rest_actor["sheet"]["effects"]
+                if item["id"] == effect["id"]
+            )
+            assert disease_effect["metadata"]["disease_state"]["symptomatic"] is True
+            assert disease_effect["metadata"]["disease_state"]["sight_penalty"] == 1
+            assert disease_effect["changes"] == [
+                {"path": "rolls.attack.bonus", "mode": "add", "value": -1}
+            ]
+
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            await _call(
+                server,
+                "game_phase",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "set",
+                    "tool_profile": "play",
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "sight-rot-check-phase",
+                },
+            )
+
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            visual_check = await _call_response(
+                server,
+                "character_check",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "check",
+                    "payload": {
+                        "actor_id": actor["id"],
+                        "kind": "ability",
+                        "ability": "strength",
+                        "dc": 1,
+                        "relies_on_sight": True,
+                    },
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "sight-rot-visual-ability-check",
+                },
+            )
+            assert visual_check["result"]["total"] - visual_check["result"]["natural"] == -1
+            assert visual_check["rule_receipts"][-1]["mechanic_id"] == (
+                "dnd5e.core.gamemastering.disease.sight_rot.sight_dependent_checks.2014"
+            )
+            assert visual_check["rule_receipts"][-1]["facts"]["disease_effect_id"] == effect["id"]
+
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            nonvisual_check = await _call_response(
+                server,
+                "character_check",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "check",
+                    "payload": {
+                        "actor_id": actor["id"],
+                        "kind": "ability",
+                        "ability": "strength",
+                        "dc": 1,
+                        "relies_on_sight": False,
+                    },
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "sight-rot-nonvisual-ability-check",
+                },
+            )
+            assert nonvisual_check["result"]["total"] - nonvisual_check["result"]["natural"] == 0
+            assert "rule_receipts" not in nonvisual_check or not any(
+                receipt.get("mechanic_id")
+                == "dnd5e.core.gamemastering.disease.sight_rot.sight_dependent_checks.2014"
+                for receipt in nonvisual_check["rule_receipts"]
+            )
+
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
             infected = await _call(
                 server,
                 "character_query",
@@ -195,6 +341,7 @@ def test_disease_exposure_is_campaign_random_cas_persisted_and_cure_is_source_bo
             }
             cured = await _call_response(server, "character_disease_cure", cure_request)
             assert cured["status"] == "committed"
+            assert await _call(server, "campaign_change", rest_request) == rested
             close_server(server)
             server = create_server(_config(tmp_path))
             assert await _call_response(server, "character_disease_cure", cure_request) == cured
@@ -208,7 +355,7 @@ def test_disease_exposure_is_campaign_random_cas_persisted_and_cure_is_source_bo
             )
             assert cured_effect["active"] is False
             assert cured_effect["metadata"]["disease_state"]["active"] is False
-            assert cured_effect["metadata"]["disease_state"]["symptomatic"] is False
+            assert cured_effect["metadata"]["disease_state"]["symptomatic"] is True
         finally:
             close_server(server)
 

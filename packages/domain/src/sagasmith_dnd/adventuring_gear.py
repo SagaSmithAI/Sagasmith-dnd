@@ -384,7 +384,13 @@ _GEAR_INTENTS: dict[str, dict[str, dict[str, Any]]] = {
         ),
     },
     "chain_10_feet": {
-        "burst": _intent(None, "chain", object_hp=10, check={"ability": "strength", "dc": 20}),
+        "burst": _intent(
+            None,
+            "chain",
+            object_hp=10,
+            check={"ability": "strength", "dc": 20},
+            effect={"requires_state": "intact", "success_state": "broken"},
+        ),
     },
     "climber_s_kit": {
         "anchor": _intent(

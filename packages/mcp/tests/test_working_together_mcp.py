@@ -15,6 +15,7 @@ from sagasmith_dnd_runtime.application_support import StateMutationService
 from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.server import close_server, create_server
 from tests.authoring_helpers import finalize_and_activate_module
+from tests.sight_rot_test_support import install_symptomatic_sight_rot
 
 
 async def call(server, name, arguments):
@@ -73,6 +74,7 @@ def test_working_together_source_eligibility_atomicity_and_restart(tmp_path, mon
                                        ("Helper", 12, ["Thieves' Tools"]), ("Untrained", 10, [])):
                 sheet = default_character_sheet()
                 sheet["combat"]["hp"] = {"value": 20, "max": 20, "temp": 0}
+                sheet["progression"]["species"] = "human"
                 sheet["abilities"]["dexterity"]["score"] = score
                 sheet["traits"]["proficiencies"]["tools"] = tools
                 actors.append(await read(server, "character_create_from", {
@@ -91,6 +93,19 @@ def test_working_together_source_eligibility_atomicity_and_restart(tmp_path, mon
                 return await read(server, "character_query", {
                     "view": "get", "payload": {"character_id": identifier},
                 })
+
+            infected_leader = await install_symptomatic_sight_rot(
+                lambda name, arguments: call(server, name, arguments),
+                campaign_id, leader["id"], key="wt-sight-rot",
+                member_ids=[actor["id"] for actor in actors],
+            )
+            disease_state = next(
+                item["metadata"]["disease_state"]
+                for item in infected_leader["sheet"]["effects"]
+                if item.get("kind") == "disease_state"
+                and item["metadata"]["disease_state"]["disease_id"] == "sight_rot"
+            )
+            disease_penalty = -disease_state["sight_penalty"]
 
             current = await snapshot()
             await call(server, "game_phase", {
@@ -193,7 +208,7 @@ def test_working_together_source_eligibility_atomicity_and_restart(tmp_path, mon
                        for r in result["result"]["rule_receipts"])
             after = await snapshot()
             assert after["revision"] == before["revision"] + 1
-            for old in (leader, helper):
+            for old in before_cards[:2]:
                 current_actor = await actor_snapshot(old["id"])
                 assert current_actor["revision"] == old["revision"] + 1
                 assert current_actor["sheet"] == old["sheet"]
@@ -206,6 +221,47 @@ def test_working_together_source_eligibility_atomicity_and_restart(tmp_path, mon
             server = create_server(config)
             assert await call(server, "character_check", args) == result
             assert await snapshot() == after
+
+            # A reviewed sight task applies the exact leader's disease penalty;
+            # the same infected leader is unaffected on a nonvisual task.
+            sight_task = {**task, "relies_on_sight": True}
+            sight_args = {
+                **args, "expected_revision": after["revision"],
+                "idempotency_key": "unlock-sight-task",
+                "payload": {**args["payload"], "task": sight_task},
+            }
+            sight_result = await call(server, "character_check", sight_args)
+            sight_check = sight_result["result"]["check"]
+            assert sight_check["total"] == max(sight_check["rolls"]) + 5 + disease_penalty
+            disease_receipt = sight_check["disease_modifier"]
+            assert disease_receipt["facts"]["actor_id"] == leader["id"]
+            assert disease_receipt["facts"]["penalty"] == disease_penalty
+            assert disease_receipt in sight_result["result"]["rule_receipts"]
+
+            after_sight = await snapshot()
+            nonvisual_args = {
+                **sight_args, "expected_revision": after_sight["revision"],
+                "idempotency_key": "unlock-nonvisual-task",
+                "payload": {**args["payload"], "task": {**task, "relies_on_sight": False}},
+            }
+            nonvisual = await call(server, "character_check", nonvisual_args)
+            nonvisual_check = nonvisual["result"]["check"]
+            assert nonvisual_check["total"] == max(nonvisual_check["rolls"]) + 5
+            assert "disease_modifier" not in nonvisual_check
+
+            after_nonvisual = await snapshot()
+            unaffected_args = {
+                **sight_args, "expected_revision": after_nonvisual["revision"],
+                "idempotency_key": "unlock-unaffected-leader",
+                "payload": {
+                    **args["payload"], "leader_id": helper["id"], "task": sight_task,
+                },
+            }
+            unaffected = await call(server, "character_check", unaffected_args)
+            unaffected_check = unaffected["result"]["check"]
+            assert unaffected_check["total"] == max(unaffected_check["rolls"]) + 3
+            assert "disease_modifier" not in unaffected_check
+            after = await snapshot()
 
             # Conditions changed after the first review must affect the next attempt.
             await call(server, "game_phase", {

@@ -126,6 +126,10 @@ def test_time_and_object_rules_are_fixed_without_inventing_unstated_action_costs
         if action.name == "Rope, hempen (50 feet)"
     )
     rope_use = resolve_adventuring_gear_intent(_item(rope), "burst")
+    chain = next(
+        action for action in ADVENTURING_GEAR_ACTIONS.values() if action.name == "Chain (10 feet)"
+    )
+    chain_use = resolve_adventuring_gear_intent(_item(chain), "burst")
 
     assert antitoxin_use["duration_ticks"] == TICKS_PER_HOUR
     assert antitoxin_use["requirements"] == ["target_not_undead", "target_not_construct"]
@@ -135,6 +139,9 @@ def test_time_and_object_rules_are_fixed_without_inventing_unstated_action_costs
     assert lamp_use["resource_cost"]["fuel"]["source_key"].endswith("oil-flask")
     assert rope_use["object_hit_points"] == 2
     assert rope_use["check"] == {"ability": "strength", "dc": 17}
+    assert chain_use["object_hit_points"] == 10
+    assert chain_use["check"] == {"ability": "strength", "dc": 20}
+    assert chain_use["effect"] == {"requires_state": "intact", "success_state": "broken"}
     assert 5 * TICKS_PER_MINUTE == 50
 
 

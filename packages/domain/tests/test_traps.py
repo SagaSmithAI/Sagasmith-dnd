@@ -9,6 +9,7 @@ from sagasmith_dnd.traps import (
     source_trap_profile,
     transition_trap_state,
     trap_severity,
+    validate_source_pit_depth,
 )
 
 
@@ -204,6 +205,55 @@ def test_falling_net_escape_removes_only_the_bound_actor():
         )
 
 
+def test_falling_net_object_destruction_releases_its_bound_actors_only():
+    state = {
+        "traps": {
+            "net": {
+                "source_ref": "module:crypt#net",
+                "profile_id": "srd5.1.falling_net",
+                "object_id": "net",
+                "status": "triggered",
+                "restrained_actor_ids": ["scout", "guard"],
+                "trap_added_restrained_actor_ids": ["scout"],
+            }
+        }
+    }
+    destroyed = transition_trap_state(
+        state,
+        source_ref="module:crypt#net",
+        trap_id="net",
+        action="destroy_object",
+        destroyed_object_id="net",
+        destroyed_hit_points=0,
+    )
+    net = destroyed["traps"]["net"]
+    assert net["status"] == "spent"
+    assert net["restrained_actor_ids"] == []
+    assert net["trap_added_restrained_actor_ids"] == []
+    assert net["released_actor_ids"] == ["scout", "guard"]
+    assert net["object_destroyed"] is True
+    assert net["object_hit_points"] == 0
+    assert state["traps"]["net"]["restrained_actor_ids"] == ["scout", "guard"]
+    with pytest.raises(ValueError, match="different source"):
+        transition_trap_state(
+            state,
+            source_ref="module:other#net",
+            trap_id="net",
+            action="destroy_object",
+            destroyed_object_id="net",
+            destroyed_hit_points=0,
+        )
+    with pytest.raises(ValueError, match="zero authoritative"):
+        transition_trap_state(
+            state,
+            source_ref="module:crypt#net",
+            trap_id="net",
+            action="destroy_object",
+            destroyed_object_id="net",
+            destroyed_hit_points=1,
+        )
+
+
 def test_poison_needle_profile_and_owned_condition_are_fixed_and_bounded():
     marker = 'trap_profile: {"profile_id":"srd5.1.poison_needle"}'
     profile = source_trap_profile({"profile_id": "srd5.1.poison_needle"}, marker)
@@ -244,6 +294,18 @@ def test_poison_needle_profile_and_owned_condition_are_fixed_and_bounded():
         )["id"]
         == effect["id"]
     )
+    canonical_source = json.dumps(
+        {"module_id": "m" * 1200, "chunk_id": "c" * 1200, "content_digest": "a" * 128},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    assert len(canonical_source) > 300
+    assert build_poison_needle_condition_effect(
+        profile_id=profile["profile_id"],
+        source_ref=canonical_source,
+        trap_id="needle-1",
+        target_actor_id="actor-1",
+    )["metadata"]["trap_state"]["source_ref"] == canonical_source
     sheet = default_character_sheet()
     sheet["edition"] = "2014"
     sheet, _ = add_effect(sheet, effect)
@@ -305,3 +367,30 @@ def test_poison_needle_effect_expiry_removes_only_its_condition_source():
     ended_independent["active"] = False
     reconcile_ended_effect_conditions(sheet, ended_effects=[ended_independent])
     assert "poisoned" not in sheet["conditions"]
+
+
+def test_source_pit_depth_is_scene_fact_bounded_by_the_selected_profile():
+    def profile(profile_id):
+        marker = "trap_profile: " + json.dumps(
+            {"profile_id": profile_id}, sort_keys=True, separators=(",", ":")
+        )
+        return source_trap_profile({"profile_id": profile_id}, marker)
+
+    assert validate_source_pit_depth(profile("srd5.1.simple_pit"), 20) == 20
+    assert validate_source_pit_depth(profile("srd5.1.simple_pit"), 200) == 200
+    assert validate_source_pit_depth(profile("srd5.1.simple_pit"), 205) == 205
+    assert validate_source_pit_depth(profile("srd5.1.hidden_pit"), 10) == 10
+    assert validate_source_pit_depth(profile("srd5.1.spiked_hidden_pit"), 20) == 20
+    with pytest.raises(ValueError, match="outside the fixed source profile"):
+        validate_source_pit_depth(profile("srd5.1.hidden_pit"), 15)
+    with pytest.raises(ValueError, match="positive integer"):
+        validate_source_pit_depth(profile("srd5.1.simple_pit"), 0)
+    with pytest.raises(ValueError, match="positive integer"):
+        validate_source_pit_depth(profile("srd5.1.simple_pit"), True)
+    assert validate_source_pit_depth(profile("srd5.1.locking_pit"), 10) == 10
+    assert validate_source_pit_depth(profile("srd5.1.spiked_locking_pit"), 20) == 20
+    assert (
+        validate_source_pit_depth(profile("srd5.1.poisoned_spiked_locking_pit"), 10) == 10
+    )
+    with pytest.raises(ValueError, match="outside the fixed source profile"):
+        validate_source_pit_depth(profile("srd5.1.locking_pit"), 15)

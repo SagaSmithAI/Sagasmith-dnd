@@ -10,6 +10,7 @@ from sagasmith_dnd.character_schema import default_character_sheet
 from sagasmith_dnd_runtime.application import create_runtime
 from sagasmith_dnd_runtime.operations import RequestIdentity
 
+from tests.sight_rot_test_support import install_symptomatic_sight_rot
 from tests.test_source_object_authority import EXCERPT, setup
 from tests.test_structured_spell_mcp import _slot, _spell
 
@@ -291,6 +292,78 @@ def test_passive_sunlight_reuses_source_authority_and_local_replay(tmp_path, loc
             if local:
                 assert replay["local_execution"]["replayed"] is True
                 assert replay["receipt_is_current"] is True
+        finally:
+            world.close()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "relies_on_sight,infected",
+    [(True, True), (False, True), (True, False), (None, True)],
+)
+def test_passive_sight_rot_modifier_uses_only_reviewed_sight_task(
+    tmp_path, relies_on_sight, infected,
+):
+    async def run():
+        world = await drow_world(tmp_path)
+        try:
+            campaign, actor = await world.snapshot()
+            disease_penalty = 0
+            if infected:
+                await world.call("game_phase", {
+                    "campaign_id": world.cid, "action": "set", "tool_profile": "lobby",
+                    "expected_revision": campaign["revision"],
+                    "idempotency_key": "passive-sight-rot-lobby",
+                })
+                infected_actor = await install_symptomatic_sight_rot(
+                    world.call, world.cid, world.aid, key="passive-sight-rot",
+                    member_ids=[world.aid, world.target],
+                )
+                disease_state = next(
+                    item["metadata"]["disease_state"]
+                    for item in infected_actor["sheet"]["effects"]
+                    if item.get("kind") == "disease_state"
+                    and item["metadata"]["disease_state"]["disease_id"] == "sight_rot"
+                )
+                disease_penalty = -disease_state["sight_penalty"]
+                campaign, _ = await world.snapshot()
+                await world.call("game_phase", {
+                    "campaign_id": world.cid, "action": "set", "tool_profile": "play",
+                    "expected_revision": campaign["revision"],
+                    "idempotency_key": "passive-sight-rot-play",
+                })
+                campaign, actor = await world.snapshot()
+            args = {
+                "campaign_id": world.cid, "action": "passive",
+                "expected_revision": campaign["revision"],
+                "idempotency_key": "passive-sight-rot",
+                "payload": {
+                    "actor_id": world.aid, "ability": "investigation",
+                    "task": {
+                        "mode": "exploration", "source_ref": world.source,
+                        "source_excerpt": SUNLIGHT_EXCERPT,
+                        "reason": "DM classifies inspecting the marked wall as a visual task.",
+                        "dc": 12,
+                        **({"relies_on_sight": relies_on_sight}
+                           if relies_on_sight is not None else {}),
+                    },
+                },
+            }
+            result = await invoke(world, "character_check", args)
+            check = result["result"]
+            expected_bonus = (
+                disease_penalty if relies_on_sight is True and infected else 0
+            )
+            assert check["bonus"] == expected_bonus
+            assert ("disease_modifier" in check) is (expected_bonus < 0)
+            if expected_bonus < 0:
+                receipt = check["disease_modifier"]
+                assert receipt["mechanic_id"].endswith("sight_dependent_checks.2014")
+                assert receipt["facts"]["relies_on_sight"] is True
+                assert receipt["facts"]["penalty"] == disease_penalty
+                assert receipt in check["rule_receipts"]
+            assert await invoke(world, "character_check", args) == result
         finally:
             world.close()
 

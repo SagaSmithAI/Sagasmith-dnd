@@ -38,6 +38,35 @@ def reconcile_movement(runtime, campaign, campaign_state, character_updates, res
         if encounter.get("movement_continuation")
         else encounter
     )
+    if not resumed.get("movement_continuation"):
+        from sagasmith_dnd.combat_engine import _combat_turn_token, _remaining_movement_ft
+
+        for participant in resumed.get("combatants", []):
+            flags = dict(participant.get("turn_flags") or {})
+            confusion = dict(flags.get("madness_confusion") or {})
+            constraint = dict(confusion.get("movement_constraint") or {})
+            if (
+                constraint.get("status") != "pending_reaction"
+                or constraint.get("turn_token") != _combat_turn_token(resumed)
+            ):
+                continue
+            travel_mode = str(constraint.get("travel_mode") or "")
+            if not travel_mode or _remaining_movement_ft(participant, travel_mode) != 0:
+                raise support.CombatEngineError(
+                    "Confusion movement continuation did not spend all available movement"
+                )
+            constraint["status"] = "completed"
+            confusion["movement_constraint"] = constraint
+            flags["madness_confusion"] = confusion
+            participant["turn_flags"] = flags
+            for event in reversed(resumed.get("log", [])):
+                if (
+                    event.get("type") == "madness_confusion_turn"
+                    and event.get("actor_id") == participant.get("actor_id")
+                    and event.get("turn_token") == confusion.get("turn_token")
+                ):
+                    event["movement_constraint"] = support.deepcopy(constraint)
+                    break
     if resumed == original and not resumed.get("jump_landing_check_due"):
         return campaign_state, list(character_updates or []), response_fields
     by_actor = {update.character_id: update for update in updates}

@@ -3,10 +3,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from copy import deepcopy
 from pathlib import Path
 
 from sagasmith_dnd.character_schema import default_character_sheet
 
+import sagasmith_dnd_mcp.server as server_module
 from sagasmith_dnd_mcp.config import McpConfig
 from sagasmith_dnd_mcp.server import close_server, create_server
 from tests.authoring_helpers import finalize_and_activate_module
@@ -202,7 +204,7 @@ def test_managed_module_research_and_source_backed_training_settle_and_replay(
                 "available": True,
                 "required_days": 2,
                 "restrictions_satisfied": True,
-                "required_check_ids": [],
+                "required_check_ids": ["archive-check"],
                 "passed_check_ids": [],
                 "source_ref": research_source_ref,
                 "source_excerpt": RESEARCH_CONTENT,
@@ -272,7 +274,6 @@ def test_managed_module_research_and_source_backed_training_settle_and_replay(
                     )
                     assert after_forgery["revision"] == campaign_now["revision"]
                     assert student_after_forgery["revision"] == student_now["revision"]
-
                 research_result = await _response(server, "character_downtime_settle", request)
                 assert research_result["status"] == "committed"
                 details = research_result["result"]["research"]
@@ -309,17 +310,40 @@ def test_managed_module_research_and_source_backed_training_settle_and_replay(
             )
             research_completion_request = {
                 **research_final_request,
+                "payload": {
+                    **research_final_request["payload"],
+                    "plan": {**research_plan, "passed_check_ids": ["archive-check"]},
+                },
                 "expected_revision": campaign_before_completion["revision"],
                 "expected_actor_revision": student_before_completion["revision"],
                 "idempotency_key": "research-day-2",
             }
+            shortened_research_request = deepcopy(research_completion_request)
+            shortened_research_request["payload"]["plan"]["required_days"] = 1
+            shortened_research_request["idempotency_key"] = "research-shorten-duration"
+            try:
+                await _response(server, "character_downtime_settle", shortened_research_request)
+            except Exception as error:
+                assert "cannot change mid-activity" in str(error)
+            else:
+                raise AssertionError("research accepted a shortened persisted duration")
+            unchanged_after_reject = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            assert unchanged_after_reject["revision"] == campaign_before_completion["revision"]
             research_completion = await _response(
                 server, "character_downtime_settle", research_completion_request
             )
             research_result = research_completion["result"]["research"]
             assert research_result["complete"] is True
             assert research_result["qualifying_days"] == 2
-            assert research_result["information_source"] is not None
+            assert research_result["missing_check_ids"] == []
+            assert research_result["information_source"] == {
+                "source_ref": info_source_ref,
+                "source_excerpt": RESEARCH_CONTENT,
+            }
             close_server(server)
             server = create_server(config)
             assert (
@@ -329,32 +353,29 @@ def test_managed_module_research_and_source_backed_training_settle_and_replay(
                 == research_completion
             )
 
-            training_request = None
-            for day_index in range(2):
-                if day_index:
-                    await _advance_one_day(
-                        server, campaign["id"], f"training-day-advance-{day_index}"
-                    )
-                campaign_now = await _call(
-                    server,
-                    "campaign_query",
-                    {"view": "get", "payload": {"campaign_id": campaign["id"]}},
-                )
-                student_now = await _call(
-                    server,
-                    "character_query",
-                    {"view": "get", "payload": {"character_id": student["id"]}},
-                )
-                training_request = {
+            short_day_campaign = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            short_day_student = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": student["id"]}},
+            )
+            short_training = await _response(
+                server,
+                "character_downtime_settle",
+                {
                     "campaign_id": campaign["id"],
                     "actor_id": student["id"],
                     "activity": "training",
                     "payload": {
                         "source_ref": ADVENTURING_REF,
                         "source_excerpt": TRAINING_RULE,
-                        "hours": 8,
+                        "hours": 7,
                         "lifestyle": "modest",
-                        "payment": {"gp": 2},
+                        "payment": {},
                         "plan": {
                             "instructor_id": instructor_id,
                             "instructor_willing": True,
@@ -364,24 +385,120 @@ def test_managed_module_research_and_source_backed_training_settle_and_replay(
                             "passed_check_ids": [],
                         },
                     },
-                    "expected_revision": campaign_now["revision"],
-                    "expected_actor_revision": student_now["revision"],
-                    "idempotency_key": f"training-day-{day_index + 1}",
-                }
-                training_response = await _response(
-                    server, "character_downtime_settle", training_request
-                )
-                training = training_response["result"]["training"]
-                assert training["qualifying_days"] == day_index + 1
-                assert training_response["result"]["cost_cp"] == 200
-                assert training["complete"] is False
+                    "expected_revision": short_day_campaign["revision"],
+                    "expected_actor_revision": short_day_student["revision"],
+                    "idempotency_key": "training-seven-hour-short-day",
+                },
+            )
+            assert short_training["result"]["training"]["qualifying_days"] == 0
+            assert short_training["result"]["training"]["days_credited"] == 0
+            assert short_training["result"]["cost_cp"] == 0
 
-            assert training_request is not None
-            assert training["target"] == {"kind": "language", "id": "Orc"}
-            assert training["instructor_id"] == instructor_id
+            # Seed the durable progress record at day 249 instead of performing
+            # 249 redundant MCP clock/settlement round trips. The public Runtime
+            # settlement below still has to cross the exact 250-day boundary.
+            storage = server_module.SagaSmithStorage(config)
+            campaigns = server_module.CampaignService(storage.database)
+            stored_campaign = campaigns.get(campaign["id"])
+            seeded_state = deepcopy(stored_campaign.state)
+            seeded_state["game_time"]["elapsed_ticks"] = 249 * 24 * 600
+            seeded_downtime = {
+                "activities": {
+                    "training": {
+                        "days": [
+                            {
+                                "activity": "training",
+                                "day_key": str(day_index),
+                                "hours": 8,
+                                "qualifies": True,
+                                "source": {
+                                    "source_ref": ADVENTURING_REF,
+                                    "source_excerpt": TRAINING_RULE,
+                                },
+                            }
+                            for day_index in range(249)
+                        ],
+                        "training_plan": {
+                            "instructor_id": instructor_id,
+                            "instructor_source_ref": json.dumps(
+                                instructor_ref, sort_keys=True, separators=(",", ":")
+                            ),
+                            "target_kind": "language",
+                            "target_id": "Orc",
+                        },
+                    }
+                }
+            }
+            seeded_state["resolution_log"].append(
+                {
+                    "id": "seeded-training-history",
+                    "type": "downtime_settlement",
+                    "actor_id": student["id"],
+                    "downtime_state": seeded_downtime,
+                }
+            )
+            seeded_campaign = campaigns.update(
+                campaign["id"],
+                state=seeded_state,
+                expected_revision=stored_campaign.revision,
+            )
+            storage.database.dispose()
+            student_now = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": student["id"]}},
+            )
+            training_request = {
+                "campaign_id": campaign["id"],
+                "actor_id": student["id"],
+                "activity": "training",
+                "payload": {
+                    "source_ref": ADVENTURING_REF,
+                    "source_excerpt": TRAINING_RULE,
+                    "hours": 8,
+                    "lifestyle": "modest",
+                    "payment": {"gp": 2},
+                    "plan": {
+                        "instructor_id": instructor_id,
+                        "instructor_willing": True,
+                        "target_kind": "language",
+                        "target_id": "Orc",
+                        "required_check_ids": [],
+                        "passed_check_ids": [],
+                    },
+                },
+                "expected_revision": seeded_campaign.revision,
+                "expected_actor_revision": student_now["revision"],
+                "idempotency_key": "training-day-250",
+            }
+            changed_target = deepcopy(training_request)
+            changed_target["payload"]["plan"]["target_id"] = "Dwarvish"
+            changed_target["idempotency_key"] = "training-target-change"
+            try:
+                await _response(server, "character_downtime_settle", changed_target)
+            except Exception as error:
+                assert "cannot change mid-activity" in str(error)
+            else:
+                raise AssertionError("training accepted a changed proficiency target")
+            unchanged = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            assert unchanged["revision"] == seeded_campaign.revision
+
             training_final_response = await _response(
                 server, "character_downtime_settle", training_request
             )
+            training = training_final_response["result"]["training"]
+            assert training["qualifying_days"] == 250
+            assert training["complete"] is True
+            assert training["target"] == {"kind": "language", "id": "Orc"}
+            assert training["instructor_id"] == instructor_id
+            assert training["instructor_source"]["source_ref"] == json.dumps(
+                instructor_ref, sort_keys=True, separators=(",", ":")
+            )
+            assert training_final_response["result"]["cost_cp"] == 200
             close_server(server)
             server = create_server(config)
             assert (
@@ -394,8 +511,8 @@ def test_managed_module_research_and_source_backed_training_settle_and_replay(
                 "character_query",
                 {"view": "get", "payload": {"character_id": student["id"]}},
             )
-            assert "Orc" not in student_after["sheet"]["traits"]["languages"]
-            assert student_after["sheet"]["inventory"]["wallet"]["gp"] == 992
+            assert "Orc" in student_after["sheet"]["traits"]["languages"]
+            assert student_after["sheet"]["inventory"]["wallet"]["gp"] == 994
         finally:
             close_server(server)
 

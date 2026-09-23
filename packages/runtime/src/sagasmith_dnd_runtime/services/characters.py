@@ -1033,6 +1033,7 @@ class CharactersService:
         idempotency_key: str | None = None,
         *,
         scene_save_source: dict[str, Any] | None = None,
+        relies_on_sight: bool | None = None,
     ) -> dict[str, Any]:
         """Resolve and audit a non-combat check using the branch's exact rule-pack lock."""
         self.access.require_campaign(campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES)
@@ -1042,6 +1043,10 @@ class CharactersService:
                 "narrative-only actors cannot make checks without an exact statblock"
             )
         actor_snapshot = self.combat_actor_snapshot(actor_id)
+        if relies_on_sight is not None and type(relies_on_sight) is not bool:
+            raise ValueError("relies_on_sight must be true, false, or omitted")
+        if relies_on_sight is True and kind not in _support.ABILITY_CHECK_KINDS:
+            raise ValueError("relies_on_sight applies only to ability checks")
         normalized_ability = str(ability).strip().casefold().replace(" ", "_")
         derived_skill = normalized_ability in dict(actor_snapshot["derived"].get("skills") or {})
         if kind in _support.ABILITY_CHECK_KINDS and derived_skill and proficient:
@@ -1052,6 +1057,41 @@ class CharactersService:
         self.require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = self.require_current_branch(campaign_id, branch_id)
         settlement_facts = self.checked_rule_facts(rule_facts)
+        sight_rot_modifier: dict[str, Any] | None = None
+        disease_receipt: dict[str, Any] | None = None
+        if relies_on_sight is True:
+            from sagasmith_dnd.diseases import (
+                DISEASE_SOURCE_REF,
+                sight_rot_ability_check_penalty,
+            )
+
+            for effect in actor_snapshot.get("sheet", {}).get("effects", []):
+                if (
+                    effect.get("kind") != "disease_state"
+                    or effect.get("source") != DISEASE_SOURCE_REF
+                    or not effect.get("active")
+                ):
+                    continue
+                disease_state = dict(
+                    dict(effect.get("metadata") or {}).get("disease_state") or {}
+                )
+                if (
+                    disease_state.get("source_ref") != DISEASE_SOURCE_REF
+                    or disease_state.get("edition") != "2014"
+                    or disease_state.get("disease_id") != "sight_rot"
+                ):
+                    continue
+                penalty = sight_rot_ability_check_penalty(
+                    disease_state, relies_on_sight=True
+                )
+                if penalty:
+                    sight_rot_modifier = {
+                        "effect_id": str(effect.get("id") or ""),
+                        "source_ref": DISEASE_SOURCE_REF,
+                        "penalty": penalty,
+                    }
+                    bonus += penalty
+                    break
         source_review = None
         if scene_save_source is not None:
             from sagasmith_dnd.save_context import validated_save_source_facts
@@ -1102,6 +1142,8 @@ class CharactersService:
             "advantage": advantage,
             "disadvantage": disadvantage,
             "rule_facts": settlement_facts,
+            "relies_on_sight": relies_on_sight,
+            "sight_rot_modifier": sight_rot_modifier,
             "branch_id": resolved_branch_id,
         }
         if source_review is not None:
@@ -1153,10 +1195,48 @@ class CharactersService:
                     "kind": kind,
                     "ability": ability,
                     "dc": dc,
+                    **(
+                        {"relies_on_sight": relies_on_sight}
+                        if relies_on_sight is not None
+                        else {}
+                    ),
                 },
                 branch_id=resolved_branch_id,
             ),
         )
+        rule_receipts: list[dict[str, Any]] = []
+        if sight_rot_modifier is not None:
+            receipt_rules = self.effective_rule_context(
+                campaign_id,
+                facts={
+                    "actor_id": actor_id,
+                    "kind": kind,
+                    "ability": ability,
+                    "relies_on_sight": True,
+                    "disease_effect_id": sight_rot_modifier["effect_id"],
+                    "penalty": sight_rot_modifier["penalty"],
+                },
+                branch_id=resolved_branch_id,
+            )
+            disease_receipt = {
+                "mechanic_id": (
+                    "dnd5e.core.gamemastering.disease.sight_rot.sight_dependent_checks.2014"
+                ),
+                "event": "character.check",
+                "operations": [{"op": "modify_check_bonus"}],
+                "citations": [{"source": sight_rot_modifier["source_ref"], "edition": "2014"}],
+                "ruleset_fingerprint": receipt_rules.fingerprint,
+                "facts": {
+                    "actor_id": actor_id,
+                    "disease_effect_id": sight_rot_modifier["effect_id"],
+                    "kind": kind,
+                    "ability": normalized_ability,
+                    "relies_on_sight": True,
+                    "penalty": sight_rot_modifier["penalty"],
+                },
+            }
+            result["disease_modifier"] = _support.deepcopy(disease_receipt)
+            rule_receipts.append(disease_receipt)
         resolution_id = f"resolution-{_support.uuid4().hex}"
         next_state = dict(campaign.state or {})
         next_state["resolution_log"] = [
@@ -1188,7 +1268,7 @@ class CharactersService:
             next_state,
             check_updates([actor_snapshot], settlement_facts),
             {},
-            list(result.get("rule_receipts") or []),
+            [*list(result.get("rule_receipts") or []), *rule_receipts],
         )
 
         def check_response(revisions: list[Any]) -> dict[str, Any]:
@@ -1201,6 +1281,7 @@ class CharactersService:
                 "result": result,
                 "campaign_revision": campaign.revision + 1,
                 "revisions": [_support.asdict(item) for item in revisions],
+                "rule_receipts": _support.deepcopy(check_receipts),
             }
             if source_review is not None:
                 response["scene_save_source"] = _support.deepcopy(source_review)
@@ -1573,10 +1654,13 @@ class CharactersService:
         expected_revision: int | None = None,
         branch_id: str | None = None,
         idempotency_key: str | None = None,
+        relies_on_sight: bool | None = None,
     ) -> dict[str, Any]:
         """Resolve one atomic 2014 group ability check in participant order."""
 
         self.access.require_campaign(campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES)
+        if relies_on_sight is not None and type(relies_on_sight) is not bool:
+            raise _support.CombatEngineError("relies_on_sight must be true, false, or omitted")
         if (
             not isinstance(actor_ids, list)
             or len(actor_ids) < 2
@@ -1622,6 +1706,7 @@ class CharactersService:
             "bonus": bonus,
             "advantage": advantage,
             "disadvantage": disadvantage,
+            "relies_on_sight": relies_on_sight,
             "rule_facts": settlement_facts,
             "branch_id": resolved_branch_id,
         }
@@ -1636,6 +1721,15 @@ class CharactersService:
                 "campaign revision conflict: "
                 f"expected {expected_revision}, found {campaign.revision}"
             )
+        from .disease_checks import sight_rot_check_modifier, sight_rot_check_receipt
+
+        sight_modifiers = {
+            snapshot["id"]: modifier
+            for snapshot in snapshots
+            if (modifier := sight_rot_check_modifier(
+                snapshot, relies_on_sight=relies_on_sight
+            )) is not None
+        }
         rules_by_actor_id = {
             actor_id_value: self.effective_rule_context(
                 campaign_id,
@@ -1652,6 +1746,8 @@ class CharactersService:
                     "ability": ability,
                     "dc": dc,
                     "group_actor_ids": list(actor_ids),
+                    **({"relies_on_sight": relies_on_sight}
+                       if relies_on_sight is not None else {}),
                 },
                 branch_id=resolved_branch_id,
             )
@@ -1665,8 +1761,34 @@ class CharactersService:
             bonus=bonus,
             advantage=advantage,
             disadvantage=disadvantage,
+            bonus_adjustments={
+                actor_id_value: modifier["penalty"]
+                for actor_id_value, modifier in sight_modifiers.items()
+            },
             rules_by_actor_id=rules_by_actor_id,
         )
+        disease_receipts = []
+        for participant in result["participants"]:
+            modifier = sight_modifiers.get(participant["actor_id"])
+            if modifier is None:
+                continue
+            disease_receipt = sight_rot_check_receipt(
+                self,
+                campaign_id=campaign_id,
+                branch_id=resolved_branch_id,
+                actor_id=participant["actor_id"],
+                kind="ability",
+                ability=ability,
+                modifier=modifier,
+                event="character.ability_group_check",
+            )
+            participant["check"]["disease_modifier"] = disease_receipt
+            participant["check"]["rule_receipts"] = [
+                *list(participant["check"].get("rule_receipts") or []), disease_receipt,
+            ]
+            disease_receipts.append(disease_receipt)
+        if disease_receipts:
+            result["rule_receipts"] = [*result["rule_receipts"], *disease_receipts]
         next_state = dict(campaign.state or {})
         next_state["resolution_log"] = [
             *list(next_state.get("resolution_log") or []),
@@ -5819,7 +5941,7 @@ boundary.
         """Resolve a check or bounded source feature in the Play phase.
 
         check payload: {actor_id, kind, ability, dc?, bonus?, advantage?,
-        disadvantage?, proficient?, rule_facts?}. For skills use ability="stealth"
+        disadvantage?, proficient?, rule_facts?, relies_on_sight?}. For skills use ability="stealth"
         (or another skill name), not ability="dexterity" plus a skill field.
         For a skill check use kind="check" and ability="stealth" (for example).
         kind is ability/check/save/death_save, never skill. Skill
@@ -5975,6 +6097,7 @@ boundary.
                 expected_revision,
                 branch_id,
                 idempotency_key,
+                relies_on_sight=data.get("relies_on_sight"),
             )
         if action == "contest":
             data = self.facade_payload(payload)
@@ -6020,6 +6143,7 @@ boundary.
             expected_revision,
             branch_id,
             idempotency_key,
+            relies_on_sight=data.get("relies_on_sight"),
         )
         return result
 
