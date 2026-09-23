@@ -61,15 +61,26 @@ def resolve_passive_scene_check(
     if type(secret) is not bool:
         raise ValueError("passive secret must be a boolean")
     task = _fields(data["task"], {"source_ref", "source_excerpt", "reason", "mode"}, {
-        "dc", "opponent", "advantage", "disadvantage", "relies_on_sight", "relies_on_hearing",
+        "dc", "opponent", "advantage", "disadvantage", "sensory_basis",
+        "relies_on_sight", "relies_on_hearing",
     }, "passive task")
     if task["mode"] not in {"repeated_task", "exploration", "trap_detection", "opposed"}:
         raise ValueError("unsupported passive task mode")
     if not isinstance(task["reason"], str) or not 1 <= len(task["reason"].strip()) <= 2000:
         raise ValueError("passive task reason must contain 1 to 2000 characters")
-    for flag in ("advantage", "disadvantage", "relies_on_sight", "relies_on_hearing"):
+    for flag in (
+        "advantage",
+        "disadvantage",
+        "relies_on_sight",
+        "relies_on_hearing",
+    ):
         if flag in task and type(task[flag]) is not bool:
             raise ValueError(f"passive task {flag} must be a boolean")
+    if task.get("sensory_basis") is not None and (
+        not isinstance(task["sensory_basis"], str)
+        or task["sensory_basis"] not in {"sight", "nonvisual"}
+    ):
+        raise ValueError("passive task sensory_basis must be sight or nonvisual")
     if task["mode"] == "opposed":
         if "dc" in task or "opponent" not in task:
             raise ValueError("opposed passive tasks require opponent instead of dc")
@@ -112,6 +123,26 @@ def resolve_passive_scene_check(
             raise ValueError("passive checks require an exact actor statblock")
         snapshot = services.combat_actor_snapshot(actor.id)
         snapshots.append(snapshot)
+        from .disease_checks import (
+            active_sight_rot_check_required,
+            validate_sensory_check_context,
+        )
+
+        check_context = validate_sensory_check_context(
+            (
+                {
+                    "task": task["reason"],
+                    "sensory_basis": task["sensory_basis"],
+                    "reason": task["reason"],
+                }
+                if "sensory_basis" in task
+                else None
+            ),
+            required=active_sight_rot_check_required(snapshot),
+        )
+        sensory_basis = (
+            check_context["sensory_basis"] if check_context is not None else None
+        )
         facts = services.checked_rule_facts(selection.get("rule_facts"))
         facts = prepare_check_facts(
             services, facts, campaign_id=campaign_id, actor_id=actor.id,
@@ -122,6 +153,7 @@ def resolve_passive_scene_check(
             facts={**facts, "actor_id": actor.id, "kind": "check",
                    "ability": selection["ability"], "skill_ability": selection.get("skill_ability"),
                    "dc": dc, "passive": True, "task_mode": task["mode"],
+                   **({"check_context": check_context} if check_context is not None else {}),
                    **{key: task[key] for key in ("relies_on_sight", "relies_on_hearing")
                       if key in task}},
         )
@@ -131,7 +163,7 @@ def resolve_passive_scene_check(
             else 0
         )
         sight_modifier = sight_rot_check_modifier(
-            snapshot, relies_on_sight=task.get("relies_on_sight")
+            snapshot, relies_on_sight=sensory_basis == "sight"
         )
         result = resolve_actor_check(
             snapshot, kind="check", ability=selection["ability"], dc=dc, passive=True,
@@ -152,6 +184,7 @@ def resolve_passive_scene_check(
                 ability=selection["ability"],
                 modifier=sight_modifier,
                 event="character.passive",
+                check_context=check_context,
             )
             result["disease_modifier"] = disease_receipt
             result["rule_receipts"] = [

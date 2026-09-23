@@ -1,7 +1,8 @@
 from types import SimpleNamespace
 
 import pytest
-from sagasmith_dnd.character_schema import default_character_sheet
+from sagasmith_dnd import madness
+from sagasmith_dnd.character_schema import add_effect, default_character_sheet
 from sagasmith_dnd.combat_engine import CombatEngineError
 from sagasmith_dnd_runtime.services.combat import CombatService
 
@@ -91,9 +92,15 @@ def test_confusion_selected_target_and_nearest_madness_force_exact_attack_target
             {"actor_id": "old-nearest", "position": {"x": 0, "y": 0}},
         ],
     }
+    actor_sheet = default_character_sheet()
+    effect = madness.resolve_madness("short_term", 55, duration_die=1)["runtime_effect"]
+    effect["id"] = "madness"
+    actor_sheet, _ = add_effect(actor_sheet, effect)
     service.characters = SimpleNamespace(
-        get=lambda actor_id: SimpleNamespace(sheet=default_character_sheet())
-        if actor_id in {"actor", "near", "old-nearest"}
+        get=lambda actor_id: SimpleNamespace(sheet=actor_sheet)
+        if actor_id == "actor"
+        else SimpleNamespace(sheet=default_character_sheet())
+        if actor_id in {"near", "old-nearest"}
         else None
     )
     with pytest.raises(CombatEngineError, match="nearest creature"):

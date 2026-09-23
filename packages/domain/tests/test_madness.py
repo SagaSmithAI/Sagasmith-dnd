@@ -312,6 +312,37 @@ def test_nearest_creature_ties_are_all_legal_and_confusion_target_uses_engine_in
     assert madness.choose_confusion_random_target(["target-a", "target-b"], 2) == "target-b"
 
 
+def test_nearest_attack_constraint_is_bound_to_active_unsuppressed_madness_effect() -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2014"
+    effect = madness.resolve_madness("short_term", 55, duration_die=3)["runtime_effect"]
+    effect["id"] = "nearest-attack"
+    sheet, _ = add_effect(sheet, effect)
+
+    constraint = madness.nearest_attack_constraint(
+        sheet, {"closest-b": 5, "far": 10, "closest-a": 5}
+    )
+    assert constraint == {
+        "source_ref": madness.SOURCE_REF,
+        "effect_ids": ["nearest-attack"],
+        "required_action": "attack",
+        "nearest_actor_ids": ["closest-a", "closest-b"],
+    }
+
+    suppressed = madness.suppress_madness_effect(
+        sheet, effect_id="nearest-attack", started_elapsed_ticks=0
+    )
+    assert madness.nearest_attack_constraint(suppressed, {"target": 5}) is None
+
+    forged = {
+        **effect,
+        "id": "forged-nearest-attack",
+        "source": "test:forged",
+    }
+    non_constraint = {**sheet, "effects": [forged]}
+    assert madness.nearest_attack_constraint(non_constraint, {"target": 5}) is None
+
+
 def test_confusion_direction_map_requires_explicit_eight_face_grid_vectors() -> None:
     directions = {
         str(face): {"dx": 1 if face % 2 else -1, "dy": 0 if face < 5 else 1}

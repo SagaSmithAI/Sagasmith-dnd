@@ -134,6 +134,12 @@ def test_collapsing_roof_uses_only_explicit_area_targets_and_replays(tmp_path: P
                 "actor_id": actor["id"],
                 "target_ids": [actor["id"]],
                 "area_confirmed": True,
+                "trigger_fact": {
+                    "kind": "knock_wedged_beam",
+                    "scene_id": expanded["scene"]["id"],
+                    "beam_id": "roof-section-1",
+                    "action_spent": True,
+                },
                 "expected_revision": current["revision"],
                 "idempotency_key": "roof-trigger-1",
             }
@@ -157,6 +163,16 @@ def test_collapsing_roof_uses_only_explicit_area_targets_and_replays(tmp_path: P
                         "idempotency_key": "roof-no-targets",
                     },
                 )
+            with pytest.raises(ToolError, match="action was spent"):
+                await _call(
+                    server,
+                    "trap_state_transition",
+                    {
+                        **args,
+                        "trigger_fact": {**args["trigger_fact"], "action_spent": False},
+                        "idempotency_key": "roof-beam-no-action",
+                    },
+                )
             unchanged_campaign = await _call(
                 server,
                 "campaign_query",
@@ -178,6 +194,7 @@ def test_collapsing_roof_uses_only_explicit_area_targets_and_replays(tmp_path: P
 
             result = await _call(server, "trap_state_transition", args)
             assert result["trap"]["status"] == "spent"
+            assert result["trap"]["trigger_fact"] == args["trigger_fact"]
             assert result["affected_actor_ids"] == [actor["id"]]
             assert isinstance(result["targets"][0]["save"]["success"], bool)
             assert result["targets"][0]["damage_amount"] == (

@@ -118,6 +118,7 @@ def test_working_together_source_eligibility_atomicity_and_restart(tmp_path, mon
                 "source_ref": expanded["source_ref"], "source_excerpt": excerpt,
                 "reason": "Two trained lockpickers can manipulate the paired tumblers.",
                 "dc": 15, "productive": True,
+                "sensory_basis": "nonvisual",
                 "requirements": {"tools": ["Thieves' Tools"], "skills": [], "features": []},
             }
             args = {
@@ -224,7 +225,10 @@ def test_working_together_source_eligibility_atomicity_and_restart(tmp_path, mon
 
             # A reviewed sight task applies the exact leader's disease penalty;
             # the same infected leader is unaffected on a nonvisual task.
-            sight_task = {**task, "relies_on_sight": True}
+            sight_task = {
+                **task,
+                "sensory_basis": "sight",
+            }
             sight_args = {
                 **args, "expected_revision": after["revision"],
                 "idempotency_key": "unlock-sight-task",
@@ -242,7 +246,10 @@ def test_working_together_source_eligibility_atomicity_and_restart(tmp_path, mon
             nonvisual_args = {
                 **sight_args, "expected_revision": after_sight["revision"],
                 "idempotency_key": "unlock-nonvisual-task",
-                "payload": {**args["payload"], "task": {**task, "relies_on_sight": False}},
+                "payload": {
+                    **args["payload"],
+                    "task": {**task, "sensory_basis": "nonvisual"},
+                },
             }
             nonvisual = await call(server, "character_check", nonvisual_args)
             nonvisual_check = nonvisual["result"]["check"]

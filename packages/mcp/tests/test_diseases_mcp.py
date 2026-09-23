@@ -267,6 +267,35 @@ def test_disease_exposure_is_campaign_random_cas_persisted_and_cure_is_source_bo
                 "campaign_query",
                 {"view": "get", "payload": {"campaign_id": campaign["id"]}},
             )
+            before_unreviewed = current
+            with pytest.raises(ToolError, match="structured check_context"):
+                await _call(
+                    server,
+                    "character_check",
+                    {
+                        "campaign_id": campaign["id"],
+                        "action": "check",
+                        "payload": {
+                            "actor_id": actor["id"],
+                            "kind": "ability",
+                            "ability": "perception",
+                            "dc": 1,
+                            "relies_on_sight": True,
+                        },
+                        "expected_revision": current["revision"],
+                        "idempotency_key": "sight-rot-forged-bool",
+                    },
+                )
+            unchanged = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            assert unchanged["revision"] == before_unreviewed["revision"]
+            assert unchanged["state"]["random_stream"]["position"] == before_unreviewed[
+                "state"
+            ]["random_stream"]["position"]
+
             visual_check = await _call_response(
                 server,
                 "character_check",
@@ -276,9 +305,13 @@ def test_disease_exposure_is_campaign_random_cas_persisted_and_cure_is_source_bo
                     "payload": {
                         "actor_id": actor["id"],
                         "kind": "ability",
-                        "ability": "strength",
+                        "ability": "perception",
                         "dc": 1,
-                        "relies_on_sight": True,
+                        "check_context": {
+                            "task": "Read the visual markings on the water vial.",
+                            "sensory_basis": "sight",
+                            "reason": "The resolved task requires reading visible markings.",
+                        },
                     },
                     "expected_revision": current["revision"],
                     "idempotency_key": "sight-rot-visual-ability-check",
@@ -304,9 +337,13 @@ def test_disease_exposure_is_campaign_random_cas_persisted_and_cure_is_source_bo
                     "payload": {
                         "actor_id": actor["id"],
                         "kind": "ability",
-                        "ability": "strength",
+                        "ability": "perception",
                         "dc": 1,
-                        "relies_on_sight": False,
+                        "check_context": {
+                            "task": "Identify the container by touch and smell.",
+                            "sensory_basis": "nonvisual",
+                            "reason": "This check explicitly uses nonvisual cues.",
+                        },
                     },
                     "expected_revision": current["revision"],
                     "idempotency_key": "sight-rot-nonvisual-ability-check",

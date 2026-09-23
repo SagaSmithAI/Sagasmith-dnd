@@ -8,7 +8,7 @@ import pytest
 from sagasmith_core.state import StateMutationService
 from sagasmith_dnd.character_schema import default_character_sheet
 from sagasmith_dnd_runtime.application import create_runtime
-from sagasmith_dnd_runtime.operations import RequestIdentity
+from sagasmith_dnd_runtime.operations import OperationError, RequestIdentity
 
 from tests.sight_rot_test_support import install_symptomatic_sight_rot
 from tests.test_source_object_authority import EXCERPT, setup
@@ -299,11 +299,11 @@ def test_passive_sunlight_reuses_source_authority_and_local_replay(tmp_path, loc
 
 
 @pytest.mark.parametrize(
-    "relies_on_sight,infected",
-    [(True, True), (False, True), (True, False), (None, True)],
+    "sensory_basis,infected",
+    [("sight", True), ("nonvisual", True), ("sight", False), (None, True)],
 )
 def test_passive_sight_rot_modifier_uses_only_reviewed_sight_task(
-    tmp_path, relies_on_sight, infected,
+    tmp_path, sensory_basis, infected,
 ):
     async def run():
         world = await drow_world(tmp_path)
@@ -345,22 +345,29 @@ def test_passive_sight_rot_modifier_uses_only_reviewed_sight_task(
                         "source_excerpt": SUNLIGHT_EXCERPT,
                         "reason": "DM classifies inspecting the marked wall as a visual task.",
                         "dc": 12,
-                        **({"relies_on_sight": relies_on_sight}
-                           if relies_on_sight is not None else {}),
+                        **({"sensory_basis": sensory_basis}
+                           if sensory_basis is not None else {}),
                     },
                 },
             }
+            if infected and sensory_basis is None:
+                with pytest.raises(OperationError, match="reviewed check_context"):
+                    await invoke(world, "character_check", args)
+                unchanged, _ = await world.snapshot()
+                assert unchanged["revision"] == campaign["revision"]
+                return
             result = await invoke(world, "character_check", args)
             check = result["result"]
             expected_bonus = (
-                disease_penalty if relies_on_sight is True and infected else 0
+                disease_penalty if sensory_basis == "sight" and infected else 0
             )
             assert check["bonus"] == expected_bonus
             assert ("disease_modifier" in check) is (expected_bonus < 0)
             if expected_bonus < 0:
                 receipt = check["disease_modifier"]
                 assert receipt["mechanic_id"].endswith("sight_dependent_checks.2014")
-                assert receipt["facts"]["relies_on_sight"] is True
+                assert receipt["facts"]["sensory_basis"] == "sight"
+                assert receipt["facts"]["check_context"]["task"]
                 assert receipt["facts"]["penalty"] == disease_penalty
                 assert receipt in check["rule_receipts"]
             assert await invoke(world, "character_check", args) == result
@@ -386,7 +393,9 @@ def test_local_working_together_binds_drow_context_and_replays(tmp_path, sight):
                     "task": {
                         "source_ref": world.source, "source_excerpt": SUNLIGHT_EXCERPT,
                         "reason": "DM allows two observers to compare courtyard observations.",
-                        "dc": 10, "productive": True, "relies_on_sight": sight,
+                        "dc": 10, "productive": True,
+                        "sensory_basis": "sight" if sight else "nonvisual",
+                        "relies_on_sight": sight,
                         "requirements": {"tools": [], "skills": [], "features": []},
                     },
                 },
@@ -545,8 +554,47 @@ def test_sunlight_authority_rejects_forgery_and_expires_after_movement(tmp_path)
 
 def test_reviewed_perception_actor_cas_rolls_back_rng_and_search_action(tmp_path, monkeypatch):
     async def run():
-        world = await drow_world(tmp_path, combat=True)
+        world = await drow_world(tmp_path)
         try:
+            campaign, _ = await world.snapshot()
+            await world.call("game_phase", {
+                "campaign_id": world.cid, "action": "set", "tool_profile": "lobby",
+                "expected_revision": campaign["revision"],
+                "idempotency_key": "combat-check-sight-rot-lobby",
+            })
+            infected_actor = await install_symptomatic_sight_rot(
+                world.call, world.cid, world.aid, key="combat-check-sight-rot",
+                member_ids=[world.aid, world.target],
+            )
+            disease_state = next(
+                item["metadata"]["disease_state"]
+                for item in infected_actor["sheet"]["effects"]
+                if item.get("kind") == "disease_state"
+                and item["metadata"]["disease_state"]["disease_id"] == "sight_rot"
+            )
+            disease_penalty = -disease_state["sight_penalty"]
+            campaign, _ = await world.snapshot()
+            await world.call("game_phase", {
+                "campaign_id": world.cid, "action": "set", "tool_profile": "play",
+                "expected_revision": campaign["revision"],
+                "idempotency_key": "combat-check-sight-rot-play",
+            })
+            campaign, _ = await world.snapshot()
+            await world.call("combat_start", {
+                "campaign_id": world.cid,
+                "positioning_mode": "grid",
+                "battle_map": {"width_cells": 12, "height_cells": 12},
+                "scene_id": world.source["scene_id"],
+                "participant_ids": [world.aid, world.target],
+                "participant_config": [
+                    {"actor_id": world.aid, "initiative": 20, "tie_breaker": 0,
+                     "position": {"x": 0, "y": 0}},
+                    {"actor_id": world.target, "initiative": 10, "tie_breaker": 1,
+                     "position": {"x": 3, "y": 0}},
+                ],
+                "expected_revision": campaign["revision"],
+                "idempotency_key": "combat-check-sight-rot-combat",
+            })
             before = await world.snapshot()
             args = {
                 "campaign_id": world.cid,
@@ -556,9 +604,22 @@ def test_reviewed_perception_actor_cas_rolls_back_rng_and_search_action(tmp_path
                 "action": "search",
                 "dc": 10,
                 "rule_facts": {"sunlight": await sunlight(world)},
+                "check_context": {
+                    "task": "Search the visible carvings in the stone room.",
+                    "sensory_basis": "sight",
+                    "reason": (
+                        "The task requires reading marks visible from the selected search cell."
+                    ),
+                },
                 "expected_revision": before[0]["revision"],
                 "idempotency_key": "search",
             }
+            unreviewed = {
+                key: value for key, value in args.items() if key != "check_context"
+            }
+            with pytest.raises(OperationError, match="reviewed check_context"):
+                await invoke(world, "combat_check", unreviewed)
+            assert await world.snapshot() == before
             original = StateMutationService.replace
             attempted = []
 
@@ -578,7 +639,30 @@ def test_reviewed_perception_actor_cas_rolls_back_rng_and_search_action(tmp_path
             result = await invoke(world, "combat_check", args)
             assert result["status"] == "committed"
             assert len(result["result"]["rolls"]) == 2
+            assert result["result"]["bonus"] == disease_penalty
+            receipt = result["result"]["disease_modifier"]
+            assert receipt["facts"]["sensory_basis"] == "sight"
+            assert receipt["facts"]["check_context"] == args["check_context"]
+            assert receipt in result["result"]["rule_receipts"]
             assert await invoke(world, "combat_check", args) == result
+
+            current = await world.snapshot()
+            nonvisual = await invoke(world, "combat_check", {
+                **args,
+                "action": None,
+                "ability": "investigation",
+                "rule_facts": None,
+                "check_context": {
+                    "task": "Identify the object by touch and weight.",
+                    "sensory_basis": "nonvisual",
+                    "reason": "This check uses tactile evidence only.",
+                },
+                "expected_revision": current[0]["revision"],
+                "idempotency_key": "search-nonvisual",
+            })
+            assert nonvisual["status"] == "committed"
+            assert nonvisual["result"]["bonus"] == 0
+            assert "disease_modifier" not in nonvisual["result"]
         finally:
             world.close()
 

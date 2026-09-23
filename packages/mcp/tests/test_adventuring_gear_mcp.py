@@ -135,7 +135,7 @@ def test_chain_burst_uses_source_dc_hp_and_replays_after_restart(tmp_path: Path)
                 {
                     "name": "Chain burst",
                     "edition": "2014",
-                    "random_seed": "gear-chain-burst",
+                    "random_seed": "gear-chain-success-1",
                     "idempotency_key": "campaign",
                 },
             )
@@ -209,16 +209,40 @@ def test_chain_burst_uses_source_dc_hp_and_replays_after_restart(tmp_path: Path)
             )
             assert unchanged["revision"] == request["expected_revision"]
             assert unchanged["state"].get("item_spends", []) == []
+
+            assert actor["revision"] > 0 and request["expected_revision"] > 0
+            for stale_request in (
+                {
+                    **request,
+                    "action_id": "stale-chain-actor",
+                    "idempotency_key": "stale-chain-actor",
+                    "expected_actor_revision": actor["revision"] - 1,
+                    "expected_target_revision": actor["revision"] - 1,
+                },
+                {
+                    **request,
+                    "action_id": "stale-chain-campaign",
+                    "idempotency_key": "stale-chain-campaign",
+                    "expected_revision": request["expected_revision"] - 1,
+                },
+            ):
+                with pytest.raises(ToolError):
+                    await _call(server, "adventuring_gear_action", stale_request)
+                after_stale = await _call(
+                    server,
+                    "campaign_query",
+                    {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+                )
+                assert after_stale["revision"] == request["expected_revision"]
+                assert after_stale["state"].get("item_spends", []) == []
+
             result = await _call(server, "adventuring_gear_action", request)
             assert result["rule_plan"]["check"] == {"ability": "strength", "dc": 20}
             assert result["rule_plan"]["object_hit_points"] == 10
             assert result["check"]["rolls"]
-            assert result["resulting_state"]["state"] == (
-                "broken" if result["success"] else "intact"
-            )
-            assert result["resulting_state"]["object_hit_points"] == (
-                0 if result["success"] else 10
-            )
+            assert result["success"] is True
+            assert result["resulting_state"]["state"] == "broken"
+            assert result["resulting_state"]["object_hit_points"] == 0
             current = await _call(
                 server,
                 "campaign_query",
@@ -230,9 +254,120 @@ def test_chain_burst_uses_source_dc_hp_and_replays_after_restart(tmp_path: Path)
             assert any(
                 spend.get("id") == "burst-chain" for spend in current["state"]["item_spends"]
             )
+            broken_request = {
+                **request,
+                "action_id": "burst-broken-chain-again",
+                "idempotency_key": "burst-broken-chain-again",
+                "expected_actor_revision": result["character"]["revision"],
+                "expected_target_revision": result["character"]["revision"],
+                "expected_revision": current["revision"],
+            }
+            with pytest.raises(ToolError, match="chain must be intact"):
+                await _call(server, "adventuring_gear_action", broken_request)
+            unchanged_after_repeat = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            assert unchanged_after_repeat["revision"] == current["revision"]
+            assert unchanged_after_repeat["state"]["item_spends"] == current["state"]["item_spends"]
             close_server(server)
             server = create_server(_config(tmp_path))
             assert await _call(server, "adventuring_gear_action", request) == result
+        finally:
+            close_server(server)
+
+    asyncio.run(exercise())
+
+
+def test_chain_burst_failure_preserves_intact_state(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        try:
+            campaign = await _call(
+                server,
+                "campaign_create",
+                {
+                    "name": "Chain burst failure",
+                    "edition": "2014",
+                    "random_seed": "gear-chain-burst-failure",
+                    "idempotency_key": "campaign",
+                },
+            )
+            sheet = default_character_sheet()
+            sheet["edition"] = "2014"
+            sheet["abilities"]["strength"]["score"] = 1
+            sheet["inventory"]["items"] = [
+                _gear_item(
+                    "Chain (10 feet)",
+                    "dnd5e.content.srd2014.item.chain-10-feet",
+                    "chain-1",
+                )
+            ]
+            actor = await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "name": "Weak chain user",
+                        "sheet": sheet,
+                    },
+                    "idempotency_key": "actor",
+                },
+            )
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            await _call(
+                server,
+                "game_phase",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "set",
+                    "tool_profile": "play",
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "phase-play",
+                },
+            )
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            request = {
+                "campaign_id": campaign["id"],
+                "action_id": "burst-chain-fail",
+                "item_id": "chain-1",
+                "intent": "burst",
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                "actor_id": actor["id"],
+                "target_actor_id": actor["id"],
+                "expected_actor_revision": actor["revision"],
+                "expected_target_revision": actor["revision"],
+                "expected_revision": current["revision"],
+                "idempotency_key": "burst-chain-fail",
+            }
+            result = await _call(server, "adventuring_gear_action", request)
+            assert result["success"] is False
+            assert result["check"]["total"] < result["rule_plan"]["check"]["dc"]
+            assert result["resulting_state"]["state"] == "intact"
+            assert result["resulting_state"]["object_hit_points"] == 10
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            assert current["state"]["adventuring_gear_objects"][
+                f"{actor['id']}:chain-1"
+            ] == result["resulting_state"]
+            assert any(
+                spend.get("id") == "burst-chain-fail"
+                for spend in current["state"]["item_spends"]
+            )
         finally:
             close_server(server)
 

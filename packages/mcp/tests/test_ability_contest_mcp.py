@@ -101,6 +101,8 @@ def test_character_check_contest_is_atomic_branch_scoped_and_replayable(
         source_sheet["abilities"]["charisma"]["score"] = 16
         source_sheet["skills"]["deception"]["proficiency"] = "expertise"
         target_sheet = default_character_sheet()
+        target_sheet["edition"] = "2014"
+        target_sheet["progression"]["species"] = "human"
         target_sheet["abilities"]["wisdom"]["score"] = 14
         target_sheet["skills"]["insight"]["proficiency"] = "proficient"
         source = await _call(
@@ -131,6 +133,20 @@ def test_character_check_contest_is_atomic_branch_scoped_and_replayable(
                 "idempotency_key": "target",
             },
         )
+        infected_target = await install_symptomatic_sight_rot(
+            lambda name, arguments: _call(server, name, arguments),
+            campaign["id"],
+            target["id"],
+            key="contest-sight-rot",
+            member_ids=[source["id"], target["id"]],
+        )
+        disease_state = next(
+            item["metadata"]["disease_state"]
+            for item in infected_target["sheet"]["effects"]
+            if item.get("kind") == "disease_state"
+            and item["metadata"]["disease_state"]["disease_id"] == "sight_rot"
+        )
+        disease_penalty = -disease_state["sight_penalty"]
         current = await _call(
             server,
             "campaign_query",
@@ -176,11 +192,32 @@ def test_character_check_contest_is_atomic_branch_scoped_and_replayable(
                 "target_ability": "insight",
                 "source_bonus": 2,
                 "target_advantage": True,
+                "target_check_context": {
+                    "task": "Hear and assess the speaker's verbal claim.",
+                    "sensory_basis": "nonvisual",
+                    "reason": "This baseline contest is adjudicated from spoken words only.",
+                },
             },
             "expected_revision": current["revision"],
             "branch_id": branch_id,
             "idempotency_key": "contest",
         }
+        unreviewed = {
+            **arguments,
+            "idempotency_key": "contest-missing-target-context",
+            "payload": {
+                key: value
+                for key, value in arguments["payload"].items()
+                if key != "target_check_context"
+            },
+        }
+        with pytest.raises(Exception, match="reviewed check_context"):
+            await _call(server, "character_check", unreviewed)
+        unchanged = await _call(server, "campaign_query", {
+            "view": "get", "payload": {"campaign_id": campaign["id"]},
+            "principal_id": "system:local",
+        })
+        assert unchanged["revision"] == current["revision"]
 
         with pytest.raises(Exception, match="skill checks derive proficiency and expertise"):
             await _call(
@@ -276,6 +313,30 @@ def test_character_check_contest_is_atomic_branch_scoped_and_replayable(
         assert after["revision"] == current["revision"] + 1
         assert after["state"]["resolution_log"][-1]["type"] == "ability_contest"
 
+        sight_arguments = {
+            **arguments,
+            "expected_revision": after["revision"],
+            "idempotency_key": "contest-target-sight-context",
+            "payload": {
+                **arguments["payload"],
+                "target_check_context": {
+                    "task": "Read the speaker's facial expression while assessing the claim.",
+                    "sensory_basis": "sight",
+                    "reason": "This variant explicitly relies on reading visual expressions.",
+                },
+            },
+        }
+        sight_result = await _call(server, "character_check", sight_arguments)
+        sight_check = sight_result["target_check"]
+        assert sight_check["bonus"] == settled["target_check"]["bonus"] + disease_penalty
+        receipt = sight_check["disease_modifier"]
+        assert receipt["facts"]["sensory_basis"] == "sight"
+        assert receipt["facts"]["check_context"] == sight_arguments["payload"][
+            "target_check_context"
+        ]
+        assert receipt in sight_check["rule_receipts"]
+        assert await _call(server, "character_check", sight_arguments) == sight_result
+
     asyncio.run(exercise())
 
 
@@ -370,6 +431,11 @@ def test_character_check_group_is_atomic_branch_scoped_and_replayable(
                 "ability": "stealth",
                 "dc": 15,
                 "advantage": True,
+                "check_context": {
+                    "task": "Move quietly through the room.",
+                    "sensory_basis": "nonvisual",
+                    "reason": "The group check concerns movement and sound, not visual reading.",
+                },
             },
             "expected_revision": current["revision"],
             "branch_id": branch_id,
@@ -409,7 +475,14 @@ def test_character_check_group_is_atomic_branch_scoped_and_replayable(
         sight_arguments = {
             **arguments, "expected_revision": after["revision"],
             "idempotency_key": "group-sight-task",
-            "payload": {**arguments["payload"], "relies_on_sight": True},
+            "payload": {
+                **arguments["payload"],
+                "check_context": {
+                    "task": "Search the visible carved room markings.",
+                    "sensory_basis": "sight",
+                    "reason": "The task is explicitly reading visible markings.",
+                },
+            },
         }
         sight_result = await _call(server, "character_check", sight_arguments)
         participants_by_id = {
@@ -436,7 +509,14 @@ def test_character_check_group_is_atomic_branch_scoped_and_replayable(
         nonvisual_arguments = {
             **sight_arguments, "expected_revision": after_sight["revision"],
             "idempotency_key": "group-nonvisual-task",
-            "payload": {**arguments["payload"], "relies_on_sight": False},
+            "payload": {
+                **arguments["payload"],
+                "check_context": {
+                    "task": "Compare the room by sound and airflow.",
+                    "sensory_basis": "nonvisual",
+                    "reason": "This task is explicitly based on sound and airflow.",
+                },
+            },
         }
         nonvisual = await _call(server, "character_check", nonvisual_arguments)
         first_check = next(

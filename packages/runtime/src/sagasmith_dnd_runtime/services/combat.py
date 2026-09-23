@@ -14,7 +14,7 @@ from sagasmith_dnd.madness import (
 from sagasmith_dnd.madness import (
     choose_confusion_random_target,
     damage_triggered_confusion_effect_ids,
-    nearest_creature_ids,
+    nearest_attack_constraint,
     resolve_confusion_turn,
     validate_confusion_direction_map,
 )
@@ -1778,8 +1778,15 @@ class CombatService:
                 raise _support.CombatEngineError(
                     "Confusion requires a melee attack against its random creature"
                 )
-        nearest = dict(turn_flags.get("madness_nearest_attack") or {})
-        if nearest:
+        actor_record = (
+            self.characters.get(str(actor_id_value))
+            if hasattr(self, "characters")
+            else None
+        )
+        nearest_contract = nearest_attack_constraint(
+            actor_record.sheet if actor_record is not None else {}, {}
+        )
+        if nearest_contract is not None:
             distances: dict[str, int] = {}
             for candidate in [
                 *encounter.get("combatants", []),
@@ -1796,7 +1803,16 @@ class CombatService:
                 distances[candidate_id] = self.madness_grid_distance_ft(
                     encounter, str(actor_id_value), candidate_id
                 )
-            current_nearest = set(nearest_creature_ids(distances))
+            resolved_contract = nearest_attack_constraint(actor_record.sheet, distances)
+            current_nearest = set(
+                resolved_contract["nearest_actor_ids"] if resolved_contract else []
+            )
+            if not current_nearest:
+                raise _support.NeedsRulingError(
+                    "nearest-creature madness requires another encounter creature",
+                    missing=("madness.nearest_attack.encounter_creature",),
+                    ruling_kind="agent_dm_adjudication",
+                )
             if str(target_id) not in current_nearest:
                 raise _support.CombatEngineError(
                     "short-term madness requires attacking a nearest creature"
@@ -3908,7 +3924,7 @@ class CombatService:
                         "madness.confusion.turn_start",
                     )
                 )
-            nearest_effects = []
+            nearest_contract = nearest_attack_constraint(source_sheets[next_actor_id], {})
             flee_effects = []
             for effect in source_sheets[next_actor_id].get("effects", []):
                 if (
@@ -3919,12 +3935,6 @@ class CombatService:
                     continue
                 madness_metadata = dict(dict(effect.get("metadata") or {}).get("madness") or {})
                 mechanics = dict(madness_metadata.get("mechanics") or {})
-                if (
-                    mechanics.get("turn_constraint")
-                    == "use_action_to_attack_nearest_creature"
-                    and not madness_metadata.get("suppression")
-                ):
-                    nearest_effects.append(str(effect.get("id") or ""))
                 if (
                     mechanics.get("turn_constraint")
                     == "spend_action_and_movement_fleeing_source"
@@ -3940,7 +3950,7 @@ class CombatService:
                     ),
                     ruling_kind="agent_dm_adjudication",
                 )
-            if nearest_effects:
+            if nearest_contract is not None:
                 if next_state["combat"].get("positioning_mode") != "grid":
                     raise _support.NeedsRulingError(
                         "nearest-creature madness requires engine-owned Grid positions",
@@ -3963,7 +3973,12 @@ class CombatService:
                     distances[candidate_id] = self.madness_grid_distance_ft(
                         next_state["combat"], next_actor_id, candidate_id
                     )
-                nearest_ids = nearest_creature_ids(distances)
+                nearest_contract = nearest_attack_constraint(
+                    source_sheets[next_actor_id], distances
+                )
+                nearest_ids = (
+                    nearest_contract["nearest_actor_ids"] if nearest_contract else []
+                )
                 if not nearest_ids:
                     raise _support.NeedsRulingError(
                         "nearest-creature madness needs another encounter creature",
@@ -3977,7 +3992,7 @@ class CombatService:
                 )
                 flags = dict(next_combatant.get("turn_flags") or {})
                 flags["madness_nearest_attack"] = {
-                    "effect_ids": nearest_effects,
+                    "effect_ids": nearest_contract["effect_ids"],
                     "nearest_actor_ids": nearest_ids,
                     "turn_token": self.encounter_turn_token(next_state["combat"]),
                 }
@@ -9140,6 +9155,7 @@ class CombatService:
         expected_revision: int | None = None,
         branch_id: str | None = None,
         idempotency_key: str | None = None,
+        check_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Resolve a check/save/death-save or an atomic Medicine stabilization.
 
@@ -9149,6 +9165,9 @@ class CombatService:
         Grid 2014 Perception Search may select search_target={kind:grid_cell,x,y};
         the selected cell is used only for authoritative vision settlement and
         its coordinates are not included in the result.
+        A symptomatic Sight Rot ability check requires a DM-reviewed
+        check_context={task,sensory_basis,reason}; only sight-based checks take
+        its source-defined penalty.
         """
         if spatial_facts is not None and kind != "stabilize":
             raise _support.CombatEngineError("spatial_facts is accepted only for stabilization")
@@ -9156,6 +9175,34 @@ class CombatService:
         advantage = _support._strict_boolean(advantage, "advantage")
         disadvantage = _support._strict_boolean(disadvantage, "disadvantage")
         self.access.require_actor(campaign_id, actor_id, principal_id, control=True)
+        check_actor_snapshot = self.combat_actor_snapshot(actor_id)
+        from .disease_checks import (
+            active_sight_rot_check_required,
+            sight_rot_check_modifier,
+            validate_sensory_check_context,
+        )
+
+        if check_context is not None and kind not in _support.ABILITY_CHECK_KINDS:
+            raise _support.CombatEngineError("check_context applies only to ability checks")
+        normalized_check_context = validate_sensory_check_context(
+            check_context,
+            required=(
+                kind in _support.ABILITY_CHECK_KINDS
+                and active_sight_rot_check_required(check_actor_snapshot)
+            ),
+        )
+        sensory_basis = (
+            normalized_check_context["sensory_basis"]
+            if normalized_check_context is not None
+            else None
+        )
+        sight_rot_modifier = sight_rot_check_modifier(
+            check_actor_snapshot,
+            relies_on_sight=sensory_basis == "sight",
+        )
+        resolved_bonus = bonus + (
+            sight_rot_modifier["penalty"] if sight_rot_modifier is not None else 0
+        )
         self.require_write_contract(expected_revision, idempotency_key)
         resolved_branch_id = self.require_current_branch(campaign_id, branch_id)
         settlement_facts = self.checked_rule_facts(rule_facts)
@@ -9231,7 +9278,7 @@ class CombatService:
             "use_object",
         }:
             raise _support.CombatEngineError("unsupported action-bound check")
-        actor: dict[str, Any] | None = None
+        actor: dict[str, Any] | None = check_actor_snapshot
         if normalized_check_action == "search":
             if kind not in _support.ABILITY_CHECK_KINDS:
                 raise _support.CombatEngineError("Search requires an ability check")
@@ -9254,7 +9301,6 @@ class CombatService:
                 raise _support.CombatEngineError(
                     "Search derives its skill proficiency and modifier from the actor card"
                 )
-            actor = self.combat_actor_snapshot(actor_id)
             if normalized_ability not in {"wisdom", "wis"} and normalized_ability not in dict(
                 actor["derived"].get("skills") or {}
             ):
@@ -9320,6 +9366,7 @@ class CombatService:
             "dc": dc,
             "proficient": proficient,
             "bonus": bonus,
+            "check_context": normalized_check_context,
             "advantage": advantage,
             "disadvantage": disadvantage,
             "rule_facts": settlement_facts,
@@ -9659,7 +9706,7 @@ class CombatService:
                 dc=dc,
                 encounter=encounter,
                 proficient=proficient,
-                bonus=bonus,
+                bonus=resolved_bonus,
                 advantage=advantage,
                 disadvantage=disadvantage,
                 ruleset=encounter.get("ruleset") if encounter else None,
@@ -9679,6 +9726,11 @@ class CombatService:
                         "ability": ability,
                         "action": normalized_check_action,
                         "dc": dc,
+                        **(
+                            {"check_context": normalized_check_context}
+                            if normalized_check_context is not None
+                            else {}
+                        ),
                     },
                     branch_id=resolved_branch_id,
                 ),
@@ -9725,6 +9777,27 @@ class CombatService:
                         },
                     )
                 result = {**result, "action": normalized_check_action}
+        if sight_rot_modifier is not None:
+            from .disease_checks import sight_rot_check_receipt
+
+            disease_receipt = sight_rot_check_receipt(
+                self,
+                campaign_id=campaign_id,
+                branch_id=resolved_branch_id,
+                actor_id=actor_id,
+                kind=kind,
+                ability=ability,
+                modifier=sight_rot_modifier,
+                event="combat.check",
+                check_context=normalized_check_context,
+            )
+            result["disease_modifier"] = disease_receipt
+            result["rule_receipts"] = [
+                *list(result.get("rule_receipts") or []),
+                disease_receipt,
+            ]
+        if normalized_check_context is not None:
+            result["check_context"] = _support.deepcopy(normalized_check_context)
         if not any(update.character_id == actor_id for update in updates):
             updates.extend(check_updates([actor], settlement_facts))
         rogue_stroke_choice: dict[str, Any] | None = None

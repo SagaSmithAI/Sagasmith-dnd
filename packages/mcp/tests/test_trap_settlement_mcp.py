@@ -425,11 +425,18 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
                 "profile": darts_profile,
                 "target_ids": [actor["id"]],
                 "area_confirmed": True,
+                "trigger_fact": {
+                    "kind": "pressure_plate_weight",
+                    "scene_id": darts_chunk["scene"]["id"],
+                    "plate_id": "darts-1",
+                    "weight_lb": 21,
+                },
                 "expected_revision": current["revision"],
                 "idempotency_key": "darts-trigger",
             }
             darts_result = await _call(server, "trap_state_transition", darts_args)
             assert darts_result["trap"]["status"] == "spent"
+            assert darts_result["trap"]["trigger_fact"] == darts_args["trigger_fact"]
             assert len(darts_result["darts"]) == 4
             assert darts_result["random_stream_receipt"]["draw_count"] >= 8
             assert await _call(server, "trap_state_transition", darts_args) == darts_result
@@ -659,11 +666,47 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
             fire_args = {
                 **fire_rejected_args,
                 "area_confirmed": True,
+                "trigger_fact": {
+                    "kind": "pressure_plate_weight",
+                    "scene_id": fire_chunk["scene"]["id"],
+                    "plate_id": "statue-1",
+                    "weight_lb": 21,
+                },
                 "expected_revision": unchanged["revision"],
                 "idempotency_key": "statue-trigger",
             }
+            with pytest.raises(ToolError, match="greater than 20 lb"):
+                await _call(
+                    server,
+                    "trap_state_transition",
+                    {
+                        **fire_args,
+                        "trigger_fact": {**fire_args["trigger_fact"], "weight_lb": 20},
+                        "idempotency_key": "statue-weight-20",
+                    },
+                )
+            with pytest.raises(ToolError, match="does not match the source-defined scene"):
+                await _call(
+                    server,
+                    "trap_state_transition",
+                    {
+                        **fire_args,
+                        "trigger_fact": {
+                            **fire_args["trigger_fact"],
+                            "scene_id": "unrelated-scene",
+                        },
+                        "idempotency_key": "statue-wrong-scene",
+                    },
+                )
+            unchanged = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign_id}},
+            )
+            assert unchanged["revision"] == current["revision"]
             fire_result = await _call(server, "trap_state_transition", fire_args)
             assert fire_result["trap"]["status"] == "spent"
+            assert fire_result["trap"]["trigger_fact"] == fire_args["trigger_fact"]
             assert fire_result["damage_roll"]["expression"] == "4d10"
             assert isinstance(fire_result["targets"][0]["save"]["success"], bool)
             assert fire_result["random_stream_receipt"]["draw_count"] >= 2
@@ -698,11 +741,36 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
                 "target_ids": [actor["id"]],
                 "area_confirmed": True,
                 "trap_depth_ft": 15,
+                "trigger_fact": {
+                    "kind": "step_on_cover",
+                    "scene_id": pit_chunk["scene"]["id"],
+                    "cover_id": "pit-1",
+                },
                 "expected_revision": current["revision"],
                 "idempotency_key": "pit-invalid-depth",
             }
             with pytest.raises(ToolError, match="outside the fixed source profile"):
                 await _call(server, "trap_state_transition", pit_rejected_args)
+            unchanged = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign_id}},
+            )
+            assert unchanged["revision"] == current["revision"]
+            with pytest.raises(ToolError, match="identify this trap component"):
+                await _call(
+                    server,
+                    "trap_state_transition",
+                    {
+                        **pit_rejected_args,
+                        "trap_depth_ft": 20,
+                        "trigger_fact": {
+                            **pit_rejected_args["trigger_fact"],
+                            "cover_id": "other-cover",
+                        },
+                        "idempotency_key": "pit-wrong-cover",
+                    },
+                )
             unchanged = await _call(
                 server,
                 "campaign_query",
@@ -717,6 +785,7 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
             }
             pit_result = await _call(server, "trap_state_transition", pit_args)
             assert pit_result["trap"]["status"] == "spent"
+            assert pit_result["trap"]["trigger_fact"] == pit_args["trigger_fact"]
             assert pit_result["trap_depth_ft"] == 20
             assert pit_result["targets"][0]["fall"]["dice_count"] == 2
             assert pit_result["targets"][0]["spikes"]["expression"] == "2d10"
@@ -750,6 +819,11 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
                 "target_ids": [captive["id"]],
                 "area_confirmed": True,
                 "trap_depth_ft": 15,
+                "trigger_fact": {
+                    "kind": "step_on_cover",
+                    "scene_id": locking_chunk["scene"]["id"],
+                    "cover_id": "locking-pit-invalid-depth",
+                },
                 "expected_revision": current["revision"],
                 "idempotency_key": "locking-pit-invalid-depth",
             }
@@ -771,6 +845,11 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
                 "target_ids": [actor["id"], captive["id"]],
                 "area_confirmed": True,
                 "trap_depth_ft": 10,
+                "trigger_fact": {
+                    "kind": "step_on_cover",
+                    "scene_id": locking_chunk["scene"]["id"],
+                    "cover_id": "locking-pit-10ft",
+                },
                 "expected_revision": unchanged["revision"],
                 "idempotency_key": "locking-pit-trigger",
             }
@@ -778,6 +857,7 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
             assert locking_result["trap"]["status"] == "triggered"
             assert locking_result["trap"]["source_ref"] == locking_source_ref
             assert locking_result["trap_depth_ft"] == 10
+            assert locking_result["trap"]["trigger_fact"] == locking_args["trigger_fact"]
             assert set(locking_result["trap"]["contained_actor_ids"]) == {
                 actor["id"],
                 captive["id"],
@@ -864,6 +944,11 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
                 "profile": spiked_locking_pit_profile,
                 "target_ids": [captive["id"]],
                 "trap_depth_ft": 20,
+                "trigger_fact": {
+                    "kind": "step_on_cover",
+                    "scene_id": spiked_chunk["scene"]["id"],
+                    "cover_id": "spiked-locking-pit-20ft",
+                },
                 "expected_revision": current["revision"],
                 "idempotency_key": "spiked-locking-pit-trigger",
             }
@@ -871,6 +956,7 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
             assert spiked_result["trap"]["status"] == "triggered"
             assert spiked_result["trap"]["source_ref"] == spiked_source_ref
             assert spiked_result["trap_depth_ft"] == 20
+            assert spiked_result["trap"]["trigger_fact"] == spiked_args["trigger_fact"]
             assert captive["id"] in spiked_result["trap"]["contained_actor_ids"]
             assert spiked_result["targets"][0]["spikes"]["expression"] == "2d10"
             assert await _call(server, "trap_state_transition", spiked_args) == spiked_result

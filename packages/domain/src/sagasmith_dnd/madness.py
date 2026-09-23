@@ -347,6 +347,44 @@ def nearest_creature_ids(distances_ft: dict[str, int]) -> list[str]:
     return sorted(actor_id for actor_id, distance in normalized.items() if distance == nearest)
 
 
+def nearest_attack_constraint(
+    sheet: dict[str, Any], distances_ft: dict[str, int]
+) -> dict[str, Any] | None:
+    """Resolve an active 2014 short-term madness nearest-attack constraint.
+
+    Distances are supplied by the authoritative encounter/space engine. This
+    helper binds the nearest-target rule to active, source-owned table effects
+    and preserves all equidistant targets as legal choices.
+    """
+    effect_ids: list[str] = []
+    for effect in sheet.get("effects", []):
+        if (
+            not isinstance(effect, dict)
+            or effect.get("active") is not True
+            or effect.get("source") != SOURCE_REF
+        ):
+            continue
+        madness = dict(dict(effect.get("metadata") or {}).get("madness") or {})
+        mechanics = dict(madness.get("mechanics") or {})
+        if (
+            madness.get("category") == "short_term"
+            and madness.get("effect_key") == "attack_nearest_creature"
+            and mechanics.get("turn_constraint") == "use_action_to_attack_nearest_creature"
+            and not madness.get("suppression")
+        ):
+            effect_id = str(effect.get("id") or "").strip()
+            if effect_id:
+                effect_ids.append(effect_id)
+    if not effect_ids:
+        return None
+    return {
+        "source_ref": SOURCE_REF,
+        "effect_ids": sorted(set(effect_ids)),
+        "required_action": "attack",
+        "nearest_actor_ids": nearest_creature_ids(distances_ft),
+    }
+
+
 def choose_confusion_random_target(candidate_actor_ids: list[str], d_n: int) -> str:
     """Select the engine-rolled index from an authoritative in-reach candidate list."""
     candidates = [str(actor_id).strip() for actor_id in candidate_actor_ids]

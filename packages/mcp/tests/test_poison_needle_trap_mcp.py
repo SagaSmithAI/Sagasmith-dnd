@@ -131,6 +131,12 @@ def test_poison_needle_trigger_is_source_bound_atomic_and_replayable(tmp_path: P
                 "profile": profile,
                 "actor_id": actor["id"],
                 "area_confirmed": True,
+                "trigger_fact": {
+                    "kind": "lock_opened",
+                    "scene_id": expanded["scene"]["id"],
+                    "lock_id": "needle-lock-1",
+                    "proper_key_used": False,
+                },
                 "expected_revision": current["revision"],
                 "idempotency_key": "needle-trigger-1",
             }
@@ -154,6 +160,16 @@ def test_poison_needle_trigger_is_source_bound_atomic_and_replayable(tmp_path: P
                         "idempotency_key": "needle-caller-rules",
                     },
                 )
+            with pytest.raises(ToolError, match="without the proper key"):
+                await _call(
+                    server,
+                    "trap_state_transition",
+                    {
+                        **args,
+                        "trigger_fact": {**args["trigger_fact"], "proper_key_used": True},
+                        "idempotency_key": "needle-proper-key",
+                    },
+                )
             unchanged_campaign = await _call(
                 server,
                 "campaign_query",
@@ -175,6 +191,7 @@ def test_poison_needle_trigger_is_source_bound_atomic_and_replayable(tmp_path: P
 
             result = await _call(server, "trap_state_transition", args)
             assert result["trap"]["status"] == "spent"
+            assert result["trap"]["trigger_fact"] == args["trigger_fact"]
             assert result["trap"]["range_confirmed"] is True
             assert "attack" not in result
             assert result["piercing"]["damage_type"] == "piercing"

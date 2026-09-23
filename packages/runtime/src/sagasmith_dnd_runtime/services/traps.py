@@ -32,6 +32,21 @@ _SOURCE_LOCKING_PIT_PROFILES = {
     "srd5.1.spiked_locking_pit",
     "srd5.1.poisoned_spiked_locking_pit",
 }
+_SOURCE_TRIGGER_FACT_KINDS = {
+    "srd5.1.fire_breathing_statue": ("pressure_plate_weight", "plate_id"),
+    "srd5.1.poison_darts": ("pressure_plate_weight", "plate_id"),
+    "srd5.1.poison_needle": ("lock_opened", "lock_id"),
+    "srd5.1.simple_pit": ("step_on_cover", "cover_id"),
+    "srd5.1.hidden_pit": ("step_on_cover", "cover_id"),
+    "srd5.1.spiked_simple_pit": ("step_on_cover", "cover_id"),
+    "srd5.1.spiked_hidden_pit": ("step_on_cover", "cover_id"),
+    "srd5.1.poisoned_spiked_simple_pit": ("step_on_cover", "cover_id"),
+    "srd5.1.poisoned_spiked_hidden_pit": ("step_on_cover", "cover_id"),
+    "srd5.1.locking_pit": ("step_on_cover", "cover_id"),
+    "srd5.1.spiked_locking_pit": ("step_on_cover", "cover_id"),
+    "srd5.1.poisoned_spiked_locking_pit": ("step_on_cover", "cover_id"),
+    "srd5.1.collapsing_roof": ("knock_wedged_beam", "beam_id"),
+}
 
 
 class TrapService:
@@ -53,6 +68,7 @@ class TrapService:
         target_ids: list[str] | None = None,
         area_confirmed: bool | None = None,
         trap_depth_ft: int | None = None,
+        trigger_fact: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Resolve source-bound trap detection and explicit no-roll bypass actions.
 
@@ -118,6 +134,77 @@ class TrapService:
                 raise _support.CombatEngineError(
                     "trap_depth_ft is accepted only for source-bound pit triggers"
                 )
+            expected_fact = _SOURCE_TRIGGER_FACT_KINDS.get(normalized_profile["profile_id"])
+            if action == "trigger" and expected_fact is not None:
+                if not isinstance(trigger_fact, dict):
+                    raise _support.CombatEngineError(
+                        f"{normalized_profile['name']} trigger requires exact source facts"
+                    )
+                if (
+                    normalized_profile["profile_id"] == "srd5.1.poison_needle"
+                    and trigger_fact.get("kind") == "lock_pick_failed"
+                ):
+                    fact_kind, identity_key = "lock_pick_failed", "lock_id"
+                    expected_keys = {"kind", "scene_id", identity_key, "pick_succeeded"}
+                else:
+                    fact_kind, identity_key = expected_fact
+                    expected_keys = {"kind", "scene_id", identity_key}
+                    if fact_kind == "pressure_plate_weight":
+                        expected_keys.add("weight_lb")
+                    elif fact_kind == "lock_opened":
+                        expected_keys.add("proper_key_used")
+                    elif fact_kind == "knock_wedged_beam":
+                        expected_keys.add("action_spent")
+                if set(trigger_fact) != expected_keys:
+                    raise _support.CombatEngineError(
+                        f"{normalized_profile['name']} trigger requires exact {fact_kind} facts"
+                    )
+                if trigger_fact.get("kind") != fact_kind:
+                    raise _support.CombatEngineError(
+                        f"{normalized_profile['name']} trigger fact kind must be {fact_kind}"
+                    )
+                component_id = trigger_fact.get(identity_key)
+                if not isinstance(component_id, str) or component_id != trap_id:
+                    raise _support.CombatEngineError(
+                        f"{normalized_profile['name']} trigger fact must identify "
+                        "this trap component"
+                    )
+                if fact_kind == "pressure_plate_weight":
+                    weight = trigger_fact.get("weight_lb")
+                    if (
+                        isinstance(weight, bool)
+                        or not isinstance(weight, (int, float))
+                        or weight <= 20
+                    ):
+                        raise _support.CombatEngineError(
+                            "pressure plate trigger requires a confirmed weight greater than 20 lb"
+                        )
+                elif (
+                    fact_kind == "lock_opened"
+                    and trigger_fact.get("proper_key_used") is not False
+                ):
+                    raise _support.CombatEngineError(
+                        "Poison Needle triggers only when its lock opens without the proper key"
+                    )
+                elif (
+                    fact_kind == "lock_pick_failed"
+                    and trigger_fact.get("pick_succeeded") is not False
+                ):
+                    raise _support.CombatEngineError(
+                        "Poison Needle triggers only on a failed lock-pick attempt"
+                    )
+                elif (
+                    fact_kind == "knock_wedged_beam"
+                    and trigger_fact.get("action_spent") is not True
+                ):
+                    raise _support.CombatEngineError(
+                        "Collapsing Roof beam trigger requires confirmation that the "
+                        "action was spent"
+                    )
+            elif action == "trigger" and expected_fact is None and trigger_fact is not None:
+                raise _support.CombatEngineError(
+                    "trigger_fact is not defined for this source-bound trap profile"
+                )
             if action == "trigger" and normalized_profile["profile_id"] not in {
                 "srd5.1.poison_darts",
                 "srd5.1.falling_net",
@@ -136,8 +223,15 @@ class TrapService:
                 raise _support.CombatEngineError(
                     "this source-bound trap has no supported escape procedure"
                 )
+        elif action == "disable" and trigger_fact is not None:
+            raise _support.CombatEngineError(
+                "trigger_fact is accepted only for direct trap trigger"
+            )
         elif action not in {"disable"} and (
-            target_ids is not None or area_confirmed is not None or trap_depth_ft is not None
+            target_ids is not None
+            or area_confirmed is not None
+            or trap_depth_ft is not None
+            or trigger_fact is not None
         ):
             raise _support.CombatEngineError(
                 "target_ids and area_confirmed are accepted only for trap trigger"
@@ -165,6 +259,7 @@ class TrapService:
             "target_ids": target_ids,
             "area_confirmed": area_confirmed,
             "trap_depth_ft": trap_depth_ft,
+            "trigger_fact": trigger_fact,
         }
         scope = f"trap-state:{campaign_id}:{resolved_branch}:{principal_id}"
         replay_payload = {"payload": payload, "branch_id": resolved_branch}
@@ -203,6 +298,7 @@ class TrapService:
                     target_ids=target_ids,
                     area_confirmed=area_confirmed,
                     trap_depth_ft=trap_depth_ft,
+                    trigger_fact=trigger_fact,
                 )
         stream = _support.active_random_stream()
         random_state = _support.validate_random_stream_state(
@@ -245,6 +341,14 @@ class TrapService:
         if ruleset != "2014":
             raise _support.CombatEngineError("source-bound trap profiles require the 2014 ruleset")
         if action in {"trigger", "escape", "disable"}:
+            if (
+                action == "trigger"
+                and trigger_fact is not None
+                and trigger_fact.get("scene_id") != str(expanded["scene"]["id"])
+            ):
+                raise _support.CombatEngineError(
+                    "trap trigger fact scene_id does not match the source-defined scene"
+                )
             return self._source_bound_trap_effect_transition(
                 campaign=campaign,
                 campaign_id=campaign_id,
@@ -258,6 +362,7 @@ class TrapService:
                 target_ids=target_ids,
                 area_confirmed=area_confirmed,
                 trap_depth_ft=trap_depth_ft,
+                trigger_fact=trigger_fact,
                 encounter=encounter,
                 ruleset=ruleset,
                 stream=stream,
@@ -413,6 +518,7 @@ class TrapService:
         target_ids: list[str] | None,
         area_confirmed: bool | None,
         trap_depth_ft: int | None,
+        trigger_fact: dict[str, Any] | None,
         encounter: dict[str, Any],
         ruleset: str,
         stream: Any,
@@ -455,6 +561,7 @@ class TrapService:
                 trap_id=trap_id,
                 action="settle",
             )
+            trap_state["traps"][trap_id]["trigger_fact"] = dict(trigger_fact or {})
             current_sheets = {
                 target_id: _support.deepcopy(snapshot["sheet"])
                 for target_id, snapshot in snapshots.items()
@@ -790,6 +897,8 @@ class TrapService:
             current_trap = dict(trap_state["traps"][trap_id])
             current_trap["triggered_actor_id"] = actor_id
             current_trap["range_confirmed"] = True
+            if action == "trigger":
+                current_trap["trigger_fact"] = dict(trigger_fact or {})
             if effect is not None:
                 current_trap["condition_effect_id"] = effect["id"]
             trap_state["traps"][trap_id] = current_trap
@@ -1039,6 +1148,8 @@ class TrapService:
             }
             current_trap["area_confirmed"] = True
             current_trap["affected_actor_ids"] = list(target_ids)
+            if action == "trigger":
+                current_trap["trigger_fact"] = dict(trigger_fact or {})
             current_trap["terrain_effects"] = [terrain_effect]
             trap_state["traps"][trap_id] = current_trap
             character_updates = []
@@ -1182,6 +1293,7 @@ class TrapService:
             current_trap = dict(trap_state["traps"][trap_id])
             current_trap["area_confirmed"] = True
             current_trap["affected_actor_ids"] = list(target_ids)
+            current_trap["trigger_fact"] = dict(trigger_fact or {})
             current_trap["area_effect"] = {
                 "kind": "fire_cone",
                 "area": trigger["area"],
@@ -1293,6 +1405,7 @@ class TrapService:
                 action="trigger",
                 contained_actor_ids=target_ids if is_locking_pit else None,
             )
+            trap_state["traps"][trap_id]["trigger_fact"] = dict(trigger_fact or {})
             if not is_locking_pit:
                 trap_state = transition_trap_state(
                     trap_state,

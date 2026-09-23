@@ -74,6 +74,7 @@ ACTION_PAYLOADS: dict[str, dict[str, type[Payload]]] = {
             ability=(str, ...), dc=(int, 0), proficient=(bool, False), bonus=(int, 0),
             advantage=(bool, False), disadvantage=(bool, False),
             relies_on_sight=_optional(bool),
+            check_context=_optional(dict[str, Any]),
             rule_facts=_optional(dict[str, Any]),
         ),
         "group": _payload(
@@ -81,6 +82,7 @@ ACTION_PAYLOADS: dict[str, dict[str, type[Payload]]] = {
             ability=(str, ...), dc=(int, ...), proficient=(bool, False), bonus=(int, 0),
             advantage=(bool, False), disadvantage=(bool, False),
             relies_on_sight=_optional(bool),
+            check_context=_optional(dict[str, Any]),
             rule_facts=_optional(dict[str, Any]),
         ),
         "contest": _payload(
@@ -92,6 +94,8 @@ ACTION_PAYLOADS: dict[str, dict[str, type[Payload]]] = {
             target_advantage=(bool, False), target_disadvantage=(bool, False),
             source_rule_facts=_optional(dict[str, Any]),
             target_rule_facts=_optional(dict[str, Any]),
+            source_check_context=_optional(dict[str, Any]),
+            target_check_context=_optional(dict[str, Any]),
         ),
         "reroll": _payload(
             "CharacterReroll", actor_id=(Identifier, ...), resolution_id=(Identifier, ...),

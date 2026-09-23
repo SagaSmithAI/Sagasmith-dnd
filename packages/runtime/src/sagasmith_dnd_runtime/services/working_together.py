@@ -31,9 +31,19 @@ def working_together_check(
         raise ValueError("working together requires at least two distinct actor_ids")
     task = _fields(data["task"], {
         "source_ref", "source_excerpt", "reason", "productive", "requirements", "dc",
-    }, {"relies_on_sight", "relies_on_hearing"}, "working_together task")
+    }, {"sensory_basis", "relies_on_sight", "relies_on_hearing"}, "working_together task")
     if not isinstance(task["reason"], str) or not 1 <= len(task["reason"].strip()) <= 2000:
         raise ValueError("working together requires a 1 to 2000 character task review reason")
+    if any(
+        flag in task and type(task[flag]) is not bool
+        for flag in ("relies_on_sight", "relies_on_hearing")
+    ):
+        raise ValueError("working together sensory flags must be booleans")
+    if task.get("sensory_basis") is not None and (
+        not isinstance(task["sensory_basis"], str)
+        or task["sensory_basis"] not in {"sight", "nonvisual"}
+    ):
+        raise ValueError("working together task sensory_basis must be sight or nonvisual")
     replay_payload = {"payload": data, "branch_id": branch}
     scope = f"working-together:{campaign_id}:{branch}:{principal_id}"
     replay = services.replay_idempotent(scope, idempotency_key, replay_payload)
@@ -77,12 +87,32 @@ def working_together_check(
     )
     snapshots = []
     contexts = {}
+    check_contexts = {}
     facts = services.checked_rule_facts(data.get("rule_facts"))
     for identifier in identifiers:
         actor = services.require_campaign_actor(campaign_id, identifier)
         if services.narrative_only_actor(actor):
             raise ValueError("working together requires exact actor statblocks")
         snapshots.append(services.combat_actor_snapshot(identifier))
+        from .disease_checks import (
+            active_sight_rot_check_required,
+            validate_sensory_check_context,
+        )
+
+        snapshot = snapshots[-1]
+        check_context = validate_sensory_check_context(
+            (
+                {
+                    "task": task["reason"],
+                    "sensory_basis": task["sensory_basis"],
+                    "reason": task["reason"],
+                }
+                if "sensory_basis" in task
+                else None
+            ),
+            required=active_sight_rot_check_required(snapshot),
+        )
+        check_contexts[identifier] = check_context
         prepared = prepare_check_facts(
             services, facts, campaign_id=campaign_id, actor_id=identifier,
             principal_id=principal_id,
@@ -92,6 +122,7 @@ def working_together_check(
                 **prepared, "actor_id": identifier, "kind": "check", "ability": data["ability"],
                 "skill_ability": data.get("skill_ability"), "dc": task["dc"],
                 "action": "working_together", "participant_ids": identifiers,
+                **({"check_context": check_context} if check_context is not None else {}),
                 **{key: task[key] for key in ("relies_on_sight", "relies_on_hearing")
                    if key in task},
             },
@@ -100,7 +131,11 @@ def working_together_check(
         snapshot["id"]: modifier
         for snapshot in snapshots
         if (modifier := sight_rot_check_modifier(
-            snapshot, relies_on_sight=task.get("relies_on_sight")
+            snapshot,
+            relies_on_sight=(
+                check_contexts[snapshot["id"]] is not None
+                and check_contexts[snapshot["id"]]["sensory_basis"] == "sight"
+            ),
         )) is not None
     }
     result = resolve_working_together(
@@ -123,6 +158,7 @@ def working_together_check(
             ability=data["ability"],
             modifier=leader_modifier,
             event="character.working_together",
+            check_context=check_contexts[result["leader_id"]],
         )
         result["check"]["disease_modifier"] = disease_receipt
         result["check"]["rule_receipts"] = [
