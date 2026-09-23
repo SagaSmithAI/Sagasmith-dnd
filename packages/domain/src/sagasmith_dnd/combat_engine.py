@@ -4028,6 +4028,15 @@ def resolve_attack_damage(
             "item_id": str(plan.get("weapon_id") or ""),
         }
     if attack["hit"] and expression:
+        from .divine_smite import settle as settle_smite
+
+        smite_sheet = actor_sheet(updated_attacker)
+        smite = settle_smite(
+            actor_id(attacker), smite_sheet, actor_id(target), actor_sheet(target), plan, attack,
+        )
+        updated_attacker["sheet"] = smite_sheet
+        if smite:
+            result["divine_smite"] = deepcopy(smite)
         damage_expression = _critical_expression(expression) if attack["critical"] else expression
         damage_roll, weapon_rerolls = roll_weapon_damage(
             damage_expression, reroll_low=bool(plan.get("use_great_weapon_fighting")), rng=rng,
@@ -4054,6 +4063,8 @@ def resolve_attack_damage(
             }
         ]
         additional_damage = deepcopy(list(plan.get("additional_damage") or []))
+        if smite:
+            additional_damage.append(smite)
         for extra in additional_damage:
             extra_expression = str(extra.get("damage_expression") or "")
             if not extra_expression:

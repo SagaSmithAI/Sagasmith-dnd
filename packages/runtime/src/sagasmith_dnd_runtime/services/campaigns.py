@@ -299,6 +299,7 @@ class CampaignsService:
         value["state"].pop("_rage_activations", None)
         if pending:
             field = ("pending_roll" if pending["decisions"][-1].get("kind") == "bardic_inspiration"
+                     else "pending_hit" if pending["decisions"][-1].get("kind") == "divine_smite"
                      else "pending_save")
             value[field] = public_choice(
                 self, campaign_id, principal_id, pending["decisions"][-1],

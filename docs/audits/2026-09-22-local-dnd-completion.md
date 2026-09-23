@@ -5,6 +5,31 @@ requires implementation and applicable validation; pending items remain open.
 Host-managed local execution must preserve Runtime authority, real choices,
 source evidence, CAS, transactions and original-key replay.
 
+## #113 - source-bound 2014 Divine Smite (local batch)
+
+Qualifying melee weapon hits offer a persisted `pending_hit` choice before damage.
+The owner selects an exact available ordinary or Pact Magic slot, or declines.
+The saved command reuses its original attack dice and atomically commits the slot,
+per-part radiant damage, target HP, attack payment and receipts. Restart, CAS,
+authorization and immutable-intent replay use the existing owned-choice boundary.
+
+Slot scaling caps at 5d8, with one extra die for authoritative undead/fiend types;
+critical hits double the dice. Spell/ranged/unarmed attacks and misses do not
+offer the feature. Each Extra Attack or reaction hit has its own choice, without
+an additional action charge. The Agent procedure now preserves `pending_hit`
+ownership. See [the caller contract](../divine-smite-2014.md).
+
+Validation: 55 focused Domain cases passed (Smite, Fighting Styles and Rage).
+All 36 focused MCP cases passed (8 Smite plus Bardic Inspiration and Legendary
+Resistance regression coverage). The new public cases cover actual source
+selection, accepted/declined choices, restart/replay, invalid slots, CAS rollback,
+critical damage caps, radiant immunity/resistance/vulnerability, Extra Attack and
+readied reaction attacks. Ruff, publisher consistency and whitespace checks pass.
+No full local suite or remote CI wait was performed. This is temporary-database
+contract evidence, not live-model/deployed-stack acceptance. Core is 1.94.0,
+SRD 2014 is 1.48.0, standard 2014 is 1.20.0 and both presets are 2.16.0.
+The issue remains open until the requested combined push reaches main.
+
 ## #111 - source-bound 2014 Barbarian Rage (local batch)
 
 The selected source feature activates and voluntarily ends through the combat

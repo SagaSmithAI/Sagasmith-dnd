@@ -6772,6 +6772,7 @@ boundary.
             "breathing_transition",
             "legendary_resistance",
             "bardic_inspiration",
+            "divine_smite",
         ],
         payload: dict[str, Any] | None = None,
         principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
@@ -6796,6 +6797,8 @@ boundary.
         copy the full source-supported list. It preserves HP, conditions and resources.
         legendary_resistance and bardic_inspiration resolve an owned roll choice in any phase:
         payload={choice_id,accept:bool}. It resumes the saved command with its recorded dice.
+        divine_smite resolves an owned hit choice with {choice_id,accept:bool,slot?:str};
+        acceptance requires one offered slot key, decline omits slot.
         statblock_proficiency_sync is DM-only for legacy 2014 non-PC imports:
         payload={reason}. It derives armor training from unchanged recorded source gear,
         accepts no supplied proficiencies, and preserves active combat and all actor state.
@@ -6815,7 +6818,7 @@ boundary.
             if field in data:
                 self.required_boolean(data, field)
         current = self.characters.get(character_id)
-        if action in {"legendary_resistance", "bardic_inspiration"}:
+        if action in {"legendary_resistance", "bardic_inspiration", "divine_smite"}:
             from .saving_throws import resolve
 
             return resolve(self, current, data, principal_id, expected_revision, idempotency_key,

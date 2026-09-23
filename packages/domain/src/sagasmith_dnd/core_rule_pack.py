@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.93.0"
+CORE_RULE_PACK_VERSION = "1.94.0"
 
 
 @dataclass(frozen=True)
@@ -273,6 +273,13 @@ BOUNDARIES = (
             "test_generic_legendary_weapon_action_is_structured",
         ),
         "bundled:srd2014/10_Monsters/Monsters.md#legendary-actions",
+    ),
+    CoreBoundary(
+        "dnd5e.core.class.divine_smite",
+        ("2014",),
+        "divine_smite.settle|combat_engine.resolve_attack_damage",
+        ("tests/test_divine_smite.py", "packages/mcp/tests/test_divine_smite_mcp.py"),
+        "bundled:srd2014/02_Classes/Paladin.md#divine-smite",
     ),
     CoreBoundary(
         "dnd5e.core.class.rage",

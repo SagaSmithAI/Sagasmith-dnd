@@ -12,6 +12,7 @@ from copy import deepcopy
 from dataclasses import replace
 
 from sagasmith_dnd import bardic_inspiration as bardic
+from sagasmith_dnd import divine_smite as smite
 from sagasmith_dnd.legendary_resistance import (
     MECHANIC,
     SaveDecisionRequiredError,
@@ -95,6 +96,7 @@ def guard_request(service, campaign_id, name, arguments):
     if name == "character_state_change" and arguments.get("action") in {
         "legendary_resistance",
         "bardic_inspiration",
+        "divine_smite",
     }:
         return
     if name == pending["name"] and arguments.get("idempotency_key") == pending["arguments"].get(
@@ -124,6 +126,7 @@ def run(service, name, function, arguments, *, read_only=False):
     choice = name == "character_state_change" and arguments.get("action") in {
         "legendary_resistance",
         "bardic_inspiration",
+        "divine_smite",
     }
     if choice:
         if s.active_random_stream() is None:
@@ -150,7 +153,10 @@ def run(service, name, function, arguments, *, read_only=False):
 
     verify_grants(campaign, records)
     verify_activations(campaign, records)
-    if not any(feature(record.sheet) or bardic.held(record.sheet) for record in records):
+    if not any(
+        feature(record.sheet) or bardic.held(record.sheet) or smite.feature(record.sheet)
+        for record in records
+    ):
         return function(**arguments)
     if not key:
         raise ValueError("saving throws require an idempotency key")
@@ -201,6 +207,32 @@ class _Command:
         self.inspired = set()
         self.inspiration_applied = set()
         self.finalized = False
+
+    def smite(self, actor_id, sheet, result, entry):
+        identity = {
+            "actor_id": actor_id,
+            "feature_id": entry["id"],
+            "result": result,
+            "kind": "divine_smite",
+        }
+        decisions = self.value["decisions"]
+        if self.index < len(decisions):
+            recorded = decisions[self.index]
+            if any(recorded.get(k) != v for k, v in identity.items()):
+                raise ValueError("saved Divine Smite hit no longer matches authoritative inputs")
+        else:
+            recorded = {
+                **deepcopy(identity),
+                "id": s.uuid4().hex,
+                "accept": None,
+                "source_key": entry["id"],
+                "rule_refs": deepcopy(entry["rule_refs"]),
+            }
+            decisions.append(recorded)
+        self.index += 1
+        if recorded["accept"] is None:
+            raise SaveDecisionRequiredError(actor_id, sheet, result)
+        return recorded["slot"] if recorded["accept"] else None
 
     def save(self, actor_id, sheet, result, entry):
         decisions = self.value["decisions"]
@@ -319,6 +351,7 @@ def _attempt(
                 with (
                     saving_throw_decisions(state.save),
                     bardic.inspiration_decisions(state.inspire),
+                    smite.decisions(state.smite),
                 ):
                     result = function(**arguments)
                 if stream.replay_index != len(stream.replay_prefix):
@@ -402,7 +435,11 @@ def _attempt(
         rule_receipts=_receipts(service, campaign.id, command["branch_id"], state.value),
         response_fields={
             "status": (
-                "pending_roll" if pending.get("kind") == "bardic_inspiration" else "pending_save"
+                "pending_roll"
+                if pending.get("kind") == "bardic_inspiration"
+                else "pending_hit"
+                if pending.get("kind") == "divine_smite"
+                else "pending_save"
             ),
             "choice": public_choice(service, campaign.id, caller, pending),
         },
@@ -443,6 +480,10 @@ def public_choice(service, campaign_id, principal, pending):
             "alternatives": [{"accept": True}, {"accept": False}],
         },
     )
+    if value["kind"] == "divine_smite":
+        alternatives = [{"accept": True, "slot": v["slot"]} for v in result["slots"]]
+        value["resolve"]["payload"] = {"choice_id": pending["id"], **alternatives[0]}
+        value["resolve"]["alternatives"] = [*alternatives, {"accept": False}]
     return value
 
 
@@ -451,7 +492,10 @@ def resolve(
 ):
     service.require_character_control(actor, principal)
     service.require_write_contract(expected_revision, key)
-    if set(payload) != {"choice_id", "accept"} or type(payload["accept"]) is not bool:
+    expected_fields = {"choice_id", "accept"}
+    if kind == "divine_smite" and payload.get("accept") is True:
+        expected_fields.add("slot")
+    if set(payload) != expected_fields or type(payload.get("accept")) is not bool:
         raise ValueError("owned roll decision requires choice_id and a boolean accept")
     cid = actor.campaign_id
     campaign = service.campaigns.get(cid)
@@ -477,6 +521,13 @@ def resolve(
         raise ValueError("roll decision kind does not match its owned choice")
     if pending["id"] != payload["choice_id"] or pending["actor_id"] != actor.id:
         raise ValueError("Legendary Resistance choice belongs to another actor or save")
+    if kind == "divine_smite" and payload["accept"]:
+        selected = payload["slot"]
+        if not isinstance(selected, str) or selected not in {
+            v["slot"] for v in pending["result"]["slots"]
+        }:
+            raise ValueError("Divine Smite slot is not one of the offered choices")
+        pending["slot"] = selected
     if actor.revision != expected_revision:
         raise ValueError("character revision conflict for Legendary Resistance")
     if campaign.revision != command["campaign_revision"]:
@@ -531,7 +582,11 @@ def resolve(
 
 def _receipts(service, cid, branch, command):
     mechanics = {
-        bardic.MECHANIC if d.get("kind") == "bardic_inspiration" else MECHANIC
+        bardic.MECHANIC
+        if d.get("kind") == "bardic_inspiration"
+        else smite.MECHANIC
+        if d.get("kind") == "divine_smite"
+        else MECHANIC
         for d in command["decisions"]
     }
     return s.core_receipts(
@@ -617,7 +672,7 @@ def finalize(service, campaign, campaign_state, updates, response, receipts):
                     shown.update(active=False, ended_reason="bardic_inspiration_spent")
     state.pop(STATE_KEY, None)
     command.finalized = True
-    for kind in ("legendary_resistance", "bardic_inspiration"):
+    for kind in ("legendary_resistance", "bardic_inspiration", "divine_smite"):
         decisions = [
             d for d in command.value["decisions"] if d.get("kind", "legendary_resistance") == kind
         ]
