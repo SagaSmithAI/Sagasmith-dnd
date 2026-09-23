@@ -3049,6 +3049,12 @@ def preflight_attack(
     )
     if dueling_bonus and expression:
         expression = f"{expression} + {dueling_bonus}"
+    from .rage import damage_bonus as rage_damage_bonus
+
+    rage_bonus = rage_damage_bonus(actor_sheet(attacker), attack_ability=attack_ability,
+                                   attack_mode=attack_mode)
+    if rage_bonus and expression:
+        expression = f"{expression} + {rage_bonus}"
     damage_type = str(weapon.get("damage_type") or "")
     attack_facts = {
         "magical": bool(weapon.get("magical", False)),
@@ -3450,7 +3456,16 @@ def preflight_attack(
         core_boundary_ids.append("dnd5e.core.weapon.mastery")
     from .bardic_inspiration import held
 
+    if rage_bonus:
+        core_boundary_ids.append("dnd5e.core.class.rage")
     return {
+        "rage_damage_bonus": rage_bonus,
+        "rage_hostile_attack": bool(encounter and any(
+            p.get("actor_id") == actor_id(attacker) and any(
+                q.get("actor_id") == actor_id(target) and _are_hostile(p, q)
+                for q in encounter.get("combatants", [])
+            ) for p in encounter.get("combatants", [])
+        )),
         "bardic_inspiration": deepcopy(held(actor_sheet(attacker))),
         "status": "ready",
         "kind": "attack",
@@ -3945,6 +3960,12 @@ def resolve_attack_damage(
         raise CombatEngineError("damage reduction must be a non-negative integer")
     updated_attacker = deepcopy(attacker)
     updated_target = deepcopy(target)
+    from .rage import note_activity
+
+    if plan.get("rage_hostile_attack"):
+        updated_attacker_sheet = actor_sheet(updated_attacker)
+        note_activity(updated_attacker_sheet, attacked=True)
+        updated_attacker["sheet"] = updated_attacker_sheet
     weapon_for_song = next(
         (
             item
@@ -3970,6 +3991,8 @@ def resolve_attack_damage(
                 effect["active"] = False
                 effect["ended_reason"] = "two_handed_attack"
     result: dict[str, Any] = deepcopy(attack)
+    if plan.get("rage_damage_bonus"):
+        result["rage_damage_bonus"] = plan["rage_damage_bonus"]
     result.update(
         attacker_id=actor_id(attacker),
         target_id=actor_id(target),
@@ -4865,6 +4888,10 @@ def _apply_adjusted_damage(
     combat = value.setdefault("combat", {})
     hp = dict(combat.setdefault("hp", {"value": 0, "max": 0, "temp": 0}))
     before_temp = int(hp.get("temp", 0) or 0)
+    from .rage import note_activity
+
+    if adjusted > 0:
+        note_activity(value, damaged=True)
     before_hp = int(hp.get("value", 0) or 0)
     absorbed = min(before_temp, adjusted)
     hp_damage = adjusted - absorbed
@@ -5342,6 +5369,12 @@ def _adjust_damage_amount(
     if normalized == "fire" and water_state(sheet)["fully_immersed"]:
         resistances.add("fire")
         active_sources.append(WATER_RULE)
+    from .rage import MECHANIC as RAGE_MECHANIC
+    from .rage import benefits as rage_benefits
+
+    if normalized in {"bludgeoning", "piercing", "slashing"} and rage_benefits(sheet):
+        resistances.add(normalized)
+        active_sources.append(RAGE_MECHANIC)
     # Temporary defenses belong to the effect ledger, not permanent traits.
     # The lifecycle deactivates expired effects; sets avoid multiplying duplicate
     # grants while preserving each contributing source in the damage receipt.
@@ -8302,6 +8335,15 @@ def resolve_actor_check(
     if armor_stealth_disadvantage:
         disadvantage = True
     boundary_ids = ["dnd5e.core.check.passive"] if passive else []
+    from .rage import MECHANIC as RAGE_MECHANIC
+    from .rage import benefits as rage_benefits
+
+    score_ability = (
+        skill_ability or SKILL_ABILITIES.get(normalized_ability) or _long_ability_name(ability)
+    )
+    if score_ability == "strength" and rage_benefits(sheet):
+        advantage = True
+        boundary_ids.append(RAGE_MECHANIC)
     from .spaces import SPACE_RULE, squeezing
 
     if (kind == "save" and _long_ability_name(ability) == "dexterity"

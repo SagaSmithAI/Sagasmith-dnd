@@ -5,6 +5,31 @@ requires implementation and applicable validation; pending items remain open.
 Host-managed local execution must preserve Runtime authority, real choices,
 source evidence, CAS, transactions and original-key replay.
 
+## #111 - source-bound 2014 Barbarian Rage (local batch)
+
+The selected source feature activates and voluntarily ends through the combat
+bonus-action contract. Class-level uses, long-rest recovery and unlimited uses at
+level 20 follow the 2014 source. Heavy armor suppresses the three benefits without
+preventing activation. Strength checks/saves, Strength melee weapon damage and
+per-part physical resistance share the deterministic engine paths. Casting and
+new concentration are rejected; activation ends existing concentration and
+dissipates held spells without refunding their already-spent slots.
+
+Hostile attack attempts, including misses and attempts before activation, and
+actual damage sustain Rage through the next own-turn boundary. Inactivity,
+unconsciousness, voluntary ending and the ten-round limit are enforced; selected
+Persistent Rage removes only the inactivity ending. A private activation ledger
+rejects copied/reset effects. See [the caller contract](../rage-2014.md).
+
+Validation is focused only: 45 related Domain cases passed, followed by all 12
+Rage Domain cases including two added missed-attack regressions. All 16 public
+MCP Rage cases passed, covering source selection, scaling, armor, concentration,
+spell rejection, rest, expiry, restart/replay and injected CAS rollback. No full
+local suite was run for this change. These are temporary-database contract tests,
+not live-model or deployed-stack acceptance. Core is 1.93.0, SRD 2014 is 1.47.0,
+standard 2014 is 1.19.0, and both presets are 2.15.0. The issue remains open until
+the requested combined push reaches main.
+
 ## #112 - source-bound 2014 Bardic Inspiration (local batch)
 
 The selected Bard feature grants another creature one die, with exact class-level

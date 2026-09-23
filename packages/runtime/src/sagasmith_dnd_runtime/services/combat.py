@@ -2955,6 +2955,10 @@ class CombatService:
         current_sheet = _support.deepcopy(current.sheet)
         next_encounter = _support.deepcopy(encounter)
         self.require_no_blocking_pending(next_encounter)
+        from sagasmith_dnd import rage
+
+        rage_turn = rage.end_turn(current_sheet)
+        current_sheet = rage_turn["sheet"]
         duration = _support.advance_effect_durations(current_sheet, period="turn_end")
         ended_turn_token = self.encounter_turn_token(next_encounter)
         expired_standard_turn_end = self.expire_standard_source_turn_effects(
@@ -3101,6 +3105,11 @@ class CombatService:
             "turn.end.duration_clock",
         )
         rule_receipts.extend(activity_recharge_receipts)
+        if rage.feature(current.sheet):
+            expired_effects.update(rage_turn["ended"])
+            rule_receipts.extend(
+                _support.core_receipts(rule_context, [rage.MECHANIC], "rage.turn_end")
+            )
         for combatant in next_state["combat"].get("combatants", []):
             target_id = str(combatant.get("actor_id"))
             target = self.characters.get(target_id)
@@ -4842,9 +4851,15 @@ class CombatService:
         decision_id,reason,target_can_hear:bool,within_60_ft:bool}} from the DM.
         Grid combat derives range and requires within_60_ft to be omitted.
         The target must be another creature; this spends one use and bonus action.
+        2014 Rage enters with declaration={} or ends with declaration={end:true}.
+        Both require the actor's turn and spend a bonus action; entering spends a use.
         """
         from .inspiration import bardic, grant
+        from .rage import rage, use
 
+        if activity_id == rage.FEATURE:
+            return use(self, campaign_id, actor_id, declaration, principal_id,
+                       expected_revision, branch_id, idempotency_key)
         if activity_id == bardic.FEATURE:
             actor = self.require_campaign_actor(campaign_id, actor_id)
             return grant(self, actor, declaration, principal_id, None, idempotency_key,

@@ -97,6 +97,10 @@ def apply_sheet_primitive(sheet: dict[str, Any], opcode: str, arguments: dict[st
             add=opcode == "condition.apply")
     elif opcode == "effect.apply":
         effect = deepcopy(arguments.get("effect") or {})
+        if effect.get("active", True) and effect.get("concentration"):
+            from .rage import require_spell_allowed
+
+            require_spell_allowed(value)
         effect.setdefault("id", arguments.get("effect_id", arguments.get("id")))
         effect.setdefault("active", True)
         if any(item.get("id") == effect["id"] for item in value.get("effects", [])):

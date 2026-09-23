@@ -1238,6 +1238,7 @@ ENGINE_SETTLED_CARD_MECHANIC_IDS = frozenset(
         "dnd5e.core.activity.legendary_action",
         "dnd5e.core.save.legendary_resistance",
         "dnd5e.core.class.bardic_inspiration",
+        "dnd5e.core.class.rage",
         "dnd5e.core.activity.preserve_life",
         "dnd5e.core.activity.second_wind",
         "dnd5e.core.activity.turn_undead",

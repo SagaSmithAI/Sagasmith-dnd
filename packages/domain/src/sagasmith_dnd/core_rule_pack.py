@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.92.0"
+CORE_RULE_PACK_VERSION = "1.93.0"
 
 
 @dataclass(frozen=True)
@@ -273,6 +273,13 @@ BOUNDARIES = (
             "test_generic_legendary_weapon_action_is_structured",
         ),
         "bundled:srd2014/10_Monsters/Monsters.md#legendary-actions",
+    ),
+    CoreBoundary(
+        "dnd5e.core.class.rage",
+        ("2014",),
+        "rage.enter|rage.end_turn|combat_engine.preflight_attack|combat_engine._adjust_damage_amount",
+        ("tests/test_rage.py", "packages/mcp/tests/test_rage_mcp.py"),
+        "bundled:srd2014/02_Classes/Barbarian.md#rage",
     ),
     CoreBoundary(
         "dnd5e.core.class.bardic_inspiration",

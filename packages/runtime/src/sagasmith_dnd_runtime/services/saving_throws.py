@@ -146,8 +146,10 @@ def run(service, name, function, arguments, *, read_only=False):
         return function(**arguments)
     records = service.characters.list(campaign_id=cid)
     from .inspiration import verify_grants
+    from .rage import verify_activations
 
     verify_grants(campaign, records)
+    verify_activations(campaign, records)
     if not any(feature(record.sheet) or bardic.held(record.sheet) for record in records):
         return function(**arguments)
     if not key:

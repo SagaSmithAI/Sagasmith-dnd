@@ -11879,7 +11879,7 @@
     }
   },
   {
-    "description": "Pay an activity and settle supported Core outcomes; return rulings for the rest.\n\n2014 Bardic Inspiration requires declaration={target_id,scene_facts:{\ndecision_id,reason,target_can_hear:bool,within_60_ft:bool}} from the DM.\nGrid combat derives range and requires within_60_ft to be omitted.\nThe target must be another creature; this spends one use and bonus action.",
+    "description": "Pay an activity and settle supported Core outcomes; return rulings for the rest.\n\n2014 Bardic Inspiration requires declaration={target_id,scene_facts:{\ndecision_id,reason,target_can_hear:bool,within_60_ft:bool}} from the DM.\nGrid combat derives range and requires within_60_ft to be omitted.\nThe target must be another creature; this spends one use and bonus action.\n2014 Rage enters with declaration={} or ends with declaration={end:true}.\nBoth require the actor's turn and spend a bonus action; entering spends a use.",
     "error_envelope": {
       "fields": [
         "code",

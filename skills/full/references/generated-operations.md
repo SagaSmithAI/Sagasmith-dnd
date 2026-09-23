@@ -868,6 +868,8 @@ Pay an activity and settle supported Core outcomes; return rulings for the rest.
 decision_id,reason,target_can_hear:bool,within_60_ft:bool}} from the DM.
 Grid combat derives range and requires within_60_ft to be omitted.
 The target must be another creature; this spends one use and bonus action.
+2014 Rage enters with declaration={} or ends with declaration={end:true}.
+Both require the actor's turn and spend a bonus action; entering spends a use.
 
 Phases: combat
 

@@ -102,6 +102,9 @@ def check_components(
 ) -> dict[str, Any]:
     """Read-only eligibility and exact material payment proposal, before any RNG."""
     from .combat_engine import CombatEngineError, NeedsRulingError
+    from .rage import require_spell_allowed
+
+    require_spell_allowed(sheet)
 
     if str(sheet.get("edition") or "2014") != "2014":
         return {"edition": sheet.get("edition"), "status": "outside_2014_contract"}

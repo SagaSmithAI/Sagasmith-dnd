@@ -1036,6 +1036,10 @@ class AttacksService:
             encounter=next_encounter,
         )
         updated_attacker = _support.deepcopy(attacker)
+        if plan.get("rage_hostile_attack"):
+            from sagasmith_dnd.rage import note_activity
+
+            note_activity(updated_attacker["sheet"], attacked=True)
         # SCAG ends Bladesong after the character makes a two-handed attack.
         # Apply that transition to the attacker sheet before either a pending
         # reaction or a settled damage commit so the termination is atomic with

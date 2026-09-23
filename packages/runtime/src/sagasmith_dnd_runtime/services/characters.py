@@ -2294,6 +2294,10 @@ class CharactersService:
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Add a validated active D&D effect and return its assigned effect id."""
+        from sagasmith_dnd import rage
+
+        if effect.get("kind") in {rage.KIND, rage.ACTIVITY}:
+            raise ValueError("Rage effects require the source combat activity")
         current = self.characters.get(character_id)
         self.require_character_control(current, principal_id)
         self.require_outside_active_combat(current, "effect changes")
@@ -2865,8 +2869,12 @@ class CharactersService:
     ) -> dict[str, Any]:
         """Consume one non-combat structured card use without fabricating its narrative result."""
         current = self.characters.get(character_id)
+        from sagasmith_dnd import rage
+
         from .inspiration import bardic, grant
 
+        if activity_id == rage.FEATURE:
+            raise ValueError("Rage requires combat_use_activity on the actor's turn")
         if activity_id == bardic.FEATURE:
             return grant(self, current, declaration, principal_id,
                          expected_revision, idempotency_key)

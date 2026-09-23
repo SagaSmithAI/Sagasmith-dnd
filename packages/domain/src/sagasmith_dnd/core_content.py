@@ -37,7 +37,7 @@ from sagasmith_dnd.standard_spell_ids import (
 )
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.46.0"
+PACK_VERSION = "1.47.0"
 
 _CONDITIONAL_SPECIES_SAVE_TRAITS = {
     "dwarven resilience": ("dwarven_resilience", CORE_DWARVEN_RESILIENCE_MECHANIC_ID),
@@ -745,6 +745,8 @@ def _level_from_feature_text(body: str) -> int:
 
 def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str, Any]:
     key = (class_name.casefold(), title.casefold())
+    if key in {("barbarian", "rage"), ("barbarian", "persistent rage")}:
+        return {"mechanic_refs": ["dnd5e.core.class.rage"]}
     if key == ("bard", "bardic inspiration"):
         return {"mechanic_refs": ["dnd5e.core.class.bardic_inspiration"]}
     if title.casefold() == "ability score improvement":

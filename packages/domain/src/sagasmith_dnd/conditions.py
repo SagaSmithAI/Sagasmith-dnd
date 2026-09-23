@@ -288,6 +288,10 @@ def apply_condition_change(
     if normalized == "petrified" and add:
         conditions.difference_update(_petrified_suspended_condition_ids(sheet))
     sheet["conditions"] = sorted(conditions)
+    if conditions & {"unconscious", "dead"}:
+        from .rage import end
+
+        end(sheet, "unconscious" if "unconscious" in conditions else "dead")
     if normalized == "petrified" and not add:
         _restore_petrified_suspended_conditions(sheet)
 

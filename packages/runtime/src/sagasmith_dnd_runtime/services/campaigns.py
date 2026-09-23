@@ -296,6 +296,7 @@ class CampaignsService:
 
         pending = value["state"].pop(STATE_KEY, None)
         value["state"].pop("bardic_inspiration_grants", None)
+        value["state"].pop("_rage_activations", None)
         if pending:
             field = ("pending_roll" if pending["decisions"][-1].get("kind") == "bardic_inspiration"
                      else "pending_save")
