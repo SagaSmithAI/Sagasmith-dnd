@@ -1178,6 +1178,10 @@ def _create_application(config: McpConfig | None = None, *, resources) -> DndRun
         _support._agent_ruling_boundary(_services.bind("combat_check", "combat_check"))
     )
 
+    _services.trap_state_transition = _services.public_tool()(
+        _services.bind("source_bound_trap_transition", "trap_state_transition")
+    )
+
     _services.combat_concentration_check = _services.public_tool()(
         _support._agent_ruling_boundary(
             _services.bind("combat_concentration_check", "combat_concentration_check")
@@ -1986,6 +1990,10 @@ def _create_application(config: McpConfig | None = None, *, resources) -> DndRun
         _services.bind("inventory_change", "inventory_change")
     )
 
+    _services.adventuring_gear_action = _services.public_tool()(
+        _services.bind("campaign_adventuring_gear_action", "adventuring_gear_action")
+    )
+
     _services.inventory_transfer = _services.public_tool()(
         _services.bind("inventory_transfer", "inventory_transfer")
     )
@@ -1996,6 +2004,23 @@ def _create_application(config: McpConfig | None = None, *, resources) -> DndRun
 
     _services.character_state_change = _services.public_tool()(
         _services.bind("character_state_change", "character_state_change")
+    )
+
+    _services.character_disease_exposure = _services.public_tool()(
+        _services.bind("character_disease_exposure", "character_disease_exposure")
+    )
+    _services.character_disease_cure = _services.public_tool()(
+        _services.bind("character_disease_cure", "character_disease_cure")
+    )
+    _services.character_disease_stress = _services.public_tool()(
+        _services.bind("character_disease_stress", "character_disease_stress")
+    )
+    _services.character_disease_end_turn = _services.public_tool()(
+        _services.bind("character_disease_end_turn", "character_disease_end_turn")
+    )
+
+    _services.character_downtime_settle = _services.public_tool()(
+        _services.bind("character_downtime_settle", "character_downtime_settle")
     )
 
     _services.character_revive_steel_defender = _support._agent_ruling_boundary(

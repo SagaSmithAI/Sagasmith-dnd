@@ -4,13 +4,411 @@ from __future__ import annotations
 
 from typing import Any
 
+from sagasmith_dnd.adventuring_gear import (
+    ADVENTURING_GEAR_SOURCE_REF,
+    normalize_gear_intent,
+    resolve_adventuring_gear_intent,
+)
+from sagasmith_dnd.madness import damage_triggered_confusion_effect_ids
+
 from .. import application_support as _support
 from ..result_contracts import affected_state_slice
 from . import protection
+from .madness import settle_damage_triggered_confusion
 from .sunlight import prepare_attack_action, prepare_context
 
 
+def _gear_target_creature_type(sheet: dict[str, Any]) -> str:
+    """Read a source-bound creature type from the target's authoritative sheet."""
+    progression = dict(sheet.get("progression") or {})
+    value = (
+        sheet.get("creature_type")
+        or progression.get("creature_type")
+        or progression.get("species")
+    )
+    return " ".join(str(value or "").strip().casefold().split())
+
+
 class AttacksService:
+    def settle_attack_madness_damage(
+        self,
+        *,
+        campaign_id: str,
+        target: dict[str, Any],
+        encounter: dict[str, Any],
+        result: dict[str, Any],
+        rules: Any,
+        transaction_id: str,
+    ) -> list[dict[str, Any]]:
+        damage = dict(result.get("damage") or {})
+        amount = int(damage.get("applied_amount", 0) or 0)
+        if amount <= 0:
+            return []
+        sheet, events, receipts = settle_damage_triggered_confusion(
+            actor=target,
+            sheet=target["sheet"],
+            damage_taken=amount,
+            encounter=encounter,
+            rules=rules,
+            transaction_id=transaction_id,
+        )
+        target["sheet"] = sheet
+        if events:
+            result["madness_triggers"] = events
+            result["rule_receipts"] = [*list(result.get("rule_receipts") or []), *receipts]
+        return events
+
+    def campaign_adventuring_gear_extinguish(
+        self,
+        campaign_id: str,
+        action_id: str,
+        item_id: str,
+        source_ref: str,
+        actor_id: str,
+        target_actor_id: str,
+        expected_actor_revision: int,
+        expected_target_revision: int,
+        principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None,
+        branch_id: str | None = None,
+        idempotency_key: str | None = None,
+        action_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Spend the burning target's action to resolve its source-bound Dex check."""
+        self.access.require_campaign(campaign_id, principal_id)
+        self.require_write_contract(expected_revision, idempotency_key)
+        resolved_branch_id = self.require_current_branch(campaign_id, branch_id)
+        if str(source_ref).strip() != ADVENTURING_GEAR_SOURCE_REF:
+            raise _support.CombatEngineError(
+                "gear source_ref must match bundled 2014 adventuring gear"
+            )
+        if action_context is not None:
+            raise _support.CombatEngineError(
+                "Alchemist's Fire extinguish accepts no caller check, DC, or outcome context"
+            )
+        normalized_action_id = str(action_id).strip()
+        normalized_item_id = str(item_id).strip()
+        normalized_actor_id = str(actor_id).strip()
+        normalized_target_id = str(target_actor_id).strip()
+        if not normalized_action_id or len(normalized_action_id) > 200:
+            raise ValueError("action_id must contain 1 to 200 characters")
+        if normalized_actor_id != normalized_target_id:
+            raise _support.CombatEngineError(
+                "a creature must spend its own action to extinguish its Alchemist's Fire"
+            )
+        request = {
+            "action_id": normalized_action_id,
+            "item_id": normalized_item_id,
+            "intent": "extinguish",
+            "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+            "actor_id": normalized_actor_id,
+            "target_actor_id": normalized_target_id,
+            "expected_actor_revision": expected_actor_revision,
+            "expected_target_revision": expected_target_revision,
+            "branch_id": resolved_branch_id,
+        }
+        scope = f"campaign-gear-extinguish:{campaign_id}:{resolved_branch_id}:{principal_id}"
+        payload = {
+            "actor_id": normalized_actor_id,
+            "target_id": normalized_target_id,
+            "operation": "adventuring_gear.extinguish",
+            "gear_action": request,
+        }
+        replay = self.replay_idempotent(scope, idempotency_key, payload)
+        if replay is not None:
+            return self.combat_response(campaign_id, principal_id, replay)
+        campaign = self.campaigns.get(campaign_id)
+        if expected_revision is not None and campaign.revision != expected_revision:
+            raise ValueError("campaign revision conflict")
+        actor = self.characters.get(normalized_actor_id)
+        if actor.campaign_id != campaign_id:
+            raise ValueError("gear user must belong to the campaign")
+        if actor.revision != expected_actor_revision or actor.revision != expected_target_revision:
+            raise ValueError("gear actor revision conflict")
+        _, encounter = self.active_encounter(campaign_id)
+        effect = next(
+            (
+                entry
+                for entry in encounter.get("ongoing_effects", [])
+                if isinstance(entry, dict)
+                and entry.get("active", True)
+                and entry.get("kind") == "adventuring_gear_burning"
+                and str(entry.get("target_id") or "") == normalized_actor_id
+                and str(entry.get("source_item_id") or "") == normalized_item_id
+            ),
+            None,
+        )
+        if effect is None:
+            raise _support.CombatEngineError(
+                "no active source-bound Alchemist's Fire effect matches this target and item"
+            )
+        prior_spend = next(
+            (
+                entry
+                for entry in list(dict(campaign.state or {}).get("item_spends") or [])
+                if isinstance(entry, dict)
+                and str(entry.get("id") or "") == str(effect.get("action_id") or "")
+            ),
+            None,
+        )
+        prior_plan = dict(dict(prior_spend or {}).get("rule_plan") or {})
+        if (
+            not isinstance(prior_spend, dict)
+            or str(prior_spend.get("item_id") or "") != normalized_item_id
+            or str(prior_spend.get("source_ref") or "") != ADVENTURING_GEAR_SOURCE_REF
+            or prior_plan.get("item_name") != "Alchemist's fire (flask)"
+            or prior_plan.get("source_key") != effect.get("source_key")
+        ):
+            raise _support.CombatEngineError(
+                "Alchemist's Fire effect lacks its exact originating source plan receipt"
+            )
+        plan = resolve_adventuring_gear_intent(
+            {
+                "id": normalized_item_id,
+                "name": str(effect.get("item_name") or ""),
+                "source_key": str(effect.get("source_key") or ""),
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+            },
+            "extinguish",
+        )
+        if plan.get("check") != {"ability": "dexterity", "dc": 10}:
+            raise _support.CombatEngineError("source-defined extinguish check is incomplete")
+        if _support.active_random_stream() is None:
+            with self.campaign_random_context(
+                campaign_id,
+                "combat.adventuring_gear.extinguish",
+                {"idempotency_key": idempotency_key},
+            ):
+                return self.campaign_adventuring_gear_extinguish(
+                    campaign_id,
+                    normalized_action_id,
+                    normalized_item_id,
+                    ADVENTURING_GEAR_SOURCE_REF,
+                    normalized_actor_id,
+                    normalized_target_id,
+                    expected_actor_revision,
+                    expected_target_revision,
+                    principal_id,
+                    expected_revision,
+                    resolved_branch_id,
+                    idempotency_key,
+                    None,
+                )
+        action_name = "utilize" if encounter.get("ruleset") == "2024" else "improvise"
+        next_encounter = _support.resolve_common_action(
+            encounter,
+            actor_id_value=normalized_actor_id,
+            action=action_name,
+            payload={"gear_action_id": normalized_action_id},
+        )
+        next_effect = next(
+            entry
+            for entry in next_encounter.get("ongoing_effects", [])
+            if isinstance(entry, dict) and str(entry.get("id") or "") == str(effect.get("id") or "")
+        )
+        rules = self.effective_rule_context(
+            campaign_id,
+            branch_id=resolved_branch_id,
+            facts={
+                "actor_id": normalized_actor_id,
+                "kind": "ability_check",
+                "ability": "dexterity",
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                "gear_action_id": normalized_action_id,
+            },
+        )
+        actor_snapshot = self.combat_actor_snapshot(normalized_actor_id)
+        check = _support.resolve_actor_check(
+            actor_snapshot,
+            kind="ability",
+            ability="dexterity",
+            dc=10,
+            encounter=next_encounter,
+            rules=rules,
+            ruleset="2014",
+            rng=_support.active_random_stream(),
+        )
+        if check.get("success"):
+            next_effect["active"] = False
+            next_effect["resolution"] = {
+                "kind": "extinguished",
+                "action_id": normalized_action_id,
+                "check": _support.deepcopy(check),
+            }
+        next_state = _support.deepcopy(dict(campaign.state or {}))
+        next_state["combat"] = next_encounter
+        response_body = {
+            "status": "committed",
+            "action_id": normalized_action_id,
+            "item_id": normalized_item_id,
+            "intent": "extinguish",
+            "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+            "rule_plan": _support.deepcopy(plan),
+            "check": check,
+            "burning": {key: value for key, value in next_effect.items() if key != "changes"},
+            "combat": next_encounter,
+            "campaign_revision": campaign.revision + 1,
+        }
+
+        def response(revisions: list[Any]) -> dict[str, Any]:
+            result = {**response_body, "revisions": [_support.asdict(item) for item in revisions]}
+            stream = _support.active_random_stream()
+            if stream is not None and stream.draw_count > 0:
+                result["random_stream_receipt"] = stream.receipt()
+            return result
+
+        revisions = _support.StateMutationService(self.storage.database).replace(
+            campaign_id,
+            campaign_state=_support.validate_party_state(next_state),
+            expected_campaign_revision=campaign.revision,
+            operation="combat.adventuring_gear.extinguish",
+            actor=principal_id,
+            branch_id=resolved_branch_id,
+            idempotency_key=idempotency_key,
+            idempotency_write=_support.IdempotencyWrite(
+                scope=scope,
+                payload=payload,
+                response=response,
+            ),
+        )
+        return self.combat_response(campaign_id, principal_id, response(list(revisions or [])))
+
+    def campaign_adventuring_gear_attack(
+        self,
+        campaign_id: str,
+        action_id: str,
+        item_id: str,
+        intent: str,
+        source_ref: str,
+        actor_id: str,
+        target_actor_id: str,
+        expected_actor_revision: int,
+        expected_target_revision: int,
+        principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None,
+        branch_id: str | None = None,
+        idempotency_key: str | None = None,
+        action_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Route an exact gear attack through the combat transaction with its item dose.
+
+        Acid is the first supported intent: its source effect is immediate damage,
+        so the normal combat engine can settle attack, damage, turn cost, dose,
+        actor revisions, random receipt, and idempotency in one mutation.
+        """
+        self.access.require_campaign(campaign_id, principal_id)
+        self.require_write_contract(expected_revision, idempotency_key)
+        resolved_branch_id = self.require_current_branch(campaign_id, branch_id)
+        if str(source_ref).strip() != ADVENTURING_GEAR_SOURCE_REF:
+            raise _support.CombatEngineError(
+                "gear source_ref must match bundled 2014 adventuring gear"
+            )
+        if not isinstance(action_context, (dict, type(None))):
+            raise _support.CombatEngineError("action_context must be an object")
+        owner_id = str(actor_id).strip()
+        target_id = str(target_actor_id).strip()
+        action_id_value = str(action_id).strip()
+        item_id_value = str(item_id).strip()
+        normalized_intent = normalize_gear_intent(intent)
+        action_payload = self.sanitize_attack_action(
+            campaign_id,
+            principal_id,
+            {"weapon_id": item_id_value, "context": _support.deepcopy(action_context or {})},
+        )
+        request = {
+            "action_id": action_id_value,
+            "item_id": item_id_value,
+            "intent": normalized_intent,
+            "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+            "actor_id": owner_id,
+            "target_actor_id": target_id,
+            "expected_actor_revision": expected_actor_revision,
+            "expected_target_revision": expected_target_revision,
+            "branch_id": resolved_branch_id,
+        }
+        scope = f"campaign-gear-attack:{campaign_id}:{resolved_branch_id}:{principal_id}"
+        replay_payload = {
+            "actor_id": owner_id,
+            "target_id": target_id,
+            "action": _support.deepcopy(action_payload),
+            "cantrip_spell_id": "",
+            "spell_resolution_id": "",
+            "deflect_attack": None,
+            "branch_id": resolved_branch_id,
+            "gear_action": request,
+        }
+        replay = self.replay_idempotent(scope, idempotency_key, replay_payload)
+        if replay is not None:
+            return self.combat_response(campaign_id, principal_id, replay)
+
+        owner = self.characters.get(owner_id)
+        target = self.characters.get(target_id)
+        if owner.campaign_id != campaign_id or target.campaign_id != campaign_id:
+            raise ValueError("gear attacker and target must belong to the campaign")
+        if owner.revision != expected_actor_revision:
+            raise ValueError(
+                "actor revision conflict: "
+                f"expected {expected_actor_revision}, found {owner.revision}"
+            )
+        if target.revision != expected_target_revision:
+            raise ValueError(
+                "target revision conflict: "
+                f"expected {expected_target_revision}, found {target.revision}"
+            )
+        source_item = next(
+            (
+                item
+                for item in dict(owner.sheet.get("inventory") or {}).get("items", [])
+                if isinstance(item, dict)
+                and str(item.get("id") or "") == str(item_id).strip()
+            ),
+            None,
+        )
+        if source_item is None:
+            raise ValueError("adventuring gear item is absent from the attacker's inventory")
+        plan = resolve_adventuring_gear_intent(
+            {**source_item, "source_ref": ADVENTURING_GEAR_SOURCE_REF}, intent
+        )
+        item_name = str(source_item.get("name") or "").strip().casefold()
+        supported_attack = (
+            item_name == "acid (vial)" and plan["intent"] in {"splash", "throw"}
+        ) or (
+            item_name == "alchemist's fire (flask)" and plan["intent"] == "throw"
+        ) or (
+            item_name == "holy water (flask)" and plan["intent"] in {"splash", "throw"}
+        )
+        if not supported_attack or plan.get("attack") != "ranged_improvised":
+            raise _support.CombatEngineError(
+                "combat gear attacks support Acid, Alchemist's Fire, and Holy Water source intents"
+            )
+        if item_name == "holy water (flask)":
+            target_type = _gear_target_creature_type(
+                _support.validate_character_sheet(target.sheet)
+            )
+            if not any(
+                token.strip(" ,.;:-()") in {"fiend", "undead"}
+                for token in target_type.split()
+            ):
+                raise _support.CombatEngineError(
+                    "Holy Water damage requires authoritative target type fiend or undead"
+                )
+        if not action_id_value or len(action_id_value) > 200:
+            raise ValueError("action_id must contain 1 to 200 characters")
+        return self._settle_combat_attack(
+            campaign_id=campaign_id,
+            actor_id=owner.id,
+            target_id=target.id,
+            action=action_payload,
+            principal_id=principal_id,
+            branch_id=resolved_branch_id,
+            expected_revision=expected_revision,
+            idempotency_key=idempotency_key,
+            gear_action={
+                "request": request,
+                "rule_plan": plan,
+            },
+        )
+
     def sanitize_attack_action(
         self, campaign_id: str, principal_id: str, action: dict[str, Any]
     ) -> dict[str, Any]:
@@ -653,6 +1051,7 @@ class AttacksService:
         idempotency_key: str | None = None,
         *,
         spell_release: dict[str, Any] | None = None,
+        gear_action: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Settle an ordinary attack or a verified paid spell continuation atomically."""
         self.require_combat_actor_or_steel_defender_owner_control(
@@ -684,6 +1083,9 @@ class AttacksService:
             "branch_id": resolved_branch_id,
         }
         scope = f"combat-attack:{campaign_id}:{resolved_branch_id}:{principal_id}"
+        if gear_action is not None:
+            scope = f"campaign-gear-attack:{campaign_id}:{resolved_branch_id}:{principal_id}"
+            payload["gear_action"] = _support.deepcopy(gear_action["request"])
         protection_binding = {
             "kind": "combat_attack", "actor_id": actor_id, "target_id": target_id,
             "payload": _support.deepcopy(payload),
@@ -695,6 +1097,13 @@ class AttacksService:
         replay = None if spell_release else self.replay_idempotent(scope, idempotency_key, payload)
         if replay is not None:
             return self.combat_response(campaign_id, principal_id, replay)
+        if gear_action is not None and any(
+            str(dict(item).get("id") or "")
+            == str(gear_action["request"].get("action_id") or "")
+            for item in list(dict(campaign.state or {}).get("item_spends") or [])
+            if isinstance(item, dict)
+        ):
+            raise ValueError("gear action_id already exists on this branch")
         resolution_id = (
             "resolution-"
             + _support.hashlib.sha256(
@@ -789,12 +1198,62 @@ class AttacksService:
         )
         attacker_record = self.require_campaign_actor(campaign_id, actor_id)
         target_record = self.require_campaign_actor(campaign_id, target_id)
+        if gear_action is not None:
+            if attacker_record.revision != int(
+                gear_action["request"].get("expected_actor_revision", -1)
+            ):
+                raise ValueError("gear attacker character revision conflict")
+            if target_record.revision != int(
+                gear_action["request"].get("expected_target_revision", -1)
+            ):
+                raise ValueError("gear target character revision conflict")
         action_payload = prepare_attack_action(
             self, action_payload, campaign_id=campaign_id, actor_id=actor_id,
             target_id=target_id, principal_id=principal_id, encounter=encounter,
         )
         attacker = self.character_view(attacker_record, rules_context=rule_context)
         target = self.character_view(target_record, rules_context=rule_context)
+        if gear_action is not None:
+            gear_plan = dict(gear_action.get("rule_plan") or {})
+            gear_item_id = str(gear_action["request"].get("item_id") or "")
+            if gear_plan.get("attack") != "ranged_improvised":
+                raise _support.CombatEngineError("gear attack plan has unsupported attack type")
+            abilities = dict(attacker.get("derived", {}).get("ability_modifiers") or {})
+            attack_modifier = int(abilities.get("strength", 0) or 0)
+            maximum_range = gear_plan.get("maximum_range_feet")
+            gear_effect = dict(gear_plan.get("effect") or {})
+            damage_expression = str(
+                gear_effect.get("damage") or gear_effect.get("hit_damage") or ""
+            )
+            damage_type = str(
+                gear_effect.get("damage_type") or gear_effect.get("hit_damage_type") or ""
+            )
+            if (
+                not gear_item_id
+                or not damage_expression
+                or not damage_type
+                or isinstance(maximum_range, bool)
+                or not isinstance(maximum_range, int)
+                or maximum_range < 1
+            ):
+                raise _support.CombatEngineError("gear attack plan is incomplete")
+            derived_inventory = attacker.setdefault("derived", {}).setdefault("inventory", {})
+            derived_inventory.setdefault("weapon_attacks", []).append(
+                {
+                    "item_id": gear_item_id,
+                    "name": str(gear_plan.get("item_name") or "Adventuring Gear"),
+                    "attack_type": "ranged",
+                    "attack_ability": "strength",
+                    "attack_ability_modifier": attack_modifier,
+                    "attack_bonus": attack_modifier,
+                    "normal_range_ft": maximum_range,
+                    "long_range_ft": maximum_range,
+                    "damage_expression": damage_expression,
+                    "damage_type": damage_type,
+                    "properties": [],
+                    "proficient": False,
+                }
+            )
         settled_attacker_sheet = (
             _support.deepcopy(spell_release["sheet"])
             if spell_release
@@ -1027,6 +1486,27 @@ class AttacksService:
                     "ruleset_fingerprint": rule_context.fingerprint,
                 },
             ]
+        if (
+            _support.active_random_stream() is None
+            and damage_triggered_confusion_effect_ids(target_record.sheet)
+        ):
+            with self.campaign_random_context(
+                campaign_id,
+                "combat.madness.damage_trigger",
+                {"idempotency_key": idempotency_key},
+            ):
+                return self._settle_combat_attack(
+                    campaign_id=campaign_id,
+                    actor_id=actor_id,
+                    target_id=target_id,
+                    action=action_payload,
+                    principal_id=principal_id,
+                    branch_id=resolved_branch_id,
+                    expected_revision=expected_revision,
+                    idempotency_key=idempotency_key,
+                    spell_release=spell_release,
+                    gear_action=gear_action,
+                )
         attack_roll = _support.roll_attack_action(plan=plan)
         if deflect_activity is not None:
             attack_roll["deflect_attack"] = {
@@ -1115,6 +1595,62 @@ class AttacksService:
                 ammunition_item_id=str(plan.get("ammunition_item_id") or ""),
                 branch_id=resolved_branch_id,
             )
+        gear_receipt: dict[str, Any] | None = None
+        if gear_action is not None:
+            gear_rule_plan = dict(gear_action.get("rule_plan") or {})
+            resource_cost = dict(gear_rule_plan.get("resource_cost") or {})
+            if resource_cost.get("item_quantity") != 1:
+                raise _support.CombatEngineError(
+                    "gear attack resource cost must be one source-defined item quantity"
+                )
+            updated_attacker["sheet"], gear_removed = _support.remove_inventory_item(
+                updated_attacker["sheet"],
+                str(gear_action["request"].get("item_id") or ""),
+                1,
+            )
+            gear_receipt = {
+                "action_id": str(gear_action["request"].get("action_id") or ""),
+                "item_id": str(gear_action["request"].get("item_id") or ""),
+                "intent": str(gear_action["request"].get("intent") or ""),
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                "rule_plan": _support.deepcopy(gear_rule_plan),
+                "removed": _support.deepcopy(gear_removed),
+            }
+            if (
+                attack_roll.get("hit")
+                and str(gear_rule_plan.get("item_name") or "").casefold()
+                == "alchemist's fire (flask)"
+            ):
+                request = dict(gear_action.get("request") or {})
+                effect = {
+                    "id": f"gear-burning:{request.get('action_id')}",
+                    "kind": "adventuring_gear_burning",
+                    "mechanic_id": "dnd5e.2014.adventuring_gear.alchemists_fire",
+                    "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                    "action_id": str(request.get("action_id") or ""),
+                    "source_item_id": str(request.get("item_id") or ""),
+                    "source_key": str(gear_rule_plan.get("source_key") or ""),
+                    "item_name": str(gear_rule_plan.get("item_name") or ""),
+                    "source_actor_id": actor_id,
+                    "target_id": target_id,
+                    "damage": str(
+                        dict(gear_rule_plan.get("effect") or {}).get("ongoing_damage") or ""
+                    ),
+                    "damage_type": str(
+                        dict(gear_rule_plan.get("effect") or {}).get("ongoing_damage_type")
+                        or ""
+                    ),
+                    "active": True,
+                }
+                if not effect["damage"] or effect["damage_type"] != "fire":
+                    raise _support.CombatEngineError(
+                        "Alchemist's Fire plan is missing its source-defined ongoing fire damage"
+                    )
+                next_encounter["ongoing_effects"] = [
+                    *list(next_encounter.get("ongoing_effects") or []),
+                    effect,
+                ]
+                gear_receipt["ongoing_effect"] = _support.deepcopy(effect)
         if not attack_roll.get("hit"):
             stroke_choice = self.open_rogue_stroke_attack_choice(
                 campaign=campaign,
@@ -1141,7 +1677,7 @@ class AttacksService:
                 poison_event=missed_ammunition_poison,
                 poison_receipts=missed_ammunition_poison_receipts,
             )
-            if stroke_choice is not None:
+            if stroke_choice is not None and gear_action is None:
                 return stroke_choice
         if defenses:
             result = {
@@ -1149,6 +1685,8 @@ class AttacksService:
                 "attack_payment": attack_payment,
                 "pending_reaction": True,
             }
+            if gear_receipt is not None:
+                result["adventuring_gear"] = _support.deepcopy(gear_receipt)
             if ammunition is not None:
                 result["ammunition"] = ammunition
             if limited_use is not None:
@@ -1204,6 +1742,23 @@ class AttacksService:
                 },
             ][-100:]
             next_state = {**dict(campaign.state or {}), "combat": next_encounter}
+            if gear_action is not None:
+                gear_receipt = dict(result.get("adventuring_gear") or {})
+                next_state["item_spends"] = [
+                    *list(next_state.get("item_spends") or []),
+                    {
+                        "id": gear_receipt["action_id"],
+                        "item_id": gear_receipt["item_id"],
+                        "quantity": 1,
+                        "reason": f"adventuring_gear:{gear_receipt['intent']}",
+                        "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                        "character_id": actor_id,
+                        "owner": {"kind": "character", "character_id": actor_id},
+                        "removed": _support.deepcopy(gear_receipt["removed"]),
+                        "target_character_id": target_id,
+                        "rule_plan": _support.deepcopy(gear_receipt["rule_plan"]),
+                    },
+                ]
             next_state["resolution_log"] = [
                 *list(next_state.get("resolution_log") or []),
                 {
@@ -1305,6 +1860,8 @@ class AttacksService:
             attack=attack_roll,
             rules=rule_context,
         )
+        if gear_receipt is not None:
+            result["adventuring_gear"] = _support.deepcopy(gear_receipt)
         poison_campaign_state = missed_ammunition_poison_state
         if missed_ammunition_poison is not None:
             result["poison"] = missed_ammunition_poison
@@ -1335,6 +1892,14 @@ class AttacksService:
                     *list(result.get("rule_receipts") or []),
                     *poison_receipts,
                 ]
+        self.settle_attack_madness_damage(
+            campaign_id=campaign_id,
+            target=updated_target,
+            encounter=next_encounter,
+            result=result,
+            rules=rule_context,
+            transaction_id=resolution_id,
+        )
         mastery_commit = _support.apply_weapon_mastery_to_encounter(
             next_encounter,
             result,
@@ -1591,6 +2156,23 @@ class AttacksService:
         ][-100:]
         next_state = dict(campaign.state or {})
         next_state["combat"] = next_encounter
+        if gear_action is not None:
+            gear_receipt = dict(result.get("adventuring_gear") or {})
+            next_state["item_spends"] = [
+                *list(next_state.get("item_spends") or []),
+                {
+                    "id": gear_receipt["action_id"],
+                    "item_id": gear_receipt["item_id"],
+                    "quantity": 1,
+                    "reason": f"adventuring_gear:{gear_receipt['intent']}",
+                    "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                    "character_id": actor_id,
+                    "owner": {"kind": "character", "character_id": actor_id},
+                    "removed": _support.deepcopy(gear_receipt["removed"]),
+                    "target_character_id": target_id,
+                    "rule_plan": _support.deepcopy(gear_receipt["rule_plan"]),
+                },
+            ]
         if poison_campaign_state is not None:
             next_state["poison_coatings"] = poison_campaign_state["poison_coatings"]
         next_state["resolution_log"] = [
@@ -2531,6 +3113,14 @@ class AttacksService:
             attack=attack_roll,
             rules=rule_context,
         )
+        self.settle_attack_madness_damage(
+            campaign_id=campaign_id,
+            target=updated_target,
+            encounter=next_encounter,
+            result=result,
+            rules=rule_context,
+            transaction_id=str(choice_id),
+        )
         if ammunition is not None:
             result["ammunition"] = ammunition
         if limited_use is not None:
@@ -2860,6 +3450,14 @@ class AttacksService:
             rules=rule_context,
             damage_reduction=song_defense_reduction,
             damage_outcome=uncanny_dodge_outcome,
+        )
+        self.settle_attack_madness_damage(
+            campaign_id=campaign_id,
+            target=updated_target,
+            encounter=next_encounter,
+            result=result,
+            rules=rule_context,
+            transaction_id=str(choice_id),
         )
         mastery_commit = _support.apply_weapon_mastery_to_encounter(
             next_encounter,

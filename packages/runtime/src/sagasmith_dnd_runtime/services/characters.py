@@ -11,6 +11,8 @@ from .. import application_support as _support
 from .sunlight import check_updates, prepare_check_facts
 
 _CORE_POISONS_SOURCE_REF = "bundled:srd2014/08_Gamemastering/Poisons.md"
+_CORE_DISEASES_SOURCE_REF = "bundled:srd2014/08_Gamemastering/Diseases.md"
+_CORE_MADNESS_SOURCE_REF = "bundled:srd2014/08_Gamemastering/Madness.md"
 
 
 def _source_bound_poison_effects(sheet: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -43,6 +45,44 @@ def _require_preserved_source_poison_effects(before: dict[str, Any], after: dict
         raise ValueError(
             "source-bound poison items and lifecycle state change only through "
             "source-owned operations"
+        )
+
+
+def _source_owned_disease_effects(sheet: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        str(effect.get("id") or ""): _support.deepcopy(effect)
+        for effect in sheet.get("effects", [])
+        if effect.get("active") is True
+        and (
+            effect.get("source") == _CORE_DISEASES_SOURCE_REF
+            or effect.get("kind") == "disease_state"
+        )
+    }
+
+
+def _require_preserved_source_disease_effects(
+    before: dict[str, Any], after: dict[str, Any]
+) -> None:
+    if _source_owned_disease_effects(before) != _source_owned_disease_effects(after):
+        raise ValueError(
+            "source-owned disease lifecycle state changes only through disease operations"
+        )
+
+
+def _source_owned_madness_effects(sheet: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    return {
+        str(effect.get("id") or ""): _support.deepcopy(effect)
+        for effect in sheet.get("effects", [])
+        if effect.get("active") is True and effect.get("source") == _CORE_MADNESS_SOURCE_REF
+    }
+
+
+def _require_preserved_source_madness_effects(
+    before: dict[str, Any], after: dict[str, Any]
+) -> None:
+    if _source_owned_madness_effects(before) != _source_owned_madness_effects(after):
+        raise ValueError(
+            "source-owned madness lifecycle state changes only through madness operations"
         )
 
 
@@ -2308,6 +2348,8 @@ class CharactersService:
             ),
         )
         _require_preserved_source_poison_effects(current.sheet, normalized_sheet)
+        _require_preserved_source_disease_effects(current.sheet, normalized_sheet)
+        _require_preserved_source_madness_effects(current.sheet, normalized_sheet)
         _support._require_preserved_tortle_natural_armor_provenance(
             current.sheet,
             normalized_sheet,
@@ -2380,9 +2422,15 @@ class CharactersService:
     ) -> dict[str, Any]:
         """Add a validated active D&D effect and return its assigned effect id."""
         from sagasmith_dnd import rage
+        from sagasmith_dnd.diseases import DISEASE_SOURCE_REF
+        from sagasmith_dnd.madness import SOURCE_REF as MADNESS_SOURCE_REF
 
         if effect.get("kind") in {rage.KIND, rage.ACTIVITY}:
             raise ValueError("Rage effects require the source combat activity")
+        if effect.get("source") == MADNESS_SOURCE_REF:
+            raise ValueError("source-owned madness effects require madness_apply")
+        if effect.get("source") == DISEASE_SOURCE_REF or effect.get("kind") == "disease_state":
+            raise ValueError("source-owned disease effects require disease exposure")
         current = self.characters.get(character_id)
         self.require_character_control(current, principal_id)
         self.require_outside_active_combat(current, "effect changes")
@@ -2408,6 +2456,512 @@ class CharactersService:
             response_extra={"effect_id": effect_id},
         )
 
+    def character_madness_apply(
+        self,
+        character_id: str,
+        category: str,
+        trigger_reason: str,
+        principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None,
+        idempotency_key: str | None = None,
+        *,
+        _stream_bound: bool = False,
+    ) -> dict[str, Any]:
+        """Roll and persist one 2014 madness effect through the campaign RNG."""
+        from sagasmith_dnd import madness
+
+        current = self.characters.get(character_id)
+        self.require_character_control(current, principal_id)
+        if current.campaign_id is None:
+            raise ValueError("madness requires a campaign-bound actor")
+        if current.sheet.get("edition") != "2014":
+            raise ValueError("bundled madness procedure is available only in 2014 campaigns")
+        if expected_revision is None or not idempotency_key:
+            raise ValueError("expected_revision and idempotency_key are required for madness")
+        self.access.require_campaign(
+            current.campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES
+        )
+        normalized_reason = " ".join(str(trigger_reason or "").split())
+        if not normalized_reason or len(normalized_reason) > 1000:
+            raise ValueError("trigger_reason must contain 1 to 1000 characters")
+        category = str(category).strip().casefold()
+        if category not in {"short_term", "long_term", "indefinite"}:
+            raise ValueError("category must be short_term, long_term, or indefinite")
+
+        campaign = self.campaigns.get(current.campaign_id)
+        branch_id = self.require_current_branch(current.campaign_id, None)
+        operation = "character.madness.apply"
+        mutation_payload = {
+            "operation": operation,
+            "character_id": character_id,
+            "category": category,
+            "trigger_reason": normalized_reason,
+        }
+        scope = (
+            f"character-write:{current.campaign_id}:{branch_id}:{principal_id}:{character_id}"
+        )
+        replay = self.replay_idempotent(scope, idempotency_key, mutation_payload)
+        if replay is not None:
+            return replay
+        if current.revision != expected_revision:
+            raise ValueError(
+                "character revision conflict: "
+                f"expected {expected_revision}, found {current.revision}"
+            )
+        if not _stream_bound and _support.active_random_stream() is None:
+            with self.campaign_random_context(
+                current.campaign_id,
+                "character_state_change",
+                {"idempotency_key": idempotency_key},
+            ):
+                return self.character_madness_apply(
+                    character_id,
+                    category,
+                    normalized_reason,
+                    principal_id,
+                    expected_revision,
+                    idempotency_key,
+                    _stream_bound=True,
+                )
+
+        table_roll = _support.asdict(_support.roll("1d100"))
+        table_result = int(table_roll["total"])
+        duration_roll = None
+        duration_die = None
+        if category != "indefinite":
+            duration_roll = _support.asdict(_support.roll("1d10"))
+            duration_die = int(duration_roll["total"])
+        conditional_roll = None
+        conditional_d100 = None
+        if category == "long_term" and 56 <= table_result <= 65:
+            conditional_roll = _support.asdict(_support.roll("1d100"))
+            conditional_d100 = int(conditional_roll["total"])
+        resolved = madness.resolve_madness(
+            category,
+            table_result,
+            duration_die=duration_die,
+            conditional_d100=conditional_d100,
+        )
+        effect = _support.deepcopy(resolved["runtime_effect"])
+        effect["id"] = _support.uuid4().hex
+        effect["name"] = f"{category.replace('_', ' ').title()} Madness: {resolved['effect_key']}"
+        effect["metadata"]["madness"].update(
+            {
+                "source_ref": madness.SOURCE_REF,
+                "trigger_reason": normalized_reason,
+                "table_roll": table_roll,
+                "duration_roll": duration_roll,
+                "conditional_roll": conditional_roll,
+                "suppressed_until": None,
+            }
+        )
+        sheet, effect_id = _support.add_effect(current.sheet, effect)
+        state = None
+        encounter = dict((campaign.state or {}).get("combat") or {})
+        if encounter.get("active"):
+            state = _support.deepcopy(campaign.state or {})
+            self.sync_combatant_conditions(state["combat"], character_id, sheet)
+        projected = self.character_view(
+            _support.replace(current, sheet=sheet, revision=current.revision + 1)
+        )
+        receipt = _support.core_receipts(
+            self.effective_rule_context(current.campaign_id, branch_id=branch_id),
+            ["dnd5e.core.madness.2014"],
+            "madness.apply",
+        )
+        return self.commit_campaign_state(
+            campaign,
+            state,
+            operation=operation,
+            principal_id=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=mutation_payload,
+            response_fields={
+                "character": projected,
+                "madness": resolved,
+                "effect_id": effect_id,
+                "rolls": {
+                    "table": table_roll,
+                    "duration": duration_roll,
+                    "conditional": conditional_roll,
+                },
+                "rule_receipts": receipt,
+            },
+            character_updates=[
+                _support.CharacterStateUpdate(
+                    character_id=character_id,
+                    sheet=sheet,
+                    notes=current.notes,
+                    expected_revision=expected_revision,
+                )
+            ],
+            rule_receipts=receipt,
+            expected_campaign_revision=campaign.revision,
+        )
+
+    def character_madness_choose_lucky_charm(
+        self,
+        character_id: str,
+        effect_id: str,
+        charm_actor_id: str,
+        principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Persist the player/DM's exact choice for a source-defined lucky charm."""
+        from sagasmith_dnd import madness
+
+        current = self.characters.get(character_id)
+        self.require_character_control(current, principal_id)
+        if current.campaign_id is None or current.sheet.get("edition") != "2014":
+            raise ValueError("madness choices require a campaign-bound 2014 actor")
+        if expected_revision is None or not idempotency_key:
+            raise ValueError("expected_revision and idempotency_key are required for madness")
+        self.access.require_campaign(
+            current.campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES
+        )
+        charm_actor_id = str(charm_actor_id or "").strip()
+        if charm_actor_id == character_id:
+            raise ValueError("a lucky charm must identify another campaign actor")
+        self.require_campaign_actor(current.campaign_id, charm_actor_id)
+        campaign = self.campaigns.get(current.campaign_id)
+        branch_id = self.require_current_branch(current.campaign_id, None)
+        payload = {
+            "operation": "character.madness.choose_lucky_charm",
+            "character_id": character_id,
+            "effect_id": effect_id,
+            "charm_actor_id": charm_actor_id,
+        }
+        scope = (
+            f"character-write:{current.campaign_id}:{branch_id}:{principal_id}:{character_id}"
+        )
+        replay = self.replay_idempotent(scope, idempotency_key, payload)
+        if replay is not None:
+            return replay
+        if current.revision != expected_revision:
+            raise ValueError(
+                "character revision conflict: "
+                f"expected {expected_revision}, found {current.revision}"
+            )
+        next_sheet = madness.choose_lucky_charm(
+            current.sheet,
+            effect_id=effect_id,
+            charm_actor_id=charm_actor_id,
+        )
+        projected = self.character_view(
+            _support.replace(current, sheet=next_sheet, revision=current.revision + 1)
+        )
+        receipt = _support.core_receipts(
+            self.effective_rule_context(current.campaign_id, branch_id=branch_id),
+            ["dnd5e.core.madness.2014"],
+            "madness.choose_lucky_charm",
+        )
+        return self.commit_campaign_state(
+            campaign,
+            None,
+            operation=payload["operation"],
+            principal_id=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=payload,
+            response_fields={
+                "character": projected,
+                "madness_choice": {
+                    "effect_id": effect_id,
+                    "kind": "lucky_charm_actor",
+                    "actor_id": charm_actor_id,
+                },
+                "rule_receipts": receipt,
+            },
+            character_updates=[
+                _support.CharacterStateUpdate(
+                    character_id=character_id,
+                    sheet=_support.validate_character_sheet(next_sheet),
+                    notes=_support.validate_character_notes(current.notes),
+                    expected_revision=expected_revision,
+                )
+            ],
+            rule_receipts=receipt,
+            expected_campaign_revision=campaign.revision,
+        )
+
+    def character_madness_choose(
+        self,
+        character_id: str,
+        effect_id: str,
+        choice: dict[str, Any],
+        principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Persist a typed player/DM choice required by an exact madness result."""
+        from sagasmith_dnd import madness
+
+        current = self.characters.get(character_id)
+        self.require_character_control(current, principal_id)
+        if current.campaign_id is None or current.sheet.get("edition") != "2014":
+            raise ValueError("madness choices require a campaign-bound 2014 actor")
+        if expected_revision is None or not idempotency_key:
+            raise ValueError("expected_revision and idempotency_key are required for madness")
+        self.access.require_campaign(
+            current.campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES
+        )
+        normalized_choice = _support.deepcopy(choice)
+        if not isinstance(normalized_choice, dict):
+            raise ValueError("madness choice must be a typed object")
+        actor_choice = (
+            normalized_choice.get("actor_id")
+            if normalized_choice.get("kind")
+            in {"target_actor", "lucky_charm_actor", "person_actor"}
+            else None
+        )
+        if actor_choice is not None:
+            if not isinstance(actor_choice, str):
+                raise ValueError("madness actor choice must be a string id")
+            actor_choice = actor_choice.strip()
+            if not actor_choice:
+                raise ValueError("madness actor choice requires an actor id")
+            if (
+                normalized_choice.get("kind") == "lucky_charm_actor"
+                and actor_choice == character_id
+            ):
+                raise ValueError("a lucky charm must identify another campaign actor")
+            self.require_campaign_actor(current.campaign_id, actor_choice)
+            normalized_choice["actor_id"] = actor_choice
+        campaign = self.campaigns.get(current.campaign_id)
+        branch_id = self.require_current_branch(current.campaign_id, None)
+        payload = {
+            "operation": "character.madness.choose",
+            "character_id": character_id,
+            "effect_id": effect_id,
+            "choice": normalized_choice,
+        }
+        scope = (
+            f"character-write:{current.campaign_id}:{branch_id}:{principal_id}:{character_id}"
+        )
+        replay = self.replay_idempotent(scope, idempotency_key, payload)
+        if replay is not None:
+            return replay
+        if current.revision != expected_revision:
+            raise ValueError(
+                "character revision conflict: "
+                f"expected {expected_revision}, found {current.revision}"
+            )
+        next_sheet = madness.choose_madness_outcome(
+            current.sheet,
+            effect_id=effect_id,
+            choice=normalized_choice,
+        )
+        projected = self.character_view(
+            _support.replace(current, sheet=next_sheet, revision=current.revision + 1)
+        )
+        receipt = _support.core_receipts(
+            self.effective_rule_context(current.campaign_id, branch_id=branch_id),
+            ["dnd5e.core.madness.2014"],
+            "madness.choose",
+        )
+        return self.commit_campaign_state(
+            campaign,
+            None,
+            operation=payload["operation"],
+            principal_id=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=payload,
+            response_fields={
+                "character": projected,
+                "madness_choice": {"effect_id": effect_id, **normalized_choice},
+                "rule_receipts": receipt,
+            },
+            character_updates=[
+                _support.CharacterStateUpdate(
+                    character_id=character_id,
+                    sheet=_support.validate_character_sheet(next_sheet),
+                    notes=_support.validate_character_notes(current.notes),
+                    expected_revision=expected_revision,
+                )
+            ],
+            rule_receipts=receipt,
+            expected_campaign_revision=campaign.revision,
+        )
+
+    def character_madness_transition(
+        self,
+        character_id: str,
+        action: str,
+        effect_id: str,
+        spell_id: str,
+        principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Apply a DM-resolved source-correct Calm Emotions/cure transition."""
+        from sagasmith_dnd import madness
+        from sagasmith_dnd.conditions import reconcile_ended_effect_conditions
+
+        normalized_action = str(action or "").strip().casefold()
+        if normalized_action not in {"madness_suppress", "madness_cure"}:
+            raise ValueError("madness action must be madness_suppress or madness_cure")
+        spell_names = {
+            "dnd5e.content.srd2014.spell.calm-emotions": "calm_emotions",
+            "dnd5e.content.srd2014.spell.lesser-restoration": "lesser_restoration",
+            "dnd5e.content.srd2014.spell.remove-curse": "remove_curse",
+            "dnd5e.content.srd2014.spell.dispel-evil-and-good": "dispel_evil",
+            "dnd5e.content.srd2014.spell.greater-restoration": "greater_restoration",
+            "dnd5e.content.srd2014.spell.wish": "wish",
+        }
+        normalized_spell_id = str(spell_id or "").strip().casefold()
+        if normalized_spell_id not in spell_names:
+            raise ValueError("madness transition requires an exact bundled 2014 spell id")
+        if (
+            normalized_action == "madness_suppress"
+            and spell_names[normalized_spell_id] != "calm_emotions"
+        ):
+            raise ValueError("madness_suppress requires the source-bound Calm Emotions spell")
+        if (
+            normalized_action == "madness_cure"
+            and spell_names[normalized_spell_id] == "calm_emotions"
+        ):
+            raise ValueError("Calm Emotions suppresses madness; it does not cure it")
+
+        current = self.characters.get(character_id)
+        self.require_character_control(current, principal_id)
+        if current.campaign_id is None or current.sheet.get("edition") != "2014":
+            raise ValueError("madness transitions require a campaign-bound 2014 actor")
+        if expected_revision is None or not idempotency_key:
+            raise ValueError("expected_revision and idempotency_key are required for madness")
+        self.access.require_campaign(
+            current.campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES
+        )
+        campaign = self.campaigns.get(current.campaign_id)
+        branch_id = self.require_current_branch(current.campaign_id, None)
+        mutation_payload = {
+            "operation": f"character.madness.{normalized_action.removeprefix('madness_')}",
+            "character_id": character_id,
+            "effect_id": effect_id,
+            "spell_id": normalized_spell_id,
+        }
+        scope = (
+            f"character-write:{current.campaign_id}:{branch_id}:{principal_id}:{character_id}"
+        )
+        replay = self.replay_idempotent(scope, idempotency_key, mutation_payload)
+        if replay is not None:
+            return replay
+        if current.revision != expected_revision:
+            raise ValueError(
+                "character revision conflict: "
+                f"expected {expected_revision}, found {current.revision}"
+            )
+        effect = next(
+            (item for item in current.sheet.get("effects", []) if item.get("id") == effect_id),
+            None,
+        )
+        if (
+            effect is None
+            or not effect.get("active")
+            or effect.get("source") != madness.SOURCE_REF
+        ):
+            raise ValueError("madness transition requires an exact active source-owned effect")
+        effect_metadata = dict(effect.get("metadata") or {})
+        madness_metadata = dict(effect_metadata.get("madness") or {})
+        category = str(madness_metadata.get("category") or "")
+        if not category:
+            raise ValueError("source-owned madness effect is missing its category")
+        authorized_cures = {
+            str(item).strip().casefold()
+            for item in madness_metadata.get("source_authorized_cures", [])
+            if str(item).strip()
+        }
+        source_authorizes = normalized_spell_id in authorized_cures
+        tier = madness.cure_tier(
+            category,
+            spell_names[normalized_spell_id],
+            source_authorizes=source_authorizes,
+        )
+        if normalized_action == "madness_suppress" and tier != "suppress":
+            raise ValueError("source rules do not allow this spell to suppress madness")
+        if normalized_action == "madness_cure" and tier != "cure":
+            raise ValueError("source rules do not allow this spell to cure this madness tier")
+
+        state = None
+        next_sheet = _support.deepcopy(current.sheet)
+        elapsed_ticks = int(
+            dict(dict(campaign.state or {}).get("game_time") or {}).get("elapsed_ticks", 0)
+        )
+        if normalized_action == "madness_suppress":
+            next_sheet = madness.suppress_madness_effect(
+                next_sheet,
+                effect_id=effect_id,
+                started_elapsed_ticks=elapsed_ticks,
+                duration_minutes=1,
+            )
+            madness_result = {
+                "effect_id": effect_id,
+                "status": "suppressed",
+                "spell_id": normalized_spell_id,
+                "suppressed_until_elapsed_ticks": elapsed_ticks
+                + _support.game_time_ticks("minute", 1),
+            }
+        else:
+            ended = next(
+                item for item in next_sheet.get("effects", []) if item.get("id") == effect_id
+            )
+            ended["active"] = False
+            ended["ended_reason"] = "cured"
+            metadata = dict(ended.get("metadata") or {})
+            madness_metadata = dict(metadata.get("madness") or {})
+            madness_metadata["cured_at_elapsed_ticks"] = elapsed_ticks
+            metadata["madness"] = madness_metadata
+            ended["metadata"] = metadata
+            reconcile_ended_effect_conditions(next_sheet, ended_effects=[ended])
+            madness_result = {
+                "effect_id": effect_id,
+                "status": "cured",
+                "spell_id": normalized_spell_id,
+                "source_authorized_cure": source_authorizes,
+            }
+        encounter = dict((campaign.state or {}).get("combat") or {})
+        if encounter.get("active"):
+            state = _support.deepcopy(campaign.state or {})
+            self.sync_combatant_conditions(state["combat"], character_id, next_sheet)
+        projected = self.character_view(
+            _support.replace(current, sheet=next_sheet, revision=current.revision + 1)
+        )
+        receipt = _support.core_receipts(
+            self.effective_rule_context(current.campaign_id, branch_id=branch_id),
+            ["dnd5e.core.madness.2014"],
+            f"madness.{normalized_action.removeprefix('madness_')}",
+        )
+        return self.commit_campaign_state(
+            campaign,
+            state,
+            operation=mutation_payload["operation"],
+            principal_id=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=mutation_payload,
+            response_fields={
+                "character": projected,
+                "madness_transition": madness_result,
+                "rule_receipts": receipt,
+            },
+            character_updates=[
+                _support.CharacterStateUpdate(
+                    character_id=character_id,
+                    sheet=next_sheet,
+                    notes=current.notes,
+                    expected_revision=expected_revision,
+                )
+            ],
+            rule_receipts=receipt,
+            expected_campaign_revision=campaign.revision,
+        )
+
     def character_effect_remove(
         self,
         character_id: str,
@@ -2417,6 +2971,9 @@ class CharactersService:
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
         """Remove an active D&D effect."""
+        from sagasmith_dnd.diseases import DISEASE_SOURCE_REF
+        from sagasmith_dnd.madness import SOURCE_REF as MADNESS_SOURCE_REF
+
         current = self.characters.get(character_id)
         self.require_character_control(current, principal_id)
         self.require_outside_active_combat(current, "effect changes")
@@ -2425,6 +2982,13 @@ class CharactersService:
             None,
         )
         if existing_effect is not None:
+            if existing_effect.get("source") == MADNESS_SOURCE_REF:
+                raise ValueError("source-owned madness effects require a source-correct cure")
+            if (
+                existing_effect.get("source") == DISEASE_SOURCE_REF
+                or existing_effect.get("kind") == "disease_state"
+            ):
+                raise ValueError("source-owned disease effects require a source-correct cure")
             metadata = dict(existing_effect.get("metadata") or {})
             poison_state = dict(metadata.get("poison_state") or {})
             if existing_effect.get("kind") == "poison" and (
@@ -4813,6 +5377,8 @@ class CharactersService:
         )
         if normalized_sheet is not None:
             _require_preserved_source_poison_effects(before.sheet, normalized_sheet)
+            _require_preserved_source_disease_effects(before.sheet, normalized_sheet)
+            _require_preserved_source_madness_effects(before.sheet, normalized_sheet)
         normalized_notes = _support.validate_character_notes(notes) if notes is not None else None
         if before.campaign_id is not None:
             self.access.require_actor(before.campaign_id, before.id, principal_id, control=True)
@@ -7030,6 +7596,10 @@ boundary.
         action: Literal[
             "effect_add",
             "effect_remove",
+            "madness_apply",
+            "madness_choose",
+            "madness_suppress",
+            "madness_cure",
             "resource_set",
             "exhaustion_set",
             "damage",
@@ -7103,7 +7673,14 @@ boundary.
         if (
             current.campaign_id is not None
             and self.authoritative_phase(current.campaign_id) == "combat"
-            and action != "statblock_proficiency_sync"
+            and action
+            not in {
+                "statblock_proficiency_sync",
+                "madness_apply",
+                "madness_choose",
+                "madness_suppress",
+                "madness_cure",
+            }
         ):
             raise _support.ExposureError(
                 "during combat character_state_change supports only statblock_proficiency_sync"
@@ -7112,6 +7689,64 @@ boundary.
             result = self.character_effect_add(
                 character_id,
                 self.required(data, "effect"),
+                principal_id,
+                expected_revision,
+                idempotency_key,
+            )
+        elif action == "madness_apply":
+            unexpected = set(data) - {"category", "trigger_reason"}
+            if unexpected:
+                raise ValueError(
+                    "madness_apply accepts only category and trigger_reason; "
+                    f"unexpected fields: {sorted(unexpected)}"
+                )
+            result = self.character_madness_apply(
+                character_id,
+                self.required(data, "category"),
+                self.required(data, "trigger_reason"),
+                principal_id,
+                expected_revision,
+                idempotency_key,
+            )
+        elif action == "madness_choose":
+            unexpected = set(data) - {"effect_id", "charm_actor_id", "choice"}
+            if unexpected:
+                raise ValueError(
+                    "madness_choose accepts effect_id and either charm_actor_id or choice; "
+                    f"unexpected fields: {sorted(unexpected)}"
+                )
+            if "choice" in data and "charm_actor_id" in data:
+                raise ValueError("madness_choose accepts one typed choice")
+            if "choice" in data:
+                result = self.character_madness_choose(
+                    character_id,
+                    self.required(data, "effect_id"),
+                    self.required(data, "choice"),
+                    principal_id,
+                    expected_revision,
+                    idempotency_key,
+                )
+            else:
+                result = self.character_madness_choose_lucky_charm(
+                    character_id,
+                    self.required(data, "effect_id"),
+                    self.required(data, "charm_actor_id"),
+                    principal_id,
+                    expected_revision,
+                    idempotency_key,
+                )
+        elif action in {"madness_suppress", "madness_cure"}:
+            unexpected = set(data) - {"effect_id", "spell_id"}
+            if unexpected:
+                raise ValueError(
+                    f"{action} accepts only effect_id and spell_id; "
+                    f"unexpected fields: {sorted(unexpected)}"
+                )
+            result = self.character_madness_transition(
+                character_id,
+                action,
+                self.required(data, "effect_id"),
+                self.required(data, "spell_id"),
                 principal_id,
                 expected_revision,
                 idempotency_key,

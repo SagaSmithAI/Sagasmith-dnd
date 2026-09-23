@@ -4,10 +4,837 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from sagasmith_dnd.adventuring_gear import (
+    ADVENTURING_GEAR_SOURCE_REF,
+    adventuring_gear_action,
+    normalize_gear_intent,
+    resolve_adventuring_gear_intent,
+)
+
 from .. import application_support as _support
 
 
+def _authoritative_gear_creature_type(sheet: dict[str, Any]) -> str:
+    progression = dict(sheet.get("progression") or {})
+    return " ".join(
+        str(
+            sheet.get("creature_type")
+            or progression.get("creature_type")
+            or progression.get("species")
+            or ""
+        )
+        .strip()
+        .casefold()
+        .split()
+    )
+
+
 class InventoryService:
+    def source_adventuring_gear_action(self, item: dict[str, Any]) -> Any:
+        """Resolve fixed action facts only for exact bundled gear identities."""
+        return adventuring_gear_action(item)
+
+    def campaign_adventuring_gear_action(
+        self,
+        campaign_id: str,
+        action_id: str,
+        item_id: str,
+        intent: str,
+        source_ref: str,
+        actor_id: str,
+        target_actor_id: str,
+        expected_actor_revision: int,
+        expected_target_revision: int,
+        principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None,
+        branch_id: str | None = None,
+        idempotency_key: str | None = None,
+        action_context: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Atomically settle supported source-bound gear actions.
+
+        Rules and resources come from the Domain plan. Caller action_context cannot
+        replace source DCs, damage, target facts, or outcomes.
+        """
+        self.access.require_campaign(campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES)
+        self.require_write_contract(expected_revision, idempotency_key)
+        resolved_branch_id = self.require_current_branch(campaign_id, branch_id)
+        campaign = self.campaigns.get(campaign_id)
+        state = _support.deepcopy(dict(campaign.state or {}))
+        normalized_action_id = str(action_id).strip()
+        normalized_item_id = str(item_id).strip()
+        normalized_actor_id = str(actor_id).strip()
+        normalized_target_id = str(target_actor_id).strip()
+        if not normalized_action_id or len(normalized_action_id) > 200:
+            raise ValueError("action_id must contain 1 to 200 characters")
+        if not normalized_item_id or len(normalized_item_id) > 200:
+            raise ValueError("item_id must contain 1 to 200 characters")
+        if not normalized_actor_id or not normalized_target_id:
+            raise ValueError("actor_id and target_actor_id are required")
+        if str(source_ref).strip() != ADVENTURING_GEAR_SOURCE_REF:
+            raise _support.CombatEngineError(
+                "gear source_ref must match bundled 2014 adventuring gear"
+            )
+        for field, value in (
+            ("expected_actor_revision", expected_actor_revision),
+            ("expected_target_revision", expected_target_revision),
+        ):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"{field} must be a non-negative integer")
+
+        normalized_intent = normalize_gear_intent(intent)
+        scope = f"campaign-gear-action:{campaign_id}:{resolved_branch_id}:{principal_id}"
+        request_payload = {
+            "action_id": normalized_action_id,
+            "item_id": normalized_item_id,
+            "intent": normalized_intent,
+            "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+            "actor_id": normalized_actor_id,
+            "target_actor_id": normalized_target_id,
+            "expected_actor_revision": expected_actor_revision,
+            "expected_target_revision": expected_target_revision,
+            "branch_id": resolved_branch_id,
+        }
+        replay = self.replay_idempotent(scope, idempotency_key, request_payload)
+        if replay is not None:
+            return replay
+
+        if normalized_intent == "extinguish":
+            return self.campaign_adventuring_gear_extinguish(
+                campaign_id=campaign_id,
+                action_id=normalized_action_id,
+                item_id=normalized_item_id,
+                source_ref=ADVENTURING_GEAR_SOURCE_REF,
+                actor_id=normalized_actor_id,
+                target_actor_id=normalized_target_id,
+                expected_actor_revision=expected_actor_revision,
+                expected_target_revision=expected_target_revision,
+                principal_id=principal_id,
+                expected_revision=expected_revision,
+                branch_id=resolved_branch_id,
+                idempotency_key=idempotency_key,
+                action_context=action_context,
+            )
+
+        owner = self.characters.get(normalized_actor_id)
+        target = self.characters.get(normalized_target_id)
+        if owner.campaign_id != campaign_id or target.campaign_id != campaign_id:
+            raise ValueError("gear user and target must belong to the campaign")
+        owner_sheet = _support.validate_character_sheet(owner.sheet)
+        item = next(
+            (
+                candidate
+                for candidate in owner_sheet.get("inventory", {}).get("items", [])
+                if str(candidate.get("id") or "") == normalized_item_id
+            ),
+            None,
+        )
+        if item is None:
+            raise ValueError("adventuring gear item is absent from the user's inventory")
+        # Inventory templates carry the exact official source_key. The source
+        # reference comes from the trusted request and is checked above because
+        # legacy materialized templates do not duplicate source_ref on each item.
+        source_item = {**item, "source_ref": ADVENTURING_GEAR_SOURCE_REF}
+        plan = resolve_adventuring_gear_intent(source_item, normalized_intent)
+        if str(item.get("name") or "").casefold() == "manacles":
+            self.require_authoritative_manacles_binding(
+                state=state,
+                target_actor_id=normalized_target_id,
+                actor_id=normalized_actor_id,
+                action_context=action_context,
+            )
+        if (
+            str(item.get("name") or "").casefold() == "antitoxin (vial)"
+            and normalized_intent == "drink"
+        ):
+            if (
+                self.authoritative_phase(campaign_id)
+                != _support.PROFILE_PLAY
+            ):
+                raise _support.CombatEngineError(
+                    "Antitoxin use is unavailable during active combat until its action cost "
+                    "is settled"
+                )
+            return self.settle_adventuring_gear_antitoxin(
+                campaign,
+                state,
+                owner,
+                target,
+                owner_sheet,
+                item,
+                plan,
+                normalized_action_id,
+                normalized_item_id,
+                normalized_actor_id,
+                normalized_target_id,
+                expected_actor_revision,
+                expected_target_revision,
+                expected_revision,
+                resolved_branch_id,
+                principal_id,
+                idempotency_key,
+                scope,
+                request_payload,
+            )
+        if plan.get("attack"):
+            return self.campaign_adventuring_gear_attack(
+                campaign_id=campaign_id,
+                action_id=normalized_action_id,
+                item_id=normalized_item_id,
+                intent=normalized_intent,
+                source_ref=ADVENTURING_GEAR_SOURCE_REF,
+                actor_id=normalized_actor_id,
+                target_actor_id=normalized_target_id,
+                expected_actor_revision=expected_actor_revision,
+                expected_target_revision=expected_target_revision,
+                principal_id=principal_id,
+                expected_revision=expected_revision,
+                branch_id=resolved_branch_id,
+                idempotency_key=idempotency_key,
+                action_context=action_context,
+            )
+        if (
+            str(item.get("name") or "").casefold() == "lock"
+            and normalized_intent == "pick"
+        ) or (
+            str(item.get("name") or "").casefold() == "rope, hempen (50 feet)"
+            and normalized_intent == "burst"
+        ):
+            return self.settle_adventuring_gear_object_check(
+                campaign=campaign,
+                state=state,
+                owner=owner,
+                owner_sheet=owner_sheet,
+                item=item,
+                plan=plan,
+                action_id=normalized_action_id,
+                item_id=normalized_item_id,
+                actor_id=normalized_actor_id,
+                target_actor_id=normalized_target_id,
+                expected_actor_revision=expected_actor_revision,
+                expected_target_revision=expected_target_revision,
+                expected_campaign_revision=expected_revision,
+                branch_id=resolved_branch_id,
+                principal_id=principal_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+                request_payload=request_payload,
+                action_context=action_context,
+            )
+        if self.authoritative_phase(campaign_id) != _support.PROFILE_PLAY:
+            raise _support.CombatEngineError(
+                "non-attack adventuring gear actions are available only outside active combat"
+            )
+        if item.get("name", "").casefold() != "healer's kit" or plan["intent"] != "stabilize":
+            raise _support.CombatEngineError(
+                "Runtime has no atomic settlement for this source-defined gear intent"
+            )
+
+        target_sheet = _support.validate_character_sheet(target.sheet)
+        hp = dict(target_sheet.get("combat", {}).get("hp") or {})
+        if int(hp.get("value", 0) or 0) != 0:
+            raise _support.CombatEngineError(
+                "Healer's Kit stabilize requires a target at 0 hit points"
+            )
+        if normalized_actor_id != normalized_target_id:
+            stabilized_sheet = _support.stabilize_sheet(target_sheet)
+        else:
+            stabilized_sheet = None
+
+        uses = dict(item.get("uses") or {})
+        use_key = "healer_s_kit"
+        use_state = uses.get(use_key)
+        if use_state is None:
+            use_state = {
+                "label": "Healer's Kit uses",
+                "value": 10,
+                "max": 10,
+                "unlimited": False,
+                "recovers_on": "none",
+                "source_key": item["source_key"],
+            }
+        else:
+            use_state = dict(use_state)
+            if (
+                use_state.get("max") != 10
+                or use_state.get("unlimited") is not False
+                or use_state.get("recovers_on") != "none"
+                or use_state.get("source_key") != item["source_key"]
+            ):
+                raise _support.CombatEngineError(
+                    "Healer's Kit use resource has invalid source identity"
+                )
+        remaining = use_state.get("value")
+        if isinstance(remaining, bool) or not isinstance(remaining, int) or remaining < 1:
+            raise _support.CombatEngineError("Healer's Kit has no uses remaining")
+        use_state["value"] = remaining - 1
+        uses[use_key] = use_state
+        item["uses"] = uses
+        owner_sheet = _support.validate_character_sheet(owner_sheet)
+
+        spends = list(state.get("item_spends") or [])
+        if any(
+            str(dict(entry).get("id") or "") == normalized_action_id
+            for entry in spends
+            if isinstance(entry, dict)
+        ):
+            raise ValueError("gear action_id already exists on this branch")
+
+        character_updates: list[_support.CharacterStateUpdate] = []
+        owner_after_sheet = owner_sheet
+        target_after_sheet = stabilized_sheet
+        if normalized_actor_id == normalized_target_id:
+            owner_after_sheet = _support.validate_character_sheet(
+                _support.stabilize_sheet(owner_sheet)
+            )
+            target_after_sheet = owner_after_sheet
+            character_updates.append(
+                _support.CharacterStateUpdate(
+                    owner.id,
+                    owner_after_sheet,
+                    _support.validate_character_notes(
+                        owner.notes, character_type=owner.character_type
+                    ),
+                    expected_actor_revision,
+                )
+            )
+        else:
+            character_updates.extend(
+                [
+                    _support.CharacterStateUpdate(
+                        owner.id,
+                        owner_after_sheet,
+                        _support.validate_character_notes(
+                            owner.notes, character_type=owner.character_type
+                        ),
+                        expected_actor_revision,
+                    ),
+                    _support.CharacterStateUpdate(
+                        target.id,
+                        target_after_sheet,
+                        _support.validate_character_notes(
+                            target.notes, character_type=target.character_type
+                        ),
+                        expected_target_revision,
+                    ),
+                ]
+            )
+        if (
+            normalized_actor_id == normalized_target_id
+            and expected_target_revision != expected_actor_revision
+        ):
+            raise ValueError("same-actor gear use requires equal actor and target revisions")
+
+        response = {
+            "status": "committed",
+            "action_id": normalized_action_id,
+            "item_id": normalized_item_id,
+            "intent": plan["intent"],
+            "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+            "rule_plan": plan,
+            "resource": {"key": use_key, "spent": 1, "remaining": remaining - 1},
+            "target": {
+                "character_id": target.id,
+                "stabilization": {"status": "stable", "hp": int(hp.get("value", 0) or 0)},
+            },
+            "owner": {"kind": "character", "character_id": owner.id},
+            "campaign": _support.asdict(
+                _support.replace(campaign, state=state, revision=campaign.revision + 1)
+            ),
+            "character": self.character_view(
+                _support.replace(
+                    owner,
+                    sheet=owner_after_sheet,
+                    revision=owner.revision + 1,
+                )
+            ),
+            **(
+                {
+                    "target_character": self.character_view(
+                        _support.replace(
+                            target,
+                            sheet=target_after_sheet,
+                            revision=target.revision + 1,
+                        )
+                    )
+                }
+                if target.id != owner.id
+                else {}
+            ),
+        }
+        receipt = {
+            "id": normalized_action_id,
+            "item_id": normalized_item_id,
+            "quantity": 1,
+            "reason": "Healer's Kit stabilize",
+            "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+            "character_id": owner.id,
+            "owner": {"kind": "character", "character_id": owner.id},
+            "gear_intent": plan["intent"],
+            "target_character_id": target.id,
+            "uses_remaining": remaining - 1,
+        }
+        spends.append(receipt)
+        state["item_spends"] = spends
+        normalized_state = _support.validate_party_state(state)
+        response["campaign"]["state"] = normalized_state
+        _support.StateMutationService(self.storage.database).replace(
+            campaign_id,
+            campaign_state=normalized_state,
+            character_updates=character_updates,
+            expected_campaign_revision=expected_revision,
+            operation="campaign.adventuring_gear.action",
+            actor=principal_id,
+            branch_id=resolved_branch_id,
+            idempotency_key=idempotency_key,
+            idempotency_write=_support.IdempotencyWrite(
+                scope=scope,
+                payload=request_payload,
+                response=response,
+            ),
+        )
+        return response
+
+    def require_authoritative_manacles_binding(
+        self,
+        *,
+        state: dict[str, Any],
+        target_actor_id: str,
+        actor_id: str,
+        action_context: dict[str, Any] | None,
+    ) -> None:
+        """Fail closed when only a generic restrained condition proves no binding source.
+
+        The bundled 2014 text defines escape/break/pick parameters but no
+        application procedure, so Runtime has no way to establish an item-owned
+        link between this exact manacle set and its target.
+        """
+        if action_context is not None:
+            raise _support.CombatEngineError(
+                "Manacles do not accept caller-supplied binding, DC, or outcome context"
+            )
+        encounter = dict(state.get("combat") or {})
+        if not encounter.get("active"):
+            raise _support.CombatEngineError(
+                "Manacles escape, break, and pick require active encounter actors"
+            )
+        self.require_encounter_combatant(encounter, actor_id, role="Manacles user")
+        self.require_encounter_combatant(encounter, target_actor_id, role="Manacles target")
+        target = self.characters.get(target_actor_id)
+        target_sheet = _support.validate_character_sheet(target.sheet)
+        size = str(dict(target_sheet.get("traits") or {}).get("size") or "").casefold()
+        if size not in {"small", "medium"}:
+            raise _support.CombatEngineError(
+                "source-defined Manacles can bind only Small or Medium creatures"
+            )
+        if "restrained" not in set(target_sheet.get("conditions") or []):
+            raise _support.CombatEngineError(
+                "source-defined Manacles escape, break, or pick requires a restrained target"
+            )
+        raise _support.CombatEngineError(
+            "Manacles action requires a source-owned binding receipt; the bundled 2014 source "
+            "does not define a binding procedure, and restrained alone is not sufficient"
+        )
+
+    def settle_adventuring_gear_object_check(
+        self,
+        *,
+        campaign: Any,
+        state: dict[str, Any],
+        owner: Any,
+        owner_sheet: dict[str, Any],
+        item: dict[str, Any],
+        plan: dict[str, Any],
+        action_id: str,
+        item_id: str,
+        actor_id: str,
+        target_actor_id: str,
+        expected_actor_revision: int,
+        expected_target_revision: int,
+        expected_campaign_revision: int | None,
+        branch_id: str,
+        principal_id: str,
+        idempotency_key: str,
+        scope: str,
+        request_payload: dict[str, Any],
+        action_context: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Roll the source-fixed Lock or Rope check and persist its object state atomically."""
+        if action_context is not None:
+            raise _support.CombatEngineError(
+                "adventuring gear object checks do not accept caller rule or outcome context"
+            )
+        if actor_id != target_actor_id or expected_actor_revision != expected_target_revision:
+            raise _support.CombatEngineError(
+                "gear object checks require the owning actor as both actor and target"
+            )
+        if self.authoritative_phase(campaign.id) != _support.PROFILE_PLAY:
+            raise _support.CombatEngineError(
+                "gear object checks are available only outside active combat"
+            )
+        if self.campaign_rules_edition(campaign.id) != "2014":
+            raise _support.CombatEngineError(
+                "source-bound adventuring gear object checks require the 2014 ruleset"
+            )
+        name = str(item.get("name") or "")
+        item_key = str(item.get("source_key") or "")
+        state_key = "lock" if name.casefold() == "lock" else "rope"
+        object_states = dict(state.get("adventuring_gear_objects") or {})
+        object_state_key = f"{actor_id}:{item_id}"
+        gear_state = dict(object_states.get(object_state_key) or {})
+        if gear_state and (
+            gear_state.get("source_ref") != ADVENTURING_GEAR_SOURCE_REF
+            or gear_state.get("source_key") != item_key
+            or gear_state.get("item_name") != name
+            or gear_state.get("owner_actor_id") != actor_id
+            or gear_state.get("item_id") != item_id
+        ):
+            raise _support.CombatEngineError("gear object state has a mismatched source identity")
+        default_state = "locked" if state_key == "lock" else "intact"
+        current_state = str(gear_state.get("state") or default_state)
+        required_state = str(dict(plan.get("effect") or {}).get("requires_state") or "")
+        if current_state != required_state:
+            raise _support.CombatEngineError(
+                f"{state_key} must be {required_state} to use this source-defined action"
+            )
+        requirements = set(plan.get("requirements") or [])
+        if "thieves_tools_proficiency" in requirements:
+            proficiencies = dict(
+                dict(owner_sheet.get("traits") or {}).get("proficiencies") or {}
+            )
+            tools = {
+                " ".join(str(value).casefold().replace("’", "'").split())
+                for value in proficiencies.get("tools", [])
+            }
+            if "thieves' tools" not in tools:
+                raise _support.CombatEngineError(
+                    "source-defined Lock picking requires authoritative thieves' tools proficiency"
+                )
+
+        campaign_state = _support.deepcopy(state)
+        stream_context = _support.active_random_stream()
+        if stream_context is None:
+            with _support.use_random_stream(
+                _support.CampaignRandomStream.from_campaign_state(
+                    campaign.id,
+                    campaign.state,
+                    operation="campaign.adventuring_gear.object_check",
+                    idempotency_key=idempotency_key,
+                    campaign_revision=campaign.revision,
+                )
+            ):
+                return self.settle_adventuring_gear_object_check(
+                    campaign=campaign,
+                    state=state,
+                    owner=owner,
+                    owner_sheet=owner_sheet,
+                    item=item,
+                    plan=plan,
+                    action_id=action_id,
+                    item_id=item_id,
+                    actor_id=actor_id,
+                    target_actor_id=target_actor_id,
+                    expected_actor_revision=expected_actor_revision,
+                    expected_target_revision=expected_target_revision,
+                    expected_campaign_revision=expected_campaign_revision,
+                    branch_id=branch_id,
+                    principal_id=principal_id,
+                    idempotency_key=idempotency_key,
+                    scope=scope,
+                    request_payload=request_payload,
+                    action_context=action_context,
+                )
+        stream = _support.active_random_stream()
+        random_state = _support.validate_random_stream_state(
+            dict(campaign.state or {}).get("random_stream")
+            or _support.initial_random_stream(f"sagasmith-dnd:{campaign.id}")
+        )
+        if (
+            stream.campaign_id != campaign.id
+            or stream.seed != random_state["seed"]
+            or stream.start_position != random_state["position"]
+            or (
+                stream.campaign_revision is not None
+                and stream.campaign_revision != campaign.revision
+            )
+        ):
+            raise _support.CombatEngineError(
+                "gear object checks require the current campaign random snapshot"
+            )
+        check_spec = dict(plan.get("check") or {})
+        check = _support.resolve_actor_check(
+            self.combat_actor_snapshot(actor_id),
+            kind="check",
+            ability=str(check_spec.get("ability") or ""),
+            dc=int(check_spec["dc"]),
+            ruleset=self.campaign_rules_edition(campaign.id),
+            rng=stream,
+        )
+        success = check.get("success") is True
+        if success:
+            gear_state = {
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                "source_key": item_key,
+                "item_name": name,
+                "owner_actor_id": actor_id,
+                "item_id": item_id,
+                "state": dict(plan.get("effect") or {}).get("success_state"),
+            }
+        elif state_key == "lock":
+            gear_state = {
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                "source_key": item_key,
+                "item_name": name,
+                "owner_actor_id": actor_id,
+                "item_id": item_id,
+                "state": dict(plan.get("effect") or {}).get("failure_state"),
+            }
+        else:
+            gear_state = {
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                "source_key": item_key,
+                "item_name": name,
+                "owner_actor_id": actor_id,
+                "item_id": item_id,
+                "state": current_state,
+            }
+        object_states[object_state_key] = gear_state
+        campaign_state["adventuring_gear_objects"] = object_states
+
+        spends = list(campaign_state.get("item_spends") or [])
+        if any(
+            isinstance(entry, dict) and str(entry.get("id") or "") == action_id
+            for entry in spends
+        ):
+            raise ValueError("gear action_id already exists on this branch")
+        receipt = {
+            "id": action_id,
+            "item_id": item_id,
+            "quantity": 0,
+            "reason": f"adventuring gear {plan['intent']}",
+            "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+            "source_key": item_key,
+            "character_id": owner.id,
+            "gear_intent": plan["intent"],
+            "check": check,
+            "resulting_state": gear_state,
+        }
+        spends.append(receipt)
+        campaign_state["item_spends"] = spends
+        owner_sheet = _support.validate_character_sheet(owner_sheet)
+        actor_update = _support.CharacterStateUpdate(
+            owner.id,
+            owner_sheet,
+            _support.validate_character_notes(owner.notes, character_type=owner.character_type),
+            expected_actor_revision,
+        )
+        normalized_state = _support.validate_party_state(campaign_state)
+        response = {
+            "status": "committed",
+            "action_id": action_id,
+            "item_id": item_id,
+            "intent": plan["intent"],
+            "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+            "rule_plan": plan,
+            "check": check,
+            "success": success,
+            "resulting_state": receipt["resulting_state"],
+            "campaign": _support.asdict(
+                _support.replace(
+                    campaign,
+                    state=normalized_state,
+                    revision=campaign.revision + 1,
+                )
+            ),
+            "character": self.character_view(
+                _support.replace(
+                    owner,
+                    sheet=owner_sheet,
+                    revision=owner.revision + 1,
+                )
+            ),
+        }
+        response["campaign"]["state"] = normalized_state
+        _support.StateMutationService(self.storage.database).replace(
+            campaign.id,
+            campaign_state=normalized_state,
+            character_updates=[actor_update],
+            expected_campaign_revision=expected_campaign_revision,
+            operation="campaign.adventuring_gear.object_check",
+            actor=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            idempotency_write=_support.IdempotencyWrite(
+                scope=scope,
+                payload=request_payload,
+                response=response,
+            ),
+        )
+        return response
+
+
+    def settle_adventuring_gear_antitoxin(
+        self,
+        campaign: Any,
+        state: dict[str, Any],
+        owner: Any,
+        target: Any,
+        owner_sheet: dict[str, Any],
+        item: dict[str, Any],
+        plan: dict[str, Any],
+        action_id: str,
+        item_id: str,
+        actor_id: str,
+        target_id: str,
+        expected_actor_revision: int,
+        expected_target_revision: int,
+        expected_revision: int,
+        branch_id: str,
+        principal_id: str,
+        idempotency_key: str,
+        scope: str,
+        request_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        if actor_id == target_id and expected_actor_revision != expected_target_revision:
+            raise ValueError("same-actor gear use requires equal actor and target revisions")
+        target_sheet = (
+            owner_sheet
+            if actor_id == target_id
+            else _support.validate_character_sheet(target.sheet)
+        )
+        creature_type = _authoritative_gear_creature_type(target_sheet)
+        if not creature_type:
+            raise _support.CombatEngineError(
+                "Antitoxin requires an authoritative target creature type"
+            )
+        if any(
+            token.strip(" ,.;:-()") in {"undead", "construct"}
+            for token in creature_type.split()
+        ):
+            raise _support.CombatEngineError("Antitoxin has no effect on undead or constructs")
+        active_antitoxin = any(
+            isinstance(effect, dict)
+            and effect.get("active") is True
+            and dict(effect.get("metadata") or {}).get("save_purpose") == "poison"
+            and dict(effect.get("metadata") or {}).get("source_item_id") == item_id
+            for effect in target_sheet.get("effects", [])
+        )
+        if active_antitoxin:
+            raise _support.CombatEngineError("target already has this Antitoxin effect active")
+        owner_after, removed = _support.remove_inventory_item(owner_sheet, item_id, 1)
+        effect = {
+            "id": f"adventuring-gear-antitoxin:{action_id}",
+            "name": "Antitoxin",
+            "kind": "source_effect",
+            "active": True,
+            "concentration": False,
+            "duration": {"period": "hour", "remaining": 1},
+            "metadata": {
+                "save_purpose": "poison",
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                "action_id": action_id,
+                "source_item_id": item_id,
+                "source_key": str(item.get("source_key") or ""),
+            },
+            "changes": [
+                {
+                    "path": "rolls.saving_throw.advantage",
+                    "mode": "set",
+                    "value": True,
+                }
+            ],
+        }
+        target_after = _support.deepcopy(target_sheet)
+        target_after["effects"] = [*list(target_after.get("effects") or []), effect]
+        if actor_id == target_id:
+            target_after = _support.validate_character_sheet(owner_after)
+            target_after["effects"].append(effect)
+            owner_after = target_after
+        else:
+            owner_after = _support.validate_character_sheet(owner_after)
+            target_after = _support.validate_character_sheet(target_after)
+
+        spends = list(state.get("item_spends") or [])
+        if any(
+            isinstance(entry, dict) and str(entry.get("id") or "") == action_id
+            for entry in spends
+        ):
+            raise ValueError("gear action_id already exists on this branch")
+        spends.append(
+            {
+                "id": action_id,
+                "item_id": item_id,
+                "quantity": 1,
+                "reason": "Antitoxin drink",
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                "character_id": owner.id,
+                "owner": {"kind": "character", "character_id": owner.id},
+                "gear_intent": plan["intent"],
+                "target_character_id": target.id,
+                "removed": _support.deepcopy(removed),
+                "rule_plan": _support.deepcopy(plan),
+            }
+        )
+        state["item_spends"] = spends
+        normalized_state = _support.validate_party_state(state)
+        character_updates = [
+            _support.CharacterStateUpdate(
+                owner.id,
+                owner_after,
+                _support.validate_character_notes(
+                    owner.notes, character_type=owner.character_type
+                ),
+                expected_actor_revision,
+            )
+        ]
+        if actor_id != target_id:
+            character_updates.append(
+                _support.CharacterStateUpdate(
+                    target.id,
+                    target_after,
+                    _support.validate_character_notes(
+                        target.notes, character_type=target.character_type
+                    ),
+                    expected_target_revision,
+                )
+            )
+        response = {
+            "status": "committed",
+            "action_id": action_id,
+            "item_id": item_id,
+            "intent": plan["intent"],
+            "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+            "rule_plan": _support.deepcopy(plan),
+            "effect": _support.deepcopy(effect),
+            "removed": _support.deepcopy(removed),
+            "campaign": _support.asdict(
+                _support.replace(campaign, state=normalized_state, revision=campaign.revision + 1)
+            ),
+            "owner": self.character_view(
+                _support.replace(owner, sheet=owner_after, revision=owner.revision + 1)
+            ),
+        }
+        if actor_id != target_id:
+            response["target"] = self.character_view(
+                _support.replace(target, sheet=target_after, revision=target.revision + 1)
+            )
+        _support.StateMutationService(self.storage.database).replace(
+            campaign.id,
+            campaign_state=normalized_state,
+            character_updates=character_updates,
+            expected_campaign_revision=expected_revision,
+            operation="campaign.adventuring_gear.antitoxin",
+            actor=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            idempotency_write=_support.IdempotencyWrite(
+                scope=scope,
+                payload=request_payload,
+                response=response,
+            ),
+        )
+        return response
+
     def reconcile_completed_item_attunements(
         self,
         campaign: Any,

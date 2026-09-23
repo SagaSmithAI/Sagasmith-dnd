@@ -10,18 +10,24 @@ from .characters import CharactersService
 from .combat import CombatService
 from .content import ContentService
 from .continuity import ContinuityService
+from .diseases import DiseasesService
+from .downtime import DowntimeService
 from .inventory import InventoryService
 from .poisons import PoisonsService
 from .presentation import PresentationService
 from .shared import SharedService
 from .spells import SpellsService
+from .traps import TrapService
 
 
 class ApplicationServices(
+    TrapService,
     AttacksService,
     AuthoringService,
     CampaignsService,
     CharactersService,
+    DiseasesService,
+    DowntimeService,
     CombatService,
     ContentService,
     ContinuityService,

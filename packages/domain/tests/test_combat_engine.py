@@ -2234,12 +2234,18 @@ def test_2014_grid_vision_resolves_light_and_senses() -> None:
         "for an additional 20 feet."
     )
 
-    def actors(*, viewer_senses: dict[str, int], map_request: dict, subject_x: int = 2):
+    def actors(
+        *,
+        viewer_senses: dict[str, int],
+        map_request: dict,
+        subject_x: int = 2,
+        viewer_x: int = 0,
+    ):
         viewer = _actor("viewer")
         viewer["sheet"]["traits"]["senses"].update(viewer_senses)
         viewer["derived"] = derive_character_sheet(viewer["sheet"])
         subject = _actor("subject")
-        viewer.update(initiative=20, tie_breaker=0, position={"x": 0, "y": 0})
+        viewer.update(initiative=20, tie_breaker=0, position={"x": viewer_x, "y": 0})
         subject.update(initiative=10, tie_breaker=1, position={"x": subject_x, "y": 0})
         battle_map = compile_battle_map(
             {"scene_id": "vision-test", "spatial": {}},
@@ -2295,6 +2301,27 @@ def test_2014_grid_vision_resolves_light_and_senses() -> None:
     assert can_see(ordinary, subject, encounter)
     assert profile["light_level"] == "dim"
     assert profile["perception_disadvantage"] is True
+    assert profile["source_lights"][0]["source_ref"] == source_ref
+
+    blocked_torch_map = {
+        **torch_map,
+        "vision_cells": [{
+            "x": 3, "y": 0, "illumination": None, "obscuration": None,
+            "magical_darkness": False, "opaque": True,
+            "source_ref": "scene:vision-test:stone-wall",
+            "source_excerpt": "A solid stone wall blocks the torchlight.",
+        }],
+    }
+    encounter, darkvision, subject = actors(
+        viewer_senses={"darkvision": 30},
+        map_request=blocked_torch_map,
+        subject_x=5,
+        viewer_x=6,
+    )
+    profile = vision_profile_2014(encounter, darkvision, subject)
+    assert can_see(darkvision, subject, encounter)
+    assert profile["light_level"] == "dim"  # darkvision changes darkness to dim light
+    assert profile["source_lights"] == []
 
 
 def test_2014_agent_vision_derives_sight_from_bounded_scene_facts() -> None:
@@ -6969,6 +6996,83 @@ def test_active_roll_effects_apply_to_attacks_saves_and_ability_checks() -> None
     assert save["total"] == 9
 
 
+def test_recuperation_advantage_is_scoped_to_one_source_bound_condition() -> None:
+    actor = _actor("recuperating")
+    actor["sheet"]["effects"].extend(
+        [
+            {
+                "id": "disease-cackle",
+                "name": "Cackle Fever",
+                "kind": "disease_state",
+                "source": "bundled:srd2014/08_Gamemastering/Diseases.md",
+                "active": True,
+                "duration": {"period": "manual", "remaining": 0},
+                "changes": [],
+                "metadata": {"disease_state": {"edition": "2014"}},
+            },
+            {
+                "id": "poison-recurring",
+                "name": "Recurring poison",
+                "kind": "poison",
+                "source": "bundled:srd2014/08_Gamemastering/Poisons.md",
+                "active": True,
+                "duration": {"period": "manual", "remaining": 0},
+                "changes": [],
+                "metadata": {"poison_state": {"edition": "2014"}},
+            },
+            {
+                "id": "recuperation-cackle",
+                "name": "Recuperation advantage",
+                "kind": "manual",
+                "source": "bundled:srd2014/06_Gameplay/Adventuring.md",
+                "active": True,
+                "duration": {"period": "hour", "remaining": 24},
+                "changes": [
+                    {"path": "rolls.saving_throw.advantage", "mode": "set", "value": True}
+                ],
+                "metadata": {
+                    "recuperation_advantage_against": {
+                        "kind": "advantage_against_condition",
+                        "condition_id": "disease-cackle",
+                        "condition_kind": "disease",
+                        "duration_hours": 24,
+                    }
+                },
+            },
+        ]
+    )
+    actor["derived"] = derive_character_sheet(actor["sheet"])
+
+    cackle_save = resolve_actor_check(
+        actor,
+        kind="save",
+        ability="constitution",
+        dc=13,
+        save_condition_id="disease-cackle",
+        rng=_SequenceRng(2, 19),
+    )
+    poison_save = resolve_actor_check(
+        actor,
+        kind="save",
+        ability="constitution",
+        dc=13,
+        save_purpose="poison",
+        save_condition_id="poison-recurring",
+        rng=_SequenceRng(19),
+    )
+    assert cackle_save["rolls"] == [2, 19]
+    assert poison_save["rolls"] == [19]
+    with pytest.raises(CombatEngineError, match="source-bound disease or poison"):
+        resolve_actor_check(
+            actor,
+            kind="save",
+            ability="constitution",
+            dc=13,
+            save_condition_id="unrelated",
+            rng=_SequenceRng(19),
+        )
+
+
 def test_condition_saving_throw_effects_are_not_left_to_client_modifiers() -> None:
     actor = _actor("target")
     actor["sheet"]["conditions"] = ["paralyzed"]
@@ -8480,3 +8584,76 @@ def test_lookalike_critical_text_does_not_gain_an_automatic_attack_contract() ->
 
     assert "critical_followup" not in plan
     assert plan["on_hit_effect"] == effect
+
+
+def test_2014_madness_damage_ends_only_its_source_owned_paralysis() -> None:
+    from sagasmith_dnd.madness import resolve_madness
+
+    actor = _actor("madness-target", hp=20)
+    resolved = resolve_madness("short_term", 1, duration_die=1)
+    effect = resolved["runtime_effect"]
+    effect["id"] = "short-madness"
+    actor["sheet"], _ = add_effect(actor["sheet"], effect)
+    actor["sheet"], _ = add_effect(
+        actor["sheet"],
+        {
+            "id": "other-paralysis",
+            "name": "Independent paralysis",
+            "kind": "timed_conditions",
+            "source": "test:independent-paralysis",
+            "changes": [{"path": "conditions", "mode": "add", "value": "paralyzed"}],
+        },
+    )
+
+    result = apply_damage_to_sheet(actor["sheet"], amount=1, damage_type="force")
+
+    effects = {item["id"]: item for item in result["sheet"]["effects"]}
+    assert effects["short-madness"]["active"] is False
+    assert effects["short-madness"]["ended_reason"] == "damaged"
+    assert effects["other-paralysis"]["active"] is True
+    assert "paralyzed" in result["sheet"]["conditions"]
+    assert "short-madness" in result["ended_effect_ids"]
+
+
+def test_2014_madness_unwakeable_unconsciousness_survives_damage() -> None:
+    from sagasmith_dnd.madness import resolve_madness
+
+    actor = _actor("unwakeable-madness", hp=20)
+    resolved = resolve_madness("long_term", 100, duration_die=1)
+    effect = resolved["runtime_effect"]
+    effect["id"] = "long-madness"
+    actor["sheet"], _ = add_effect(actor["sheet"], effect)
+
+    result = apply_damage_to_sheet(actor["sheet"], amount=1, damage_type="force")
+
+    assert result["sheet"]["effects"][0]["active"] is True
+    assert "unconscious" in result["sheet"]["conditions"]
+    assert "long-madness" not in result["ended_effect_ids"]
+
+
+def test_lucky_charm_madness_attack_penalty_uses_chosen_actor_grid_distance() -> None:
+    from sagasmith_dnd import madness
+
+    attacker = _actor("madman")
+    charm = _actor("charm")
+    target = _actor("target")
+    attacker.update(position={"x": 0, "y": 0}, initiative=30)
+    charm.update(position={"x": 7, "y": 0}, initiative=20)
+    target.update(position={"x": 1, "y": 0}, initiative=10)
+    effect = madness.resolve_madness("long_term", 46, duration_die=8)["runtime_effect"]
+    effect["id"] = "lucky-charm"
+    attacker["sheet"], _ = add_effect(attacker["sheet"], effect)
+    attacker["sheet"] = madness.choose_lucky_charm(
+        attacker["sheet"], effect_id="lucky-charm", charm_actor_id="charm"
+    )
+    attacker["derived"] = derive_character_sheet(attacker["sheet"])
+
+    plan = preflight_attack(
+        attacker,
+        target,
+        action={},
+        encounter=_grid_encounter([attacker, charm, target]),
+    )
+
+    assert plan["disadvantage"] is True
+    assert "lucky-charm" in plan["disadvantage_sources"]

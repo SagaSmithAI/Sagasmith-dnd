@@ -4,7 +4,21 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
+from sagasmith_dnd.adventuring_gear import (
+    ADVENTURING_GEAR_SOURCE_REF,
+    resolve_adventuring_gear_intent,
+)
+from sagasmith_dnd.madness import (
+    SOURCE_REF as MADNESS_SOURCE_REF,
+)
+from sagasmith_dnd.madness import (
+    damage_triggered_confusion_effect_ids,
+    resolve_confusion_turn,
+)
+from sagasmith_dnd.traps import transition_trap_state
+
 from .. import application_support as _support
+from .madness import settle_damage_triggered_confusion
 from .passive_checks import chase_passive_contexts
 from .sunlight import check_updates, prepare_check_facts
 
@@ -49,6 +63,105 @@ def _without_repeated_preflight_cards(encounter: dict[str, Any]) -> dict[str, An
     }
 
 
+def _active_madness_confusion_effects(sheet: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        effect
+        for effect in sheet.get("effects", [])
+        if isinstance(effect, dict)
+        and effect.get("active") is True
+        and effect.get("kind") == "madness_confusion"
+        and effect.get("source") == MADNESS_SOURCE_REF
+        and isinstance(dict(effect.get("metadata") or {}).get("madness_confusion"), dict)
+    ]
+
+
+def _settle_adventuring_gear_burning_turn_start(
+    encounter: dict[str, Any],
+    actor_id: str,
+    sheet: dict[str, Any],
+    turn_token: str,
+    *,
+    item_spends: list[dict[str, Any]],
+    death_saves: bool,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Apply source-verified Alchemist's Fire damage at the target's turn start."""
+    events: list[dict[str, Any]] = []
+    next_sheet = _support.deepcopy(sheet)
+    receipts_by_id = {
+        str(item.get("id") or ""): item for item in item_spends if isinstance(item, dict)
+    }
+    for effect in encounter.get("ongoing_effects", []):
+        if (
+            not isinstance(effect, dict)
+            or not effect.get("active", True)
+            or effect.get("kind") != "adventuring_gear_burning"
+            or str(effect.get("target_id") or "") != actor_id
+            or str(effect.get("last_trigger_turn_token") or "") == turn_token
+        ):
+            continue
+        action_id = str(effect.get("action_id") or "")
+        item_id = str(effect.get("source_item_id") or "")
+        source_key = str(effect.get("source_key") or "")
+        spend = receipts_by_id.get(action_id)
+        spend_plan = dict(dict(spend or {}).get("rule_plan") or {})
+        if (
+            effect.get("source_ref") != ADVENTURING_GEAR_SOURCE_REF
+            or effect.get("mechanic_id") != "dnd5e.2014.adventuring_gear.alchemists_fire"
+            or not action_id
+            or not item_id
+            or not source_key
+            or not isinstance(spend, dict)
+            or str(spend.get("item_id") or "") != item_id
+            or str(spend.get("source_ref") or "") != ADVENTURING_GEAR_SOURCE_REF
+            or spend_plan.get("item_name") != "Alchemist's fire (flask)"
+            or spend_plan.get("source_key") != source_key
+            or spend_plan.get("intent") != "throw"
+        ):
+            raise _support.CombatEngineError(
+                "Alchemist's Fire turn effect lacks its source-bound item-spend receipt"
+            )
+        plan = resolve_adventuring_gear_intent(
+            {
+                "id": item_id,
+                "name": "Alchemist's fire (flask)",
+                "source_key": source_key,
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+            },
+            "throw",
+        )
+        source_effect = dict(plan.get("effect") or {})
+        if (
+            effect.get("damage") != source_effect.get("ongoing_damage")
+            or effect.get("damage_type") != source_effect.get("ongoing_damage_type")
+        ):
+            raise _support.CombatEngineError(
+                "Alchemist's Fire turn effect differs from its source-defined plan"
+            )
+        damage_roll = _support.asdict(_support.roll(str(source_effect["ongoing_damage"])))
+        damage = _support.apply_damage_to_sheet(
+            next_sheet,
+            amount=int(damage_roll["total"]),
+            damage_type=str(source_effect["ongoing_damage_type"]),
+            source=action_id,
+            ruleset="2014",
+            death_saves=death_saves,
+        )
+        next_sheet = damage["sheet"]
+        effect["last_trigger_turn_token"] = turn_token
+        events.append(
+            {
+                "action_id": action_id,
+                "source_item_id": item_id,
+                "target_actor_id": actor_id,
+                "damage_roll": damage_roll,
+                "damage": {key: value for key, value in damage.items() if key != "sheet"},
+                "turn_token": turn_token,
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+            }
+        )
+    return next_sheet, events
+
+
 def _with_current_turn(encounter: dict[str, Any]) -> dict[str, Any]:
     """Summarize only the already audience-filtered current combatant."""
     index = encounter.get("turn_index")
@@ -73,6 +186,86 @@ def _with_current_turn(encounter: dict[str, Any]) -> dict[str, Any]:
 
 
 class CombatService:
+    def source_bound_trap_transition(
+        self,
+        campaign_id: str,
+        trap_id: str,
+        action: str,
+        source_ref: str,
+        source_excerpt: str,
+        *,
+        principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None,
+        branch_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Persist a source-bound trap observation or lifecycle event.
+
+        Checks, damage, and effects are deliberately not accepted here: they
+        still need to enter through an engine-owned settlement path.
+        """
+        if action != "detect":
+            raise _support.CombatEngineError(
+                "trap state writes currently support detection only; "
+                "other outcomes require settlement"
+            )
+        self.access.require_campaign(campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES)
+        self.require_write_contract(expected_revision, idempotency_key)
+        resolved_branch = self.require_current_branch(campaign_id, branch_id)
+        payload = {
+            "trap_id": trap_id, "action": action, "source_ref": source_ref,
+            "source_excerpt": source_excerpt,
+        }
+        scope = f"trap-state:{campaign_id}:{resolved_branch}:{principal_id}"
+        replay_payload = {"payload": payload, "branch_id": resolved_branch}
+        replay = self.replay_idempotent(scope, idempotency_key, replay_payload)
+        if replay is not None:
+            return replay
+        campaign = self.campaigns.get(campaign_id)
+        if campaign.revision != expected_revision:
+            raise ValueError(
+                "campaign revision conflict: expected "
+                f"{expected_revision}, found {campaign.revision}"
+            )
+        _, exact_source, expanded = self.managed_module_source_ref(
+            campaign_id, source_ref, require_exact=True, require_active_module=True,
+        )
+        assert expanded is not None
+        self.managed_module_source_excerpt(
+            expanded, source_excerpt, field="trap source_excerpt", minimum_length=10,
+        )
+        next_state = _support.deepcopy(campaign.state)
+        next_state["trap_state"] = transition_trap_state(
+            dict(next_state.get("trap_state") or {}),
+            source_ref=exact_source,
+            trap_id=trap_id,
+            action=action,
+        )
+        resolution_id = f"resolution-{_support.uuid4().hex}"
+
+        def response(revisions: list[Any]) -> dict[str, Any]:
+            return {
+                "status": "committed", "resolution_id": resolution_id,
+                "trap_id": trap_id, "action": action,
+                "trap": next_state["trap_state"]["traps"][trap_id],
+                "campaign_revision": campaign.revision + 1,
+                "revisions": [_support.asdict(item) for item in revisions],
+            }
+
+        revisions = _support.StateMutationService(self.storage.database).replace(
+            campaign_id,
+            campaign_state=_support.validate_party_state(next_state),
+            expected_campaign_revision=campaign.revision,
+            operation="trap.state.transition",
+            actor=principal_id,
+            branch_id=resolved_branch,
+            idempotency_key=idempotency_key,
+            idempotency_write=_support.IdempotencyWrite(
+                scope=scope, payload=replay_payload, response=response,
+            ),
+        )
+        return response(list(revisions or []))
+
     def npc_turn_latest_event_sequence(self, campaign_id: str, branch_id: str | None) -> int:
         values = self.events.list(campaign_id, limit=1, branch_id=branch_id)
         return int(values[-1].sequence) if values else 0
@@ -1456,6 +1649,32 @@ class CombatService:
             ),
             None,
         )
+        combatants = list(encounter.get("combatants") or [])
+        turn_index = encounter.get("turn_index")
+        current_actor_id = (
+            str(combatants[turn_index].get("actor_id") or "")
+            if isinstance(turn_index, int)
+            and not isinstance(turn_index, bool)
+            and 0 <= turn_index < len(combatants)
+            else ""
+        )
+        confusion = dict(
+            dict((combatant or {}).get("turn_flags") or {}).get("madness_confusion") or {}
+        )
+        if current_actor_id == str(actor_id_value):
+            outcome = confusion.get("outcome")
+            if outcome == "no_action_or_movement":
+                raise _support.CombatEngineError(
+                    "Confusion turn result prohibits actions and movement"
+                )
+            if outcome == "move_random_direction" and action != "move":
+                raise _support.CombatEngineError(
+                    "Confusion turn result prohibits actions after random movement"
+                )
+            if outcome == "attack_random_creature_in_reach" and action not in {"move", "attack"}:
+                raise _support.CombatEngineError(
+                    "Confusion turn result requires a random melee attack"
+                )
         contract = dict((combatant or {}).get("mounted_turn") or {})
         if contract.get("mode") == "controlled" and action not in {
             "move",
@@ -3124,8 +3343,22 @@ class CombatService:
         next_combatant = _support.current_combatant(next_state["combat"])
         if next_combatant is not None:
             next_actor_id = str(next_combatant.get("actor_id") or "")
+            next_actor_record = self.characters.get(next_actor_id)
             needs_poison_rng = self.poison_turn_events_due(actor_id, "end_of_turn") or (
                 bool(next_actor_id) and self.poison_turn_events_due(next_actor_id, "start_of_turn")
+            )
+            turn_token = self.encounter_turn_token(next_state["combat"])
+            needs_gear_rng = any(
+                isinstance(effect, dict)
+                and effect.get("active", True)
+                and effect.get("kind") == "adventuring_gear_burning"
+                and str(effect.get("target_id") or "") == next_actor_id
+                and str(effect.get("last_trigger_turn_token") or "") != turn_token
+                for effect in next_state["combat"].get("ongoing_effects", [])
+            )
+            needs_madness_rng = bool(
+                next_actor_record
+                and _active_madness_confusion_effects(next_actor_record.sheet)
             )
             if needs_poison_rng and _support.active_random_stream() is None:
                 with self.campaign_random_context(
@@ -3141,9 +3374,38 @@ class CombatService:
                         resolved_branch_id,
                         idempotency_key,
                     )
+            if needs_gear_rng and _support.active_random_stream() is None:
+                with self.campaign_random_context(
+                    campaign_id,
+                    "combat.adventuring_gear.turn_start",
+                    {"idempotency_key": idempotency_key},
+                ):
+                    return self.combat_end_turn(
+                        campaign_id,
+                        actor_id,
+                        principal_id,
+                        expected_revision,
+                        resolved_branch_id,
+                        idempotency_key,
+                    )
+            if needs_madness_rng and _support.active_random_stream() is None:
+                with self.campaign_random_context(
+                    campaign_id,
+                    "combat.madness.confusion_turn",
+                    {"idempotency_key": idempotency_key},
+                ):
+                    return self.combat_end_turn(
+                        campaign_id,
+                        actor_id,
+                        principal_id,
+                        expected_revision,
+                        resolved_branch_id,
+                        idempotency_key,
+                    )
         poison_turn_events = list(poison_end_events)
         poison_turn_receipts = list(poison_end_receipts)
         expired_standard_turn_start: list[str] = []
+        gear_turn_events: list[dict[str, Any]] = []
         if next_combatant is not None:
             next_actor_id = str(next_combatant.get("actor_id") or "")
             _support.record_death_save_turn_start(
@@ -3223,6 +3485,8 @@ class CombatService:
         started_effects_by_actor: dict[str, dict[str, Any]] = {}
         activity_recharges: list[dict[str, Any]] = []
         activity_recharge_receipts: list[dict[str, Any]] = []
+        madness_turn_events: list[dict[str, Any]] = []
+        madness_turn_receipts: list[dict[str, Any]] = []
         if next_combatant is not None:
             next_actor_id = str(next_combatant.get("actor_id") or "")
             next_sheet, next_events, next_receipts = self.settle_poison_turn_events(
@@ -3237,6 +3501,16 @@ class CombatService:
             source_sheets[next_actor_id] = next_sheet
             poison_turn_events.extend(next_events)
             poison_turn_receipts.extend(next_receipts)
+            source_sheets[next_actor_id], gear_turn_events = (
+                _settle_adventuring_gear_burning_turn_start(
+                    next_state["combat"],
+                    next_actor_id,
+                    source_sheets[next_actor_id],
+                    self.encounter_turn_token(next_state["combat"]),
+                    item_spends=list(dict(campaign.state or {}).get("item_spends") or []),
+                    death_saves=self.characters.get(next_actor_id).character_type == "pc",
+                )
+            )
             try:
                 recharged = _support.recharge_activities_at_turn_start(
                     source_sheets[next_actor_id],
@@ -3261,6 +3535,42 @@ class CombatService:
                 period="turn_start",
             )
             source_sheets[next_actor_id] = started_effects_by_actor[next_actor_id]["sheet"]
+            confusion_effects = _active_madness_confusion_effects(source_sheets[next_actor_id])
+            if confusion_effects:
+                stream = _support.active_random_stream()
+                if stream is None:
+                    raise _support.CombatEngineError(
+                        "Confusion turn requires the campaign random stream"
+                    )
+                confusion_roll = int(_support.roll("1d10", rng=stream).total)
+                turn_outcome = resolve_confusion_turn(confusion_roll)
+                turn_token = self.encounter_turn_token(next_state["combat"])
+                target_combatant = next(
+                    item
+                    for item in next_state["combat"].get("combatants", [])
+                    if str(item.get("actor_id") or "") == next_actor_id
+                )
+                flags = dict(target_combatant.get("turn_flags") or {})
+                confusion_event = {
+                    "actor_id": next_actor_id,
+                    "turn_token": turn_token,
+                    "effect_ids": [str(effect.get("id") or "") for effect in confusion_effects],
+                    **turn_outcome,
+                }
+                flags["madness_confusion"] = confusion_event
+                target_combatant["turn_flags"] = flags
+                next_state["combat"]["log"] = [
+                    *list(next_state["combat"].get("log") or []),
+                    {"type": "madness_confusion_turn", **confusion_event},
+                ][-100:]
+                madness_turn_events.append(confusion_event)
+                madness_turn_receipts.extend(
+                    _support.core_receipts(
+                        rule_context,
+                        ["dnd5e.core.madness.2014"],
+                        "madness.confusion.turn_start",
+                    )
+                )
         combat_updates: list[_support.CharacterStateUpdate] = []
         expired_effects = {
             *duration["expired"],
@@ -3276,6 +3586,7 @@ class CombatService:
         )
         rule_receipts.extend(activity_recharge_receipts)
         rule_receipts.extend(poison_turn_receipts)
+        rule_receipts.extend(madness_turn_receipts)
         if rage.feature(current.sheet):
             expired_effects.update(rage_turn["ended"])
             rule_receipts.extend(
@@ -3427,6 +3738,8 @@ class CombatService:
                 "readied_spells_expired": sorted(str(item.get("id")) for item in expired_readied),
                 "activity_recharges": activity_recharges,
                 "poison_events": poison_turn_events,
+                "madness_events": madness_turn_events,
+                "adventuring_gear_events": gear_turn_events,
                 "rule_receipts": rule_receipts,
                 "ruleset_fingerprint": rule_context.fingerprint,
                 "campaign_revision": campaign.revision + 1,
@@ -9560,6 +9873,27 @@ class CombatService:
                 f"expected {expected_revision}, found {campaign.revision}"
             )
         target = self.combat_actor_snapshot(target_id)
+        if (
+            _support.active_random_stream() is None
+            and damage_triggered_confusion_effect_ids(target["sheet"])
+        ):
+            with self.campaign_random_context(
+                campaign_id,
+                "combat.madness.damage_trigger",
+                {"idempotency_key": idempotency_key},
+            ):
+                return self.combat_apply_damage(
+                    campaign_id=campaign_id,
+                    target_id=target_id,
+                    parts=parts,
+                    critical=critical,
+                    principal_id=principal_id,
+                    expected_revision=expected_revision,
+                    branch_id=resolved_branch_id,
+                    idempotency_key=idempotency_key,
+                    knock_out=knock_out,
+                    melee=melee,
+                )
         existing_encounter = dict(campaign.state or {}).get("combat")
         target_uses_death_saves = target.get("character_type") == "pc"
         ruleset = self.campaign_rules_edition(campaign_id)
@@ -9580,7 +9914,19 @@ class CombatService:
             knock_out=knock_out,
             melee=melee,
         )
+        rule_context = self.effective_rule_context(campaign_id, branch_id=resolved_branch_id)
+        madness_sheet, madness_events, madness_receipts = settle_damage_triggered_confusion(
+            actor=target,
+            sheet=applied["sheet"],
+            damage_taken=int(applied.get("applied_amount", 0) or 0),
+            encounter=existing_encounter if isinstance(existing_encounter, dict) else None,
+            rules=rule_context,
+            transaction_id=f"{campaign_id}:{resolved_branch_id}:{idempotency_key}",
+        )
+        applied["sheet"] = madness_sheet
         applied_result = {key: value for key, value in applied.items() if key != "sheet"}
+        if madness_events:
+            applied_result["madness_triggers"] = madness_events
         damage_receipts = _support.core_receipts(
             self.effective_rule_context(campaign_id, branch_id=resolved_branch_id),
             [
@@ -9589,6 +9935,7 @@ class CombatService:
             ],
             "damage.apply",
         )
+        damage_receipts.extend(madness_receipts)
         encounter = existing_encounter
         next_state = dict(campaign.state or {})
         if encounter:
@@ -9619,6 +9966,12 @@ class CombatService:
                 "status": "committed",
                 "result": applied_result,
                 "combat": next_state.get("combat"),
+                **(
+                    {"random_stream_receipt": _support.active_random_stream().receipt()}
+                    if _support.active_random_stream() is not None
+                    and _support.active_random_stream().draw_count > 0
+                    else {}
+                ),
             },
             character_updates=[
                 _support.CharacterStateUpdate(

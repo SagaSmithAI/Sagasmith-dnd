@@ -3542,6 +3542,84 @@ def preflight_attack(
             context["disadvantage"] = True
             context.setdefault("disadvantage_sources", []).append("hostile_creature_within_5_ft")
     attacker_sheet = actor_sheet(attacker)
+    from .madness import (
+        SOURCE_REF as MADNESS_SOURCE_REF,
+    )
+    from .madness import (
+        MadnessError,
+        range_limited_disadvantage_effect_ids,
+    )
+
+    for madness_effect in attacker_sheet.get("effects", []):
+        if (
+            not isinstance(madness_effect, dict)
+            or not madness_effect.get("active")
+            or madness_effect.get("source") != MADNESS_SOURCE_REF
+        ):
+            continue
+        madness_metadata = dict(
+            dict(madness_effect.get("metadata") or {}).get("madness") or {}
+        )
+        mechanics = dict(madness_metadata.get("mechanics") or {})
+        if mechanics.get("range_limit_ft") is None:
+            continue
+        if madness_metadata.get("suppression"):
+            continue
+        choice = dict(madness_metadata.get("choice") or {})
+        charm_actor_id = str(choice.get("actor_id") or "")
+        if choice.get("kind") != "lucky_charm_actor" or not charm_actor_id:
+            raise NeedsRulingError(
+                "the active lucky-charm madness requires an explicit actor choice",
+                missing=(f"madness.{madness_effect.get('id')}.lucky_charm_actor_id",),
+                ruling_kind="source_or_scene_fact",
+            )
+        if not isinstance(encounter, dict) or encounter.get("positioning_mode") != "grid":
+            raise NeedsRulingError(
+                "the lucky-charm distance requires authoritative Grid positions",
+                missing=(f"madness.{madness_effect.get('id')}.lucky_charm_distance",),
+                ruling_kind="source_or_scene_fact",
+            )
+        combatants = [
+            *list(encounter.get("combatants") or []),
+            *list(encounter.get("reinforcements") or []),
+        ]
+        charm = next(
+            (item for item in combatants if str(item.get("actor_id") or "") == charm_actor_id),
+            None,
+        )
+        attacker_position = _position(attacker.get("position"))
+        charm_position = _position(charm.get("position")) if charm else None
+        if attacker_position is None or charm_position is None:
+            raise NeedsRulingError(
+                "the lucky charm and affected actor need authoritative Grid positions",
+                missing=(f"madness.{madness_effect.get('id')}.lucky_charm_positions",),
+                ruling_kind="source_or_scene_fact",
+            )
+        from .spaces import SPACE_FT, distance_between
+
+        distance_from_charm = int(
+            distance_between(
+                attacker_position,
+                float(
+                    attacker.get("space_ft")
+                    or SPACE_FT[str(attacker.get("size") or "medium")]
+                ),
+                charm_position,
+                float(charm.get("space_ft") or SPACE_FT[str(charm.get("size") or "medium")]),
+            )
+        )
+        try:
+            madness_sources = range_limited_disadvantage_effect_ids(
+                attacker_sheet,
+                distance_ft=distance_from_charm,
+                roll_kind="attack_rolls",
+            )
+        except MadnessError as error:
+            raise CombatEngineError(str(error)) from error
+        for source_id in madness_sources:
+            if source_id not in context.setdefault("disadvantage_sources", []):
+                context["disadvantage"] = True
+                context["disadvantage_sources"].append(source_id)
     from .sunlight import SUNLIGHT_MECHANIC, sunlight_disadvantage
 
     sunlight = sunlight_disadvantage(
@@ -5386,7 +5464,15 @@ def _apply_adjusted_damage(
     ended_turn_effects: list[dict[str, Any]] = []
     ended_effect_ids: list[str] = []
     if adjusted > 0:
+        from .madness import SOURCE_REF as MADNESS_SOURCE_REF
+
         for effect in value.get("effects", []):
+            madness = dict(dict(effect.get("metadata") or {}).get("madness") or {})
+            madness_ends_on_damage = (
+                effect.get("active")
+                and effect.get("source") == MADNESS_SOURCE_REF
+                and bool(dict(madness.get("mechanics") or {}).get("ends_on_damage"))
+            )
             if effect.get("active") and (
                 effect.get("kind") == "turn_undead"
                 or _is_hypnotic_pattern_target_effect(effect)
@@ -5394,6 +5480,7 @@ def _apply_adjusted_damage(
                     effect.get("kind") == "timed_conditions"
                     and effect.get("source_spell_id") == CORE_SLEEP_SPELL_ID
                 )
+                or madness_ends_on_damage
             ):
                 effect["active"] = False
                 effect["ended_reason"] = "damaged"
@@ -8996,6 +9083,7 @@ def resolve_actor_check(
     save_source_kind: str | None = None,
     save_effect_conditions: list[str] | None = None,
     save_purpose: str | None = None,
+    save_condition_id: str | None = None,
     ruleset: str | None = None,
     rules: ResolutionContext | None = None,
     rng: Any = None,
@@ -9004,7 +9092,34 @@ def resolve_actor_check(
 ) -> dict[str, Any]:
     if kind not in ACTOR_CHECK_KINDS:
         raise CombatEngineError("unsupported check kind")
+    if save_condition_id is not None:
+        if kind != "save" or not str(save_condition_id).strip():
+            raise CombatEngineError(
+                "save_condition_id requires a saving throw and an active condition"
+            )
+        save_condition_id = str(save_condition_id).strip()
     sheet = actor_sheet(actor)
+    if save_condition_id is not None and not any(
+        isinstance(effect, dict)
+        and effect.get("id") == save_condition_id
+        and effect.get("active") is True
+        and (
+            (
+                effect.get("kind") == "disease_state"
+                and effect.get("source") == "bundled:srd2014/08_Gamemastering/Diseases.md"
+                and isinstance(dict(effect.get("metadata") or {}).get("disease_state"), dict)
+            )
+            or (
+                effect.get("kind") == "poison"
+                and effect.get("source") == "bundled:srd2014/08_Gamemastering/Poisons.md"
+                and isinstance(dict(effect.get("metadata") or {}).get("poison_state"), dict)
+            )
+        )
+        for effect in sheet.get("effects", [])
+    ):
+        raise CombatEngineError(
+            "save_condition_id must identify an active source-bound disease or poison"
+        )
     derived = actor_derived(actor)
     normalized_ruleset = _normalize_ruleset(ruleset or sheet.get("edition"))
     normalized_ability = str(ability).strip().casefold().replace(" ", "_")
@@ -9070,7 +9185,11 @@ def resolve_actor_check(
         skill_ability=skill_ability,
     )
     effect_advantage, _effect_disadvantage = active_effect_roll_advantage(
-        sheet, kind, key=str(ability).strip().casefold().replace(" ", "_")
+        sheet,
+        kind,
+        key=str(ability).strip().casefold().replace(" ", "_"),
+        purpose=modifier_save_purpose,
+        condition_id=save_condition_id,
     )
     if effect_advantage:
         advantage = True
@@ -9216,8 +9335,9 @@ def resolve_actor_check(
     if kind == "save" and normalized_save_purpose not in {
         "effect",
         "concentration",
+        "poison",
     }:
-        raise CombatEngineError("save_purpose must be effect or concentration")
+        raise CombatEngineError("save_purpose must be effect, concentration, or poison")
     long_save_ability = _long_ability_name(ability)
     automatic_physical_failure = (
         kind == "save"
@@ -10697,16 +10817,28 @@ def vision_profile_2014(
     magical_darkness = any(bool(item.get("magical_darkness")) for item in cell_facts)
     target_facts = vision_cells.get((int(subject_position[0]), int(subject_position[1])), {})
     level = target_facts.get("illumination") or battle_map.get("ambient_illumination") or "bright"
+    unlit_level = level
     rank = {"dark": 0, "dim": 1, "bright": 2}
     cell_ft = int(dict(battle_map.get("grid") or {}).get("cell_ft", 5) or 5)
+    active_light_sources: list[dict[str, Any]] = []
     for source in battle_map.get("light_sources", []):
         if not isinstance(source, dict):
             continue
         position = dict(source.get("position") or {})
+        source_position = (int(position.get("x", 0)), int(position.get("y", 0)))
+        light_ray = _vision_line_cells(
+            source_position,
+            (int(subject_position[0]), int(subject_position[1])),
+        )
+        if any(
+            bool(vision_cells.get(point, {}).get("opaque"))
+            for point in light_ray[1:-1]
+        ):
+            continue
         source_distance = (
             max(
-                abs(int(position.get("x", 0)) - int(subject_position[0])),
-                abs(int(position.get("y", 0)) - int(subject_position[1])),
+                abs(source_position[0] - int(subject_position[0])),
+                abs(source_position[1] - int(subject_position[1])),
             )
             * cell_ft
         )
@@ -10719,6 +10851,9 @@ def vision_profile_2014(
         )
         if rank[source_level] > rank[level]:
             level = source_level
+            active_light_sources = [source]
+        elif rank[source_level] == rank[level] and rank[source_level] > rank[unlit_level]:
+            active_light_sources.append(source)
     used_blindsight = blindsight > 0 and distance <= blindsight
     used_truesight = truesight > 0 and distance <= truesight
     used_darkvision = (
@@ -10744,6 +10879,17 @@ def vision_profile_2014(
         "color_detail": "grayscale" if used_darkvision else "full_color",
         "blindsense_detects_location": blindsense_detects_location(viewer, subject, encounter),
         "mechanic_id": "dnd5e.core.vision.light_obscuration_2014",
+        "source_lights": [
+            {
+                "id": item["id"],
+                "position": dict(item["position"]),
+                "bright_radius_ft": item["bright_radius_ft"],
+                "dim_radius_ft": item["dim_radius_ft"],
+                "source_ref": item["source_ref"],
+                "source_excerpt": item["source_excerpt"],
+            }
+            for item in active_light_sources
+        ],
         "source_cells": [
             {
                 "x": item["x"],

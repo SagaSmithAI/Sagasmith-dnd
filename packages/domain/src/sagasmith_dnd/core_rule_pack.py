@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.97.0"
+CORE_RULE_PACK_VERSION = "1.98.0"
 
 
 @dataclass(frozen=True)
@@ -1447,6 +1447,13 @@ BOUNDARIES = (
         "sagasmith_dnd_runtime.application",
         ("packages/mcp/tests/test_runtime_integrity_mcp.py",),
         "runtime:mcp/dm-ruling-boundary",
+    ),
+    CoreBoundary(
+        "dnd5e.core.madness.2014",
+        ("2014",),
+        "madness.resolve_madness|sagasmith_dnd_runtime.services.characters.character_madness_apply",
+        ("packages/domain/tests/test_madness.py", "packages/mcp/tests/test_madness_mcp.py"),
+        "bundled:srd2014/08_Gamemastering/Madness.md",
     ),
 )
 

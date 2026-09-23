@@ -5,6 +5,15 @@ from __future__ import annotations
 from typing import Annotated, Any, Literal
 
 from sagasmith_dnd.character_schema import derive_character_sheet
+from sagasmith_dnd.diseases import (
+    DISEASE_SOURCE_REF,
+    advance_disease_clock,
+    resolve_sewer_plague_rest_exhaustion,
+    sight_rot_attack_penalty,
+)
+from sagasmith_dnd.diseases import (
+    resolve_long_rest as resolve_disease_long_rest,
+)
 from sagasmith_dnd.game_time import TICKS_PER_DAY, TICKS_PER_MINUTE
 from sagasmith_dnd.survival import merge_daily_intake, validate_daily_intake
 from sagasmith_dnd.travel import (
@@ -20,6 +29,44 @@ from .grapples import reconcile_grapples
 from .mounted_combat import needs_mounted_rider_save, reconcile_mounted_conditions
 from .movement_continuations import reconcile_movement
 from .survival import needs_survival_save, reconcile_survival_days
+
+
+def _advance_disease_effects(
+    sheet: dict[str, Any], elapsed_ticks: int
+) -> tuple[dict[str, Any], list[str]]:
+    """Advance only source-owned 2014 disease instances on an actor sheet."""
+    value = _support.deepcopy(sheet)
+    changed: list[str] = []
+    for effect in value.get("effects", []):
+        if effect.get("kind") != "disease_state" or effect.get("source") != DISEASE_SOURCE_REF:
+            continue
+        state = dict(dict(effect.get("metadata") or {}).get("disease_state") or {})
+        if not state.get("active") or state.get("source_ref") != DISEASE_SOURCE_REF:
+            continue
+        was_symptomatic = bool(state.get("symptomatic"))
+        advanced = advance_disease_clock(state, elapsed_ticks=elapsed_ticks)
+        if advanced != state:
+            effect.setdefault("metadata", {})["disease_state"] = advanced
+            changed.append(str(effect.get("id") or advanced["disease_id"]))
+            if (
+                advanced.get("symptomatic")
+                and not was_symptomatic
+                and advanced["disease_id"] in {"cackle_fever", "sewer_plague"}
+            ):
+                combat = value.setdefault("combat", {})
+                before = int(combat.get("exhaustion", 0) or 0)
+                value = _support.set_exhaustion_level(value, min(6, before + 1))
+                advanced["symptom_exhaustion_owned"] = True
+                advanced["locked_exhaustion_level"] = min(6, before + 1)
+                effect = next(
+                    item for item in value.get("effects", []) if item.get("id") == effect.get("id")
+                )
+            effect.setdefault("metadata", {})["disease_state"] = advanced
+        if advanced.get("disease_id") == "sight_rot":
+            effect.setdefault("metadata", {})["attack_roll_penalty"] = (
+                sight_rot_attack_penalty(advanced)
+            )
+    return value, changed
 
 
 class CampaignsService:
@@ -1478,12 +1525,21 @@ class CampaignsService:
         updates: list[_support.CharacterStateUpdate] = []
         advanced: dict[str, list[str]] = {}
         expired: dict[str, list[str]] = {}
+        madness_suppression_resumed: dict[str, list[str]] = {}
         rule_receipts: list[dict[str, Any]] = []
         rule_context = self.effective_rule_context(campaign_id)
+        elapsed_after_ticks = (
+            int(time_transition["after"]["elapsed_ticks"])
+            if time_transition is not None
+            else None
+        )
         for character in self.characters.list(campaign_id=campaign_id):
             sheet = character.sheet
             character_advanced: list[str] = []
             character_expired: list[str] = []
+            if elapsed_after_ticks is not None:
+                sheet, disease_clock_advanced = _advance_disease_effects(sheet, elapsed_after_ticks)
+                character_advanced.extend(disease_clock_advanced)
             if elapsed_ticks:
                 result = _support.advance_elapsed_effect_durations(
                     sheet,
@@ -1525,6 +1581,18 @@ class CampaignsService:
                 sheet = extension.sheet
                 character_advanced.extend(result["advanced"])
                 character_expired.extend(result["expired"])
+            if elapsed_after_ticks is not None:
+                from sagasmith_dnd.madness import advance_madness_suppression
+
+                suppression = advance_madness_suppression(
+                    sheet,
+                    elapsed_ticks=elapsed_after_ticks,
+                )
+                sheet = suppression["sheet"]
+                if suppression["resumed_effect_ids"]:
+                    madness_suppression_resumed[character.id] = suppression[
+                        "resumed_effect_ids"
+                    ]
             if not character_advanced and not character_expired and sheet == character.sheet:
                 continue
             updates.append(
@@ -1559,6 +1627,7 @@ class CampaignsService:
                 "world_time": world_time,
                 "advanced": advanced,
                 "expired": expired,
+                "madness_suppression_resumed": madness_suppression_resumed,
                 "world_advanced": list(dict.fromkeys(world_advanced)),
                 "world_expired": list(dict.fromkeys(world_expired)),
                 "poison_events": poison_events,
@@ -2449,6 +2518,8 @@ class CampaignsService:
                     dict(sheet.get("combat") or {}).get("short_rest_hit_dice")
                 )
                 receipts.extend(applied_rest.get("rule_receipts") or [])
+            if bool(dict(next_state.get("combat") or {}).get("active")):
+                self.sync_combatant_conditions(next_state["combat"], current.id, sheet)
             if sheet != current.sheet:
                 updates.append(
                     _support.CharacterStateUpdate(
@@ -3032,7 +3103,10 @@ class CampaignsService:
         normalized_rest_type = str(rest_type).strip().lower().replace("-", "_")
         if normalized_rest_type not in _support.REST_TYPES:
             raise _support.CombatEngineError("rest_type must be short_rest or long_rest")
-        if normalized_rest_type == "short_rest" and _support.active_random_stream() is None:
+        if (
+            normalized_rest_type in {"short_rest", "long_rest"}
+            and _support.active_random_stream() is None
+        ):
             campaign_snapshot = self.campaigns.get(campaign_id)
             stream = _support.CampaignRandomStream.from_campaign_state(
                 campaign_id,
@@ -3464,6 +3538,11 @@ class CampaignsService:
                     f"party rest duration for {current.id} requires an unresolved rule choice"
                 )
             sheet = extension.sheet
+            if current.id not in member_by_id:
+                sheet, disease_clock_advanced = _advance_disease_effects(
+                    sheet, completed_elapsed_ticks
+                )
+                actor_advanced.extend(disease_clock_advanced)
             actor_advanced.extend(duration["advanced"])
             actor_expired.extend(duration["expired"])
             actor_advanced.extend(round_duration["advanced"])
@@ -3517,6 +3596,308 @@ class CampaignsService:
                     raise _support.CombatEngineError(
                         f"party rest for {current.id} requires an unresolved rule choice"
                     )
+                if (
+                    normalized_rest_type == "short_rest"
+                    and str(sheet.get("edition") or "") == "2014"
+                ):
+                    sewer_active = any(
+                        effect.get("kind") == "disease_state"
+                        and effect.get("source") == DISEASE_SOURCE_REF
+                        and bool(
+                            dict(dict(effect.get("metadata") or {}).get("disease_state") or {}).get(
+                                "active"
+                            )
+                        )
+                        and bool(
+                            dict(dict(effect.get("metadata") or {}).get("disease_state") or {}).get(
+                                "symptomatic"
+                            )
+                        )
+                        and dict(dict(effect.get("metadata") or {}).get("disease_state") or {}).get(
+                            "disease_id"
+                        )
+                        == "sewer_plague"
+                        for effect in sheet.get("effects", [])
+                    )
+                    if sewer_active:
+                        original_hp = int(
+                            sheet.get("combat", {}).get("hp", {}).get("value", 0) or 0
+                        )
+                        hit_die_healing = int(applied.get("hit_die_applied_healing", 0) or 0)
+                        song_healing = int(
+                            dict(applied.get("song_of_rest") or {}).get("applied_healing", 0) or 0
+                        )
+                        allowed_healing = hit_die_healing // 2 + song_healing
+                        maximum_hp = int(
+                            applied["sheet"].get("combat", {}).get("hp", {}).get("max", original_hp)
+                            or original_hp
+                        )
+                        applied["sheet"].setdefault("combat", {}).setdefault("hp", {})["value"] = (
+                            min(maximum_hp, original_hp + allowed_healing)
+                        )
+                        applied["hit_die_applied_healing"] = hit_die_healing // 2
+                if normalized_rest_type == "short_rest":
+                    applied["sheet"], _ = _advance_disease_effects(
+                        applied["sheet"], completed_elapsed_ticks
+                    )
+                disease_rest_results: list[dict[str, Any]] = []
+                if (
+                    normalized_rest_type == "long_rest"
+                    and str(sheet.get("edition") or "") == "2014"
+                ):
+                    stream = _support.active_random_stream()
+                    disease_rules = self.effective_rule_context(
+                        campaign_id,
+                        branch_id=resolved_branch_id,
+                        facts={"actor_id": current.id, "rest_type": "long_rest"},
+                    )
+                    for disease_effect in applied["sheet"].get("effects", []):
+                        if (
+                            disease_effect.get("kind") != "disease_state"
+                            or disease_effect.get("source") != DISEASE_SOURCE_REF
+                        ):
+                            continue
+                        disease_state = dict(
+                            dict(disease_effect.get("metadata") or {}).get("disease_state") or {}
+                        )
+                        if (
+                            not disease_state.get("active")
+                            or disease_state.get("edition") != "2014"
+                        ):
+                            continue
+                        pre_symptomatic = bool(disease_state.get("symptomatic"))
+                        disease_state = advance_disease_clock(
+                            disease_state, elapsed_ticks=completed_elapsed_ticks
+                        )
+                        if (
+                            not pre_symptomatic
+                            and disease_state.get("symptomatic")
+                            and disease_state["disease_id"] in {"cackle_fever", "sewer_plague"}
+                        ):
+                            before_level = int(
+                                applied["sheet"].get("combat", {}).get("exhaustion", 0) or 0
+                            )
+                            disease_effect_id = disease_effect.get("id")
+                            applied["sheet"] = _support.set_exhaustion_level(
+                                applied["sheet"], min(6, before_level + 1)
+                            )
+                            disease_effect = next(
+                                item
+                                for item in applied["sheet"].get("effects", [])
+                                if item.get("id") == disease_effect_id
+                            )
+                            disease_state["symptom_exhaustion_owned"] = True
+                            disease_state["locked_exhaustion_level"] = min(6, before_level + 1)
+                        if not disease_state.get("symptomatic"):
+                            disease_effect.setdefault("metadata", {})["disease_state"] = (
+                                disease_state
+                            )
+                            continue
+                        if disease_state["disease_id"] == "cackle_fever":
+                            locked_level = int(disease_state.get("locked_exhaustion_level", 0) or 0)
+                            current_level = int(
+                                applied["sheet"].get("combat", {}).get("exhaustion", 0) or 0
+                            )
+                            if locked_level and current_level < locked_level:
+                                disease_effect_id = disease_effect.get("id")
+                                applied["sheet"] = _support.set_exhaustion_level(
+                                    applied["sheet"], locked_level
+                                )
+                                disease_effect = next(
+                                    item
+                                    for item in applied["sheet"].get("effects", [])
+                                    if item.get("id") == disease_effect_id
+                                )
+                        save_succeeded = None
+                        check_result = None
+                        recovery_die = madness_d100 = None
+                        disease_id = disease_state["disease_id"]
+                        if disease_id in {"cackle_fever", "sewer_plague"}:
+                            if stream is None:
+                                raise _support.CombatEngineError(
+                                    "disease rest saves require the campaign random stream"
+                                )
+                            actor_snapshot = self.combat_actor_snapshot(current.id)
+                            actor_snapshot["sheet"] = _support.deepcopy(applied["sheet"])
+                            actor_snapshot["derived"] = derive_character_sheet(applied["sheet"])
+                            check_result = _support.resolve_actor_check(
+                                actor_snapshot,
+                                kind="save",
+                                ability="constitution",
+                                dc=13 if disease_id == "cackle_fever" else 11,
+                                save_condition_id=str(disease_effect.get("id") or ""),
+                                encounter=next_state.get("combat"),
+                                rules=disease_rules,
+                                rng=stream,
+                                ruleset="2014",
+                            )
+                            save_succeeded = check_result.get("success") is True
+                            if disease_id == "cackle_fever" and save_succeeded:
+                                recovery_die = int(_support.roll("1d6", rng=stream).total)
+                            elif (
+                                disease_id == "cackle_fever"
+                                and not save_succeeded
+                                and int(disease_state.get("failed_recovery_saves", 0)) == 2
+                            ):
+                                madness_d100 = int(_support.roll("1d100", rng=stream).total)
+                        transition = resolve_disease_long_rest(
+                            disease_state,
+                            save_succeeded=save_succeeded,
+                            elapsed_ticks=completed_elapsed_ticks,
+                            recovery_die=recovery_die,
+                            madness_d100=madness_d100,
+                        )
+                        disease_state = transition["state"]
+                        for disease_event in transition["events"]:
+                            if disease_event.get("kind") != "indefinite_madness":
+                                continue
+                            from sagasmith_dnd.madness import SOURCE_REF as MADNESS_SOURCE_REF
+
+                            madness_result = dict(disease_event.get("madness") or {})
+                            madness_effect = _support.deepcopy(
+                                dict(madness_result.get("runtime_effect") or {})
+                            )
+                            madness_effect["id"] = _support.uuid4().hex
+                            madness_effect["name"] = "Indefinite Madness: " + str(
+                                madness_result.get("effect_key") or "unknown"
+                            )
+                            madness_effect.setdefault("metadata", {}).setdefault(
+                                "madness", {}
+                            ).update(
+                                {
+                                    "source_ref": MADNESS_SOURCE_REF,
+                                    "trigger_reason": "third failed Cackle Fever recovery save",
+                                    "table_roll": {"die": "1d100", "total": madness_d100},
+                                    "duration_roll": None,
+                                    "conditional_roll": None,
+                                    "suppressed_until": None,
+                                    "originating_disease_effect_id": disease_effect.get("id"),
+                                }
+                            )
+                            applied["sheet"], madness_effect_id = _support.add_effect(
+                                applied["sheet"], madness_effect
+                            )
+                            disease_event["effect_id"] = madness_effect_id
+                            disease_effect = next(
+                                item
+                                for item in applied["sheet"].get("effects", [])
+                                if item.get("id") == disease_effect.get("id")
+                            )
+                        if not disease_state.get("active"):
+                            disease_effect["active"] = False
+                            disease_effect["ended_reason"] = "cured_by_long_rest"
+                        if disease_id == "sewer_plague":
+                            after_ordinary = int(
+                                applied["sheet"].get("combat", {}).get("exhaustion", 0) or 0
+                            )
+                            sewer = resolve_sewer_plague_rest_exhaustion(
+                                current_exhaustion=after_ordinary,
+                                disease_save_succeeded=bool(save_succeeded),
+                                ordinary_2014_recovery_applies=False,
+                            )
+                            disease_effect_id = disease_effect.get("id")
+                            applied["sheet"] = _support.set_exhaustion_level(
+                                applied["sheet"], sewer["exhaustion"]
+                            )
+                            disease_effect = next(
+                                item
+                                for item in applied["sheet"].get("effects", [])
+                                if item.get("id") == disease_effect_id
+                            )
+                            if sewer["disease_cured"]:
+                                disease_state["active"] = False
+                                disease_effect["active"] = False
+                                disease_effect["ended_reason"] = "cured_by_sewer_plague_rest"
+                            hp_before = int(
+                                sheet.get("combat", {}).get("hp", {}).get("value", 0) or 0
+                            )
+                            applied["sheet"].setdefault("combat", {}).setdefault("hp", {})[
+                                "value"
+                            ] = hp_before
+                            transition["events"].extend(sewer["events"])
+                            transition["events"].append({"kind": "long_rest_hp_recovery_blocked"})
+                            transition["events"].append({"kind": "hit_dice_recovery_halved"})
+                        elif disease_id == "cackle_fever" and disease_state.get("active"):
+                            protected = int(disease_state.get("locked_exhaustion_level", 0) or 0)
+                            if protected:
+                                now = int(
+                                    applied["sheet"].get("combat", {}).get("exhaustion", 0) or 0
+                                )
+                                if now < protected:
+                                    disease_effect_id = disease_effect.get("id")
+                                    applied["sheet"] = _support.set_exhaustion_level(
+                                        applied["sheet"], protected
+                                    )
+                                    disease_effect = next(
+                                        item
+                                        for item in applied["sheet"].get("effects", [])
+                                        if item.get("id") == disease_effect_id
+                                    )
+                        if disease_id == "sight_rot":
+                            penalty = sight_rot_attack_penalty(disease_state)
+                            disease_effect.setdefault("metadata", {})["attack_roll_penalty"] = (
+                                penalty
+                            )
+                            disease_effect["changes"] = (
+                                [
+                                    {"path": "rolls.attack.bonus", "mode": "add", "value": penalty},
+                                    {
+                                        "path": "rolls.ability_check.bonus",
+                                        "mode": "add",
+                                        "value": penalty,
+                                    },
+                                ]
+                                if penalty
+                                else []
+                            )
+                            if disease_state.get("blindness_owned"):
+                                owner_id = f"{disease_effect.get('id')}:blindness"
+                                blindness_effect = next(
+                                    (
+                                        item
+                                        for item in applied["sheet"].get("effects", [])
+                                        if item.get("id") == owner_id
+                                    ),
+                                    None,
+                                )
+                                if blindness_effect is None:
+                                    blindness_effect = {
+                                        "id": owner_id,
+                                        "name": "Sight Rot blindness",
+                                        "kind": "timed_conditions",
+                                        "source": DISEASE_SOURCE_REF,
+                                        "active": True,
+                                        "duration": {"period": "manual", "remaining": 0},
+                                        "changes": [
+                                            {
+                                                "path": "conditions",
+                                                "mode": "add",
+                                                "value": "blinded",
+                                            }
+                                        ],
+                                        "metadata": {
+                                            "disease_condition_owner": disease_effect.get("id"),
+                                            "disease_id": "sight_rot",
+                                        },
+                                    }
+                                    applied["sheet"], _ = _support.add_effect(
+                                        applied["sheet"], blindness_effect
+                                    )
+                                    disease_effect = next(
+                                        item
+                                        for item in applied["sheet"].get("effects", [])
+                                        if item.get("id") == disease_effect.get("id")
+                                    )
+                        disease_effect.setdefault("metadata", {})["disease_state"] = disease_state
+                        disease_rest_results.append(
+                            {
+                                "disease_id": disease_id,
+                                "effect_id": disease_effect.get("id"),
+                                "save": check_result,
+                                "events": transition["events"],
+                                "active": disease_state.get("active"),
+                            }
+                        )
                 if (
                     normalized_rest_type == "long_rest"
                     and member.get("survival_intake") is not None
@@ -3587,6 +3968,8 @@ class CampaignsService:
                     for key, value in applied.items()
                     if key not in {"sheet", "rule_receipts"}
                 }
+                if disease_rest_results:
+                    recovered[current.id]["disease_rest"] = disease_rest_results
                 if normalized_rest_type == "short_rest":
                     recovered[current.id]["short_rest_hit_dice"] = _support.deepcopy(
                         dict(sheet.get("combat") or {}).get("short_rest_hit_dice")
@@ -3608,6 +3991,8 @@ class CampaignsService:
                             "spell.prepare.long_rest",
                         )
                     )
+            if bool(dict(next_state.get("combat") or {}).get("active")):
+                self.sync_combatant_conditions(next_state["combat"], current.id, sheet)
             if sheet != current.sheet:
                 updates.append(
                     _support.CharacterStateUpdate(

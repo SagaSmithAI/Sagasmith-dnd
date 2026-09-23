@@ -5227,7 +5227,12 @@ def active_effect_roll_bonus(sheet: dict[str, Any], kind: str) -> int:
 
 
 def active_effect_roll_advantage(
-    sheet: dict[str, Any], kind: str, *, key: str | None = None
+    sheet: dict[str, Any],
+    kind: str,
+    *,
+    key: str | None = None,
+    purpose: str | None = None,
+    condition_id: str | None = None,
 ) -> tuple[bool, bool]:
     """Return source-bound advantage/disadvantage flags for checks and saves."""
     normalized = str(kind).strip().casefold().replace("-", "_").replace(" ", "_")
@@ -5243,15 +5248,27 @@ def active_effect_roll_advantage(
         return False, False
     advantage = disadvantage = False
     normalized_key = str(key or "").casefold().replace("-", "_").replace(" ", "_")
+    normalized_purpose = str(purpose or "").strip().casefold().replace("-", "_")
+    normalized_condition_id = str(condition_id or "").strip()
     for effect in validate_character_sheet(sheet)["effects"]:
         if not effect["active"]:
             continue
         if effect_is_suspended_by_petrification(sheet, effect):
             continue
-        restricted = str(dict(effect.get("metadata") or {}).get("skill") or "")
+        metadata = dict(effect.get("metadata") or {})
+        restricted = str(metadata.get("skill") or "")
         if restricted and (
             restricted.casefold().replace("-", "_").replace(" ", "_") != normalized_key
         ):
+            continue
+        scoped_purpose = str(metadata.get("save_purpose") or "").strip().casefold().replace(
+            "-", "_"
+        )
+        if scoped_purpose and scoped_purpose != normalized_purpose:
+            continue
+        recuperation_choice = dict(metadata.get("recuperation_advantage_against") or {})
+        scoped_condition_id = str(recuperation_choice.get("condition_id") or "").strip()
+        if scoped_condition_id and scoped_condition_id != normalized_condition_id:
             continue
         for change in effect["changes"]:
             if change["path"] not in {f"{prefix}.advantage", f"{prefix}.disadvantage"}:
