@@ -9,7 +9,7 @@ from sagasmith_core.integrity import json_sha256
 
 from sagasmith_dnd.editions import SUPPORTED_DND_EDITIONS, normalize_dnd_edition
 
-CORE_RULE_PACK_VERSION = "1.98.0"
+CORE_RULE_PACK_VERSION = "1.98.1"
 
 
 @dataclass(frozen=True)
@@ -299,8 +299,10 @@ BOUNDARIES = (
         "dnd5e.core.save.legendary_resistance",
         ("2014",),
         "legendary_resistance.settle_save|statblocks.parse_2014_statblock",
-        ("tests/test_legendary_resistance.py",
-         "packages/mcp/tests/test_legendary_resistance_mcp.py"),
+        (
+            "tests/test_legendary_resistance.py",
+            "packages/mcp/tests/test_legendary_resistance_mcp.py",
+        ),
         "bundled:srd2014/10_Monsters/Monsters_Each/Adult_Black_Dragon_(Chromatic).md",
     ),
     CoreBoundary(
@@ -394,7 +396,9 @@ BOUNDARIES = (
         "dnd5e.core.progression.multiclassing",
         ("2014",),
         "progression.advance_single_class_level",
-        ("tests/test_progression.py::test_2014_multiclass_level_up_uses_total_level_and_source_class_contract",),
+        (
+            "tests/test_progression.py::test_2014_multiclass_level_up_uses_total_level_and_source_class_contract",
+        ),
         "bundled:srd2014/03_Characterization/Multiclassing.md",
     ),
     CoreBoundary(
@@ -503,14 +507,18 @@ BOUNDARIES = (
         "dnd5e.core.attack.elusive",
         ("2014",),
         "combat_engine.preflight_attack",
-        ("tests/test_rogue_features.py::test_elusive_removes_attack_advantage_unless_incapacitated",),
+        (
+            "tests/test_rogue_features.py::test_elusive_removes_attack_advantage_unless_incapacitated",
+        ),
         "bundled:srd2014/02_Classes/Rogue.md#elusive",
     ),
     CoreBoundary(
         "dnd5e.core.rogue.stroke_of_luck",
         ("2014",),
         "character_schema.srd2014_rogue_stroke_of_luck_feature|combat_engine.apply_srd2014_stroke_of_luck_to_check",
-        ("tests/test_rogue_features.py::test_stroke_of_luck_applies_to_a_failed_check_and_has_one_short_rest_use",),
+        (
+            "tests/test_rogue_features.py::test_stroke_of_luck_applies_to_a_failed_check_and_has_one_short_rest_use",
+        ),
         "bundled:srd2014/02_Classes/Rogue.md#stroke-of-luck",
     ),
     CoreBoundary(
@@ -827,14 +835,18 @@ BOUNDARIES = (
         "dnd5e.core.movement.jump_2014",
         ("2014",),
         "combat_engine.jump_profile_2014|combat_engine.settle_jump_2014|combat_engine.spend_movement",
-        ("tests/test_combat_engine.py::test_2014_jump_obstacle_and_difficult_landing_checks_are_source_bounded",),
+        (
+            "tests/test_combat_engine.py::test_2014_jump_obstacle_and_difficult_landing_checks_are_source_bounded",
+        ),
         "bundled:srd2014/06_Gameplay/Adventuring.md#Jumping",
     ),
     CoreBoundary(
         "dnd5e.core.combat.mounted_2014",
         ("2014",),
         "mounted_combat.mount_2014|mounted_combat.dismount_2014|combat_engine.available_actions",
-        ("tests/test_mounted_combat.py::test_controlled_mount_uses_own_initiative_slot_and_keeps_budget_separate",),
+        (
+            "tests/test_mounted_combat.py::test_controlled_mount_uses_own_initiative_slot_and_keeps_budget_separate",
+        ),
         "bundled:srd2014/06_Gameplay/Order_of_Combat.md#Mounted_Combat",
     ),
     CoreBoundary(
@@ -1322,8 +1334,10 @@ BOUNDARIES = (
         "dnd5e.core.spell.material_components",
         ("2014", "2024"),
         "spells.consume_spell_cast",
-        ("tests/test_spells.py::"
-         "test_costly_material_component_requires_reviewed_inventory_not_confirmation",),
+        (
+            "tests/test_spells.py::"
+            "test_costly_material_component_requires_reviewed_inventory_not_confirmation",
+        ),
         "bundled:srd/components",
     ),
     CoreBoundary(
@@ -1447,6 +1461,16 @@ BOUNDARIES = (
         "sagasmith_dnd_runtime.application",
         ("packages/mcp/tests/test_runtime_integrity_mcp.py",),
         "runtime:mcp/dm-ruling-boundary",
+    ),
+    CoreBoundary(
+        "dnd5e.core.adventuring_gear.caltrops",
+        ("2014",),
+        "sagasmith_dnd.adventuring_gear.resolve_adventuring_gear_intent",
+        (
+            "packages/domain/tests/test_adventuring_gear.py",
+            "packages/mcp/tests/test_adventuring_gear_mcp.py",
+        ),
+        "bundled:srd2014/04_Equipment/Adventuring_Gear.md",
     ),
     CoreBoundary(
         "dnd5e.core.madness.2014",

@@ -44,7 +44,7 @@ from sagasmith_dnd.standard_spell_ids import (
 )
 
 PACK_ID = "dnd5e.content.srd2014"
-PACK_VERSION = "1.56.0"
+PACK_VERSION = "1.56.1"
 
 _CONDITIONAL_SPECIES_SAVE_TRAITS = {
     "dwarven resilience": ("dwarven_resilience", CORE_DWARVEN_RESILIENCE_MECHANIC_ID),
@@ -1013,7 +1013,7 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
                 "options": options,
                 "requires_new_choice": True,
                 "choice_uniqueness_scope": "fighting_style",
-            }
+            },
         }
     if key == ("fighter", "additional fighting style"):
         return {
@@ -1031,7 +1031,7 @@ def _known_feature_structure(class_name: str, title: str, body: str) -> dict[str
                 ],
                 "requires_new_choice": True,
                 "choice_uniqueness_scope": "fighting_style",
-            }
+            },
         }
     if key == ("rogue", "expertise"):
         return {
@@ -1851,25 +1851,22 @@ def _equipment_items(folder: Path) -> list[dict[str, Any]]:
             if amount is not None:
                 properties["amount"] = amount
             artifact = _artifact(
-                    "item",
-                    item_name,
-                    path,
-                    {
-                        "name": item_name,
-                        "category": path.stem.replace("_", " "),
-                        "table": effective_table,
-                        "properties": properties,
-                        "inventory_template": _inventory_template(
-                            item_name,
-                            table_name=effective_table,
-                            properties=properties,
-                        ),
-                    },
-                )
-            if (
-                name == "Adventuring_Gear.md"
-                and item_name.casefold().startswith("poison, basic")
-            ):
+                "item",
+                item_name,
+                path,
+                {
+                    "name": item_name,
+                    "category": path.stem.replace("_", " "),
+                    "table": effective_table,
+                    "properties": properties,
+                    "inventory_template": _inventory_template(
+                        item_name,
+                        table_name=effective_table,
+                        properties=properties,
+                    ),
+                },
+            )
+            if name == "Adventuring_Gear.md" and item_name.casefold().startswith("poison, basic"):
                 artifact["id"] = POISON_ITEM_SOURCE_PREFIX + "basic_poison"
                 identity = {
                     "poison_id": "basic_poison",
@@ -2042,9 +2039,7 @@ def _inventory_template(
         else:
             base = re.match(r"(\d+)", ac_text)
             maximum = re.search(r"max\s+(\d+)", ac_text, re.I)
-            strength_requirement = re.search(
-                r"(\d+)", str(properties.get("strength") or "")
-            )
+            strength_requirement = re.search(r"(\d+)", str(properties.get("strength") or ""))
             dexterity_mode = (
                 "max" if maximum else "full" if "dex modifier" in ac_text.casefold() else "none"
             )

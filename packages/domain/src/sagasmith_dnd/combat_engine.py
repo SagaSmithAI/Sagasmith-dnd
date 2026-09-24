@@ -3770,8 +3770,13 @@ def preflight_attack(
                 context.setdefault("disadvantage_sources", []).append("frightened")
         else:
             unresolved_condition_sources.append("frightened")
+    roll_effect_ability = weapon.get("roll_effect_ability")
+    if roll_effect_ability is None and not weapon.get("spell_attack"):
+        roll_effect_ability = attack_ability
+    if isinstance(roll_effect_ability, str):
+        roll_effect_ability = roll_effect_ability.strip().casefold() or None
     effect_advantage, effect_disadvantage, effect_sources = _active_attack_roll_effect_flags(
-        actor_sheet(attacker), ability=attack_ability
+        actor_sheet(attacker), ability=roll_effect_ability
     )
     if effect_advantage:
         context["advantage"] = True
@@ -4172,6 +4177,7 @@ def preflight_spell_attack(
         "attack_ability": "spell",
         "attack_ability_options": ["spell"],
         "attack_ability_modifier": 0,
+        "roll_effect_ability": str(spellcasting.get("ability") or ""),
         "attack_bonus": int(attack_bonus),
         "damage_expression": scaled_roll_expression(
             damage,

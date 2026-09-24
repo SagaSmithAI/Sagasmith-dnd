@@ -186,9 +186,7 @@ def test_2014_class_poison_and_disease_immunities_are_source_bound() -> None:
             "condition_immunities": ["disease", "poisoned"],
         }
     }
-    assert _known_feature_structure("Druid", "Nature's Ward", "")[
-        "mechanical_grants"
-    ] == {
+    assert _known_feature_structure("Druid", "Nature's Ward", "")["mechanical_grants"] == {
         "immunities": ["poison"],
         "condition_immunities": ["disease", "poisoned"],
         "conditional_condition_immunities": {
@@ -203,7 +201,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
     manifest, artifacts = build_srd2014_content(workspace / "skills")
     counts = Counter(item["kind"] for item in artifacts)
 
-    assert manifest["version"] == PACK_VERSION == "1.56.0"
+    assert manifest["version"] == PACK_VERSION == "1.56.1"
     assert "dnd5e.core.spell.structured_resolution" in manifest["native_mechanic_refs"]
     assert "dnd5e.core.gamemastering.poisons_2014" in manifest["native_mechanic_refs"]
     registered = {boundary.id for boundary in get_core_rule_pack("2014").boundaries}
@@ -305,9 +303,7 @@ def test_srd2014_content_uses_leaf_records_and_structured_eligibility() -> None:
             "strength_requirement": 13,
         },
     }
-    dagger = next(
-        item for item in artifacts if item["id"] == "dnd5e.content.srd2014.item.dagger"
-    )
+    dagger = next(item for item in artifacts if item["id"] == "dnd5e.content.srd2014.item.dagger")
     assert dagger["card"]["inventory_template"]["mechanics"]["proficient"] is False
     assert "Finesse" in dagger["card"]["inventory_template"]["mechanics"]["properties"]
     shields = [

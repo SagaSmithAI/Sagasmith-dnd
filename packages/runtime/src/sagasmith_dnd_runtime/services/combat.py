@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Annotated, Any, Literal, TypedDict
+from typing import Annotated, Any, Literal
 
 from sagasmith_dnd.adventuring_gear import (
     ADVENTURING_GEAR_SOURCE_REF,
@@ -20,6 +20,7 @@ from sagasmith_dnd.madness import (
     validate_confusion_direction_map,
 )
 from sagasmith_dnd.traps import rolling_sphere_actor_route_entry_indices, transition_trap_state
+from typing_extensions import TypedDict
 
 from .. import application_support as _support
 from .madness import settle_damage_triggered_confusion
