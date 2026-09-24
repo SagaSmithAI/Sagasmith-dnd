@@ -317,6 +317,7 @@ def test_holy_water_only_damages_fiends_and_undead_and_settles_source_plan(
                 "campaign_query",
                 {"view": "get", "payload": {"campaign_id": campaign["id"]}},
             )
+            assert current["state"]["random_stream"]["position"] == 1
             attacker = await _call(
                 server,
                 "character_query",
@@ -352,6 +353,7 @@ def test_holy_water_only_damages_fiends_and_undead_and_settles_source_plan(
                 "campaign_query",
                 {"view": "get", "payload": {"campaign_id": campaign["id"]}},
             )
+            assert spent_campaign["state"]["random_stream"]["position"] == 4
             spend = next(
                 item
                 for item in spent_campaign["state"]["item_spends"]

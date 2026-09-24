@@ -340,6 +340,28 @@ class AttacksService:
         replay = self.replay_idempotent(scope, idempotency_key, replay_payload)
         if replay is not None:
             return self.combat_response(campaign_id, principal_id, replay)
+        if _support.active_random_stream() is None:
+            with self.campaign_random_context(
+                campaign_id,
+                "combat.adventuring_gear.attack",
+                {"idempotency_key": idempotency_key},
+            ):
+                return self.campaign_adventuring_gear_attack(
+                    campaign_id=campaign_id,
+                    action_id=action_id_value,
+                    item_id=item_id_value,
+                    intent=normalized_intent,
+                    source_ref=ADVENTURING_GEAR_SOURCE_REF,
+                    actor_id=owner_id,
+                    target_actor_id=target_id,
+                    expected_actor_revision=expected_actor_revision,
+                    expected_target_revision=expected_target_revision,
+                    principal_id=principal_id,
+                    expected_revision=expected_revision,
+                    branch_id=resolved_branch_id,
+                    idempotency_key=idempotency_key,
+                    action_context=action_context,
+                )
 
         owner = self.characters.get(owner_id)
         target = self.characters.get(target_id)
