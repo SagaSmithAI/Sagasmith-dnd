@@ -365,9 +365,10 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
             assert fire_arcana_disable["check"]["ability"] == "arcana"
             assert fire_arcana_disable["check"]["dc"] == 15
             assert fire_arcana_disable["trap"]["status"] == "disabled"
-            assert await _call(
-                server, "trap_state_transition", fire_arcana_disable_args
-            ) == fire_arcana_disable
+            assert (
+                await _call(server, "trap_state_transition", fire_arcana_disable_args)
+                == fire_arcana_disable
+            )
             after_fire_arcana_disable = await _call(
                 server,
                 "campaign_query",
@@ -956,26 +957,47 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
                 "idempotency_key": "net-rescue",
             }
             with pytest.raises(ToolError, match="within reach"):
-                await _call(server, "trap_state_transition", {
-                    **rescue_args,
-                    "rescue_facts": {**rescue_args["rescue_facts"], "within_reach": False},
-                    "idempotency_key": "net-rescue-not-reach",
-                })
+                await _call(
+                    server,
+                    "trap_state_transition",
+                    {
+                        **rescue_args,
+                        "rescue_facts": {**rescue_args["rescue_facts"], "within_reach": False},
+                        "idempotency_key": "net-rescue-not-reach",
+                    },
+                )
             with pytest.raises(ToolError, match="rescuer_id"):
-                await _call(server, "trap_state_transition", {
-                    **rescue_args,
-                    "rescue_facts": {**rescue_args["rescue_facts"], "rescuer_id": locksmith["id"]},
-                    "idempotency_key": "net-rescue-wrong-actor",
-                })
-            unchanged = await _call(server, "campaign_query", {
-                "view": "get", "payload": {"campaign_id": campaign_id},
-            })
+                await _call(
+                    server,
+                    "trap_state_transition",
+                    {
+                        **rescue_args,
+                        "rescue_facts": {
+                            **rescue_args["rescue_facts"],
+                            "rescuer_id": locksmith["id"],
+                        },
+                        "idempotency_key": "net-rescue-wrong-actor",
+                    },
+                )
+            unchanged = await _call(
+                server,
+                "campaign_query",
+                {
+                    "view": "get",
+                    "payload": {"campaign_id": campaign_id},
+                },
+            )
             assert unchanged["revision"] == current["revision"]
             with pytest.raises(ToolError, match="revision conflict"):
-                await _call(server, "trap_state_transition", {
-                    **rescue_args, "expected_revision": current["revision"] - 1,
-                    "idempotency_key": "net-rescue-stale-cas",
-                })
+                await _call(
+                    server,
+                    "trap_state_transition",
+                    {
+                        **rescue_args,
+                        "expected_revision": current["revision"] - 1,
+                        "idempotency_key": "net-rescue-stale-cas",
+                    },
+                )
             rescued = await _call(server, "trap_state_transition", rescue_args)
             assert rescued["action"] == "rescue"
             assert rescued["check"]["success"] is True
@@ -985,12 +1007,20 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
             assert actor["id"] in rescued["trap"]["restrained_actor_ids"]
             assert await _call(server, "trap_state_transition", rescue_args) == rescued
 
-            current = await _call(server, "campaign_query", {
-                "view": "get", "payload": {"campaign_id": campaign_id},
-            })
+            current = await _call(
+                server,
+                "campaign_query",
+                {
+                    "view": "get",
+                    "payload": {"campaign_id": campaign_id},
+                },
+            )
             escape_args = {
-                **net_args, "action": "escape", "spatial_facts": None,
-                "expected_revision": current["revision"], "idempotency_key": "net-escape",
+                **net_args,
+                "action": "escape",
+                "spatial_facts": None,
+                "expected_revision": current["revision"],
+                "idempotency_key": "net-escape",
             }
             escaped = await _call(server, "trap_state_transition", escape_args)
             assert escaped["check"]["success"] is True
@@ -1230,16 +1260,14 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
             empty_area_args["trap_id"] = "statue-empty-area"
             empty_area_args["spatial_facts"]["trap_id"] = "statue-empty-area"
             empty_area_args["trigger_fact"]["plate_id"] = "statue-empty-area"
-            empty_area_settled = await _call(
-                server, "trap_state_transition", empty_area_args
-            )
+            empty_area_settled = await _call(server, "trap_state_transition", empty_area_args)
             assert empty_area_settled["trap"]["status"] == "spent"
             assert empty_area_settled["affected_actor_ids"] == []
             assert empty_area_settled["targets"] == []
             assert empty_area_settled["damage_roll"] is None
-            assert await _call(
-                server, "trap_state_transition", empty_area_args
-            ) == empty_area_settled
+            assert (
+                await _call(server, "trap_state_transition", empty_area_args) == empty_area_settled
+            )
             unchanged = await _call(
                 server,
                 "campaign_query",
@@ -1612,9 +1640,9 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
             )
             assert unchanged["revision"] == current["revision"]
             rolling_args["expected_revision"] = unchanged["revision"]
-            with pytest.raises(ToolError, match="no trap initiative participant"):
+            with pytest.raises(ToolError, match="active Grid encounter"):
                 await _call(server, "trap_state_transition", rolling_args)
-            with pytest.raises(ToolError, match="no trap initiative participant"):
+            with pytest.raises(ToolError, match="active Grid encounter"):
                 await _call(server, "trap_state_transition", rolling_args)
             unchanged = await _call(
                 server,

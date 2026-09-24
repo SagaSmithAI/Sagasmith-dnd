@@ -376,7 +376,7 @@ _SRD_TRAPS: dict[str, dict[str, Any]] = {
             "on_failure": ["prone"],
             "slow_check": {"ability": "strength", "dc": 20, "speed_reduction_ft": 15},
         },
-        "settlement": "unsupported_complex_movement",
+        "settlement": "supported_source_bound_initiative_path_contact",
     },
     "srd5.1.sphere_of_annihilation": {
         "name": "Sphere of Annihilation",
@@ -809,6 +809,335 @@ def validate_rolling_sphere_trigger_fact(
     ):
         raise ValueError("Rolling Sphere triggers at 20 lb or greater")
     return deepcopy(fact)
+
+
+def validate_rolling_sphere_spatial_facts(
+    profile: Any,
+    facts: Any,
+    *,
+    scene_id: str,
+    trap_id: str,
+    encounter_id: str,
+    source_ref: str,
+    campaign_revision: int,
+    reviewed_by: str,
+    positioning_mode: str,
+    battle_map: dict[str, Any] | None,
+    combatants: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Bind the sphere's release point and straight heading to the live Grid map."""
+    if not isinstance(profile, dict) or profile.get("profile_id") != "srd5.1.rolling_sphere":
+        raise ValueError("Rolling Sphere path facts require the source-defined profile")
+    expected = {
+        "decision_id",
+        "reason",
+        "scene_id",
+        "trap_id",
+        "encounter_id",
+        "source_ref",
+        "campaign_revision",
+        "reviewed_by",
+        "map_id",
+        "map_revision",
+        "map_checksum",
+        "origin",
+        "heading",
+    }
+    if not isinstance(facts, dict) or set(facts) != expected:
+        raise ValueError(
+            "Rolling Sphere spatial_facts require exact source, revision, reviewer, map, "
+            "origin, and heading bindings"
+        )
+    if positioning_mode != "grid" or not isinstance(battle_map, dict):
+        raise ValueError("Rolling Sphere movement requires the authoritative Grid battle map")
+    decision_id = str(facts.get("decision_id") or "").strip()
+    reason = " ".join(str(facts.get("reason") or "").split())
+    if not decision_id or len(decision_id) > 200 or not reason or len(reason) > 1000:
+        raise ValueError("Rolling Sphere spatial_facts require a bounded DM-reviewed decision")
+    expected_bindings = {
+        "scene_id": scene_id,
+        "trap_id": trap_id,
+        "encounter_id": encounter_id,
+        "source_ref": source_ref,
+        "campaign_revision": campaign_revision,
+        "reviewed_by": reviewed_by,
+        "map_id": battle_map.get("id"),
+        "map_revision": battle_map.get("map_revision"),
+        "map_checksum": battle_map.get("checksum"),
+    }
+    if not reviewed_by or any(facts.get(key) != value for key, value in expected_bindings.items()):
+        raise ValueError(
+            "Rolling Sphere spatial_facts are stale or do not match the reviewed scene"
+        )
+    if (
+        type(campaign_revision) is not int
+        or type(battle_map.get("map_revision")) is not int
+        or not isinstance(battle_map.get("checksum"), str)
+        or len(battle_map["checksum"]) != 64
+    ):
+        raise ValueError("Rolling Sphere requires a versioned, checksummed battle map")
+    grid = battle_map.get("grid") if isinstance(battle_map.get("grid"), dict) else {}
+    bounds = battle_map.get("bounds") if isinstance(battle_map.get("bounds"), dict) else {}
+    width = bounds.get("width_cells")
+    height = bounds.get("height_cells")
+    if (
+        grid.get("kind") != "square"
+        or grid.get("cell_ft") != 5
+        or type(width) is not int
+        or type(height) is not int
+        or width < 2
+        or height < 2
+    ):
+        raise ValueError("Rolling Sphere requires a bounded five-foot square battle map")
+    origin = facts.get("origin")
+    if (
+        not isinstance(origin, dict)
+        or set(origin) != {"x", "y"}
+        or type(origin.get("x")) is not int
+        or type(origin.get("y")) is not int
+    ):
+        raise ValueError("Rolling Sphere origin must be one reviewed integral Grid cell")
+    x, y = int(origin["x"]), int(origin["y"])
+    heading = facts.get("heading")
+    headings = {
+        "north": (0, -1),
+        "east": (1, 0),
+        "south": (0, 1),
+        "west": (-1, 0),
+    }
+    if heading not in headings:
+        raise ValueError("Rolling Sphere heading must be a reviewed straight cardinal direction")
+    blocked = set(battle_map.get("blocked_cells") or [])
+    if any(
+        not (0 <= cell_x < width and 0 <= cell_y < height) or f"{cell_x},{cell_y}" in blocked
+        for cell_x in (x, x + 1)
+        for cell_y in (y, y + 1)
+    ):
+        raise ValueError("Rolling Sphere release footprint must fit on unblocked reviewed cells")
+    active_combatants = [
+        item
+        for item in combatants
+        if isinstance(item, dict)
+        and "dead" not in {str(condition).casefold() for condition in item.get("conditions", [])}
+    ]
+    if not active_combatants or any(
+        not isinstance(item.get("position"), dict) or type(item.get("initiative")) is not int
+        for item in active_combatants
+    ):
+        raise ValueError(
+            "Rolling Sphere activation requires positioned encounter creatures with initiative"
+        )
+    from .spaces import grid_space
+
+    for combatant in active_combatants:
+        point = combatant["position"]
+        grid_space(combatant, (point.get("x"), point.get("y")), battle_map)
+    return {
+        **{key: deepcopy(facts[key]) for key in expected - {"origin", "heading"}},
+        "origin": {"x": x, "y": y},
+        "heading": heading,
+        "heading_vector": {"x": headings[heading][0], "y": headings[heading][1]},
+        "participant_initiatives": [
+            {
+                "actor_id": str(item.get("actor_id") or ""),
+                "initiative": int(item["initiative"]),
+            }
+            for item in active_combatants
+        ],
+    }
+
+
+def rolling_sphere_turn_path(
+    state: Any,
+    battle_map: Any,
+    *,
+    movement_ft: int | None = None,
+) -> dict[str, Any]:
+    """Advance a 10-foot sphere in five-foot steps without turning or crossing walls."""
+    if not isinstance(state, dict) or not isinstance(battle_map, dict):
+        raise ValueError("Rolling Sphere movement requires persisted state and a battle map")
+    origin = state.get("position")
+    heading = state.get("heading_vector")
+    bounds = battle_map.get("bounds") if isinstance(battle_map.get("bounds"), dict) else {}
+    width, height = bounds.get("width_cells"), bounds.get("height_cells")
+    if (
+        not isinstance(origin, dict)
+        or type(origin.get("x")) is not int
+        or type(origin.get("y")) is not int
+        or not isinstance(heading, dict)
+        or (heading.get("x"), heading.get("y")) not in {(0, -1), (1, 0), (0, 1), (-1, 0)}
+        or type(width) is not int
+        or type(height) is not int
+    ):
+        raise ValueError("Rolling Sphere movement state is incomplete")
+    speed = state.get("speed_ft", 60) if movement_ft is None else movement_ft
+    if type(speed) is not int or speed < 0 or speed > 60 or speed % 5:
+        raise ValueError("Rolling Sphere movement speed must be a multiple of five up to 60 feet")
+    x, y = int(origin["x"]), int(origin["y"])
+    dx, dy = int(heading["x"]), int(heading["y"])
+    blocked = set(battle_map.get("blocked_cells") or [])
+    positions = []
+    stopped = speed == 0
+    stop_reason = "speed_reduced_to_zero" if stopped else None
+    for _ in range(speed // 5):
+        next_x, next_y = x + dx, y + dy
+        footprint = [
+            f"{cell_x},{cell_y}"
+            for cell_x in (next_x, next_x + 1)
+            for cell_y in (next_y, next_y + 1)
+        ]
+        if any(
+            cell_x < 0 or cell_y < 0 or cell_x + 1 >= width or cell_y + 1 >= height
+            for cell_x, cell_y in ((next_x, next_y),)
+        ):
+            raise ValueError("Rolling Sphere path leaves the reviewed map before a barrier")
+        if blocked.intersection(footprint):
+            stopped = True
+            stop_reason = "wall_or_similar_barrier"
+            break
+        x, y = next_x, next_y
+        positions.append({"x": x, "y": y})
+    return {
+        "from": deepcopy(origin),
+        "positions": positions,
+        "to": {"x": x, "y": y},
+        "distance_ft": len(positions) * 5,
+        "stopped": stopped,
+        "stop_reason": stop_reason,
+    }
+
+
+def rolling_sphere_entered_actor_ids(
+    previous_position: Any,
+    next_position: Any,
+    combatants: Any,
+    battle_map: Any,
+) -> list[str]:
+    """Find living creatures newly entered by one five-foot sphere step."""
+    if (
+        not isinstance(previous_position, dict)
+        or not isinstance(next_position, dict)
+        or not isinstance(combatants, list)
+        or not isinstance(battle_map, dict)
+    ):
+        raise ValueError("Rolling Sphere contact requires a Grid step and encounter creatures")
+    from .spaces import grid_space, overlap
+
+    before = (previous_position.get("x"), previous_position.get("y"))
+    after = (next_position.get("x"), next_position.get("y"))
+    sphere_ft = 10
+    entered = []
+    for combatant in combatants:
+        if not isinstance(combatant, dict):
+            continue
+        actor_id = str(combatant.get("actor_id") or "")
+        if not actor_id or "dead" in {
+            str(condition).casefold() for condition in combatant.get("conditions", [])
+        }:
+            continue
+        point = combatant.get("position")
+        if not isinstance(point, dict):
+            raise ValueError("Rolling Sphere contact requires authoritative actor positions")
+        actor_point = (point.get("x"), point.get("y"))
+        actor_ft = grid_space(combatant, actor_point, battle_map)["space_ft"]
+        was_inside = overlap(before, sphere_ft, actor_point, actor_ft)
+        is_inside = overlap(after, sphere_ft, actor_point, actor_ft)
+        if is_inside and not was_inside:
+            entered.append(actor_id)
+    return entered
+
+
+def rolling_sphere_actor_route_contact(
+    sphere_position: Any,
+    actor: Any,
+    route: Any,
+    battle_map: Any,
+) -> bool:
+    """Whether an actor's reviewed Grid route newly enters a rolling sphere space."""
+    return bool(
+        rolling_sphere_actor_route_entry_indices(
+            sphere_position,
+            actor,
+            route,
+            battle_map,
+        )
+    )
+
+
+def rolling_sphere_actor_route_entry_indices(
+    sphere_position: Any,
+    actor: Any,
+    route: Any,
+    battle_map: Any,
+) -> list[int]:
+    """Return every route step where an actor newly enters a rolling sphere space."""
+    if (
+        not isinstance(sphere_position, dict)
+        or not isinstance(actor, dict)
+        or not isinstance(route, list)
+        or not route
+        or not isinstance(battle_map, dict)
+    ):
+        raise ValueError("Rolling Sphere actor contact requires an authoritative Grid route")
+    from .spaces import grid_space, overlap
+
+    sphere_ft = 10
+    sphere_point = (sphere_position.get("x"), sphere_position.get("y"))
+    entries: list[int] = []
+    was_inside = False
+    for index, point in enumerate(route):
+        if not isinstance(point, dict):
+            raise ValueError("Rolling Sphere actor route contains an invalid Grid position")
+        if not all(key in point for key in ("x", "y")):
+            raise ValueError("Rolling Sphere actor route contains an invalid Grid position")
+        actor_point = (point["x"], point["y"])
+        actor_ft = grid_space(actor, actor_point, battle_map)["space_ft"]
+        is_inside = overlap(sphere_point, sphere_ft, actor_point, actor_ft)
+        if is_inside and not was_inside:
+            entries.append(index)
+        was_inside = is_inside
+    return entries
+
+
+def rolling_sphere_within_five_feet(
+    sphere_position: Any,
+    actor: Any,
+    battle_map: Any,
+) -> bool:
+    """Check the source-defined Strength action reach using current Grid spaces."""
+    if (
+        not isinstance(sphere_position, dict)
+        or not isinstance(actor, dict)
+        or not isinstance(actor.get("position"), dict)
+        or not isinstance(battle_map, dict)
+    ):
+        raise ValueError("Rolling Sphere slow action requires authoritative Grid positions")
+    from .spaces import grid_space, overlap
+
+    point = actor["position"]
+    actor_point = (point.get("x"), point.get("y"))
+    actor_ft = grid_space(actor, actor_point, battle_map)["space_ft"]
+    sphere_x, sphere_y = sphere_position.get("x"), sphere_position.get("y")
+    if type(sphere_x) is not int or type(sphere_y) is not int:
+        raise ValueError("Rolling Sphere position is invalid")
+    # Five feet includes adjacent and diagonal Grid cells in 2014 square-grid play.
+    return overlap((sphere_x - 1, sphere_y - 1), 20, actor_point, actor_ft)
+
+
+def rolling_sphere_reduce_speed(state: Any, *, success: Any) -> dict[str, Any]:
+    """Apply the source-defined DC 20 action result to the persisted 15-foot speed steps."""
+    if not isinstance(state, dict) or type(success) is not bool:
+        raise ValueError("Rolling Sphere slow action requires persisted state and a check result")
+    speed = state.get("speed_ft", 60)
+    if type(speed) is not int or speed < 0 or speed > 60 or speed % 15:
+        raise ValueError("Rolling Sphere speed must be zero through 60 in 15-foot steps")
+    updated = deepcopy(state)
+    if success and speed:
+        updated["speed_ft"] = max(0, speed - 15)
+        if updated["speed_ft"] == 0:
+            updated["active"] = False
+            updated["stop_reason"] = "slowed_to_zero"
+    return updated
 
 
 def validate_source_trap_area_spatial_facts(

@@ -127,6 +127,386 @@ def test_rope_burst_action_persists_source_state_and_replays_after_restart(tmp_p
     asyncio.run(exercise())
 
 
+def test_antitoxin_in_combat_spends_action_and_replays_after_restart(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        try:
+            campaign = await _call(
+                server,
+                "campaign_create",
+                {
+                    "name": "Antitoxin in combat",
+                    "edition": "2014",
+                    "idempotency_key": "campaign",
+                },
+            )
+            user_sheet = default_character_sheet()
+            user_sheet["edition"] = "2014"
+            user_sheet["inventory"]["items"] = [
+                _gear_item(
+                    "Antitoxin (vial)",
+                    "dnd5e.content.srd2014.item.antitoxin-vial",
+                    "antitoxin-1",
+                ),
+                _gear_item(
+                    "Antitoxin (vial)",
+                    "dnd5e.content.srd2014.item.antitoxin-vial",
+                    "antitoxin-2",
+                ),
+            ]
+            user = await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {"campaign_id": campaign["id"], "name": "User", "sheet": user_sheet},
+                    "idempotency_key": "user",
+                },
+            )
+            target_sheet = default_character_sheet()
+            target_sheet["edition"] = "2014"
+            target_sheet["progression"]["species"] = "Human"
+            target = await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "name": "Target",
+                        "sheet": target_sheet,
+                    },
+                    "idempotency_key": "target",
+                },
+            )
+            target2 = await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "name": "Second target",
+                        "sheet": target_sheet,
+                    },
+                    "idempotency_key": "target-2",
+                },
+            )
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            await _call(
+                server,
+                "combat_start",
+                {
+                    "campaign_id": campaign["id"],
+                    "positioning_mode": "grid",
+                    "battle_map": {"width_cells": 4, "height_cells": 4},
+                    "participant_ids": [user["id"], target["id"], target2["id"]],
+                    "participant_config": [
+                        {"actor_id": user["id"], "initiative": 20, "position": {"x": 0, "y": 0}},
+                        {"actor_id": target["id"], "initiative": 10, "position": {"x": 1, "y": 0}},
+                        {"actor_id": target2["id"], "initiative": 5, "position": {"x": 2, "y": 0}},
+                    ],
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "combat-start",
+                },
+            )
+            user = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": user["id"]}},
+            )
+            target = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": target["id"]}},
+            )
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            request = {
+                "campaign_id": campaign["id"],
+                "action_id": "drink-antitoxin",
+                "item_id": "antitoxin-1",
+                "intent": "drink",
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                "actor_id": user["id"],
+                "target_actor_id": target["id"],
+                "expected_actor_revision": user["revision"],
+                "expected_target_revision": target["revision"],
+                "expected_revision": current["revision"],
+                "idempotency_key": "drink-antitoxin",
+            }
+            result = await _call(server, "adventuring_gear_action", request)
+            assert result["rule_plan"]["action_economy"] is None
+            assert result["action_cost"] == "object_interaction"
+            assert result["action_paid"] is False
+            assert result["effect"]["duration"] == {"period": "hour", "remaining": 1}
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            user_combatant = next(
+                entry
+                for entry in current["state"]["combat"]["combatants"]
+                if entry["actor_id"] == user["id"]
+            )
+            assert user_combatant["turn_budget"]["object_interaction"] == 0
+            assert user_combatant["turn_budget"]["main_action"] == 1
+            spend = next(
+                entry
+                for entry in current["state"]["item_spends"]
+                if entry["id"] == "drink-antitoxin"
+            )
+            assert spend["combat_action"] == "interact_object"
+            assert spend["quantity"] == 1
+
+            user = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": user["id"]}},
+            )
+            target2 = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": target2["id"]}},
+            )
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            action_request = {
+                **request,
+                "action_id": "drink-antitoxin-action",
+                "item_id": "antitoxin-2",
+                "target_actor_id": target2["id"],
+                "expected_actor_revision": user["revision"],
+                "expected_target_revision": target2["revision"],
+                "expected_revision": current["revision"],
+                "idempotency_key": "drink-antitoxin-action",
+            }
+            action_result = await _call(server, "adventuring_gear_action", action_request)
+            assert action_result["action_cost"] == "action"
+            assert action_result["action_paid"] is True
+            assert action_result["combat"]["combatants"][0]["turn_budget"]["main_action"] == 0
+            close_server(server)
+            server = create_server(_config(tmp_path))
+            assert await _call(server, "adventuring_gear_action", request) == result
+            assert await _call(server, "adventuring_gear_action", action_request) == action_result
+        finally:
+            close_server(server)
+
+    asyncio.run(exercise())
+
+
+def test_climbers_kit_anchor_tethers_fall_and_undo_persists(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        try:
+            campaign = await _call(
+                server,
+                "campaign_create",
+                {"name": "Climber tether", "edition": "2014", "idempotency_key": "campaign"},
+            )
+            sheet = default_character_sheet()
+            sheet["edition"] = "2014"
+            sheet["combat"]["hp"] = {"value": 30, "max": 30, "temp": 0}
+            sheet["inventory"]["items"] = [
+                _gear_item(
+                    "Climber's kit",
+                    "dnd5e.content.srd2014.item.climber-s-kit",
+                    "climber-kit-1",
+                )
+            ]
+            actor = await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {"campaign_id": campaign["id"], "name": "Climber", "sheet": sheet},
+                    "idempotency_key": "actor",
+                },
+            )
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            await _call(
+                server,
+                "combat_start",
+                {
+                    "campaign_id": campaign["id"],
+                    "positioning_mode": "grid",
+                    "battle_map": {"width_cells": 4, "height_cells": 4},
+                    "participant_ids": [actor["id"]],
+                    "participant_config": [
+                        {
+                            "actor_id": actor["id"],
+                            "initiative": 20,
+                            "position": {"x": 1, "y": 1, "elevation_ft": 50},
+                        }
+                    ],
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "combat-start",
+                },
+            )
+            actor = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": actor["id"]}},
+            )
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            anchor_request = {
+                "campaign_id": campaign["id"],
+                "action_id": "anchor-climber-kit",
+                "item_id": "climber-kit-1",
+                "intent": "anchor",
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                "actor_id": actor["id"],
+                "expected_actor_revision": actor["revision"],
+                "expected_revision": current["revision"],
+                "idempotency_key": "anchor-climber-kit",
+                "action_context": {"elevation_ft": 50, "reason": "DM confirmed the ledge height."},
+            }
+            anchored = await _call(server, "adventuring_gear_action", anchor_request)
+            assert anchored["anchor"]["position"] == {"x": 1, "y": 1, "elevation_ft": 50}
+            assert anchored["action_paid"] is True
+            close_server(server)
+            server = create_server(_config(tmp_path))
+            assert await _call(server, "adventuring_gear_action", anchor_request) == anchored
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            assert current["state"]["adventuring_gear_anchors"][0]["active"] is True
+            assert current["state"]["combat"]["combatants"][0]["turn_budget"]["main_action"] == 0
+            climb_request = {
+                "campaign_id": campaign["id"],
+                "actor_id": actor["id"],
+                "action": "move",
+                "payload": {
+                    "distance": 5,
+                    "travel_mode": "climb",
+                    "destination": {"x": 2, "y": 1, "elevation_ft": 60},
+                    "path": [
+                        {"x": 1, "y": 1, "elevation_ft": 50},
+                        {"x": 2, "y": 1, "elevation_ft": 60},
+                    ],
+                },
+                "expected_revision": current["revision"],
+                "idempotency_key": "climber-rise-10",
+            }
+            await _call(server, "combat_movement", climb_request)
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            before_overreach = current
+            overreach = {
+                **climb_request,
+                "payload": {
+                    "distance": 0,
+                    "travel_mode": "climb",
+                    "destination": {"x": 2, "y": 1, "elevation_ft": 76},
+                    "path": [
+                        {"x": 2, "y": 1, "elevation_ft": 60},
+                        {"x": 2, "y": 1, "elevation_ft": 76},
+                    ],
+                },
+                "expected_revision": current["revision"],
+                "idempotency_key": "climber-overreach-26",
+            }
+            with pytest.raises(ToolError, match="cannot exceed 25 feet from its anchor"):
+                await _call(server, "combat_movement", overreach)
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            assert current == before_overreach
+            fall = await _call(
+                server,
+                "combat_hp_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "target_id": actor["id"],
+                    "action": "fall",
+                    "payload": {"distance_ft": 100},
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "tethered-fall",
+                },
+            )
+            assert fall["fall_distance_ft"] == 35
+            assert fall["result"]["dice_count"] == 3
+
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            actor = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": actor["id"]}},
+            )
+            await _call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": actor["id"],
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "end-turn-before-undo",
+                },
+            )
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            actor = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": actor["id"]}},
+            )
+            undo_request = {
+                **anchor_request,
+                "action_id": "undo-climber-kit",
+                "intent": "undo_anchor",
+                "expected_actor_revision": actor["revision"],
+                "expected_revision": current["revision"],
+                "idempotency_key": "undo-climber-kit",
+            }
+            undo_request.pop("action_context")
+            undone = await _call(server, "adventuring_gear_action", undo_request)
+            assert undone["anchor"]["active"] is False
+            assert undone["action_paid"] is False
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            assert current["state"]["adventuring_gear_anchors"][0]["active"] is False
+        finally:
+            close_server(server)
+
+    asyncio.run(exercise())
+
+
 def test_chain_burst_uses_source_dc_hp_and_replays_after_restart(tmp_path: Path) -> None:
     async def exercise() -> None:
         server = create_server(_config(tmp_path))
@@ -250,9 +630,10 @@ def test_chain_burst_uses_source_dc_hp_and_replays_after_restart(tmp_path: Path)
                 "campaign_query",
                 {"view": "get", "payload": {"campaign_id": campaign["id"]}},
             )
-            assert current["state"]["adventuring_gear_objects"][f"{actor['id']}:chain-1"] == result[
-                "resulting_state"
-            ]
+            assert (
+                current["state"]["adventuring_gear_objects"][f"{actor['id']}:chain-1"]
+                == result["resulting_state"]
+            )
             assert any(
                 spend.get("id") == "burst-chain" for spend in current["state"]["item_spends"]
             )
@@ -363,12 +744,12 @@ def test_chain_burst_failure_preserves_intact_state(tmp_path: Path) -> None:
                 "campaign_query",
                 {"view": "get", "payload": {"campaign_id": campaign["id"]}},
             )
-            assert current["state"]["adventuring_gear_objects"][
-                f"{actor['id']}:chain-1"
-            ] == result["resulting_state"]
+            assert (
+                current["state"]["adventuring_gear_objects"][f"{actor['id']}:chain-1"]
+                == result["resulting_state"]
+            )
             assert any(
-                spend.get("id") == "burst-chain-fail"
-                for spend in current["state"]["item_spends"]
+                spend.get("id") == "burst-chain-fail" for spend in current["state"]["item_spends"]
             )
         finally:
             close_server(server)
@@ -392,9 +773,7 @@ def test_lamp_lantern_dynamic_light_fuel_lifecycle_and_replay(tmp_path: Path) ->
             )
             sheet = default_character_sheet()
             sheet["edition"] = "2014"
-            oil = _gear_item(
-                "Oil (flask)", "dnd5e.content.srd2014.item.oil-flask", "oil"
-            )
+            oil = _gear_item("Oil (flask)", "dnd5e.content.srd2014.item.oil-flask", "oil")
             oil["quantity"] = 3
             sheet["inventory"]["items"] = [
                 _gear_item("Lamp", "dnd5e.content.srd2014.item.lamp", "lamp"),
@@ -491,9 +870,7 @@ def test_lamp_lantern_dynamic_light_fuel_lifecycle_and_replay(tmp_path: Path) ->
                 action_context: dict | None = None,
             ):
                 if action_id in gear_requests:
-                    return await _call(
-                        server, "adventuring_gear_action", gear_requests[action_id]
-                    )
+                    return await _call(server, "adventuring_gear_action", gear_requests[action_id])
                 current_state = await campaign_state()
                 current_actor = await character_state()
                 request = {
@@ -657,7 +1034,8 @@ def test_lamp_lantern_dynamic_light_fuel_lifecycle_and_replay(tmp_path: Path) ->
             server = create_server(config)
             after_restart = await campaign_state()
             persisted_lamp = next(
-                light for light in after_restart["state"]["combat"]["adventuring_gear_lights"]
+                light
+                for light in after_restart["state"]["combat"]["adventuring_gear_lights"]
                 if light["item_id"] == "lamp"
             )
             assert persisted_lamp["active"] is False
@@ -864,7 +1242,8 @@ def test_manacles_binding_key_escape_break_and_pick_settle_atomically(tmp_path: 
             )
             assert paid_actor["turn_budget"]["main_action"] == 0
             bind_receipt = next(
-                entry for entry in paid_state["state"]["item_spends"]
+                entry
+                for entry in paid_state["state"]["item_spends"]
                 if entry["id"] == "bind-with-key"
             )
             assert bind_receipt["action_cost"] == "action"
@@ -892,9 +1271,7 @@ def test_manacles_binding_key_escape_break_and_pick_settle_atomically(tmp_path: 
                 },
             )
 
-            await assert_rejected_without_writes(
-                1, 0, "pick", "pick-with-key", match="unavailable"
-            )
+            await assert_rejected_without_writes(1, 0, "pick", "pick-with-key", match="unavailable")
             unlocked, _ = await act(1, 0, "unlock", "unlock-with-key")
             assert unlocked["success"] is True
             assert unlocked["binding"]["status"] == "released"
@@ -1631,8 +2008,7 @@ def test_acid_and_alchemists_fire_attack_source_objects_atomically(tmp_path: Pat
                     "payload": {
                         "name": "gear-target.md",
                         "content": (
-                            "# Workshop\n\n## Door\n\n"
-                            "The wooden door has AC 5 and 500 hit points."
+                            "# Workshop\n\n## Door\n\nThe wooden door has AC 5 and 500 hit points."
                         ),
                         "source_key": "gear-target",
                         "title": "Gear target",
@@ -1667,9 +2043,7 @@ def test_acid_and_alchemists_fire_attack_source_objects_atomically(tmp_path: Pat
                 "page_start": expanded["page_start"],
                 "page_end": expanded["page_end"],
                 "heading_path": expanded["heading_path"],
-                "content_sha256": hashlib.sha256(
-                    expanded["content"].encode("utf-8")
-                ).hexdigest(),
+                "content_sha256": hashlib.sha256(expanded["content"].encode("utf-8")).hexdigest(),
             }
             object_profile = {
                 "id": "wooden-door",
@@ -1796,9 +2170,7 @@ def test_acid_and_alchemists_fire_attack_source_objects_atomically(tmp_path: Pat
                 for item in after_rejected_fire_actor["sheet"]["inventory"]["items"]
             )
 
-            for item_id, intent, damage_expression in (
-                ("acid-1", "throw", "2d6"),
-            ):
+            for item_id, intent, damage_expression in (("acid-1", "throw", "2d6"),):
                 result = None
                 last_request = None
                 for attempt in range(20):
@@ -1836,9 +2208,9 @@ def test_acid_and_alchemists_fire_attack_source_objects_atomically(tmp_path: Pat
                 assert result is not None and result["attack"]["hit"] is True
                 gear_receipt = result["adventuring_gear"]
                 assert gear_receipt["source_ref"] == ADVENTURING_GEAR_SOURCE_REF
-                planned_damage = gear_receipt["rule_plan"]["effect"].get(
-                    "damage"
-                ) or gear_receipt["rule_plan"]["effect"].get("hit_damage")
+                planned_damage = gear_receipt["rule_plan"]["effect"].get("damage") or gear_receipt[
+                    "rule_plan"
+                ]["effect"].get("hit_damage")
                 assert planned_damage == damage_expression
                 assert result["damage"]["expression"] == damage_expression
                 assert result["object"]["hit_points"] < object_profile["hit_points"]
@@ -2030,8 +2402,7 @@ def test_acid_and_alchemists_fire_attack_source_objects_atomically(tmp_path: Pat
             ].get("item_spends", [])
             assert unchanged_actor["revision"] == combat_actor["revision"]
             assert all(
-                item["quantity"] == 1
-                for item in unchanged_actor["sheet"]["inventory"]["items"]
+                item["quantity"] == 1 for item in unchanged_actor["sheet"]["inventory"]["items"]
             )
 
             combat_result = await _call(
@@ -2047,9 +2418,7 @@ def test_acid_and_alchemists_fire_attack_source_objects_atomically(tmp_path: Pat
             )
             assert actor_combatant["turn_budget"]["main_action"] == 0
             assert combat_result["adventuring_gear"]["item_id"] == "combat-acid-1"
-            assert await _call(server, "adventuring_gear_action", combat_request) == (
-                combat_result
-            )
+            assert await _call(server, "adventuring_gear_action", combat_request) == (combat_result)
 
             spent_campaign = await _call(
                 server,
@@ -2083,18 +2452,19 @@ def test_acid_and_alchemists_fire_attack_source_objects_atomically(tmp_path: Pat
                 {"view": "get", "payload": {"character_id": combat_actor["id"]}},
             )
             assert unchanged_after_rejection["revision"] == spent_campaign["revision"]
-            assert unchanged_after_rejection["state"]["combat"] == spent_campaign["state"][
-                "combat"
-            ]
-            assert unchanged_after_rejection["state"]["scene_objects"] == spent_campaign[
-                "state"
-            ]["scene_objects"]
-            assert unchanged_after_rejection["state"]["item_spends"] == spent_campaign[
-                "state"
-            ]["item_spends"]
-            assert unchanged_after_rejection["state"]["random_stream"] == spent_campaign[
-                "state"
-            ]["random_stream"]
+            assert unchanged_after_rejection["state"]["combat"] == spent_campaign["state"]["combat"]
+            assert (
+                unchanged_after_rejection["state"]["scene_objects"]
+                == spent_campaign["state"]["scene_objects"]
+            )
+            assert (
+                unchanged_after_rejection["state"]["item_spends"]
+                == spent_campaign["state"]["item_spends"]
+            )
+            assert (
+                unchanged_after_rejection["state"]["random_stream"]
+                == spent_campaign["state"]["random_stream"]
+            )
             assert actor_after_rejection["revision"] == spent_actor["revision"]
             assert any(
                 item["id"] == "combat-fire-1" and item["quantity"] == 1

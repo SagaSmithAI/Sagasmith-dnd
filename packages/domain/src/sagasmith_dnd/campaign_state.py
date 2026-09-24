@@ -9,6 +9,7 @@ SYSTEM_OWNED_CAMPAIGN_STATE_FIELDS = frozenset(
     {
         "advancement",
         "adventuring_gear_bindings",
+        "adventuring_gear_anchors",
         "adventure_started",
         "adventure_started_actor_ids",
         "chase",

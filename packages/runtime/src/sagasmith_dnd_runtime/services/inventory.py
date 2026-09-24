@@ -287,6 +287,28 @@ class InventoryService:
         source_item = {**item, "source_ref": ADVENTURING_GEAR_SOURCE_REF}
         plan = resolve_adventuring_gear_intent(source_item, normalized_intent)
         gear_name = str(item.get("name") or "").strip().casefold()
+        if gear_name == "climber's kit" and normalized_intent in {"anchor", "undo_anchor"}:
+            if object_target or normalized_target_id or expected_target_revision is not None:
+                raise _support.CombatEngineError("Climber's Kit anchors do not accept a target")
+            return self.settle_climber_kit_anchor(
+                campaign=campaign,
+                state=state,
+                owner=owner,
+                owner_sheet=owner_sheet,
+                item=item,
+                plan=plan,
+                action_id=normalized_action_id,
+                item_id=normalized_item_id,
+                actor_id=normalized_actor_id,
+                expected_actor_revision=expected_actor_revision,
+                expected_campaign_revision=expected_revision,
+                branch_id=resolved_branch_id,
+                principal_id=principal_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+                request_payload=request_payload,
+                action_context=action_context,
+            )
         if gear_name == "candle" and normalized_intent == "light":
             if object_target or normalized_target_id or expected_target_revision is not None:
                 raise _support.CombatEngineError("Candle lighting does not accept a target")
@@ -588,11 +610,6 @@ class InventoryService:
             str(item.get("name") or "").casefold() == "antitoxin (vial)"
             and normalized_intent == "drink"
         ):
-            if self.authoritative_phase(campaign_id) != _support.PROFILE_PLAY:
-                raise _support.CombatEngineError(
-                    "Antitoxin use is unavailable during active combat until its action cost "
-                    "is settled"
-                )
             return self.settle_adventuring_gear_antitoxin(
                 campaign,
                 state,
@@ -3882,6 +3899,8 @@ class InventoryService:
         scope: str,
         request_payload: dict[str, Any],
     ) -> dict[str, Any]:
+        if plan.get("intent") != "drink" or plan.get("action_economy") is not None:
+            raise _support.CombatEngineError("invalid bundled Antitoxin action plan")
         if actor_id == target_id and expected_actor_revision != expected_target_revision:
             raise ValueError("same-actor gear use requires equal actor and target revisions")
         target_sheet = (
@@ -3907,6 +3926,41 @@ class InventoryService:
         )
         if active_antitoxin:
             raise _support.CombatEngineError("target already has this Antitoxin effect active")
+        encounter = _support.deepcopy(dict(state.get("combat") or {}))
+        active_combat = bool(encounter.get("active"))
+        combat_action = None
+        action_cost = None
+        if active_combat:
+            self.encounter_rules_edition(campaign.id, encounter)
+            self.require_no_blocking_pending(encounter)
+            user_combatant = self.require_encounter_combatant(
+                encounter, actor_id, role="Antitoxin user"
+            )
+            self.require_encounter_combatant(encounter, target_id, role="Antitoxin target")
+            use_interaction = (
+                int(dict(user_combatant.get("turn_budget") or {}).get("object_interaction", 0) or 0)
+                > 0
+            )
+            combat_action = "interact_object" if use_interaction else "use_object"
+            action_cost = "object_interaction" if use_interaction else "action"
+            encounter = _support.resolve_common_action(
+                encounter,
+                actor_id_value=actor_id,
+                action=combat_action,
+                payload=(
+                    {"object_description": "Antitoxin (vial)", "interaction": "drink"}
+                    if use_interaction
+                    else {
+                        "kind": "adventuring_gear",
+                        "intent": "drink",
+                        "item_id": item_id,
+                        "source_key": item.get("source_key"),
+                        "target_actor_id": target_id,
+                    }
+                ),
+                **({"payment": "object_interaction"} if use_interaction else {}),
+            )
+            state["combat"] = encounter
         owner_after, removed = _support.remove_inventory_item(owner_sheet, item_id, 1)
         effect = {
             "id": f"adventuring-gear-antitoxin:{action_id}",
@@ -3958,6 +4012,15 @@ class InventoryService:
                 "target_character_id": target.id,
                 "removed": _support.deepcopy(removed),
                 "rule_plan": _support.deepcopy(plan),
+                **(
+                    {
+                        "combat_action": combat_action,
+                        "action_cost": action_cost,
+                        "action_paid": action_cost == "action",
+                    }
+                    if active_combat
+                    else {}
+                ),
             }
         )
         state["item_spends"] = spends
@@ -3996,6 +4059,15 @@ class InventoryService:
             "owner": self.character_view(
                 _support.replace(owner, sheet=owner_after, revision=owner.revision + 1)
             ),
+            **(
+                {
+                    "combat": _support.deepcopy(encounter),
+                    "action_cost": action_cost,
+                    "action_paid": action_cost == "action",
+                }
+                if active_combat
+                else {}
+            ),
         }
         if actor_id != target_id:
             response["target"] = self.character_view(
@@ -4007,6 +4079,240 @@ class InventoryService:
             character_updates=character_updates,
             expected_campaign_revision=expected_revision,
             operation="campaign.adventuring_gear.antitoxin",
+            actor=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            idempotency_write=_support.IdempotencyWrite(
+                scope=scope,
+                payload=request_payload,
+                response=response,
+            ),
+        )
+        return response
+
+    def settle_climber_kit_anchor(
+        self,
+        *,
+        campaign: Any,
+        state: dict[str, Any],
+        owner: Any,
+        owner_sheet: dict[str, Any],
+        item: dict[str, Any],
+        plan: dict[str, Any],
+        action_id: str,
+        item_id: str,
+        actor_id: str,
+        expected_actor_revision: int,
+        expected_campaign_revision: int | None,
+        branch_id: str,
+        principal_id: str,
+        idempotency_key: str,
+        scope: str,
+        request_payload: dict[str, Any],
+        action_context: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Persist a Climber's Kit tether at the actor's recorded Grid location."""
+        if expected_campaign_revision is None or campaign.revision != expected_campaign_revision:
+            raise ValueError("campaign revision conflict for Climber's Kit anchor")
+        if owner.campaign_id != campaign.id or owner.id != actor_id:
+            raise _support.CombatEngineError("Climber's Kit user must belong to the campaign")
+        if owner.revision != expected_actor_revision:
+            raise ValueError(
+                f"character revision conflict: expected {expected_actor_revision}, "
+                f"found {owner.revision}"
+            )
+        if int(item.get("quantity", 0) or 0) < 1:
+            raise _support.CombatEngineError("the source-bound Climber's Kit is unavailable")
+        if plan.get("action_economy") != ("action" if plan.get("intent") == "anchor" else None):
+            raise _support.CombatEngineError("invalid bundled Climber's Kit action plan")
+
+        encounter = _support.deepcopy(dict(state.get("combat") or {}))
+        if not encounter.get("active") or encounter.get("positioning_mode") != "grid":
+            raise _support.NeedsRulingError(
+                "Climber's Kit requires a recorded Grid location and elevation",
+                missing=("adventuring_gear.climber_kit.grid_location",),
+                ruling_kind="agent_dm_adjudication",
+            )
+        self.encounter_rules_edition(campaign.id, encounter)
+        self.require_no_blocking_pending(encounter)
+        combatant = self.require_encounter_combatant(encounter, actor_id, role="Climber's Kit user")
+        position = dict(combatant.get("position") or {})
+        x, y = position.get("x"), position.get("y")
+        if any(isinstance(value, bool) or not isinstance(value, int) for value in (x, y)):
+            raise _support.NeedsRulingError(
+                "Climber's Kit requires an integer Grid position",
+                missing=("adventuring_gear.climber_kit.grid_location",),
+                ruling_kind="agent_dm_adjudication",
+            )
+
+        anchors = _support.deepcopy(list(state.get("adventuring_gear_anchors") or []))
+        active_anchor = next(
+            (
+                record
+                for record in anchors
+                if isinstance(record, dict)
+                and record.get("actor_id") == actor_id
+                and record.get("item_id") == item_id
+                and record.get("active") is True
+            ),
+            None,
+        )
+        if plan["intent"] == "undo_anchor":
+            if action_context is not None:
+                raise _support.CombatEngineError("undo_anchor accepts no caller-supplied outcome")
+            if active_anchor is None:
+                raise _support.CombatEngineError("this Climber's Kit has no active anchor")
+            active_anchor["active"] = False
+            active_anchor["undone_action_id"] = action_id
+            encounter_anchors = _support.deepcopy(
+                list(encounter.get("adventuring_gear_anchors") or [])
+            )
+            for entry in encounter_anchors:
+                if isinstance(entry, dict) and entry.get("id") == active_anchor.get("id"):
+                    entry["active"] = False
+                    entry["undone_action_id"] = action_id
+            encounter["adventuring_gear_anchors"] = encounter_anchors
+        else:
+            recorded_elevation = position.get("elevation_ft")
+            if (
+                action_context is None
+                and isinstance(recorded_elevation, int)
+                and not isinstance(recorded_elevation, bool)
+            ):
+                elevation_ft = recorded_elevation
+                elevation_review = {"source": "combatant.position.elevation_ft"}
+            else:
+                if action_context is None or set(action_context) != {"elevation_ft", "reason"}:
+                    raise _support.NeedsRulingError(
+                        "Climber's Kit anchoring requires a DM-reviewed current elevation",
+                        missing=("adventuring_gear.climber_kit.elevation_review",),
+                        ruling_kind="agent_dm_adjudication",
+                    )
+                elevation_ft = action_context.get("elevation_ft")
+                reason = action_context.get("reason")
+                if recorded_elevation is not None and recorded_elevation != elevation_ft:
+                    raise _support.CombatEngineError(
+                        "reviewed Climber's Kit elevation must match the recorded Grid position"
+                    )
+                if not isinstance(reason, str) or not reason.strip() or len(reason) > 1000:
+                    raise _support.CombatEngineError(
+                        "Climber's Kit elevation review needs an integer elevation and reason"
+                    )
+                elevation_review = {
+                    "reviewed_by": principal_id,
+                    "reason": reason.strip(),
+                }
+            if isinstance(elevation_ft, bool) or not isinstance(elevation_ft, int):
+                raise _support.CombatEngineError("Climber's Kit elevation must be an integer")
+            if active_anchor is not None:
+                raise _support.CombatEngineError("this Climber's Kit already has an active anchor")
+            position["elevation_ft"] = elevation_ft
+            combatant["position"] = position
+            encounter_anchors = _support.deepcopy(
+                list(encounter.get("adventuring_gear_anchors") or [])
+            )
+            encounter_anchors = [
+                entry
+                for entry in encounter_anchors
+                if not (
+                    isinstance(entry, dict)
+                    and entry.get("actor_id") == actor_id
+                    and entry.get("item_id") == item_id
+                )
+            ]
+            anchor = {
+                "id": f"climber-kit-anchor:{action_id}",
+                "actor_id": actor_id,
+                "item_id": item_id,
+                "source_key": item.get("source_key"),
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                "branch_id": branch_id,
+                "encounter_id": encounter.get("id"),
+                "position": {"x": x, "y": y, "elevation_ft": elevation_ft},
+                "maximum_fall_feet": 25,
+                "maximum_climb_feet": 25,
+                "active": True,
+                "created_action_id": action_id,
+                "created_revision": campaign.revision + 1,
+                "elevation_review": elevation_review,
+            }
+            anchors.append(anchor)
+            encounter_anchors.append(_support.deepcopy(anchor))
+            encounter["adventuring_gear_anchors"] = encounter_anchors
+            if plan.get("action_economy") == "action":
+                encounter = _support.resolve_common_action(
+                    encounter,
+                    actor_id_value=actor_id,
+                    action="use_object",
+                    payload={
+                        "kind": "adventuring_gear",
+                        "intent": "anchor",
+                        "item_id": item_id,
+                        "source_key": item.get("source_key"),
+                    },
+                )
+
+        spends = list(state.get("item_spends") or [])
+        if any(isinstance(entry, dict) and entry.get("id") == action_id for entry in spends):
+            raise ValueError("gear action_id already exists on this branch")
+        state["adventuring_gear_anchors"] = anchors
+        state["combat"] = encounter
+        state["item_spends"] = [
+            *spends,
+            {
+                "id": action_id,
+                "item_id": item_id,
+                "quantity": 0,
+                "reason": f"Climber's Kit {plan['intent']}",
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                "source_key": item.get("source_key"),
+                "character_id": actor_id,
+                "owner": {"kind": "character", "character_id": actor_id},
+                "gear_intent": plan["intent"],
+                "rule_plan": _support.deepcopy(plan),
+                **(
+                    {"combat_action": "use_object", "action_cost": "action", "action_paid": True}
+                    if plan.get("action_economy") == "action"
+                    else {}
+                ),
+                "resulting_anchor": _support.deepcopy(
+                    active_anchor if plan["intent"] == "undo_anchor" else anchor
+                ),
+            },
+        ]
+        normalized_state = _support.validate_party_state(state)
+        response = {
+            "status": "committed",
+            "action_id": action_id,
+            "item_id": item_id,
+            "intent": plan["intent"],
+            "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+            "rule_plan": _support.deepcopy(plan),
+            "anchor": _support.deepcopy(
+                active_anchor if plan["intent"] == "undo_anchor" else anchor
+            ),
+            "action_paid": plan.get("action_economy") == "action",
+            "combat": _support.deepcopy(encounter),
+            "campaign": _support.asdict(
+                _support.replace(campaign, state=normalized_state, revision=campaign.revision + 1)
+            ),
+        }
+        response["campaign"]["state"] = normalized_state
+        _support.StateMutationService(self.storage.database).replace(
+            campaign.id,
+            campaign_state=normalized_state,
+            character_updates=[
+                _support.CharacterStateUpdate(
+                    owner.id,
+                    owner_sheet,
+                    _support.validate_character_notes(
+                        owner.notes, character_type=owner.character_type
+                    ),
+                    expected_actor_revision,
+                )
+            ],
+            expected_campaign_revision=expected_campaign_revision,
+            operation="campaign.adventuring_gear.climber_kit",
             actor=principal_id,
             branch_id=branch_id,
             idempotency_key=idempotency_key,

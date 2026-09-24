@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Annotated, Any, Literal, TypedDict
 
 from sagasmith_dnd.adventuring_gear import (
@@ -18,7 +19,7 @@ from sagasmith_dnd.madness import (
     resolve_confusion_turn,
     validate_confusion_direction_map,
 )
-from sagasmith_dnd.traps import transition_trap_state
+from sagasmith_dnd.traps import rolling_sphere_actor_route_entry_indices, transition_trap_state
 
 from .. import application_support as _support
 from .madness import settle_damage_triggered_confusion
@@ -3779,6 +3780,9 @@ class CombatService:
                 f"expected {expected_revision}, found {campaign.revision}"
             )
         _, encounter = self.active_encounter(campaign_id)
+        rolling_sphere_turn_ids = self.rolling_sphere_turns_due(
+            dict(campaign.state or {}), encounter, actor_id
+        )
         current_combatant = next(
             item
             for item in encounter.get("combatants", [])
@@ -3981,6 +3985,22 @@ class CombatService:
             needs_madness_rng = bool(
                 next_actor_record and _active_madness_confusion_effects(next_actor_record.sheet)
             )
+            needs_rolling_sphere_rng = bool(rolling_sphere_turn_ids)
+            if needs_rolling_sphere_rng and _support.active_random_stream() is None:
+                with self.campaign_random_context(
+                    campaign_id,
+                    "combat.rolling_sphere.turn",
+                    {"idempotency_key": idempotency_key},
+                ):
+                    return self.combat_end_turn(
+                        campaign_id,
+                        actor_id,
+                        principal_id,
+                        expected_revision,
+                        resolved_branch_id,
+                        idempotency_key,
+                        confusion_direction_map=normalized_confusion_direction_map,
+                    )
             if needs_poison_rng and _support.active_random_stream() is None:
                 with self.campaign_random_context(
                     campaign_id,
@@ -4077,6 +4097,29 @@ class CombatService:
             )
             for item in next_state["combat"].get("combatants", [])
         }
+        rolling_sphere_events: list[dict[str, Any]] = []
+        rolling_sphere_receipts: list[dict[str, Any]] = []
+        if rolling_sphere_turn_ids:
+            sphere_stream = _support.active_random_stream()
+            if sphere_stream is None:
+                raise _support.CombatEngineError(
+                    "Rolling Sphere initiative turn requires the campaign random stream"
+                )
+            (
+                next_state,
+                sphere_sheets,
+                rolling_sphere_events,
+                rolling_sphere_receipts,
+            ) = self.settle_rolling_sphere_turns(
+                campaign_id=campaign_id,
+                campaign_revision=campaign.revision,
+                branch_id=resolved_branch_id,
+                next_state=next_state,
+                current_sheets=source_sheets,
+                trap_ids=rolling_sphere_turn_ids,
+                stream=sphere_stream,
+            )
+            source_sheets.update(sphere_sheets)
         skipped_source_ids: list[str] = []
         for event in reversed(list(next_state["combat"].get("log") or [])):
             if event.get("type") != "turn_skipped" or event.get("reason") != "dead":
@@ -4469,6 +4512,7 @@ class CombatService:
         rule_receipts.extend(activity_recharge_receipts)
         rule_receipts.extend(poison_turn_receipts)
         rule_receipts.extend(madness_turn_receipts)
+        rule_receipts.extend(rolling_sphere_receipts)
         if rage.feature(current.sheet):
             expired_effects.update(rage_turn["ended"])
             rule_receipts.extend(
@@ -4623,6 +4667,7 @@ class CombatService:
                 "madness_events": madness_turn_events,
                 "adventuring_gear_events": gear_turn_events,
                 "oil_hazard_events": oil_turn_events,
+                "rolling_sphere_events": rolling_sphere_events,
                 "rule_receipts": rule_receipts,
                 "ruleset_fingerprint": rule_context.fingerprint,
                 "campaign_revision": campaign.revision + 1,
@@ -4711,6 +4756,39 @@ class CombatService:
             )
         _, encounter = self.active_encounter(campaign_id)
         self.require_no_blocking_pending(encounter)
+        trap_instances = dict(
+            dict(dict(campaign.state or {}).get("trap_state") or {}).get("traps") or {}
+        )
+        active_rolling_sphere = any(
+            isinstance(trap, dict)
+            and trap.get("profile_id") == "srd5.1.rolling_sphere"
+            and dict(trap.get("sphere") or {}).get("active") is True
+            and dict(trap.get("sphere") or {}).get("encounter_id") == encounter.get("id")
+            for trap in trap_instances.values()
+        )
+        if active_rolling_sphere and _support.active_random_stream() is None:
+            with self.campaign_random_context(
+                campaign_id,
+                "combat_movement_rolling_sphere_contact",
+                {"idempotency_key": idempotency_key},
+            ):
+                return self.combat_move(
+                    campaign_id,
+                    actor_id,
+                    distance,
+                    destination,
+                    path,
+                    movement_mode,
+                    travel_mode,
+                    crawl,
+                    spatial_facts,
+                    drag_grapple_ids,
+                    principal_id,
+                    expected_revision,
+                    branch_id,
+                    idempotency_key,
+                    jump=jump,
+                )
         self.require_mounted_action(encounter, actor_id, "move")
         moving_combatant = next(
             (
@@ -4720,6 +4798,122 @@ class CombatService:
             ),
             None,
         )
+        climber_anchor = next(
+            (
+                record
+                for record in list(dict(campaign.state or {}).get("adventuring_gear_anchors") or [])
+                if isinstance(record, dict)
+                and record.get("actor_id") == actor_id
+                and record.get("active") is True
+                and record.get("source_ref") == "bundled:srd2014/04_Equipment/Adventuring_Gear.md"
+                and record.get("branch_id") == resolved_branch_id
+                and record.get("encounter_id") == encounter.get("id")
+            ),
+            None,
+        )
+        climber_vertical_delta = 0
+        if climber_anchor is not None:
+            from sagasmith_dnd.combat_engine import _position
+
+            anchor_position = dict(climber_anchor.get("position") or {})
+            current_position = dict((moving_combatant or {}).get("position") or {})
+            anchor_elevation = anchor_position.get("elevation_ft")
+            anchor_x, anchor_y = anchor_position.get("x"), anchor_position.get("y")
+            current_elevation = current_position.get("elevation_ft")
+            if any(
+                isinstance(value, bool) or not isinstance(value, int)
+                for value in (anchor_elevation, anchor_x, anchor_y, current_elevation)
+            ):
+                raise _support.NeedsRulingError(
+                    "Climber's Kit movement requires its recorded anchor and current elevations",
+                    missing=("adventuring_gear.climber_kit.elevation",),
+                    ruling_kind="agent_dm_adjudication",
+                )
+            points = list(path or [])
+            if destination is not None:
+                endpoint = dict(destination) if isinstance(destination, dict) else {}
+                if "elevation_ft" not in endpoint:
+                    endpoint["elevation_ft"] = current_elevation
+                destination = endpoint
+                if points and dict(points[-1]).get("elevation_ft") != endpoint["elevation_ft"]:
+                    raise _support.CombatEngineError(
+                        "Climber's Kit path endpoint elevation must match destination"
+                    )
+            if points:
+                normalized_path = []
+                for point in points:
+                    if not isinstance(point, dict):
+                        raise _support.CombatEngineError(
+                            "Climber's Kit Grid paths must include explicit elevation values"
+                        )
+                    next_point = dict(point)
+                    next_point.setdefault("elevation_ft", current_elevation)
+                    elevation = next_point["elevation_ft"]
+                    point_x, point_y = next_point.get("x"), next_point.get("y")
+                    if any(
+                        isinstance(value, bool) or not isinstance(value, int)
+                        for value in (point_x, point_y, elevation)
+                    ):
+                        raise _support.CombatEngineError(
+                            "Climber's Kit path coordinates and elevation must be integers"
+                        )
+                    distance_from_anchor = math.hypot(
+                        max(abs(point_x - anchor_x), abs(point_y - anchor_y)) * 5,
+                        elevation - anchor_elevation,
+                    )
+                    if distance_from_anchor > 25:
+                        raise _support.CombatEngineError(
+                            "Climber's Kit movement cannot exceed 25 feet from its anchor"
+                        )
+                    normalized_path.append(next_point)
+                path = normalized_path
+                if destination is None:
+                    destination = normalized_path[-1]
+            if destination is not None:
+                endpoint_elevation = destination.get("elevation_ft")
+                if isinstance(endpoint_elevation, bool) or not isinstance(endpoint_elevation, int):
+                    raise _support.CombatEngineError(
+                        "Climber's Kit destination elevation must be an integer"
+                    )
+                endpoint_x = destination.get("x")
+                endpoint_y = destination.get("y")
+                if any(
+                    isinstance(value, bool) or not isinstance(value, int)
+                    for value in (endpoint_x, endpoint_y)
+                ):
+                    raise _support.CombatEngineError(
+                        "Climber's Kit destination coordinates must be integers"
+                    )
+                distance_from_anchor = math.hypot(
+                    max(abs(endpoint_x - anchor_x), abs(endpoint_y - anchor_y)) * 5,
+                    endpoint_elevation - anchor_elevation,
+                )
+                if distance_from_anchor > 25:
+                    raise _support.CombatEngineError(
+                        "Climber's Kit movement cannot exceed 25 feet from its anchor"
+                    )
+                climber_vertical_delta = abs(endpoint_elevation - current_elevation)
+                if climber_vertical_delta and path is None:
+                    raise _support.NeedsRulingError(
+                        "Climber's Kit vertical movement requires an explicit 3D path",
+                        missing=("adventuring_gear.climber_kit.vertical_path",),
+                        ruling_kind="agent_dm_adjudication",
+                    )
+                if (
+                    endpoint_elevation > current_elevation
+                    and str(travel_mode).casefold() != "climb"
+                ):
+                    raise _support.CombatEngineError(
+                        "upward Climber's Kit movement requires climb travel mode"
+                    )
+                if climber_vertical_delta:
+                    from sagasmith_dnd.combat_engine import _remaining_movement_ft
+
+                    available = _remaining_movement_ft(moving_combatant, travel_mode)
+                    if distance + climber_vertical_delta > available:
+                        raise _support.CombatEngineError(
+                            "Climber's Kit vertical movement exceeds available movement"
+                        )
         if (
             moving_combatant is not None
             and str(movement_mode).strip().casefold().replace("-", "_")
@@ -5232,6 +5426,45 @@ class CombatService:
             elif jump_result["outcome"] == "exceptional_height_failed":
                 movement_distance = int(jump_result["profile"]["maximum_ft"])
                 movement_jump_kind = "high"
+        movement_rules_encounter = encounter
+        sphere_terrain_cells: set[str] = set()
+        if (
+            active_rolling_sphere
+            and encounter.get("positioning_mode") == "grid"
+            and jump is None
+            and str(movement_mode).strip().casefold().replace("-", "_")
+            in {"voluntary", "aggressive"}
+        ):
+            for trap in trap_instances.values():
+                if not isinstance(trap, dict) or trap.get("profile_id") != "srd5.1.rolling_sphere":
+                    continue
+                sphere = dict(trap.get("sphere") or {})
+                if sphere.get("active") is not True or sphere.get("encounter_id") != encounter.get(
+                    "id"
+                ):
+                    continue
+                position = dict(sphere.get("position") or {})
+                if any(
+                    isinstance(position.get(key), bool) or not isinstance(position.get(key), int)
+                    for key in ("x", "y")
+                ):
+                    raise _support.NeedsRulingError(
+                        "Rolling Sphere difficult terrain requires its recorded Grid footprint",
+                        missing=("traps.rolling_sphere.grid_position",),
+                        ruling_kind="missing_or_conflicting_source_review",
+                    )
+                sphere_terrain_cells.update(
+                    f"{x},{y}"
+                    for x in (position["x"], position["x"] + 1)
+                    for y in (position["y"], position["y"] + 1)
+                )
+        if sphere_terrain_cells:
+            movement_rules_encounter = _support.deepcopy(encounter)
+            movement_map = dict(movement_rules_encounter.get("battle_map") or {})
+            movement_map["difficult_cells"] = sorted(
+                set(movement_map.get("difficult_cells") or []) | sphere_terrain_cells
+            )
+            movement_rules_encounter["battle_map"] = movement_map
         moving_combatant = next(
             item for item in encounter.get("combatants", []) if item.get("actor_id") == actor_id
         )
@@ -5247,7 +5480,7 @@ class CombatService:
 
             confusion_movement_cost = _remaining_movement_ft(moving_combatant, travel_mode)
             planned = _spend_movement_uninterrupted(
-                encounter,
+                movement_rules_encounter,
                 actor_id,
                 movement_distance,
                 destination=movement_destination,
@@ -5270,7 +5503,7 @@ class CombatService:
                 )
         pending_before = {str(item.get("id")) for item in encounter.get("pending", [])}
         next_encounter = _support.spend_movement(
-            encounter,
+            movement_rules_encounter,
             actor_id,
             movement_distance,
             destination=movement_destination,
@@ -5282,6 +5515,21 @@ class CombatService:
             grapple_drag_ids=drag_ids,
             jump_kind=movement_jump_kind,
         )
+        if sphere_terrain_cells:
+            next_encounter["battle_map"] = _support.deepcopy(encounter["battle_map"])
+        if climber_anchor is not None and climber_vertical_delta:
+            from sagasmith_dnd.combat_engine import _update_movement_accounting
+
+            moved_combatant = next(
+                item
+                for item in next_encounter.get("combatants", [])
+                if str(item.get("actor_id") or "") == str(actor_id)
+            )
+            _update_movement_accounting(
+                moved_combatant,
+                dict(moved_combatant.get("turn_budget") or {}),
+                spent_delta=climber_vertical_delta,
+            )
         gear_area_resolutions: list[dict[str, Any]] = []
         active_gear_hazards = [
             item
@@ -6024,6 +6272,177 @@ class CombatService:
                     )
                 else:
                     mount_fall_resolutions.append(resolution)
+        rolling_sphere_entry_resolutions: list[dict[str, Any]] = []
+        rolling_sphere_rule_receipts: list[dict[str, Any]] = []
+        if active_rolling_sphere and movement_mode not in {"teleport"}:
+            if encounter.get("positioning_mode") != "grid" or not encounter.get("battle_map"):
+                raise _support.NeedsRulingError(
+                    "Rolling Sphere creature-entry contact requires the reviewed Grid map",
+                    missing=("traps.rolling_sphere.grid_route",),
+                    ruling_kind="agent_dm_adjudication",
+                )
+            from sagasmith_dnd.combat_engine import _position
+
+            mover_before = next(
+                item
+                for item in encounter.get("combatants", [])
+                if str(item.get("actor_id") or "") == str(actor_id)
+            )
+            mover_after = next(
+                item
+                for item in next_encounter.get("combatants", [])
+                if str(item.get("actor_id") or "") == str(actor_id)
+            )
+            origin = _position(mover_before.get("position"))
+            final_position = _position(mover_after.get("position"))
+            if origin is None or final_position is None:
+                raise _support.NeedsRulingError(
+                    "Rolling Sphere creature-entry contact requires recorded Grid positions",
+                    missing=("traps.rolling_sphere.grid_positions",),
+                    ruling_kind="agent_dm_adjudication",
+                )
+            route_points = [_position(point) for point in list(movement_path or [])]
+            if not route_points:
+                if max(abs(final_position[0] - origin[0]), abs(final_position[1] - origin[1])) == 1:
+                    route_points = [origin, final_position]
+                elif final_position == origin:
+                    route_points = [origin]
+                else:
+                    raise _support.NeedsRulingError(
+                        "Rolling Sphere creature-entry contact requires the exact traversed "
+                        "Grid route",
+                        missing=("traps.rolling_sphere.grid_route",),
+                        ruling_kind="agent_dm_adjudication",
+                    )
+            if any(
+                point is None
+                or any(
+                    isinstance(coordinate, bool)
+                    or not isinstance(coordinate, (int, float))
+                    or not float(coordinate).is_integer()
+                    for coordinate in point
+                )
+                for point in route_points
+            ):
+                raise _support.NeedsRulingError(
+                    "Rolling Sphere creature-entry contact requires integral Grid route cells",
+                    missing=("traps.rolling_sphere.grid_route",),
+                    ruling_kind="agent_dm_adjudication",
+                )
+            route_points = [
+                (int(point[0]), int(point[1])) for point in route_points if point is not None
+            ]
+            if route_points[0] != origin:
+                route_points.insert(0, (int(origin[0]), int(origin[1])))
+            if final_position not in route_points:
+                raise _support.NeedsRulingError(
+                    "Rolling Sphere contact route does not reach the settled destination",
+                    missing=("traps.rolling_sphere.grid_route",),
+                    ruling_kind="agent_dm_adjudication",
+                )
+            final_route_index = max(
+                index for index, point in enumerate(route_points) if point == final_position
+            )
+            route_points = route_points[: final_route_index + 1]
+            actor_route = [{"x": point[0], "y": point[1]} for point in route_points]
+            actor_snapshot = self.combat_actor_snapshot(actor_id)
+            battle_map = dict(encounter.get("battle_map") or {})
+            expected_map_binding = (
+                battle_map.get("id"),
+                battle_map.get("map_revision"),
+                battle_map.get("checksum"),
+            )
+            updated_traps = dict(dict(campaign.state or {}).get("trap_state") or {})
+            updated_traps = dict(updated_traps.get("traps") or {})
+            for sphere_trap_id, trap in updated_traps.items():
+                if not isinstance(trap, dict) or trap.get("profile_id") != "srd5.1.rolling_sphere":
+                    continue
+                sphere = dict(trap.get("sphere") or {})
+                if sphere.get("active") is not True or sphere.get("encounter_id") != encounter.get(
+                    "id"
+                ):
+                    continue
+                if (
+                    sphere.get("scene_id") != encounter.get("scene_id")
+                    or sphere.get("map_id") != expected_map_binding[0]
+                    or sphere.get("map_revision") != expected_map_binding[1]
+                    or sphere.get("map_checksum") != expected_map_binding[2]
+                ):
+                    raise _support.NeedsRulingError(
+                        "Rolling Sphere creature-entry contact has a stale scene/map binding",
+                        missing=("traps.rolling_sphere.current_map_review",),
+                        ruling_kind="missing_or_conflicting_source_review",
+                    )
+                try:
+                    entry_indices = rolling_sphere_actor_route_entry_indices(
+                        sphere.get("position"), actor_snapshot, actor_route, battle_map
+                    )
+                except ValueError as exc:
+                    raise _support.NeedsRulingError(
+                        str(exc),
+                        missing=("traps.rolling_sphere.grid_route",),
+                        ruling_kind="agent_dm_adjudication",
+                    ) from exc
+                actor_record = self.characters.get(actor_id)
+                for route_index in entry_indices:
+                    current_actor = next(
+                        item
+                        for item in next_encounter.get("combatants", [])
+                        if str(item.get("actor_id") or "") == str(actor_id)
+                    )
+                    if "dead" in {
+                        str(condition).casefold()
+                        for condition in current_actor.get("conditions", [])
+                    }:
+                        break
+                    existing_update = next(
+                        (item for item in space_guards if item.character_id == actor_id),
+                        None,
+                    )
+                    current_sheet = (
+                        _support.deepcopy(existing_update.sheet)
+                        if existing_update is not None
+                        else _support.deepcopy(actor_record.sheet)
+                    )
+                    updated_sheet, result, contact_receipts = self._resolve_rolling_sphere_contact(
+                        campaign_id=campaign_id,
+                        campaign_revision=campaign.revision,
+                        branch_id=resolved_branch_id,
+                        encounter=next_encounter,
+                        trap_id=str(sphere_trap_id),
+                        source_ref=str(sphere.get("source_ref") or trap.get("source_ref") or ""),
+                        target_id=actor_id,
+                        sheet=current_sheet,
+                        stream=_support.active_random_stream(),
+                    )
+                    self.sync_combatant_conditions(next_encounter, actor_id, updated_sheet)
+                    resolution = {
+                        "trap_id": str(sphere_trap_id),
+                        "target_id": actor_id,
+                        "route_index": route_index,
+                        "save": _support.deepcopy(result.get("save")),
+                        "damage": _support.deepcopy(result.get("damage")),
+                        "prone": result.get("prone") is True,
+                    }
+                    rolling_sphere_entry_resolutions.append(resolution)
+                    rolling_sphere_rule_receipts.extend(contact_receipts)
+                    replacement = _support.CharacterStateUpdate(
+                        character_id=actor_id,
+                        sheet=_support.validate_character_sheet(updated_sheet),
+                        notes=_support.validate_character_notes(actor_record.notes),
+                        expected_revision=actor_record.revision,
+                    )
+                    if existing_update is not None:
+                        space_guards[space_guards.index(existing_update)] = replacement
+                    else:
+                        space_guards.append(replacement)
+                    next_encounter.setdefault("log", []).append(
+                        {
+                            "type": "rolling_sphere_creature_entry",
+                            **_support.deepcopy(resolution),
+                        }
+                    )
+                    next_encounter["log"] = next_encounter["log"][-100:]
         deferred_jump_landing = bool(
             jump_result is not None
             and jump_result.get("landing_check_pending")
@@ -6141,6 +6560,16 @@ class CombatService:
             for point in route_points
         ):
             movement_boundary_ids.append("dnd5e.core.movement.difficult_terrain")
+        if (
+            sphere_terrain_cells
+            and any(
+                isinstance(point, dict)
+                and f"{point.get('x')},{point.get('y')}" in sphere_terrain_cells
+                for point in route_points
+            )
+            and "dnd5e.core.movement.difficult_terrain" not in movement_boundary_ids
+        ):
+            movement_boundary_ids.append("dnd5e.core.movement.difficult_terrain")
         if any(
             str(item.get("id")) not in pending_before
             and item.get("kind") == "reaction"
@@ -6157,6 +6586,7 @@ class CombatService:
             movement_boundary_ids,
             "movement.spend",
         )
+        movement_receipts.extend(rolling_sphere_rule_receipts)
         next_state = {**dict(campaign.state or {}), "combat": next_encounter}
         response = self.commit_campaign_state(
             campaign,
@@ -6178,6 +6608,11 @@ class CombatService:
                 **(
                     {"adventuring_gear_area_resolutions": gear_area_resolutions}
                     if gear_area_resolutions
+                    else {}
+                ),
+                **(
+                    {"rolling_sphere_contacts": rolling_sphere_entry_resolutions}
+                    if rolling_sphere_entry_resolutions
                     else {}
                 ),
                 "rule_receipts": movement_receipts,
@@ -11971,6 +12406,21 @@ class CombatService:
 
         target = self.combat_actor_snapshot(target_id)
         existing_encounter = dict(campaign.state or {}).get("combat")
+        climber_anchor = next(
+            (
+                record
+                for record in list(dict(campaign.state or {}).get("adventuring_gear_anchors") or [])
+                if isinstance(record, dict)
+                and record.get("actor_id") == target_id
+                and record.get("active") is True
+                and record.get("source_ref") == "bundled:srd2014/04_Equipment/Adventuring_Gear.md"
+                and record.get("branch_id") == resolved_branch_id
+                and isinstance(existing_encounter, dict)
+                and record.get("encounter_id") == existing_encounter.get("id")
+            ),
+            None,
+        )
+        resolved_distance_ft = distance_ft
         target_uses_death_saves = target.get("character_type") == "pc"
         ruleset = self.campaign_rules_edition(campaign_id)
         if isinstance(existing_encounter, dict) and existing_encounter.get("active", False):
@@ -11980,9 +12430,24 @@ class CombatService:
                 existing_encounter, target_id, role="fall target"
             )
             target_uses_death_saves = self.combatant_zero_hp_buffered(target_combatant)
+            if climber_anchor is not None:
+                anchor_elevation = dict(climber_anchor.get("position") or {}).get("elevation_ft")
+                current_elevation = dict(target_combatant.get("position") or {}).get("elevation_ft")
+                if any(
+                    isinstance(value, bool) or not isinstance(value, int)
+                    for value in (anchor_elevation, current_elevation)
+                ):
+                    raise _support.NeedsRulingError(
+                        "Climber's Kit fall settlement requires recorded anchor and current "
+                        "elevations",
+                        missing=("adventuring_gear.climber_kit.elevation",),
+                        ruling_kind="agent_dm_adjudication",
+                    )
+                maximum_fall = max(0, current_elevation - (anchor_elevation - 25))
+                resolved_distance_ft = min(distance_ft, maximum_fall)
         applied = _support.resolve_fall_to_sheet(
             target["sheet"],
-            distance_ft=distance_ft,
+            distance_ft=resolved_distance_ft,
             source=principal_id,
             ruleset=ruleset,
             death_saves=target_uses_death_saves,
@@ -11991,6 +12456,18 @@ class CombatService:
         next_state = dict(campaign.state or {})
         encounter = existing_encounter
         if isinstance(encounter, dict) and encounter.get("active", False):
+            if climber_anchor is not None:
+                target_combatant = next(
+                    item
+                    for item in encounter.get("combatants", [])
+                    if str(item.get("actor_id") or "") == str(target_id)
+                )
+                target_position = dict(target_combatant.get("position") or {})
+                target_position["elevation_ft"] = max(
+                    int(dict(climber_anchor.get("position") or {})["elevation_ft"]) - 25,
+                    int(target_position["elevation_ft"]) - resolved_distance_ft,
+                )
+                target_combatant["position"] = target_position
             self.sync_combatant_conditions(encounter, target_id, applied["sheet"])
             _support.reconcile_readied_spells(encounter, target_id, applied["sheet"])
             self.add_concentration_window(
@@ -12020,6 +12497,11 @@ class CombatService:
             response_fields={
                 "status": "committed",
                 "result": applied_result,
+                **(
+                    {"fall_distance_ft": resolved_distance_ft, "tethered_by": climber_anchor["id"]}
+                    if climber_anchor is not None
+                    else {}
+                ),
                 "combat": next_state.get("combat"),
                 "rule_receipts": _support.core_receipts(
                     self.effective_rule_context(campaign_id, branch_id=resolved_branch_id),

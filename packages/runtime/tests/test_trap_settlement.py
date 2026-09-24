@@ -135,7 +135,7 @@ def test_detection_clues_are_returned_only_after_source_defined_check_success(
     assert _revealed_detection_facts(profile, [{"success": success}]) == expected
 
 
-def test_rolling_sphere_missing_spatial_contract_fails_closed():
+def test_rolling_sphere_pressure_trigger_is_source_bound_and_defers_to_map_review():
     profile = source_trap_profile(
         {"profile_id": "srd5.1.rolling_sphere"},
         'trap_profile: {"profile_id":"srd5.1.rolling_sphere"}',
@@ -147,14 +147,15 @@ def test_rolling_sphere_missing_spatial_contract_fails_closed():
         "weight_lb": 20,
     }
 
-    with pytest.raises(CombatEngineError, match="no trap initiative participant") as error:
+    assert (
         _require_rolling_sphere_trigger_settlement(
             profile,
             fact,
             scene_id="scene-1",
             trap_id="sphere-plate-1",
         )
-    assert "no state was written" in str(error.value)
+        is None
+    )
 
     with pytest.raises(CombatEngineError, match="20 lb or greater"):
         _require_rolling_sphere_trigger_settlement(

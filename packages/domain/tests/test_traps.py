@@ -9,6 +9,12 @@ from sagasmith_dnd.traps import (
     build_poison_needle_condition_effect,
     falling_net_section_cut_qualifies,
     record_sphere_annihilation_contact,
+    rolling_sphere_actor_route_contact,
+    rolling_sphere_actor_route_entry_indices,
+    rolling_sphere_entered_actor_ids,
+    rolling_sphere_reduce_speed,
+    rolling_sphere_turn_path,
+    rolling_sphere_within_five_feet,
     settle_trap_object_spell,
     source_trap_object_facts,
     source_trap_profile,
@@ -18,6 +24,7 @@ from sagasmith_dnd.traps import (
     validate_locking_pit_disable_scene_facts,
     validate_locking_pit_disable_state,
     validate_poison_needle_spatial_facts,
+    validate_rolling_sphere_spatial_facts,
     validate_rolling_sphere_trigger_fact,
     validate_source_pit_depth,
     validate_source_trap_area_spatial_facts,
@@ -404,7 +411,9 @@ def test_named_traps_explicitly_mark_incomplete_area_condition_and_complex_settl
     assert profiles["srd5.1.poison_needle"]["settlement"] == (
         "supported_single_target_range_confirmed_timed_condition"
     )
-    assert profiles["srd5.1.rolling_sphere"]["settlement"] == "unsupported_complex_movement"
+    assert profiles["srd5.1.rolling_sphere"]["settlement"] == (
+        "supported_source_bound_initiative_path_contact"
+    )
     assert profiles["srd5.1.sphere_of_annihilation"]["settlement"] == (
         "unsupported_complex_magic_and_instant_death"
     )
@@ -646,6 +655,155 @@ def test_rolling_sphere_pressure_trigger_fact_is_source_bound_and_inclusive_at_t
             scene_id="scene-1",
             trap_id="sphere-plate-1",
         )
+
+
+def test_rolling_sphere_spatial_facts_bind_review_to_current_grid_scene_and_initiative():
+    profile = source_trap_profile(
+        {"profile_id": "srd5.1.rolling_sphere"},
+        'trap_profile: {"profile_id":"srd5.1.rolling_sphere"}',
+    )
+    battle_map = {
+        "id": "map-1",
+        "map_revision": 3,
+        "checksum": "a" * 64,
+        "grid": {"kind": "square", "cell_ft": 5},
+        "bounds": {"width_cells": 12, "height_cells": 6},
+        "blocked_cells": ["5,0", "5,1"],
+    }
+    combatants = [
+        {"actor_id": "actor-1", "initiative": 20, "position": {"x": 2, "y": 2}},
+        {"actor_id": "actor-2", "initiative": 10, "position": {"x": 8, "y": 2}},
+    ]
+    facts = {
+        "decision_id": "sphere-release-1",
+        "reason": "The surveyed corridor runs straight east from the ceiling trapdoor.",
+        "scene_id": "scene-1",
+        "trap_id": "sphere-1",
+        "encounter_id": "encounter-1",
+        "source_ref": "module:crypt#sphere",
+        "campaign_revision": 12,
+        "reviewed_by": "system:local",
+        "map_id": "map-1",
+        "map_revision": 3,
+        "map_checksum": "a" * 64,
+        "origin": {"x": 2, "y": 2},
+        "heading": "east",
+    }
+
+    normalized = validate_rolling_sphere_spatial_facts(
+        profile,
+        facts,
+        scene_id="scene-1",
+        trap_id="sphere-1",
+        encounter_id="encounter-1",
+        source_ref="module:crypt#sphere",
+        campaign_revision=12,
+        reviewed_by="system:local",
+        positioning_mode="grid",
+        battle_map=battle_map,
+        combatants=combatants,
+    )
+    assert normalized["heading_vector"] == {"x": 1, "y": 0}
+    assert normalized["participant_initiatives"] == [
+        {"actor_id": "actor-1", "initiative": 20},
+        {"actor_id": "actor-2", "initiative": 10},
+    ]
+    with pytest.raises(ValueError, match="stale or do not match"):
+        validate_rolling_sphere_spatial_facts(
+            profile,
+            {**facts, "campaign_revision": 11},
+            scene_id="scene-1",
+            trap_id="sphere-1",
+            encounter_id="encounter-1",
+            source_ref="module:crypt#sphere",
+            campaign_revision=12,
+            reviewed_by="system:local",
+            positioning_mode="grid",
+            battle_map=battle_map,
+            combatants=combatants,
+        )
+    with pytest.raises(ValueError, match="authoritative Grid"):
+        validate_rolling_sphere_spatial_facts(
+            profile,
+            facts,
+            scene_id="scene-1",
+            trap_id="sphere-1",
+            encounter_id="encounter-1",
+            source_ref="module:crypt#sphere",
+            campaign_revision=12,
+            reviewed_by="system:local",
+            positioning_mode="agent",
+            battle_map=battle_map,
+            combatants=combatants,
+        )
+
+
+def test_rolling_sphere_straight_route_stops_at_barrier_and_settles_new_entries():
+    battle_map = {
+        "grid": {"kind": "square", "cell_ft": 5},
+        "bounds": {"width_cells": 12, "height_cells": 6},
+        "blocked_cells": ["6,2", "6,3"],
+    }
+    sphere = {
+        "position": {"x": 2, "y": 2},
+        "heading_vector": {"x": 1, "y": 0},
+        "speed_ft": 60,
+    }
+    route = rolling_sphere_turn_path(sphere, battle_map)
+    assert route["positions"] == [{"x": 3, "y": 2}, {"x": 4, "y": 2}]
+    assert route["to"] == {"x": 4, "y": 2}
+    assert route["stopped"] is True
+    assert route["stop_reason"] == "wall_or_similar_barrier"
+    with pytest.raises(ValueError, match="leaves the reviewed map"):
+        rolling_sphere_turn_path(
+            {**sphere, "position": {"x": 9, "y": 2}},
+            {**battle_map, "blocked_cells": []},
+        )
+
+    combatants = [
+        {"actor_id": "entered", "position": {"x": 4, "y": 2}},
+        {"actor_id": "already-inside", "position": {"x": 2, "y": 2}},
+    ]
+    assert rolling_sphere_entered_actor_ids(
+        {"x": 2, "y": 2}, {"x": 3, "y": 2}, combatants, battle_map
+    ) == ["entered"]
+    actor = {"size": "medium", "position": {"x": 8, "y": 2}}
+    assert rolling_sphere_actor_route_contact(
+        {"x": 2, "y": 2},
+        actor,
+        [
+            {"x": 8, "y": 2},
+            {"x": 7, "y": 2},
+            {"x": 6, "y": 2},
+            {"x": 5, "y": 2},
+            {"x": 4, "y": 2},
+            {"x": 3, "y": 2},
+        ],
+        {**battle_map, "blocked_cells": []},
+    )
+    assert rolling_sphere_actor_route_entry_indices(
+        {"x": 2, "y": 2},
+        {"size": "medium", "position": {"x": 4, "y": 2}},
+        [
+            {"x": 4, "y": 2},
+            {"x": 3, "y": 2},
+            {"x": 4, "y": 2},
+            {"x": 3, "y": 2},
+        ],
+        {**battle_map, "blocked_cells": []},
+    ) == [1, 3]
+    assert not rolling_sphere_actor_route_contact(
+        {"x": 2, "y": 2},
+        actor,
+        [{"x": 8, "y": 2}, {"x": 9, "y": 2}],
+        {**battle_map, "blocked_cells": []},
+    )
+    assert rolling_sphere_within_five_feet(
+        {"x": 2, "y": 2}, {"position": {"x": 4, "y": 2}}, battle_map
+    )
+    reduced = rolling_sphere_reduce_speed({"active": True, "speed_ft": 15}, success=True)
+    assert reduced["speed_ft"] == 0
+    assert reduced["active"] is False
 
 
 def test_source_trap_area_spatial_facts_bind_every_actor_to_scene_trap_source_and_revision():

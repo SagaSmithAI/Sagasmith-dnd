@@ -13,12 +13,17 @@ from sagasmith_dnd.traps import (
     apply_locking_pit_spring_disable,
     build_poison_needle_condition_effect,
     record_sphere_annihilation_contact,
+    rolling_sphere_entered_actor_ids,
+    rolling_sphere_reduce_speed,
+    rolling_sphere_turn_path,
+    rolling_sphere_within_five_feet,
     source_trap_profile,
     transition_trap_state,
     validate_falling_net_rescue_facts,
     validate_locking_pit_disable_scene_facts,
     validate_locking_pit_disable_state,
     validate_poison_needle_spatial_facts,
+    validate_rolling_sphere_spatial_facts,
     validate_rolling_sphere_trigger_fact,
     validate_source_pit_depth,
     validate_source_trap_area_spatial_facts,
@@ -111,11 +116,43 @@ def _require_rolling_sphere_trigger_settlement(
         )
     except ValueError as exc:
         raise _support.CombatEngineError(str(exc)) from exc
-    raise _support.CombatEngineError(
-        "Rolling Sphere pressure trigger is source-bound, but activation is unresolved: "
-        "the encounter has no trap initiative participant or authoritative sphere path and "
-        "creature-collision settlement; no state was written"
-    )
+
+
+def _resolve_rolling_sphere_spatial_facts(
+    profile: dict[str, Any],
+    facts: dict[str, Any] | None,
+    *,
+    encounter: dict[str, Any],
+    scene_id: str,
+    trap_id: str,
+    source_ref: str,
+    campaign_revision: int,
+    reviewed_by: str,
+) -> dict[str, Any]:
+    if (
+        encounter.get("active") is not True
+        or str(encounter.get("scene_id") or "") != scene_id
+        or not isinstance(encounter.get("battle_map"), dict)
+    ):
+        raise _support.CombatEngineError(
+            "Rolling Sphere requires an active Grid encounter in its source scene"
+        )
+    try:
+        return validate_rolling_sphere_spatial_facts(
+            profile,
+            facts,
+            scene_id=scene_id,
+            trap_id=trap_id,
+            encounter_id=str(encounter.get("id") or ""),
+            source_ref=source_ref,
+            campaign_revision=campaign_revision,
+            reviewed_by=reviewed_by,
+            positioning_mode=str(encounter.get("positioning_mode") or "agent"),
+            battle_map=encounter.get("battle_map"),
+            combatants=list(encounter.get("combatants") or []),
+        )
+    except ValueError as exc:
+        raise _support.CombatEngineError(str(exc)) from exc
 
 
 def _resolve_source_trap_area_targets(
@@ -451,6 +488,273 @@ class TrapService:
             expected_campaign_revision=campaign.revision,
         )
 
+    def rolling_sphere_turns_due(
+        self,
+        campaign_state: dict[str, Any],
+        encounter: dict[str, Any],
+        ending_actor_id: str,
+    ) -> list[str]:
+        """Return active Rolling Spheres whose initiative slot follows this turn."""
+        combatants = list(encounter.get("combatants") or [])
+        if not combatants:
+            return []
+        current = _support.current_combatant(encounter)
+        if not isinstance(current, dict) or str(current.get("actor_id") or "") != ending_actor_id:
+            return []
+        current_index = int(encounter.get("turn_index", 0) or 0) % len(combatants)
+        next_index = (current_index + 1) % len(combatants)
+        checked = 0
+        while checked < len(combatants) and "dead" in {
+            str(value).casefold() for value in combatants[next_index].get("conditions", [])
+        }:
+            next_index = (next_index + 1) % len(combatants)
+            checked += 1
+        wraps = next_index <= current_index
+        living = [
+            item
+            for item in combatants
+            if "dead" not in {str(value).casefold() for value in item.get("conditions", [])}
+        ]
+        if not living:
+            return []
+        current_initiative = int(current.get("initiative", 0) or 0)
+        next_initiative = int(combatants[next_index].get("initiative", 0) or 0)
+        maximum = max(int(item.get("initiative", 0) or 0) for item in living)
+        minimum = min(int(item.get("initiative", 0) or 0) for item in living)
+        round_number = int(encounter.get("round", 1) or 1)
+        due: list[str] = []
+        instances = dict(dict(campaign_state.get("trap_state") or {}).get("traps") or {})
+        for trap_id, trap in instances.items():
+            if not isinstance(trap, dict) or trap.get("profile_id") != "srd5.1.rolling_sphere":
+                continue
+            sphere = dict(trap.get("sphere") or {})
+            if sphere.get("active") is not True or sphere.get("encounter_id") != encounter.get(
+                "id"
+            ):
+                continue
+            if (
+                sphere.get("activated_round") == round_number
+                and sphere.get("activated_after_actor_id") == ending_actor_id
+            ):
+                if (
+                    round_number >= int(sphere.get("first_eligible_round", round_number) or 1)
+                    and sphere.get("last_acted_round") != round_number
+                    and int(sphere.get("initiative", 0) or 0) <= current_initiative
+                ):
+                    due.append(str(trap_id))
+                continue
+            sphere_initiative = int(sphere.get("initiative", 0) or 0)
+            crossed_slot = current_initiative >= sphere_initiative > next_initiative
+            if crossed_slot:
+                target_round = round_number
+            elif wraps and sphere_initiative > maximum:
+                target_round = round_number + 1
+            elif wraps and sphere_initiative <= minimum and current_initiative <= minimum:
+                target_round = round_number
+            else:
+                continue
+            if (
+                target_round >= int(sphere.get("first_eligible_round", round_number) or 1)
+                and sphere.get("last_acted_round") != target_round
+            ):
+                due.append(str(trap_id))
+        return sorted(due)
+
+    def _resolve_rolling_sphere_contact(
+        self,
+        *,
+        campaign_id: str,
+        campaign_revision: int,
+        branch_id: str,
+        encounter: dict[str, Any],
+        trap_id: str,
+        source_ref: str,
+        target_id: str,
+        sheet: dict[str, Any],
+        stream: Any,
+    ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
+        target = self.combat_actor_snapshot(target_id)
+        target["sheet"] = _support.deepcopy(sheet)
+        target["derived"] = _support.derive_domain_character_sheet(sheet)
+        save_context = self.effective_rule_context(
+            campaign_id,
+            branch_id=branch_id,
+            facts={
+                "kind": "save",
+                "actor_id": target_id,
+                "ability": "dexterity",
+                "dc": 15,
+                "trap_id": trap_id,
+                "trap_source_ref": source_ref,
+                "trap_action": "rolling_sphere_contact",
+            },
+        )
+        save = _support.resolve_actor_check(
+            target,
+            kind="save",
+            ability="dexterity",
+            dc=15,
+            encounter=encounter,
+            ruleset="2014",
+            rules=save_context,
+            rng=stream,
+        )
+        result: dict[str, Any] = {
+            "target_id": target_id,
+            "save": save,
+            "damage": None,
+            "prone": False,
+        }
+        updated_sheet = _support.deepcopy(sheet)
+        receipts = list(save.get("rule_receipts") or [])
+        if save.get("success") is not True:
+            damage_roll = roll("10d10", rng=stream)
+            damaged = _support.apply_damage_to_sheet(
+                updated_sheet,
+                amount=damage_roll.total,
+                damage_type="bludgeoning",
+                source=f"trap:{source_ref}:{trap_id}:rolling-sphere",
+                ruleset="2014",
+                death_saves=self.characters.get(target_id).character_type == "pc",
+            )
+            updated_sheet = damaged["sheet"]
+            _support.apply_condition_change(updated_sheet, condition_id="prone", add=True)
+            result["damage"] = {
+                "expression": "10d10",
+                "rolls": list(damage_roll.rolls),
+                **{key: value for key, value in damaged.items() if key != "sheet"},
+            }
+            result["prone"] = True
+            receipts.extend(damaged.get("environment_receipts") or [])
+            self.add_concentration_window(
+                encounter,
+                target_id,
+                damaged.get("concentration"),
+                next_revision=campaign_revision + 1,
+            )
+        return _support.validate_character_sheet(updated_sheet), result, receipts
+
+    def settle_rolling_sphere_turns(
+        self,
+        *,
+        campaign_id: str,
+        campaign_revision: int,
+        branch_id: str,
+        next_state: dict[str, Any],
+        current_sheets: dict[str, dict[str, Any]],
+        trap_ids: list[str],
+        stream: Any,
+    ) -> tuple[
+        dict[str, Any], dict[str, dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]
+    ]:
+        """Move initiative-ready spheres and atomically settle every new creature entry."""
+        state = _support.deepcopy(next_state)
+        encounter = dict(state.get("combat") or {})
+        if not trap_ids:
+            return state, {}, [], []
+        map_value = dict(encounter.get("battle_map") or {})
+        sheets = dict(current_sheets)
+        events: list[dict[str, Any]] = []
+        receipts: list[dict[str, Any]] = []
+        trap_state = dict(state.get("trap_state") or {})
+        instances = dict(trap_state.get("traps") or {})
+        for trap_id in trap_ids:
+            trap = dict(instances.get(trap_id) or {})
+            sphere = dict(trap.get("sphere") or {})
+            if (
+                trap.get("profile_id") != "srd5.1.rolling_sphere"
+                or trap.get("source_ref") != sphere.get("source_ref")
+                or sphere.get("active") is not True
+                or sphere.get("encounter_id") != encounter.get("id")
+                or sphere.get("scene_id") != encounter.get("scene_id")
+                or sphere.get("map_id") != map_value.get("id")
+                or sphere.get("map_revision") != map_value.get("map_revision")
+                or sphere.get("map_checksum") != map_value.get("checksum")
+            ):
+                raise _support.NeedsRulingError(
+                    "Rolling Sphere initiative state no longer matches the active scene/map",
+                    missing=("traps.rolling_sphere.current_map_review",),
+                    ruling_kind="missing_or_conflicting_source_review",
+                )
+            source_ref = str(sphere["source_ref"])
+            try:
+                path = rolling_sphere_turn_path(sphere, map_value)
+            except ValueError as exc:
+                raise _support.NeedsRulingError(
+                    str(exc),
+                    missing=("traps.rolling_sphere.path_or_barrier_review",),
+                    ruling_kind="missing_or_conflicting_source_review",
+                ) from exc
+            contacts: list[dict[str, Any]] = []
+            previous = _support.deepcopy(path["from"])
+            for step_index, position in enumerate(path["positions"], start=1):
+                try:
+                    actor_ids = rolling_sphere_entered_actor_ids(
+                        previous,
+                        position,
+                        list(encounter.get("combatants") or []),
+                        map_value,
+                    )
+                except ValueError as exc:
+                    raise _support.NeedsRulingError(
+                        str(exc),
+                        missing=("traps.rolling_sphere.actor_grid_positions",),
+                        ruling_kind="agent_dm_adjudication",
+                    ) from exc
+                for target_id in actor_ids:
+                    target_sheet = sheets.get(target_id)
+                    if target_sheet is None:
+                        target_sheet = _support.deepcopy(self.characters.get(target_id).sheet)
+                    updated_sheet, result, save_receipts = self._resolve_rolling_sphere_contact(
+                        campaign_id=campaign_id,
+                        campaign_revision=campaign_revision,
+                        branch_id=branch_id,
+                        encounter=encounter,
+                        trap_id=trap_id,
+                        source_ref=source_ref,
+                        target_id=target_id,
+                        sheet=target_sheet,
+                        stream=stream,
+                    )
+                    sheets[target_id] = updated_sheet
+                    self.sync_combatant_conditions(encounter, target_id, updated_sheet)
+                    contact = {"step": step_index, **result}
+                    contacts.append(contact)
+                    receipts.extend(save_receipts)
+                previous = position
+            sphere["position"] = _support.deepcopy(path["to"])
+            sphere["last_acted_round"] = int(encounter.get("round", 1) or 1)
+            sphere["last_turn"] = {
+                "round": sphere["last_acted_round"],
+                "from": path["from"],
+                "to": path["to"],
+                "distance_ft": path["distance_ft"],
+                "stopped": path["stopped"],
+                "stop_reason": path["stop_reason"],
+                "contacts": contacts,
+            }
+            turns = list(sphere.get("turns") or [])
+            sphere["turns"] = [*turns, _support.deepcopy(sphere["last_turn"])][-50:]
+            if path["stopped"]:
+                sphere["active"] = False
+                sphere["stop_reason"] = path["stop_reason"]
+                trap["status"] = "spent"
+            trap["sphere"] = sphere
+            instances[trap_id] = trap
+            event = {
+                "type": "rolling_sphere_turn",
+                "trap_id": trap_id,
+                "initiative": sphere["initiative"],
+                **_support.deepcopy(sphere["last_turn"]),
+            }
+            events.append(event)
+            encounter.setdefault("log", []).append(event)
+        encounter["log"] = encounter["log"][-100:]
+        trap_state["traps"] = instances
+        state["trap_state"] = trap_state
+        state["combat"] = encounter
+        return state, sheets, events, receipts
+
     def source_bound_trap_transition(
         self,
         campaign_id: str,
@@ -492,10 +796,11 @@ class TrapService:
             "escape",
             "rescue",
             "contact",
+            "slow",
         }:
             raise _support.CombatEngineError(
                 "trap action must be detect, passive_detect, disable, bypass, trigger, escape, "
-                "or contact"
+                "contact, or slow"
             )
         try:
             normalized_profile = source_trap_profile(profile, source_excerpt)
@@ -531,6 +836,10 @@ class TrapService:
         elif contact_facts is not None:
             raise _support.CombatEngineError(
                 "contact_facts are accepted only for Sphere of Annihilation contact"
+            )
+        if action == "slow" and profile_id != "srd5.1.rolling_sphere":
+            raise _support.CombatEngineError(
+                "the DC 20 Strength slow action is supported only for Rolling Sphere"
             )
         area_target_action = profile_id in _SOURCE_AREA_TARGET_PROFILES and (
             action == "trigger"
@@ -610,10 +919,13 @@ class TrapService:
                 raise _support.CombatEngineError(
                     "source-bound area effects derive all affected actors from spatial_facts"
                 )
-        elif spatial_facts is not None and not poison_needle_range_action:
+        elif spatial_facts is not None and not (
+            poison_needle_range_action
+            or (action == "trigger" and profile_id == "srd5.1.rolling_sphere")
+        ):
             raise _support.CombatEngineError(
-                "spatial_facts are accepted only for source-defined area or Poison Needle "
-                "range settlement"
+                "spatial_facts are accepted only for source-defined area, Poison Needle range, "
+                "or Rolling Sphere activation"
             )
         if poison_needle_range_action:
             if area_confirmed is not None:
@@ -953,7 +1265,7 @@ class TrapService:
         )
         if ruleset != "2014":
             raise _support.CombatEngineError("source-bound trap profiles require the 2014 ruleset")
-        if action in {"trigger", "escape", "disable", "rescue"}:
+        if action in {"trigger", "escape", "disable", "rescue", "slow"}:
             if (
                 action == "trigger"
                 and trigger_fact is not None
@@ -995,12 +1307,23 @@ class TrapService:
                     campaign_revision=campaign.revision,
                     reviewed_by=principal_id,
                 )
+            normalized_sphere_spatial_facts = None
             if action == "trigger" and normalized_profile["profile_id"] == "srd5.1.rolling_sphere":
                 _require_rolling_sphere_trigger_settlement(
                     normalized_profile,
                     trigger_fact,
                     scene_id=str(expanded["scene"]["id"]),
                     trap_id=trap_id,
+                )
+                normalized_sphere_spatial_facts = _resolve_rolling_sphere_spatial_facts(
+                    normalized_profile,
+                    spatial_facts,
+                    encounter=encounter,
+                    scene_id=str(expanded["scene"]["id"]),
+                    trap_id=trap_id,
+                    source_ref=exact_source,
+                    campaign_revision=campaign.revision,
+                    reviewed_by=principal_id,
                 )
             normalized_area_spatial_facts = None
             if area_target_action:
@@ -1036,6 +1359,8 @@ class TrapService:
                     normalized_area_spatial_facts
                     if area_target_action
                     else normalized_needle_spatial_facts
+                    if poison_needle_range_action
+                    else normalized_sphere_spatial_facts
                 ),
                 encounter=encounter,
                 ruleset=ruleset,
@@ -1244,6 +1569,295 @@ class TrapService:
     ) -> dict[str, Any]:
         """Settle the bounded Poison Darts and Falling Net source mechanics."""
         profile_id = normalized_profile["profile_id"]
+        if profile_id == "srd5.1.rolling_sphere" and action == "trigger":
+            if encounter.get("active") is not True or not isinstance(spatial_facts, dict):
+                raise _support.CombatEngineError(
+                    "Rolling Sphere activation requires its reviewed active Grid path"
+                )
+            current_actor = _support.current_combatant(encounter)
+            if (
+                not isinstance(current_actor, dict)
+                or str(current_actor.get("actor_id") or "") != actor_id
+            ):
+                raise _support.CombatEngineError(
+                    "Rolling Sphere pressure activation must be recorded during the triggering "
+                    "creature's current initiative turn"
+                )
+            sphere_initiative_roll = stream.randint(1, 20)
+            sphere_initiative = sphere_initiative_roll + 8
+            next_state = _support.deepcopy(campaign.state)
+            trap_state = transition_trap_state(
+                dict(next_state.get("trap_state") or {}),
+                source_ref=exact_source,
+                trap_id=trap_id,
+                action="trigger",
+            )
+            sphere = {
+                "active": True,
+                "scene_id": scene_id,
+                "encounter_id": str(encounter.get("id") or ""),
+                "map_id": str(dict(encounter.get("battle_map") or {}).get("id") or ""),
+                "map_revision": dict(encounter.get("battle_map") or {}).get("map_revision"),
+                "map_checksum": dict(encounter.get("battle_map") or {}).get("checksum"),
+                "position": _support.deepcopy(spatial_facts["origin"]),
+                "heading": spatial_facts["heading"],
+                "heading_vector": _support.deepcopy(spatial_facts["heading_vector"]),
+                "speed_ft": 60,
+                "initiative_roll": sphere_initiative_roll,
+                "initiative_bonus": 8,
+                "initiative": sphere_initiative,
+                "participant_initiatives": _support.deepcopy(
+                    spatial_facts["participant_initiatives"]
+                ),
+                "activated_round": int(encounter.get("round", 1) or 1),
+                "activated_after_actor_id": actor_id,
+                "first_eligible_round": (
+                    int(encounter.get("round", 1) or 1)
+                    if sphere_initiative <= int(current_actor.get("initiative", 0) or 0)
+                    else int(encounter.get("round", 1) or 1) + 1
+                ),
+                "last_acted_round": None,
+                "source_ref": exact_source,
+                "spatial_facts": _support.deepcopy(spatial_facts),
+            }
+            initial_from = {
+                "x": int(sphere["position"]["x"]) - int(sphere["heading_vector"]["x"]),
+                "y": int(sphere["position"]["y"]) - int(sphere["heading_vector"]["y"]),
+            }
+            initial_contacts = rolling_sphere_entered_actor_ids(
+                initial_from,
+                sphere["position"],
+                list(encounter.get("combatants") or []),
+                dict(encounter.get("battle_map") or {}),
+            )
+            next_encounter = _support.deepcopy(encounter)
+            updated_sheets: dict[str, dict[str, Any]] = {}
+            contact_results: list[dict[str, Any]] = []
+            contact_receipts: list[dict[str, Any]] = []
+            for target_id in initial_contacts:
+                target_record = self.characters.get(target_id)
+                sheet, result, receipts = self._resolve_rolling_sphere_contact(
+                    campaign_id=campaign_id,
+                    campaign_revision=campaign.revision,
+                    branch_id=branch_id,
+                    encounter=next_encounter,
+                    trap_id=trap_id,
+                    source_ref=exact_source,
+                    target_id=target_id,
+                    sheet=_support.deepcopy(target_record.sheet),
+                    stream=stream,
+                )
+                updated_sheets[target_id] = sheet
+                self.sync_combatant_conditions(next_encounter, target_id, sheet)
+                contact_results.append(result)
+                contact_receipts.extend(receipts)
+            sphere["activation_contacts"] = contact_results
+            trap = dict(trap_state["traps"][trap_id])
+            trap.update(
+                {
+                    "profile_id": profile_id,
+                    "scene_id": scene_id,
+                    "encounter_id": str(encounter.get("id") or ""),
+                    "trigger_fact": _support.deepcopy(trigger_fact),
+                    "sphere": sphere,
+                }
+            )
+            trap_state["traps"][trap_id] = trap
+            next_state["trap_state"] = trap_state
+            next_encounter.setdefault("log", []).append(
+                {
+                    "type": "rolling_sphere_activated",
+                    "trap_id": trap_id,
+                    "initiative": sphere_initiative,
+                    "activated_round": sphere["activated_round"],
+                    "contacts": contact_results,
+                }
+            )
+            next_encounter["log"] = next_encounter["log"][-100:]
+            next_state["combat"] = next_encounter
+            trap_state.setdefault("attempts", [])
+            trap_state["attempts"] = [
+                *list(trap_state["attempts"]),
+                {
+                    "trap_id": trap_id,
+                    "source_ref": exact_source,
+                    "actor_id": actor_id,
+                    "action": action,
+                    "trigger_fact": _support.deepcopy(trigger_fact),
+                    "sphere_initiative": sphere_initiative,
+                    "campaign_revision": campaign.revision + 1,
+                },
+            ][-100:]
+            next_state["trap_state"] = trap_state
+            receipt = stream.receipt() if stream.draw_count else None
+            response = {
+                "status": "committed",
+                "action": action,
+                "trap_id": trap_id,
+                "trap": trap_state["traps"][trap_id],
+                "sphere": _support.deepcopy(sphere),
+                "initiative": sphere_initiative,
+                "participant_initiatives": _support.deepcopy(sphere["participant_initiatives"]),
+            }
+            if receipt is not None:
+                response["random_stream_receipt"] = receipt
+            response["contacts"] = contact_results
+            response["rule_receipts"] = contact_receipts
+            character_updates = []
+            for target_id, updated_sheet in updated_sheets.items():
+                target_record = self.characters.get(target_id)
+                character_updates.append(
+                    _support.CharacterStateUpdate(
+                        character_id=target_id,
+                        sheet=updated_sheet,
+                        notes=_support.validate_character_notes(target_record.notes),
+                        expected_revision=target_record.revision,
+                    )
+                )
+            return self.commit_campaign_state(
+                campaign,
+                next_state,
+                operation="trap.state.transition",
+                principal_id=principal_id,
+                branch_id=branch_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+                payload=replay_payload,
+                response_fields=response,
+                character_updates=character_updates,
+                rule_receipts=contact_receipts,
+                expected_campaign_revision=campaign.revision,
+            )
+
+        if profile_id == "srd5.1.rolling_sphere" and action == "slow":
+            if encounter.get("active") is not True:
+                raise _support.CombatEngineError(
+                    "Rolling Sphere slow action requires active combat"
+                )
+            current_actor = _support.current_combatant(encounter)
+            if (
+                not isinstance(current_actor, dict)
+                or str(current_actor.get("actor_id") or "") != actor_id
+            ):
+                raise _support.CombatEngineError(
+                    "Rolling Sphere slow action must use the current creature's turn"
+                )
+            next_state = _support.deepcopy(campaign.state)
+            trap_state = dict(next_state.get("trap_state") or {})
+            trap = dict(dict(trap_state.get("traps") or {}).get(trap_id) or {})
+            sphere = dict(trap.get("sphere") or {})
+            battle_map = dict(encounter.get("battle_map") or {})
+            if (
+                trap.get("source_ref") != exact_source
+                or trap.get("profile_id") != profile_id
+                or trap.get("scene_id") != scene_id
+                or trap.get("encounter_id") != encounter.get("id")
+                or sphere.get("active") is not True
+                or sphere.get("map_id") != battle_map.get("id")
+                or sphere.get("map_revision") != battle_map.get("map_revision")
+                or sphere.get("map_checksum") != battle_map.get("checksum")
+            ):
+                raise _support.CombatEngineError(
+                    "Rolling Sphere is inactive or its reviewed scene/map binding is stale"
+                )
+            actor = self.combat_actor_snapshot(actor_id)
+            actor_position = dict(current_actor.get("position") or {})
+            actor["position"] = actor_position
+            try:
+                in_range = rolling_sphere_within_five_feet(
+                    sphere.get("position"), actor, battle_map
+                )
+            except ValueError as exc:
+                raise _support.CombatEngineError(str(exc)) from exc
+            if not in_range:
+                raise _support.CombatEngineError(
+                    "Rolling Sphere slow action requires the creature to be within 5 feet"
+                )
+            budget = dict(current_actor.get("turn_budget") or {})
+            if int(budget.get("main_action", 0) or 0) < 1:
+                raise _support.CombatEngineError(
+                    "Rolling Sphere slow action requires an unspent action"
+                )
+            check_context = self.effective_rule_context(
+                campaign_id,
+                branch_id=branch_id,
+                facts={
+                    "kind": "check",
+                    "actor_id": actor_id,
+                    "ability": "strength",
+                    "dc": 20,
+                    "trap_id": trap_id,
+                    "trap_source_ref": exact_source,
+                    "trap_action": "slow_rolling_sphere",
+                },
+            )
+            check = _support.resolve_actor_check(
+                {**actor, "sheet": _support.deepcopy(self.characters.get(actor_id).sheet)},
+                kind="check",
+                ability="strength",
+                dc=20,
+                encounter=encounter,
+                ruleset="2014",
+                rules=check_context,
+                rng=stream,
+            )
+            try:
+                sphere = rolling_sphere_reduce_speed(sphere, success=check.get("success") is True)
+            except ValueError as exc:
+                raise _support.CombatEngineError(str(exc)) from exc
+            budget["main_action"] = int(budget.get("main_action", 0) or 0) - 1
+            updated_combat = _support.deepcopy(encounter)
+            updated_actor = next(
+                item
+                for item in updated_combat.get("combatants", [])
+                if str(item.get("actor_id") or "") == actor_id
+            )
+            updated_actor["turn_budget"] = budget
+            updated_trap = dict(trap)
+            updated_trap["sphere"] = sphere
+            if sphere.get("active") is not True:
+                updated_trap["status"] = "spent"
+            trap_state.setdefault("traps", {})[trap_id] = updated_trap
+            trap_state.setdefault("attempts", [])
+            trap_state["attempts"] = [
+                *list(trap_state["attempts"]),
+                {
+                    "trap_id": trap_id,
+                    "source_ref": exact_source,
+                    "actor_id": actor_id,
+                    "action": action,
+                    "check": _support.deepcopy(check),
+                    "speed_ft": sphere.get("speed_ft"),
+                    "campaign_revision": campaign.revision + 1,
+                },
+            ][-100:]
+            next_state["trap_state"] = trap_state
+            next_state["combat"] = updated_combat
+            receipt = stream.receipt() if stream.draw_count else None
+            response = {
+                "status": "committed",
+                "action": action,
+                "trap_id": trap_id,
+                "trap": updated_trap,
+                "check": check,
+                "sphere": _support.deepcopy(sphere),
+                "action_budget": _support.deepcopy(budget),
+            }
+            if receipt is not None:
+                response["random_stream_receipt"] = receipt
+            return self.commit_campaign_state(
+                campaign,
+                next_state,
+                operation="trap.state.transition",
+                principal_id=principal_id,
+                branch_id=branch_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+                payload=replay_payload,
+                response_fields=response,
+                expected_campaign_revision=campaign.revision,
+            )
+
         if profile_id == "srd5.1.poison_darts" and action == "trigger":
             if (
                 not isinstance(target_ids, list)
