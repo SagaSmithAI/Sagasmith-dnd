@@ -34,13 +34,22 @@ class SharedService:
         receipt_key = f"runtime-transition:{key}"
         with self.storage.database.transaction(immediate=True):
             cached = self.idempotency.lookup(scope, receipt_key, arguments)
-            yield {"scope": scope, "key": receipt_key, "payload": arguments,
-                   "campaign_id": campaign_id,
-                   "response": cached.response if cached is not None else None}
+            yield {
+                "scope": scope,
+                "key": receipt_key,
+                "payload": arguments,
+                "campaign_id": campaign_id,
+                "response": cached.response if cached is not None else None,
+            }
 
     def remember_transition(self, command, result):
-        self.idempotency.remember(command["scope"], command["key"], command["payload"],
-                                  result, campaign_id=command["campaign_id"])
+        self.idempotency.remember(
+            command["scope"],
+            command["key"],
+            command["payload"],
+            result,
+            campaign_id=command["campaign_id"],
+        )
 
     def profile_options_with_core_lock(
         self, edition: str, options: dict[str, Any] | None = None
@@ -496,7 +505,8 @@ class SharedService:
         tool_id: str,
         principal_id: str,
         campaign_id: str | None,
-        *, replay: bool = False,
+        *,
+        replay: bool = False,
     ) -> None:
         """Apply one ToolPolicy authorization check at every hosted boundary."""
 
@@ -521,8 +531,9 @@ class SharedService:
             raise _support.ExposureError(
                 f"Tool {tool_id!r} is not available during campaign phase {phase!r}."
             )
-        roles = (frozenset().union(*policy.roles_by_phase.values())
-                 if replay else policy.roles(phase))
+        roles = (
+            frozenset().union(*policy.roles_by_phase.values()) if replay else policy.roles(phase)
+        )
         if not roles:
             return
         try:
@@ -540,8 +551,9 @@ class SharedService:
 
         self.validate_request_scope(exposure.campaign_id, tool_id, arguments)
 
-    def validate_request_scope(self, campaign_id: str, tool_id: str,
-                               arguments: dict[str, Any]) -> None:
+    def validate_request_scope(
+        self, campaign_id: str, tool_id: str, arguments: dict[str, Any]
+    ) -> None:
         """Validate resource ownership independently of the caller's global permissions."""
 
         campaign_ids: set[str] = set()
@@ -557,8 +569,10 @@ class SharedService:
                 for key, item in value.items():
                     if key == "campaign_id" and item:
                         campaign_ids.add(str(item))
-                    elif (key in {"character_id", "actor_id"}
-                          or key.endswith(("_character_id", "_actor_id"))) and item:
+                    elif (
+                        key in {"character_id", "actor_id"}
+                        or key.endswith(("_character_id", "_actor_id"))
+                    ) and item:
                         character_ids.add(str(item))
                     elif isinstance(item, list) and (
                         key in {"character_ids", "actor_ids", "participant_ids"}
@@ -653,10 +667,14 @@ class SharedService:
             campaign = self.campaigns.get(campaign_id)
             profile = self.rule_profiles.get(campaign_id)
             value["timeline_epoch"] = str(campaign.timeline_epoch)
-            value["rules_fingerprint"] = _support.hashlib.sha256(_support.canonical_json({
-                "settings": campaign.settings,
-                "profile": _support.asdict(profile) if profile else None,
-            }).encode("utf-8")).hexdigest()
+            value["rules_fingerprint"] = _support.hashlib.sha256(
+                _support.canonical_json(
+                    {
+                        "settings": campaign.settings,
+                        "profile": _support.asdict(profile) if profile else None,
+                    }
+                ).encode("utf-8")
+            ).hexdigest()
         return {
             **value,
             "context_epoch": _support.hashlib.sha256(
@@ -2038,8 +2056,11 @@ class SharedService:
             "reason": reason,
             "source_ref": _support.deepcopy(source_ref),
             "source_excerpt": source_excerpt,
-            **({"target_facts": _support.deepcopy(raw_ruling["target_facts"])}
-               if "target_facts" in raw_ruling else {}),
+            **(
+                {"target_facts": _support.deepcopy(raw_ruling["target_facts"])}
+                if "target_facts" in raw_ruling
+                else {}
+            ),
         }
 
     def source_card_evidence_texts(self, source_card: dict[str, Any]) -> tuple[str, ...]:
@@ -3656,6 +3677,27 @@ class SharedService:
             next_state = stepped["state"]
             advanced.extend(stepped["advanced"])
             expired.extend(stepped["expired"])
+        expired_ids = set(expired)
+        if expired_ids:
+            effects = next_state.get("world_effects")
+            if isinstance(effects, list):
+                settled_effects = []
+                effects_changed = False
+                for raw_effect in effects:
+                    if (
+                        isinstance(raw_effect, dict)
+                        and str(raw_effect.get("id") or "") in expired_ids
+                        and raw_effect.get("kind") == "adventuring_gear_candle_light"
+                        and raw_effect.get("active") is False
+                    ):
+                        effect = _support.deepcopy(raw_effect)
+                        effect["ended_reason"] = "burned_out"
+                        settled_effects.append(effect)
+                        effects_changed = True
+                    else:
+                        settled_effects.append(raw_effect)
+                if effects_changed:
+                    next_state["world_effects"] = settled_effects
         encounter = next_state.get("combat")
         if elapsed_ticks and isinstance(encounter, dict):
             light_records = encounter.get("adventuring_gear_lights")
@@ -3677,8 +3719,7 @@ class SharedService:
                             if isinstance(due_ticks, int) and not isinstance(due_ticks, bool)
                             else max(
                                 0,
-                                int(light.get("remaining_fuel_ticks", 0) or 0)
-                                - elapsed_ticks,
+                                int(light.get("remaining_fuel_ticks", 0) or 0) - elapsed_ticks,
                             )
                         )
                         if remaining != light.get("remaining_fuel_ticks"):

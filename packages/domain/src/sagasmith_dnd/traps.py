@@ -568,10 +568,10 @@ def validate_falling_net_section_spatial_facts(
     facts: Any,
     *,
     scene_id: str,
-    scene_revision: int,
     trap_id: str,
     object_id: str,
     source_ref: str,
+    scene_revision: int,
     campaign_revision: int,
     reviewed_by: str,
     restrained_actor_ids: list[str],
@@ -583,10 +583,10 @@ def validate_falling_net_section_spatial_facts(
         "decision_id",
         "reason",
         "scene_id",
-        "scene_revision",
         "trap_id",
         "object_id",
         "source_ref",
+        "scene_revision",
         "campaign_revision",
         "reviewed_by",
         "target_section_id",
@@ -661,10 +661,10 @@ def validate_falling_net_section_spatial_facts(
         "decision_id": decision_id.strip(),
         "reason": reason,
         "scene_id": scene_id,
-        "scene_revision": scene_revision,
         "trap_id": trap_id,
         "object_id": object_id,
         "source_ref": source_ref,
+        "scene_revision": scene_revision,
         "campaign_revision": revision,
         "reviewed_by": reviewed_by,
         "target_section_id": target_section_id,
@@ -904,9 +904,12 @@ def validate_source_trap_area_spatial_facts(
                 "Grid area review must match the current 5-foot square battle map and revision"
             )
         cells = grid_area.get("cells")
-        if not isinstance(cells, list) or len(cells) != 4 or any(
-            not isinstance(cell, str) for cell in cells
-        ) or len(set(cells)) != 4:
+        if (
+            not isinstance(cells, list)
+            or len(cells) != 4
+            or any(not isinstance(cell, str) for cell in cells)
+            or len(set(cells)) != 4
+        ):
             raise ValueError("Falling Net Grid area must contain exactly four distinct cells")
         points = []
         for cell in cells:
@@ -919,9 +922,7 @@ def validate_source_trap_area_spatial_facts(
             points.append(point)
         xs = {point[0] for point in points}
         ys = {point[1] for point in points}
-        if len(xs) != 2 or len(ys) != 2 or {
-            (x, y) for x in xs for y in ys
-        } != set(points):
+        if len(xs) != 2 or len(ys) != 2 or {(x, y) for x in xs for y in ys} != set(points):
             raise ValueError("Falling Net Grid area cells must form one exact 2-by-2 square")
         bounds = map_value.get("bounds") if isinstance(map_value.get("bounds"), dict) else {}
         if bounds and any(
@@ -955,8 +956,11 @@ def validate_source_trap_area_spatial_facts(
             "source_ref": source_ref,
             "campaign_revision": revision,
             "reviewed_by": reviewed_by,
-            "grid_area": {"map_id": map_value["id"], "map_revision": map_value["map_revision"],
-                          "cells": sorted(cells)},
+            "grid_area": {
+                "map_id": map_value["id"],
+                "map_revision": map_value["map_revision"],
+                "cells": sorted(cells),
+            },
             "affected_actor_ids": sorted(affected_actor_ids),
         }
         return normalized
@@ -1009,6 +1013,128 @@ def validate_source_trap_area_spatial_facts(
         "actor_facts": ordered_facts,
         "affected_actor_ids": affected_actor_ids,
     }
+
+
+def validate_sphere_annihilation_contact_facts(
+    profile: Any,
+    facts: Any,
+    *,
+    scene_id: str,
+    trap_id: str,
+    source_ref: str,
+    campaign_revision: int,
+    reviewed_by: str,
+    target_actor_id: str | None = None,
+    target_actor_revision: int | None = None,
+    target_scene_object_id: str | None = None,
+    target_scene_object_source_ref: str | None = None,
+) -> dict[str, Any]:
+    """Validate a DM-authorized, exact-revision Sphere contact decision."""
+    if (
+        not isinstance(profile, dict)
+        or profile.get("profile_id") != "srd5.1.sphere_of_annihilation"
+    ):
+        raise ValueError("Sphere contact facts require the Sphere of Annihilation profile")
+    actor_target = target_actor_id is not None
+    if actor_target == (target_scene_object_id is not None):
+        raise ValueError("Sphere contact must bind exactly one actor or scene object")
+    target_field = "target_actor_id" if actor_target else "target_scene_object_id"
+    target_id = target_actor_id if actor_target else target_scene_object_id
+    expected_fields = {
+        "decision_id",
+        "reason",
+        "scene_id",
+        "trap_id",
+        target_field,
+        "source_ref",
+        "campaign_revision",
+        "reviewed_by",
+        "enters_mouth",
+    }
+    if actor_target:
+        expected_fields.add("target_actor_revision")
+    else:
+        expected_fields.add("target_scene_object_source_ref")
+    if not isinstance(facts, dict) or set(facts) != expected_fields:
+        raise ValueError("Sphere contact requires exact reviewed target and revision facts")
+    if type(facts.get("campaign_revision")) is not int or type(campaign_revision) is not int:
+        raise ValueError("Sphere contact campaign revision must be an integer")
+    if actor_target and (
+        type(facts.get("target_actor_revision")) is not int
+        or type(target_actor_revision) is not int
+    ):
+        raise ValueError("Sphere contact actor revision must be an integer")
+    decision_id = facts.get("decision_id")
+    reason = " ".join(str(facts.get("reason") or "").split())
+    if (
+        not isinstance(decision_id, str)
+        or not decision_id.strip()
+        or len(decision_id) > 200
+        or not reason
+        or len(reason) > 1000
+    ):
+        raise ValueError("Sphere contact requires a bounded decision id and reason")
+    expected = {
+        "scene_id": scene_id,
+        "trap_id": trap_id,
+        target_field: target_id,
+        "source_ref": source_ref,
+        "campaign_revision": campaign_revision,
+        "reviewed_by": reviewed_by,
+    }
+    if actor_target:
+        expected["target_actor_revision"] = target_actor_revision
+    else:
+        expected["target_scene_object_source_ref"] = target_scene_object_source_ref
+    for key, value in expected.items():
+        if facts.get(key) != value:
+            if key == "reviewed_by":
+                raise ValueError("Sphere contact reviewer does not match the authorized DM")
+            raise ValueError(f"Sphere contact fact {key} is stale or mismatched")
+    if type(facts.get("enters_mouth")) is not bool or facts["enters_mouth"] is not True:
+        raise ValueError("Sphere contact requires DM-confirmed entry into the stone mouth")
+    return deepcopy(facts)
+
+
+def record_sphere_annihilation_contact(
+    state: Any,
+    *,
+    source_ref: str,
+    trap_id: str,
+    contact: dict[str, Any],
+) -> dict[str, Any]:
+    """Record a Sphere contact without consuming or destroying the Sphere trap."""
+    if not isinstance(state, dict) or not isinstance(contact, dict):
+        raise ValueError("Sphere contact state and decision must be objects")
+    source = str(source_ref or "").strip()
+    instance_id = str(trap_id or "").strip()
+    if not source or not instance_id:
+        raise ValueError("Sphere contact requires an exact source and trap id")
+    if contact.get("trap_id") != instance_id or contact.get("source_ref") != source:
+        raise ValueError("Sphere contact does not match its source-bound trap")
+    target_id = str(
+        contact.get("target_actor_id") or contact.get("target_scene_object_id") or ""
+    ).strip()
+    if not target_id:
+        raise ValueError("Sphere contact requires its exact victim id")
+    result = deepcopy(state)
+    instances = dict(result.get("traps") or {})
+    current = dict(instances.get(instance_id) or {})
+    if current.get("source_ref") not in (None, source):
+        raise ValueError("trap instance is bound to a different source")
+    if current.get("profile_id") not in (None, "srd5.1.sphere_of_annihilation"):
+        raise ValueError("trap instance is bound to a different source profile")
+    if current.get("status", "armed") not in {"armed", "triggered"}:
+        raise ValueError("Sphere contact requires an active source-bound trap")
+    current.update({"source_ref": source, "profile_id": "srd5.1.sphere_of_annihilation"})
+    current.setdefault("status", "armed")
+    contacts = list(current.get("annihilation_contacts") or [])
+    contacts.append(deepcopy(contact))
+    current["annihilation_contacts"] = contacts[-100:]
+    current["sphere_object_removed"] = False
+    instances[instance_id] = current
+    result["traps"] = instances
+    return result
 
 
 def validate_poison_needle_spatial_facts(

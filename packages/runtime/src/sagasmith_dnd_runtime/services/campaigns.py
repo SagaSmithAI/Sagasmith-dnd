@@ -83,9 +83,7 @@ def _advance_disease_effects(
             # only when their authoritative task context relies on sight. Never
             # project the latter as a global sheet modifier.
             expected_changes = (
-                [{"path": "rolls.attack.bonus", "mode": "add", "value": penalty}]
-                if penalty
-                else []
+                [{"path": "rolls.attack.bonus", "mode": "add", "value": penalty}] if penalty else []
             )
             if effect.get("changes", []) != expected_changes:
                 effect["changes"] = expected_changes
@@ -95,9 +93,7 @@ def _advance_disease_effects(
     return value, changed
 
 
-def _sewer_plague_symptomatic(
-    sheet: dict[str, Any], *, elapsed_ticks: int = 0
-) -> bool:
+def _sewer_plague_symptomatic(sheet: dict[str, Any], *, elapsed_ticks: int = 0) -> bool:
     """Check source-owned 2014 Sewer Plague symptoms at a rest boundary."""
     if str(sheet.get("edition") or "") != "2014":
         return False
@@ -1467,6 +1463,7 @@ class CampaignsService:
         expected_elapsed_ticks: int | None = None,
         *,
         disease_eyebright_crafting: EyebrightCraftingPlan | None = None,
+        candle_lighting: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Advance the campaign clock and matching timed effects atomically."""
         self.access.require_campaign(campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES)
@@ -1493,10 +1490,15 @@ class CampaignsService:
                 "expected_elapsed_ticks is invalid for an encounter advance "
                 "because it has no fixed elapsed duration"
             )
-        if disease_eyebright_crafting is not None and type(
-            disease_eyebright_crafting
-        ) is not EyebrightCraftingPlan:
+        if (
+            disease_eyebright_crafting is not None
+            and type(disease_eyebright_crafting) is not EyebrightCraftingPlan
+        ):
             raise ValueError("clock disease mutation must be a typed EyebrightCraftingPlan")
+        if candle_lighting is not None and (
+            normalized_period != "minute" or count != 1 or expected_elapsed_ticks is None
+        ):
+            raise ValueError("Candle lighting requires exactly one expected campaign minute")
         payload = {
             "period": normalized_period,
             "count": count,
@@ -1506,7 +1508,13 @@ class CampaignsService:
             payload["expected_elapsed_ticks"] = expected_elapsed_ticks
         if disease_eyebright_crafting is not None:
             payload["disease_eyebright_crafting"] = disease_eyebright_crafting.payload()
-        scope = f"campaign-advance-effects:{campaign_id}:{resolved_branch_id}:{principal_id}"
+        if candle_lighting is not None:
+            payload["candle_lighting"] = _support.deepcopy(candle_lighting)
+        if candle_lighting is not None:
+            payload = _support.deepcopy(candle_lighting["gear_request_payload"])
+            scope = f"campaign-gear-action:{campaign_id}:{resolved_branch_id}:{principal_id}"
+        else:
+            scope = f"campaign-advance-effects:{campaign_id}:{resolved_branch_id}:{principal_id}"
         replay = self.replay_idempotent(scope, idempotency_key, payload)
         if replay is not None:
             return replay
@@ -1516,6 +1524,94 @@ class CampaignsService:
                 "campaign revision conflict: "
                 f"expected {expected_revision}, found {campaign.revision}"
             )
+        candle_actor = None
+        candle_item = None
+        if candle_lighting is not None:
+            required_candle_fields = {
+                "action_id",
+                "actor_id",
+                "item_id",
+                "source_key",
+                "source_ref",
+                "expected_actor_revision",
+                "plan",
+                "gear_request_payload",
+            }
+            if (
+                not isinstance(candle_lighting, dict)
+                or set(candle_lighting) != required_candle_fields
+            ):
+                raise ValueError("Candle lighting command fields are invalid")
+            from sagasmith_dnd.adventuring_gear import (
+                ADVENTURING_GEAR_SOURCE_REF,
+                resolve_adventuring_gear_intent,
+            )
+
+            if (
+                candle_lighting.get("source_ref") != ADVENTURING_GEAR_SOURCE_REF
+                or candle_lighting.get("source_key") != "dnd5e.content.srd2014.item.candle"
+                or self.campaign_rules_edition(campaign_id) != "2014"
+            ):
+                raise _support.CombatEngineError(
+                    "Candle lighting requires exact 2014 source identity"
+                )
+            candle_actor = self.require_campaign_actor(campaign_id, candle_lighting["actor_id"])
+            expected_actor_revision = candle_lighting.get("expected_actor_revision")
+            if (
+                isinstance(expected_actor_revision, bool)
+                or not isinstance(expected_actor_revision, int)
+                or candle_actor.revision != expected_actor_revision
+            ):
+                raise ValueError("actor revision conflict for Candle lighting")
+            candle_item = next(
+                (
+                    item
+                    for item in dict(candle_actor.sheet.get("inventory") or {}).get("items", [])
+                    if str(item.get("id") or "") == str(candle_lighting.get("item_id") or "")
+                ),
+                None,
+            )
+            if (
+                candle_item is None
+                or str(candle_item.get("name") or "").strip().casefold() != "candle"
+                or str(candle_item.get("source_key") or "") != candle_lighting["source_key"]
+                or int(candle_item.get("quantity", 0) or 0) < 1
+            ):
+                raise _support.CombatEngineError("the source-bound Candle is not carried")
+            tinderbox = next(
+                (
+                    item
+                    for item in dict(candle_actor.sheet.get("inventory") or {}).get("items", [])
+                    if str(item.get("name") or "").strip().casefold() == "tinderbox"
+                    and str(item.get("source_key") or "") == "dnd5e.content.srd2014.item.tinderbox"
+                    and int(item.get("quantity", 0) or 0) > 0
+                ),
+                None,
+            )
+            if tinderbox is None:
+                raise _support.CombatEngineError("a source-bound Tinderbox is required")
+            candle_item_sheet = _support.deepcopy(candle_actor.sheet)
+            candle_inventory_items = candle_item_sheet["inventory"]["items"]
+            candle_inventory_item = next(
+                item
+                for item in candle_inventory_items
+                if str(item.get("id") or "") == str(candle_lighting["item_id"])
+            )
+            candle_inventory_item["quantity"] = int(candle_inventory_item["quantity"]) - 1
+            candle_item_sheet = _support.validate_character_sheet(candle_item_sheet)
+            authoritative_plan = resolve_adventuring_gear_intent(
+                {**candle_item, "source_ref": ADVENTURING_GEAR_SOURCE_REF}, "light"
+            )
+            if candle_lighting.get("plan") != authoritative_plan:
+                raise _support.CombatEngineError("Candle lighting plan is not authoritative")
+            if any(
+                isinstance(effect, dict)
+                and effect.get("kind") == "adventuring_gear_candle_light"
+                and effect.get("active") is True
+                and dict(effect.get("metadata") or {}).get("item_id") == candle_item.get("id")
+                for effect in dict(campaign.state or {}).get("world_effects", [])
+            ):
+                raise _support.CombatEngineError("this source-bound Candle is already lit")
         eyb_actor = None
         if disease_eyebright_crafting is not None:
             if normalized_period != "hour" or count != 1 or expected_elapsed_ticks is None:
@@ -1601,6 +1697,7 @@ class CampaignsService:
                         idempotency_key,
                         expected_elapsed_ticks,
                         disease_eyebright_crafting=disease_eyebright_crafting,
+                        candle_lighting=candle_lighting,
                     )
         elapsed_ticks = int(time_transition["elapsed_ticks"]) if time_transition is not None else 0
         elapsed_minutes = (
@@ -1619,6 +1716,68 @@ class CampaignsService:
         next_state = world_duration["state"]
         world_advanced = world_duration["advanced"]
         world_expired = world_duration["expired"]
+        candle_light_result: dict[str, Any] | None = None
+        if candle_lighting is not None:
+            from sagasmith_dnd.adventuring_gear import ADVENTURING_GEAR_SOURCE_REF
+
+            action_id = str(candle_lighting["action_id"])
+            spends = list(next_state.get("item_spends") or [])
+            if any(
+                isinstance(entry, dict) and str(entry.get("id") or "") == action_id
+                for entry in spends
+            ):
+                raise ValueError("Candle action_id already exists on this branch")
+            now_ticks = int(dict(next_state.get("game_time") or {}).get("elapsed_ticks", 0) or 0)
+            effect_id = _support.uuid4().hex
+            effect = {
+                "id": effect_id,
+                "name": "Lit Candle",
+                "kind": "adventuring_gear_candle_light",
+                "source": ADVENTURING_GEAR_SOURCE_REF,
+                "source_actor_id": str(candle_lighting["actor_id"]),
+                "target": {"kind": "campaign", "id": campaign_id},
+                "active": True,
+                "visibility": "party",
+                "duration": {"period": "hour", "remaining": 1},
+                "created_at_elapsed_ticks": now_ticks,
+                "metadata": {
+                    "action_id": action_id,
+                    "item_id": str(candle_lighting["item_id"]),
+                    "item_name": "Candle",
+                    "source_key": str(candle_lighting["source_key"]),
+                    "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                    "fuel_due_elapsed_ticks": now_ticks
+                    + int(candle_lighting["plan"]["duration_ticks"]),
+                    "bright_light": {"shape": "radius", "feet": 5},
+                    "dim_light_additional_feet": 5,
+                },
+            }
+            effects = list(next_state.get("world_effects") or [])
+            effects.append(effect)
+            next_state["world_effects"] = effects
+            spends.append(
+                {
+                    "id": action_id,
+                    "item_id": str(candle_lighting["item_id"]),
+                    "quantity": 1,
+                    "reason": "adventuring gear light:candle",
+                    "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                    "source_key": str(candle_lighting["source_key"]),
+                    "character_id": str(candle_lighting["actor_id"]),
+                    "gear_intent": "light",
+                    "world_effect_id": effect_id,
+                }
+            )
+            next_state["item_spends"] = spends
+            candle_light_result = {
+                "effect_id": effect_id,
+                "actor_id": str(candle_lighting["actor_id"]),
+                "item_id": str(candle_lighting["item_id"]),
+                "created_at_elapsed_ticks": now_ticks,
+                "fuel_due_elapsed_ticks": effect["metadata"]["fuel_due_elapsed_ticks"],
+                "remaining_fuel_ticks": int(candle_lighting["plan"]["duration_ticks"]),
+                "inventory_quantity_spent": 1,
+            }
         world_state_changed = bool(world_advanced or world_expired)
         updates: list[_support.CharacterStateUpdate] = []
         advanced: dict[str, list[str]] = {}
@@ -1628,12 +1787,14 @@ class CampaignsService:
         eyb_craft_result: dict[str, Any] | None = None
         rule_context = self.effective_rule_context(campaign_id)
         elapsed_after_ticks = (
-            int(time_transition["after"]["elapsed_ticks"])
-            if time_transition is not None
-            else None
+            int(time_transition["after"]["elapsed_ticks"]) if time_transition is not None else None
         )
         for character in self.characters.list(campaign_id=campaign_id):
-            sheet = character.sheet
+            sheet = (
+                candle_item_sheet
+                if candle_lighting is not None and character.id == candle_lighting["actor_id"]
+                else character.sheet
+            )
             character_advanced: list[str] = []
             character_expired: list[str] = []
             if elapsed_after_ticks is not None:
@@ -1689,9 +1850,7 @@ class CampaignsService:
                 )
                 sheet = suppression["sheet"]
                 if suppression["resumed_effect_ids"]:
-                    madness_suppression_resumed[character.id] = suppression[
-                        "resumed_effect_ids"
-                    ]
+                    madness_suppression_resumed[character.id] = suppression["resumed_effect_ids"]
             if (
                 disease_eyebright_crafting is not None
                 and character.id == disease_eyebright_crafting.actor_id
@@ -1736,9 +1895,7 @@ class CampaignsService:
                             {"op": "inventory.create", "item_id": ointment_id, "quantity": 1},
                             {"op": "game_time.advance", "period": "hour", "count": 1},
                         ],
-                        "citations": [
-                            {"source": DISEASE_SOURCE_REF, "edition": "2014"}
-                        ],
+                        "citations": [{"source": DISEASE_SOURCE_REF, "edition": "2014"}],
                         "ruleset_fingerprint": rule_context.fingerprint,
                         "facts": {
                             **disease_eyebright_crafting.payload(),
@@ -1747,7 +1904,15 @@ class CampaignsService:
                         },
                     }
                 )
-            if not character_advanced and not character_expired and sheet == character.sheet:
+            candle_owner_needs_revision_guard = bool(
+                candle_lighting is not None and character.id == candle_lighting["actor_id"]
+            )
+            if (
+                not character_advanced
+                and not character_expired
+                and sheet == character.sheet
+                and not candle_owner_needs_revision_guard
+            ):
                 continue
             updates.append(
                 _support.CharacterStateUpdate(
@@ -1786,6 +1951,11 @@ class CampaignsService:
                 "world_expired": list(dict.fromkeys(world_expired)),
                 "poison_events": poison_events,
                 "eyebright_crafting": eyb_craft_result,
+                **(
+                    {"candle_lighting": candle_light_result}
+                    if candle_light_result is not None
+                    else {}
+                ),
                 "rule_receipts": rule_receipts,
                 "ruleset_fingerprint": rule_context.fingerprint,
                 "campaign_revision": campaign.revision + (1 if mutation_required else 0),
@@ -3370,9 +3540,7 @@ class CampaignsService:
                 "attempt",
                 "skip",
             }:
-                raise ValueError(
-                    f"members[{index}].cackle_fever_recovery must be attempt or skip"
-                )
+                raise ValueError(f"members[{index}].cackle_fever_recovery must be attempt or skip")
             character_id = str(raw_member.get("character_id") or "").strip()
             if not character_id:
                 raise ValueError(f"members[{index}].character_id is required")
@@ -4800,7 +4968,7 @@ class CampaignsService:
         self,
         campaign_id: str,
         payload: dict[str, Any],
-        action: Literal["water", "object_strength_review"] = "water",
+        action: Literal["water", "object_strength_review", "fire_source_review"] = "water",
         principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
         expected_revision: int | None = None,
         branch_id: str | None = None,
@@ -4818,7 +4986,18 @@ class CampaignsService:
         Use this operation on entering/leaving water, including during combat.
         Pending combat choices must finish before changing their environment.
         """
-        from .environment import change_water_environment
+        from .environment import change_water_environment, review_fire_source
+
+        if action == "fire_source_review":
+            return review_fire_source(
+                self,
+                campaign_id,
+                payload,
+                principal_id=principal_id,
+                expected_revision=expected_revision,
+                branch_id=branch_id,
+                idempotency_key=idempotency_key,
+            )
 
         if action == "object_strength_review":
             from .environment import review_scene_object_strength_check

@@ -7,9 +7,12 @@ from typing import Any
 from sagasmith_dnd.combat_engine import resolve_fall_to_sheet
 from sagasmith_dnd.conditions import effect_is_immune, effect_is_suspended_by_petrification
 from sagasmith_dnd.engine import resolve_attack, roll
+from sagasmith_dnd.lifecycle import annihilate_character_body_to_sheet
+from sagasmith_dnd.objects import validate_object_profile
 from sagasmith_dnd.traps import (
     apply_locking_pit_spring_disable,
     build_poison_needle_condition_effect,
+    record_sphere_annihilation_contact,
     source_trap_profile,
     transition_trap_state,
     validate_falling_net_rescue_facts,
@@ -19,6 +22,7 @@ from sagasmith_dnd.traps import (
     validate_rolling_sphere_trigger_fact,
     validate_source_pit_depth,
     validate_source_trap_area_spatial_facts,
+    validate_sphere_annihilation_contact_facts,
 )
 
 from .. import application_support as _support
@@ -218,6 +222,235 @@ def _revealed_detection_facts(
 
 
 class TrapService:
+    def _source_bound_sphere_contact(
+        self,
+        *,
+        campaign: Any,
+        trap_id: str,
+        exact_source: str,
+        profile: dict[str, Any],
+        initiating_actor_id: str,
+        contact_facts: dict[str, Any],
+        source_scene_id: str,
+        principal_id: str,
+        branch_id: str,
+        idempotency_key: str,
+        scope: str,
+        replay_payload: dict[str, Any],
+        stream: Any,
+    ) -> dict[str, Any]:
+        """Atomically annihilate one DM-confirmed actor or reviewed scene object."""
+        campaign_id = campaign.id
+        active_scene = self.modules.current_scene(campaign_id, scope_id="party")
+        if (
+            not isinstance(active_scene, dict)
+            or str(active_scene.get("scene_id") or "") != source_scene_id
+        ):
+            raise _support.CombatEngineError(
+                "Sphere contact requires its exact active source scene"
+            )
+        if contact_facts.get("reviewed_by") != principal_id:
+            raise _support.CombatEngineError(
+                "Sphere contact facts must be reviewed by the authenticated campaign DM"
+            )
+
+        target_actor_id = contact_facts.get("target_actor_id")
+        target_object_id = contact_facts.get("target_scene_object_id")
+        character_updates: list[Any] = []
+        target_kind: str
+        target_id: str
+        target_record: dict[str, Any] | None = None
+        object_after: dict[str, Any] | None = None
+        if (
+            isinstance(target_actor_id, str)
+            and target_actor_id.strip()
+            and target_object_id is None
+        ):
+            target_kind = "actor"
+            target_id = target_actor_id
+            self.require_campaign_actor(campaign_id, target_id)
+            target = self.characters.get(target_id)
+            if target.campaign_id != campaign_id:
+                raise _support.CombatEngineError("Sphere contact actor belongs to another campaign")
+            if contact_facts.get("target_actor_revision") != target.revision:
+                raise _support.CombatEngineError("Sphere contact actor revision is stale")
+            if str(target.sheet.get("body_state") or "present") == "annihilated":
+                raise _support.CombatEngineError(
+                    "Sphere contact target body was already annihilated"
+                )
+            updated_sheet = annihilate_character_body_to_sheet(
+                target.sheet,
+                source_ref=exact_source,
+                trap_id=trap_id,
+            )
+            updated_sheet = _support.validate_character_sheet(updated_sheet)
+            target_record = {"actor_id": target_id, "character_revision": target.revision}
+            character_updates.append(
+                _support.CharacterStateUpdate(
+                    character_id=target_id,
+                    sheet=updated_sheet,
+                    notes=_support.validate_character_notes(target.notes),
+                    expected_revision=target.revision,
+                )
+            )
+        elif (
+            isinstance(target_object_id, str)
+            and target_object_id.strip()
+            and target_actor_id is None
+        ):
+            target_kind = "object"
+            target_id = target_object_id
+            if target_id == trap_id:
+                raise _support.CombatEngineError("the Sphere hazard itself is not a contact victim")
+            scene_objects = _support.deepcopy(dict(campaign.state.get("scene_objects") or {}))
+            scene_state = _support.deepcopy(dict(scene_objects.get(source_scene_id) or {}))
+            current_object = _support.deepcopy(dict(scene_state.get(target_id) or {}))
+            if not current_object:
+                raise _support.CombatEngineError(
+                    "Sphere contact object must be a current DM-reviewed scene object"
+                )
+            if current_object.get("destroyed") is True:
+                raise _support.CombatEngineError("Sphere contact object is already destroyed")
+            try:
+                object_profile = validate_object_profile(current_object.get("profile"))
+            except ValueError as exc:
+                raise _support.CombatEngineError(
+                    "Sphere contact object profile is invalid"
+                ) from exc
+            if (
+                object_profile.get("id") != target_id
+                or object_profile.get("scene_id") != source_scene_id
+            ):
+                raise _support.CombatEngineError(
+                    "Sphere contact object identity does not match the active scene"
+                )
+            object_source, _, _ = self.managed_module_source_ref(
+                campaign_id,
+                current_object.get("source_ref"),
+                require_exact=True,
+                expected_scene_id=source_scene_id,
+                require_active_module=True,
+            )
+            approval = _support.verify_receipt_signature(
+                current_object.get("profile_approval"),
+                self.content_authority_secret,
+                missing_error="Sphere contact object profile approval is missing",
+                invalid_error="Sphere contact object profile approval is invalid",
+            )
+            if (
+                object_source is None
+                or object_source != current_object.get("source_ref")
+                or approval.get("purpose") != "source_object_profile"
+                or approval.get("campaign_id") != campaign_id
+                or approval.get("source_ref") != object_source
+                or approval.get("profile_digest") != _support.json_sha256(object_profile)
+            ):
+                raise _support.CombatEngineError(
+                    "Sphere contact object is not bound to its exact signed scene profile"
+                )
+            object_source_in_facts = contact_facts.get("target_scene_object_source_ref")
+            if object_source_in_facts != object_source:
+                raise _support.CombatEngineError(
+                    "Sphere contact facts do not bind the reviewed victim object source"
+                )
+            object_after = _support.deepcopy(current_object)
+            object_after["destroyed"] = True
+            object_after["hit_points"] = 0
+            object_after["destruction_cause"] = {
+                "kind": "sphere_of_annihilation_contact",
+                "trap_id": trap_id,
+                "trap_source_ref": exact_source,
+                "scene_id": source_scene_id,
+                "campaign_revision": campaign.revision + 1,
+                "reviewed_by": principal_id,
+            }
+            scene_state[target_id] = object_after
+            scene_objects[source_scene_id] = scene_state
+        else:
+            raise _support.CombatEngineError(
+                "Sphere contact must identify exactly one actor or reviewed scene object"
+            )
+
+        try:
+            normalized_facts = validate_sphere_annihilation_contact_facts(
+                profile,
+                contact_facts,
+                scene_id=source_scene_id,
+                trap_id=trap_id,
+                source_ref=exact_source,
+                campaign_revision=campaign.revision,
+                reviewed_by=principal_id,
+                target_actor_id=(target_id if target_kind == "actor" else None),
+                target_actor_revision=(
+                    target_record["character_revision"] if target_record is not None else None
+                ),
+                target_scene_object_id=(target_id if target_kind == "object" else None),
+                target_scene_object_source_ref=(object_source if target_kind == "object" else None),
+            )
+        except ValueError as exc:
+            raise _support.CombatEngineError(str(exc)) from exc
+        next_state = _support.deepcopy(campaign.state)
+        trap_state = record_sphere_annihilation_contact(
+            dict(next_state.get("trap_state") or {}),
+            source_ref=exact_source,
+            trap_id=trap_id,
+            contact=normalized_facts,
+        )
+        next_state["trap_state"] = trap_state
+        if target_kind == "object":
+            next_state["scene_objects"] = scene_objects
+        encounter = _support.deepcopy(dict(next_state.get("combat") or {}))
+        if target_kind == "actor" and encounter.get("active"):
+            self.sync_combatant_conditions(encounter, target_id, character_updates[0].sheet)
+            next_state["combat"] = encounter
+        next_state["resolution_log"] = [
+            *list(next_state.get("resolution_log") or []),
+            {
+                "type": "sphere_of_annihilation_contact",
+                "trap_id": trap_id,
+                "trap_source_ref": exact_source,
+                "scene_id": source_scene_id,
+                "target_kind": target_kind,
+                "target_id": target_id,
+                "reviewed_by": principal_id,
+                "contact_facts": _support.deepcopy(normalized_facts),
+                "campaign_revision": campaign.revision + 1,
+            },
+        ][-100:]
+        response = {
+            "status": "committed",
+            "action": "contact",
+            "trap_id": trap_id,
+            "trap": trap_state["traps"][trap_id],
+            "target_kind": target_kind,
+            "target_id": target_id,
+            "annihilated": True,
+            "body_state": "annihilated" if target_kind == "actor" else None,
+            "destroyed": target_kind == "object",
+            "destruction_cause": (
+                _support.deepcopy(object_after.get("destruction_cause"))
+                if object_after is not None
+                else None
+            ),
+            "contact_facts": _support.deepcopy(normalized_facts),
+        }
+        receipt = stream.receipt() if stream.draw_count else None
+        if receipt is not None:
+            response["random_stream_receipt"] = receipt
+        return self.commit_campaign_state(
+            campaign,
+            next_state,
+            operation="trap.state.transition",
+            principal_id=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=replay_payload,
+            response_fields=response,
+            character_updates=character_updates,
+            expected_campaign_revision=campaign.revision,
+        )
+
     def source_bound_trap_transition(
         self,
         campaign_id: str,
@@ -241,6 +474,7 @@ class TrapService:
         spatial_facts: dict[str, Any] | None = None,
         rescue_target_id: str | None = None,
         rescue_facts: dict[str, Any] | None = None,
+        contact_facts: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Resolve source-bound trap detection and explicit no-roll bypass actions.
 
@@ -257,15 +491,47 @@ class TrapService:
             "trigger",
             "escape",
             "rescue",
+            "contact",
         }:
             raise _support.CombatEngineError(
-                "trap action must be detect, passive_detect, disable, bypass, trigger, or escape"
+                "trap action must be detect, passive_detect, disable, bypass, trigger, escape, "
+                "or contact"
             )
         try:
             normalized_profile = source_trap_profile(profile, source_excerpt)
         except ValueError as exc:
             raise _support.CombatEngineError(str(exc)) from exc
         profile_id = str(normalized_profile["profile_id"])
+        if action == "contact":
+            if profile_id != "srd5.1.sphere_of_annihilation":
+                raise _support.CombatEngineError(
+                    "contact settlement is supported only for Sphere of Annihilation"
+                )
+            if not isinstance(contact_facts, dict):
+                raise _support.CombatEngineError(
+                    "Sphere contact requires DM-reviewed enters_mouth facts"
+                )
+            if any(
+                value is not None
+                for value in (
+                    method,
+                    target_ids,
+                    area_confirmed,
+                    trap_depth_ft,
+                    trigger_fact,
+                    scene_facts,
+                    spatial_facts,
+                    rescue_target_id,
+                    rescue_facts,
+                )
+            ):
+                raise _support.CombatEngineError(
+                    "Sphere contact accepts only its exact contact_facts declaration"
+                )
+        elif contact_facts is not None:
+            raise _support.CombatEngineError(
+                "contact_facts are accepted only for Sphere of Annihilation contact"
+            )
         area_target_action = profile_id in _SOURCE_AREA_TARGET_PROFILES and (
             action == "trigger"
             or (
@@ -556,6 +822,7 @@ class TrapService:
             "spatial_facts": spatial_facts,
             "rescue_target_id": rescue_target_id,
             "rescue_facts": rescue_facts,
+            "contact_facts": contact_facts,
         }
         scope = f"trap-state:{campaign_id}:{resolved_branch}:{principal_id}"
         replay_payload = {"payload": payload, "branch_id": resolved_branch}
@@ -599,6 +866,7 @@ class TrapService:
                     spatial_facts=spatial_facts,
                     rescue_target_id=rescue_target_id,
                     rescue_facts=rescue_facts,
+                    contact_facts=contact_facts,
                 )
         stream = _support.active_random_stream()
         random_state = _support.validate_random_stream_state(
@@ -631,6 +899,22 @@ class TrapService:
             field="trap source_excerpt",
             minimum_length=10,
         )
+        if action == "contact":
+            return self._source_bound_sphere_contact(
+                campaign=campaign,
+                trap_id=trap_id,
+                exact_source=exact_source,
+                profile=normalized_profile,
+                initiating_actor_id=actor_id,
+                contact_facts=contact_facts,
+                source_scene_id=str(expanded["scene"]["id"]),
+                principal_id=principal_id,
+                branch_id=resolved_branch,
+                idempotency_key=str(idempotency_key),
+                scope=scope,
+                replay_payload=replay_payload,
+                stream=stream,
+            )
         if action == "trigger":
             current_traps = dict(dict(campaign.state or {}).get("trap_state") or {}).get(
                 "traps", {}

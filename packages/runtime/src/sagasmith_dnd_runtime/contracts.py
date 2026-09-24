@@ -27,12 +27,8 @@ def _optional(kind: Any, default: Any = None) -> tuple[Any, Any]:
     return kind | None, default
 
 
-_choice = _payload(
-    "ResolveChoice", choice_id=(Identifier, ...), selection=(dict[str, Any], ...)
-)
-_trigger = _payload(
-    "TriggerReadied", readied_id=(Identifier, ...), event=(str, ...)
-)
+_choice = _payload("ResolveChoice", choice_id=(Identifier, ...), selection=(dict[str, Any], ...))
+_trigger = _payload("TriggerReadied", readied_id=(Identifier, ...), event=(str, ...))
 _release = _payload(
     "ResolveReadied",
     actor_id=(Identifier, ...),
@@ -44,8 +40,11 @@ _release = _payload(
 ACTION_PAYLOADS: dict[str, dict[str, type[Payload]]] = {
     "environment_change": {
         "water": _payload(
-            "WaterEnvironment", source_ref=(dict[str, Any], ...), source_excerpt=(str, ...),
-            reason=(str, ...), actors=(list[dict[str, Any]], []),
+            "WaterEnvironment",
+            source_ref=(dict[str, Any], ...),
+            source_excerpt=(str, ...),
+            reason=(str, ...),
+            actors=(list[dict[str, Any]], []),
             objects=(list[dict[str, Any]], []),
         ),
         "object_strength_review": _payload(
@@ -55,62 +54,112 @@ ACTION_PAYLOADS: dict[str, dict[str, type[Payload]]] = {
             object_ruling=(dict[str, Any], ...),
             strength_check=(dict[str, Any], ...),
         ),
+        "fire_source_review": _payload(
+            "FireSourceReview",
+            active=(bool, ...),
+            reason=(str, ...),
+            fire_source_id=_optional(Identifier),
+            cell=_optional(dict[str, Any]),
+            level_ground_surface=_optional(bool),
+            source_ref=_optional(dict[str, Any]),
+            source_excerpt=_optional(str),
+        ),
     },
     "character_check": {
         "working_together": _payload(
-            "WorkingTogetherCheck", actor_ids=(list[Identifier], ...), ability=(str, ...),
-            task=(dict[str, Any], ...), leader_id=_optional(Identifier),
-            skill_ability=_optional(str), tool=_optional(str), rule_facts=_optional(dict[str, Any]),
+            "WorkingTogetherCheck",
+            actor_ids=(list[Identifier], ...),
+            ability=(str, ...),
+            task=(dict[str, Any], ...),
+            leader_id=_optional(Identifier),
+            skill_ability=_optional(str),
+            tool=_optional(str),
+            rule_facts=_optional(dict[str, Any]),
         ),
         "passive": _payload(
-            "PassiveSceneCheck", actor_id=(Identifier, ...), ability=(str, ...),
-            task=(dict[str, Any], ...), skill_ability=_optional(str),
-            secret=(bool, True), rule_facts=_optional(dict[str, Any]),
+            "PassiveSceneCheck",
+            actor_id=(Identifier, ...),
+            ability=(str, ...),
+            task=(dict[str, Any], ...),
+            skill_ability=_optional(str),
+            secret=(bool, True),
+            rule_facts=_optional(dict[str, Any]),
         ),
         "scene_save": _payload(
-            "SceneHazardSave", actor_id=(Identifier, ...), ability=(str, ...), dc=(int, ...),
-            source_ref=(dict[str, Any], ...), source_excerpt=(str, ...),
+            "SceneHazardSave",
+            actor_id=(Identifier, ...),
+            ability=(str, ...),
+            dc=(int, ...),
+            source_ref=(dict[str, Any], ...),
+            source_excerpt=(str, ...),
             reason=(str, ...),
             save_source_kind=(Literal["nonmagical_effect", "magical_effect"], ...),
-            save_effect_conditions=(list[str], ...), save_against_poison=(bool, ...),
-            advantage=(bool, False), disadvantage=(bool, False), bonus=(int, 0),
+            save_effect_conditions=(list[str], ...),
+            save_against_poison=(bool, ...),
+            advantage=(bool, False),
+            disadvantage=(bool, False),
+            bonus=(int, 0),
         ),
         "check": _payload(
-            "CharacterCheck", actor_id=(Identifier, ...),
+            "CharacterCheck",
+            actor_id=(Identifier, ...),
             kind=(Literal["ability", "check", "save", "death_save"], ...),
-            ability=(str, ...), dc=(int, 0), proficient=(bool, False), bonus=(int, 0),
-            advantage=(bool, False), disadvantage=(bool, False),
+            ability=(str, ...),
+            dc=(int, 0),
+            proficient=(bool, False),
+            bonus=(int, 0),
+            advantage=(bool, False),
+            disadvantage=(bool, False),
             relies_on_sight=_optional(bool),
             check_context=_optional(dict[str, Any]),
             rule_facts=_optional(dict[str, Any]),
         ),
         "group": _payload(
-            "CharacterGroupCheck", actor_ids=(list[Identifier], ...),
-            ability=(str, ...), dc=(int, ...), proficient=(bool, False), bonus=(int, 0),
-            advantage=(bool, False), disadvantage=(bool, False),
+            "CharacterGroupCheck",
+            actor_ids=(list[Identifier], ...),
+            ability=(str, ...),
+            dc=(int, ...),
+            proficient=(bool, False),
+            bonus=(int, 0),
+            advantage=(bool, False),
+            disadvantage=(bool, False),
             relies_on_sight=_optional(bool),
             check_context=_optional(dict[str, Any]),
             rule_facts=_optional(dict[str, Any]),
         ),
         "contest": _payload(
-            "CharacterContest", source_actor_id=(Identifier, ...),
-            target_actor_id=(Identifier, ...), source_ability=(str, ...), target_ability=(str, ...),
-            source_proficient=(bool, False), target_proficient=(bool, False),
-            source_bonus=(int, 0), target_bonus=(int, 0),
-            source_advantage=(bool, False), source_disadvantage=(bool, False),
-            target_advantage=(bool, False), target_disadvantage=(bool, False),
+            "CharacterContest",
+            source_actor_id=(Identifier, ...),
+            target_actor_id=(Identifier, ...),
+            source_ability=(str, ...),
+            target_ability=(str, ...),
+            source_proficient=(bool, False),
+            target_proficient=(bool, False),
+            source_bonus=(int, 0),
+            target_bonus=(int, 0),
+            source_advantage=(bool, False),
+            source_disadvantage=(bool, False),
+            target_advantage=(bool, False),
+            target_disadvantage=(bool, False),
             source_rule_facts=_optional(dict[str, Any]),
             target_rule_facts=_optional(dict[str, Any]),
             source_check_context=_optional(dict[str, Any]),
             target_check_context=_optional(dict[str, Any]),
         ),
         "reroll": _payload(
-            "CharacterReroll", actor_id=(Identifier, ...), resolution_id=(Identifier, ...),
-            roll_index=(int, ...), expected_original_roll=(int, ...),
+            "CharacterReroll",
+            actor_id=(Identifier, ...),
+            resolution_id=(Identifier, ...),
+            roll_index=(int, ...),
+            expected_original_roll=(int, ...),
         ),
         "source_feature": _payload(
-            "CharacterSourceFeature", actor_id=(Identifier, ...), feature_id=(Identifier, ...),
-            capability=(str, ...), settlement_ref=(str, ...), fact_key=(str, ...),
+            "CharacterSourceFeature",
+            actor_id=(Identifier, ...),
+            feature_id=(Identifier, ...),
+            capability=(str, ...),
+            settlement_ref=(str, ...),
+            fact_key=(str, ...),
         ),
     },
     "combat_choice": {
@@ -139,41 +188,61 @@ ACTION_PAYLOADS: dict[str, dict[str, type[Payload]]] = {
         "trigger_spell": _trigger,
         "trigger_action": _trigger,
         "resolve_spell": create_model(
-            "ResolveReadiedSpell", __base__=_release,
+            "ResolveReadiedSpell",
+            __base__=_release,
             sunlight_contexts=_optional(list[dict[str, Any]]),
         ),
         "resolve_action": create_model(
-            "ResolveReadiedAction", __base__=_release,
+            "ResolveReadiedAction",
+            __base__=_release,
             sunlight=_optional(dict[str, Any]),
         ),
     },
     "combat_hp_change": {
         "damage": _payload(
-            "ApplyDamage", parts=(list[dict[str, Any]], ...),
-            critical=(bool, False), knock_out=(bool, False), melee=(bool, False),
+            "ApplyDamage",
+            parts=(list[dict[str, Any]], ...),
+            critical=(bool, False),
+            knock_out=(bool, False),
+            melee=(bool, False),
         ),
         "fall": _payload("ApplyFall", distance_ft=(int, ...)),
         "heal": _payload(
-            "ApplyHealing", amount=(int, ...), source_actor_id=_optional(Identifier),
-            spell_id=_optional(Identifier), spell_level=_optional(int),
+            "ApplyHealing",
+            amount=(int, ...),
+            source_actor_id=_optional(Identifier),
+            spell_id=_optional(Identifier),
+            spell_level=_optional(int),
         ),
         "stabilize": _payload("SourceStabilization", source_excerpt=(str, ...)),
         "save_damage": _payload(
-            "SaveDamage", target_ids=_optional(list[Identifier]),
+            "SaveDamage",
+            target_ids=_optional(list[Identifier]),
             application_id=_optional(Identifier),
-            source_actor_id=(Identifier, ...), source_card_id=(Identifier, ...),
-            source_card_kind=(str, ...), save_ability=(str, ...), save_dc=(int, ...),
-            damage_expression=(str, ...), damage_type=(str, ...),
-            half_on_success=(bool, ...), save_advantage=(bool, False),
-            save_disadvantage=(bool, False), mechanic_source_excerpt=(str, ...),
-            agent_ruling=(dict[str, Any], ...), spatial_facts=_optional(dict[str, Any]),
+            source_actor_id=(Identifier, ...),
+            source_card_id=(Identifier, ...),
+            source_card_kind=(str, ...),
+            save_ability=(str, ...),
+            save_dc=(int, ...),
+            damage_expression=(str, ...),
+            damage_type=(str, ...),
+            half_on_success=(bool, ...),
+            save_advantage=(bool, False),
+            save_disadvantage=(bool, False),
+            mechanic_source_excerpt=(str, ...),
+            agent_ruling=(dict[str, Any], ...),
+            spatial_facts=_optional(dict[str, Any]),
         ),
     },
     "combat_movement": {
         "move": _payload(
-            "MoveActor", distance=(int, ...), destination=_optional(Position),
-            path=_optional(list[Position]), movement_mode=(str, "voluntary"),
-            travel_mode=(str, "walk"), crawl=(bool, False),
+            "MoveActor",
+            distance=(int, ...),
+            destination=_optional(Position),
+            path=_optional(list[Position]),
+            movement_mode=(str, "voluntary"),
+            travel_mode=(str, "walk"),
+            crawl=(bool, False),
             spatial_facts=_optional(dict[str, Any]),
             drag_grapple_ids=_optional(list[Identifier]),
             jump=_optional(dict[str, Any]),
@@ -257,13 +326,17 @@ def action_parameters(tool: str, parameters: dict[str, Any]) -> dict[str, Any]:
         condition: dict[str, Any] = {"properties": {"action": {"const": action}}}
         if not (tool == "character_check" and action == "check"):
             condition["required"] = ["action"]
-        branches.append({
-            "if": condition,
-            "then": then,
-        })
+        branches.append(
+            {
+                "if": condition,
+                "then": then,
+            }
+        )
     if tool == "combat_choice":
         schema["properties"]["actor_id"] = {
-            **schema["properties"]["actor_id"], "type": "string", "minLength": 1,
+            **schema["properties"]["actor_id"],
+            "type": "string",
+            "minLength": 1,
         }
         schema["properties"]["actor_id"].pop("anyOf", None)
         schema["properties"]["actor_id"].pop("default", None)

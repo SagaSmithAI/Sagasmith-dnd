@@ -597,19 +597,14 @@ def timed_condition_sources(sheet: dict[str, Any]) -> dict[str, list[str]]:
     from .madness import fleeing_source_bindings
 
     fleeing_sources = {
-        str(item["effect_id"]): item.get("actor_id")
-        for item in fleeing_source_bindings(sheet)
+        str(item["effect_id"]): item.get("actor_id") for item in fleeing_source_bindings(sheet)
     }
     for normalized in condition_ids(sheet.get("conditions")):
         sources = sorted(
             {
                 str(
-                    (
-                        fleeing_sources.get(str(effect.get("id") or ""))
-                        or MADNESS_SOURCE_REF
-                    )
-                    if normalized == "frightened"
-                    and effect.get("source") == MADNESS_SOURCE_REF
+                    (fleeing_sources.get(str(effect.get("id") or "")) or MADNESS_SOURCE_REF)
+                    if normalized == "frightened" and effect.get("source") == MADNESS_SOURCE_REF
                     else effect.get("source") or ""
                 )
                 for effect in active_condition_source_effects(sheet, normalized)
@@ -2319,13 +2314,13 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
     if (
         isinstance(madness_flee, dict)
         and str(madness_flee.get("turn_token") or "") == _combat_turn_token(encounter)
-        and str(madness_flee.get("dash_used_turn_token") or "")
-        != _combat_turn_token(encounter)
+        and str(madness_flee.get("dash_used_turn_token") or "") != _combat_turn_token(encounter)
     ):
         actions = ["move"] if has_movement and not conditions & {"grappled", "restrained"} else []
-        if int(budget.get("main_action", 0) or 0) > 0 or int(
-            budget.get("extra_action", 0) or 0
-        ) > 0:
+        if (
+            int(budget.get("main_action", 0) or 0) > 0
+            or int(budget.get("extra_action", 0) or 0) > 0
+        ):
             actions.append("dash")
         if int(budget.get("bonus_action", 0) or 0) > 0:
             actions.append("bonus_action")
@@ -3606,9 +3601,7 @@ def preflight_attack(
             or madness_effect.get("source") != MADNESS_SOURCE_REF
         ):
             continue
-        madness_metadata = dict(
-            dict(madness_effect.get("metadata") or {}).get("madness") or {}
-        )
+        madness_metadata = dict(dict(madness_effect.get("metadata") or {}).get("madness") or {})
         mechanics = dict(madness_metadata.get("mechanics") or {})
         if mechanics.get("range_limit_ft") is None:
             continue
@@ -3649,10 +3642,7 @@ def preflight_attack(
         distance_from_charm = int(
             distance_between(
                 attacker_position,
-                float(
-                    attacker.get("space_ft")
-                    or SPACE_FT[str(attacker.get("size") or "medium")]
-                ),
+                float(attacker.get("space_ft") or SPACE_FT[str(attacker.get("size") or "medium")]),
                 charm_position,
                 float(charm.get("space_ft") or SPACE_FT[str(charm.get("size") or "medium")]),
             )
@@ -3759,9 +3749,7 @@ def preflight_attack(
         elif actor_id(target) in charm_sources:
             raise CombatEngineError(CHARMED_ATTACK_ERROR)
     if "frightened" in attacker_conditions:
-        fear_sources = set(
-            timed_condition_sources(actor_sheet(attacker)).get("frightened", [])
-        )
+        fear_sources = set(timed_condition_sources(actor_sheet(attacker)).get("frightened", []))
         if not fear_sources:
             unresolved_condition_sources.append("frightened")
         elif encounter is not None:
@@ -6796,9 +6784,7 @@ def _spend_movement_uninterrupted(
         and isinstance(madness_flee, dict)
         and madness_flee.get("turn_token") == _combat_turn_token(value)
     ):
-        source_actor_ids = [
-            str(item).strip() for item in madness_flee.get("source_actor_ids", [])
-        ]
+        source_actor_ids = [str(item).strip() for item in madness_flee.get("source_actor_ids", [])]
         if not source_actor_ids or any(not item for item in source_actor_ids):
             raise NeedsRulingError(
                 "fleeing madness requires its typed fear-source actors",
@@ -10988,11 +10974,13 @@ def vision_profile_2014(
 
         source_ref = "bundled:srd2014/04_Equipment/Adventuring_Gear.md"
         current_scene_id = str(
-            encounter.get("scene_id")
-            or dict(battle_map.get("source") or {}).get("scene_id")
-            or ""
+            encounter.get("scene_id") or dict(battle_map.get("source") or {}).get("scene_id") or ""
         )
         excerpts = {
+            "Candle": (
+                "For 1 hour, a candle sheds bright light in a 5-foot radius and dim light for an "
+                "additional 5 feet."
+            ),
             "Lamp": (
                 "A lamp casts bright light in a 15-foot radius and dim light for an additional "
                 "30 feet. Once lit, it burns for 6 hours on a flask (1 pint) of oil."
@@ -11102,10 +11090,7 @@ def vision_profile_2014(
             source_position,
             (int(subject_position[0]), int(subject_position[1])),
         )
-        if any(
-            bool(vision_cells.get(point, {}).get("opaque"))
-            for point in light_ray[1:-1]
-        ):
+        if any(bool(vision_cells.get(point, {}).get("opaque")) for point in light_ray[1:-1]):
             continue
         source_distance = (
             max(
@@ -11164,9 +11149,7 @@ def vision_profile_2014(
         "obscuration": "heavily" if heavy else "lightly" if lightly else "none",
         "magical_darkness": magical_darkness,
         "perception_disadvantage": bool(
-            visible
-            and not (used_blindsight or used_truesight)
-            and (lightly or level == "dim")
+            visible and not (used_blindsight or used_truesight) and (lightly or level == "dim")
         ),
         "darkvision_used": used_darkvision,
         "blindsight_used": used_blindsight,

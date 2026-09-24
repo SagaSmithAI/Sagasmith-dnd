@@ -70,7 +70,7 @@ def test_gear_action_requires_exact_source_key_reference_and_name(field: str, va
 
 
 def test_all_prioritized_gear_actions_round_trip_by_source_identity() -> None:
-    assert len(ADVENTURING_GEAR_ACTIONS) == 22
+    assert len(ADVENTURING_GEAR_ACTIONS) == 23
     for action in ADVENTURING_GEAR_ACTIONS.values():
         assert adventuring_gear_action(_item(action)) == action
 
@@ -81,6 +81,29 @@ def test_every_catalogued_priority_item_has_at_least_one_executable_intent() -> 
         for action in ADVENTURING_GEAR_ACTIONS.values()
     }
     assert all(intents for intents in _GEAR_INTENTS.values())
+
+
+def test_hunting_trap_plan_fixes_trigger_save_damage_and_escape_costs() -> None:
+    trap = next(
+        action for action in ADVENTURING_GEAR_ACTIONS.values() if action.name == "Hunting trap"
+    )
+    item = _item(trap)
+    deployment = resolve_adventuring_gear_intent(item, "set")
+    escape = resolve_adventuring_gear_intent(item, "escape")
+    assert deployment["action_economy"] == "action"
+    assert deployment["target"] == "ground_location"
+    assert deployment["effect"]["trigger"] == "creature_steps_on_pressure_plate"
+    assert deployment["effect"]["save"] == {"ability": "dexterity", "dc": 13}
+    assert deployment["effect"]["failure"] == {
+        "damage": "1d4",
+        "damage_type": "piercing",
+        "movement_stops": True,
+        "tether_feet": 3,
+    }
+    assert escape["action_economy"] == "action"
+    assert escape["check"] == {"ability": "strength", "dc": 13}
+    assert escape["effect"]["failure_damage"] == "1"
+    assert escape["effect"]["failure_damage_type"] == "piercing"
 
 
 def test_normalized_intent_returns_fixed_attack_damage_and_item_consumption() -> None:
@@ -432,4 +455,18 @@ def test_lock_key_unlock_is_source_bound_and_has_no_check() -> None:
         "requires_state": "locked",
         "requires_provided_key": True,
         "success_state": "open",
+    }
+
+
+def test_candle_lighting_plan_is_source_bound_and_uses_canonical_duration_and_light() -> None:
+    candle = next(action for action in ADVENTURING_GEAR_ACTIONS.values() if action.name == "Candle")
+    plan = resolve_adventuring_gear_intent(_item(candle), "light")
+
+    assert plan["action_economy"] is None
+    assert plan["duration_ticks"] == 600
+    assert plan["resource_cost"] == {"item_quantity": 1}
+    assert plan["requirements"] == ["source_bound_tinderbox"]
+    assert plan["effect"] == {
+        "bright_light": {"shape": "radius", "feet": 5},
+        "dim_light_additional_feet": 5,
     }

@@ -11,6 +11,7 @@ from sagasmith_dnd.lifecycle import (
     advance_elapsed_world_effect_durations,
     advance_source_turn_effect_durations,
     advance_world_effect_durations,
+    annihilate_character_body_to_sheet,
     apply_raise_dead_to_sheet,
     apply_rest,
     apply_short_rest_hit_die_choice,
@@ -154,6 +155,68 @@ def test_raise_dead_rejects_source_conditions_that_make_the_spell_fail(
         apply_raise_dead_to_sheet(sheet, **arguments)
 
 
+def test_raise_dead_rejects_a_sphere_annihilated_body() -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2014"
+    sheet["body_state"] = "annihilated"
+    sheet["combat"]["hp"]["value"] = 0
+    sheet["conditions"] = ["dead"]
+    with pytest.raises(CombatEngineError, match="Sphere of Annihilation"):
+        apply_raise_dead_to_sheet(
+            sheet,
+            elapsed_days=1,
+            soul_willing=True,
+            body_intact=True,
+            source_ref="srd2014:raise-dead",
+        )
+
+
+def test_sphere_annihilation_erases_carried_property_and_marks_body_state() -> None:
+    sheet = default_character_sheet()
+    sheet["inventory"]["wallet"]["gp"] = 25
+    sheet["inventory"]["items"] = [
+        {
+            "id": "attuned-ring",
+            "name": "Ring",
+            "kind": "equipment",
+            "quantity": 1,
+            "weight_oz": 1,
+            "attunement": "attuned",
+        }
+    ]
+    sheet["inventory"]["equipment_slots"]["ring_1"] = "attuned-ring"
+    sheet["inventory"]["external_items"] = [
+        {"id": "loaned-item", "owner_character_id": "other", "attunement": "attuned"}
+    ]
+    sheet["effects"] = [
+        {
+            "id": "concentration",
+            "name": "Concentration",
+            "kind": "spell",
+            "source": "spell",
+            "active": True,
+            "concentration": True,
+            "duration": {"period": "manual", "remaining": 0},
+            "changes": [],
+            "description": "active",
+        }
+    ]
+
+    result = annihilate_character_body_to_sheet(
+        sheet, source_ref="module:crypt#sphere", trap_id="sphere-1"
+    )
+
+    assert result["body_state"] == "annihilated"
+    assert result["combat"]["hp"]["value"] == 0
+    assert result["conditions"] == ["dead"]
+    assert result["inventory"]["wallet"]["gp"] == 0
+    assert result["inventory"]["items"] == []
+    assert result["inventory"]["external_items"] == []
+    assert all(value is None for value in result["inventory"]["equipment_slots"].values())
+    assert result["effects"][0]["active"] is False
+    assert result["effects"][0]["ended_reason"] == "body_annihilated_by_sphere_of_annihilation"
+
+
 def test_rest_completion_enforces_duration_and_daily_limit() -> None:
     sheet = default_character_sheet()
     with pytest.raises(CombatEngineError, match="at least 480"):
@@ -221,11 +284,14 @@ def test_long_rest_schedule_accounts_for_declared_light_activity() -> None:
         "strenuous_activity_minutes": 0,
         "trance_minutes": 0,
     }
-    assert validate_rest_schedule(
-        rest_type="long_rest",
-        duration_minutes=480,
-        rest_activity_minutes={"reading": 120},
-    )["sleep_minutes"] == 360
+    assert (
+        validate_rest_schedule(
+            rest_type="long_rest",
+            duration_minutes=480,
+            rest_activity_minutes={"reading": 120},
+        )["sleep_minutes"]
+        == 360
+    )
 
 
 def test_rest_activity_contract_rejects_interruption_and_short_rest_strain() -> None:

@@ -434,6 +434,7 @@ def default_character_sheet() -> dict[str, Any]:
     return {
         "schema_version": 2,
         "edition": DEFAULT_CHARACTER_EDITION,
+        "body_state": "present",
         "identity": {
             "gender": "",
             "age": "",
@@ -1040,9 +1041,7 @@ def _normalize_item_base_mechanics(kind: str, value: Any, field: str) -> dict[st
             "proficient": _boolean(
                 mechanics.get("proficient"), f"{field}.proficient", default=True
             ),
-            "magical": _boolean(
-                mechanics.get("magical"), f"{field}.magical", default=False
-            ),
+            "magical": _boolean(mechanics.get("magical"), f"{field}.magical", default=False),
             "magic_bonus": _integer(mechanics.get("magic_bonus"), f"{field}.magic_bonus"),
             "reach_ft": _integer(
                 mechanics.get("reach_ft"),
@@ -1414,9 +1413,10 @@ def _normalize_official_item_mechanics(value: Any, field: str) -> dict[str, Any]
             raise ValueError(f"{field} has an invalid Armblade qualification or activation")
         if state not in {"extended", "retracted"}:
             raise ValueError(f"{field}.state is invalid")
-        if item.get("occupies_hand_when_extended") is not True or item.get(
-            "inseparable_while_attuned"
-        ) is not True:
+        if (
+            item.get("occupies_hand_when_extended") is not True
+            or item.get("inseparable_while_attuned") is not True
+        ):
             raise ValueError(f"{field} must record hand occupation and inseparability")
         return {
             "kind": kind,
@@ -1532,7 +1532,15 @@ def _normalize_item(value: Any, field: str, *, generate_id: bool = True) -> dict
             item.get("quantity"),
             f"{field}.quantity",
             default=1,
-            minimum=0 if kind == "ammunition" else 1,
+            minimum=(
+                0
+                if kind == "ammunition"
+                or (
+                    str(item.get("name") or "").strip().casefold() == "candle"
+                    and str(item.get("source_key") or "") == "dnd5e.content.srd2014.item.candle"
+                )
+                else 1
+            ),
         ),
         "weight_oz": _number(item.get("weight_oz"), f"{field}.weight_oz", minimum=0),
         "price_cp": _integer(item.get("price_cp"), f"{field}.price_cp", minimum=0),
@@ -2661,6 +2669,7 @@ def validate_character_sheet(
     allowed = {
         "schema_version",
         "edition",
+        "body_state",
         "identity",
         "progression",
         "ability_generation",
@@ -2680,6 +2689,10 @@ def validate_character_sheet(
     if _integer(value["schema_version"], "sheet.schema_version") != 2:
         raise ValueError("sheet.schema_version must be 2")
     edition = normalize_dnd_edition(_text(value["edition"], "sheet.edition"))
+    body_state = _text(value["body_state"], "sheet.body_state")
+    if body_state not in {"present", "annihilated"}:
+        raise ValueError("sheet.body_state must be present or annihilated")
+    value["body_state"] = body_state
     ability_generation = normalize_ability_generation(value["ability_generation"], edition)
 
     identity = _object(value["identity"], "sheet.identity")
@@ -2721,8 +2734,13 @@ def validate_character_sheet(
             entry,
             f"sheet.progression.classes[{index}]",
             {
-                "name", "level", "subclass", "hit_die", "spellcasting",
-                "source_artifact", "multiclass_proficiencies",
+                "name",
+                "level",
+                "subclass",
+                "hit_die",
+                "spellcasting",
+                "source_artifact",
+                "multiclass_proficiencies",
             },
         )
         normalized_class = {
@@ -3795,6 +3813,7 @@ def validate_character_sheet(
     normalized = {
         "schema_version": 2,
         "edition": edition,
+        "body_state": body_state,
         "identity": {
             "gender": _text(identity["gender"], "sheet.identity.gender", maximum=100),
             "age": _text(identity["age"], "sheet.identity.age", maximum=100),
@@ -4493,15 +4512,12 @@ def _2014_tortle_natural_armor_sources(
             in TORTLE_NATURAL_ARMOR_CONTENT_IDENTITIES
         )
         selection_provenance = (
-            (
-                selection.get("pack_version") in TORTLE_NATURAL_ARMOR_LEGACY_PACK_VERSIONS
-                and selection.get("mechanic_refs") == []
-            )
-            or (
-                selection.get("pack_version") == TORTLE_NATURAL_ARMOR_CURRENT_PACK_VERSION
-                and set(selection.get("mechanic_refs") or [])
-                == TORTLE_NATURAL_ARMOR_CURRENT_SELECTION_MECHANIC_REFS
-            )
+            selection.get("pack_version") in TORTLE_NATURAL_ARMOR_LEGACY_PACK_VERSIONS
+            and selection.get("mechanic_refs") == []
+        ) or (
+            selection.get("pack_version") == TORTLE_NATURAL_ARMOR_CURRENT_PACK_VERSION
+            and set(selection.get("mechanic_refs") or [])
+            == TORTLE_NATURAL_ARMOR_CURRENT_SELECTION_MECHANIC_REFS
         )
         if (
             selection.get("kind") == "species"
@@ -4807,7 +4823,9 @@ def _derive_armor_class(
                     unresolved_effects.add(effect["id"])
                 continue
             if change["path"] in {
-                "traits.resistances", "traits.immunities", "traits.vulnerabilities"
+                "traits.resistances",
+                "traits.immunities",
+                "traits.vulnerabilities",
             }:
                 continue
             if change["path"] not in {"derived.armor_class", "combat.ac"}:
@@ -4918,13 +4936,15 @@ def _weapon_attacks(
             official_item = {}
         if official_item.get("kind") == "armblade" and official_item.get("state") == "retracted":
             continue
-        if official_item.get("kind") == "arcane_propulsion_arm" and official_item.get(
-            "state"
-        ) == "detached":
+        if (
+            official_item.get("kind") == "arcane_propulsion_arm"
+            and official_item.get("state") == "detached"
+        ):
             continue
-        if official_item.get("kind") == "dyrrn_tentacle_whip" and official_item.get(
-            "state"
-        ) == "sheathed":
+        if (
+            official_item.get("kind") == "dyrrn_tentacle_whip"
+            and official_item.get("state") == "sheathed"
+        ):
             continue
         # Ordinary magic items are active when they do not require attunement;
         # a materialized official weapon always requires attunement, so its
@@ -4950,8 +4970,7 @@ def _weapon_attacks(
         # active magic mechanics. Battle Ready changes only those attacks;
         # ordinary weapons and suppressed attunement keep their normal ability.
         magic_weapon = magic_properties_active and (
-            mechanics["magical"]
-            or mechanics["magic_bonus"] != 0
+            mechanics["magical"] or mechanics["magic_bonus"] != 0
         )
         if battle_ready and magic_weapon and ability in {"strength", "dexterity"}:
             ability = "intelligence"
@@ -5072,9 +5091,15 @@ def _weapon_attacks(
                 "official_item": official_item,
                 "materialized_item_hash": materialized_item_hash,
                 "source_key": item.get("source_key", ""),
-                **({"base_weapon_source": copy.deepcopy(
-                    dict(selection.get("selection") or {}).get("base_weapon_source")
-                )} if has_official_contract and official_binding_valid and selection else {}),
+                **(
+                    {
+                        "base_weapon_source": copy.deepcopy(
+                            dict(selection.get("selection") or {}).get("base_weapon_source")
+                        )
+                    }
+                    if has_official_contract and official_binding_valid and selection
+                    else {}
+                ),
                 "attunement": item.get("attunement", "none"),
             }
         )
@@ -5277,8 +5302,8 @@ def active_effect_roll_advantage(
             restricted.casefold().replace("-", "_").replace(" ", "_") != normalized_key
         ):
             continue
-        scoped_purpose = str(metadata.get("save_purpose") or "").strip().casefold().replace(
-            "-", "_"
+        scoped_purpose = (
+            str(metadata.get("save_purpose") or "").strip().casefold().replace("-", "_")
         )
         if scoped_purpose and scoped_purpose != normalized_purpose:
             continue
@@ -5373,8 +5398,9 @@ def _has_2014_artificer_battle_ready(sheet: dict[str, Any]) -> bool:
     for feature in dict(sheet.get("content") or {}).get("features", []):
         if not isinstance(feature, dict):
             continue
-        if feature.get("pack_id") not in BATTLE_READY_SOURCES or feature.get("id") != (
-            BATTLE_READY_SOURCES[feature["pack_id"]]
+        if (
+            feature.get("pack_id") not in BATTLE_READY_SOURCES
+            or feature.get("id") != (BATTLE_READY_SOURCES[feature["pack_id"]])
         ):
             continue
         pack_version = feature.get("pack_version")
@@ -5384,9 +5410,7 @@ def _has_2014_artificer_battle_ready(sheet: dict[str, Any]) -> bool:
         if (
             not isinstance(rule_refs, list)
             or not rule_refs
-            or not all(
-                isinstance(reference, str) and reference.strip() for reference in rule_refs
-            )
+            or not all(isinstance(reference, str) and reference.strip() for reference in rule_refs)
         ):
             continue
         matches.append(feature)
@@ -5413,7 +5437,8 @@ def has_srd2014_rogue_feature(
     if rogue_level < minimum_level:
         return False
     matches = [
-        item for item in dict(sheet.get("content") or {}).get("features", [])
+        item
+        for item in dict(sheet.get("content") or {}).get("features", [])
         if isinstance(item, dict)
         and str(item.get("id") or "") == feature_id
         and str(item.get("source_key") or "").strip().casefold() == "rogue"
@@ -5438,7 +5463,8 @@ def srd2014_rogue_stroke_of_luck_feature(
     ):
         return None
     matches = [
-        item for item in dict(sheet.get("content") or {}).get("features", [])
+        item
+        for item in dict(sheet.get("content") or {}).get("features", [])
         if isinstance(item, dict)
         and str(item.get("id") or "") == feature_id
         and str(item.get("source_key") or "").strip().casefold() == "rogue"
@@ -5748,8 +5774,9 @@ def derive_character_sheet(
                 {*derived["unresolved_rules"], modifier["mechanic_id"]}
             )
     core_boundary_ids: list[str] = []
-    if (derived["armor_class_breakdown"].get("defense_fighting_style")
-            or any(a.get("archery_bonus") for a in derived["inventory"]["weapon_attacks"])):
+    if derived["armor_class_breakdown"].get("defense_fighting_style") or any(
+        a.get("archery_bonus") for a in derived["inventory"]["weapon_attacks"]
+    ):
         from .fighting_styles import STYLE_RULE
 
         core_boundary_ids.append(STYLE_RULE)
@@ -5787,19 +5814,29 @@ def derive_character_sheet(
 
         try:
             passive = resolve_actor_check(
-                {"id": str(dict(rules.facts).get("actor_id") or "card") if rules else "card",
-                 "sheet": value, "derived": derived},
-                kind="check", ability="perception", dc=0, passive=True,
+                {
+                    "id": str(dict(rules.facts).get("actor_id") or "card") if rules else "card",
+                    "sheet": value,
+                    "derived": derived,
+                },
+                kind="check",
+                ability="perception",
+                dc=0,
+                passive=True,
                 rules=context_with_facts(rules, kind="check", ability="perception"),
             )
             derived["passive_perception"] = passive["total"]
         except NeedsRulingError as exc:
             derived["passive_perception"] = None
-            derived["ruling_requirements"].append({
-                "mechanic_id": "dnd5e.core.check.passive",
-                "reason": str(exc), "missing": list(exc.missing),
-                "default_resolver": "agent", "ruling_kind": exc.ruling_kind,
-            })
+            derived["ruling_requirements"].append(
+                {
+                    "mechanic_id": "dnd5e.core.check.passive",
+                    "reason": str(exc),
+                    "missing": list(exc.missing),
+                    "default_resolver": "agent",
+                    "ruling_kind": exc.ruling_kind,
+                }
+            )
         except CombatEngineError:
             if "dead" not in condition_ids(value.get("conditions")):
                 raise
@@ -5881,11 +5918,7 @@ def use_official_item_action(
         "official_item_kind": kind,
         "operation": normalized,
         "state": next_state,
-        "activation": (
-            "action"
-            if kind == "arcane_propulsion_arm"
-            else "bonus_action"
-        ),
+        "activation": ("action" if kind == "arcane_propulsion_arm" else "bonus_action"),
     }
     return validate_character_sheet(value), result
 
@@ -6063,9 +6096,7 @@ def validate_equipment_hand_capacity(sheet: dict[str, Any]) -> None:
         for slot in ("main_hand", "off_hand", "shield")
     )
     if occupied > sheet["traits"]["anatomy"]["functional_hands"]:
-        raise ValueError(
-            "equipped weapons and shield exceed functional hands; stow an item first"
-        )
+        raise ValueError("equipped weapons and shield exceed functional hands; stow an item first")
 
 
 def equip_inventory_item(sheet: dict[str, Any], item_id: str, slot: str | None) -> dict[str, Any]:
@@ -6104,7 +6135,9 @@ def add_effect(sheet: dict[str, Any], effect: dict[str, Any]) -> tuple[dict[str,
     from sagasmith_dnd.rule_primitives import apply_sheet_primitive
 
     settled = apply_sheet_primitive(
-        value, "effect.apply", {"effect": entry, "effect_id": entry["id"]},
+        value,
+        "effect.apply",
+        {"effect": entry, "effect_id": entry["id"]},
     )
     return validate_character_sheet(settled["sheet"]), entry["id"]
 

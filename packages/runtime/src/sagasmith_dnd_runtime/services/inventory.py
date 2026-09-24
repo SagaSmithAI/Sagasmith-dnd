@@ -13,6 +13,7 @@ from sagasmith_dnd.adventuring_gear import (
 )
 from sagasmith_dnd.character_schema import effective_ability_scores, effective_size
 from sagasmith_dnd.conditions import effect_is_suspended_by_petrification
+from sagasmith_dnd.game_time import TICKS_PER_MINUTE
 from sagasmith_dnd.objects import validate_object_profile
 
 from .. import application_support as _support
@@ -203,6 +204,81 @@ class InventoryService:
             ),
             None,
         )
+        if item is None and normalized_intent == "escape":
+            if action_context is not None:
+                raise _support.CombatEngineError(
+                    "Hunting Trap escape accepts no caller-supplied check or damage outcome"
+                )
+            hazards = list(dict(state.get("combat") or {}).get("adventuring_gear_hazards") or [])
+            trapped_hazard = next(
+                (
+                    hazard
+                    for hazard in hazards
+                    if isinstance(hazard, dict)
+                    and hazard.get("kind") == "adventuring_gear_ground_hazard"
+                    and hazard.get("hazard_kind") == "hunting trap"
+                    and hazard.get("item_id") == normalized_item_id
+                    and hazard.get("trapped_actor_id") == normalized_target_id
+                    and hazard.get("source_ref") == ADVENTURING_GEAR_SOURCE_REF
+                    and isinstance(hazard.get("anchor_review"), dict)
+                ),
+                None,
+            )
+            if trapped_hazard is not None:
+                anchor_review = dict(trapped_hazard.get("anchor_review") or {})
+                try:
+                    _, exact_ref, expanded = self.managed_module_source_ref(
+                        campaign_id,
+                        anchor_review.get("source_ref"),
+                        require_exact=True,
+                        expected_scene_id=str(trapped_hazard.get("scene_id") or ""),
+                        require_active_module=True,
+                    )
+                    if expanded is None or exact_ref != anchor_review.get("source_ref"):
+                        raise ValueError("anchor source changed")
+                    self.managed_module_source_excerpt(
+                        expanded,
+                        anchor_review.get("source_excerpt"),
+                        field="Hunting Trap anchor source_excerpt",
+                        minimum_length=10,
+                    )
+                except (AssertionError, LookupError, ValueError) as error:
+                    raise _support.NeedsRulingError(
+                        "Hunting Trap escape requires its active anchor source",
+                        missing=("adventuring_gear.immobile_anchor_source",),
+                        ruling_kind="missing_or_conflicting_source_review",
+                    ) from error
+                item = {
+                    "id": normalized_item_id,
+                    "name": "Hunting trap",
+                    "source_key": trapped_hazard.get("source_key"),
+                    "quantity": 1,
+                }
+                plan = resolve_adventuring_gear_intent(
+                    {**item, "source_ref": ADVENTURING_GEAR_SOURCE_REF}, "escape"
+                )
+                return self.settle_hunting_trap_escape(
+                    campaign=campaign,
+                    state=state,
+                    owner=owner,
+                    owner_sheet=owner_sheet,
+                    target=target,
+                    item=item,
+                    hazard=trapped_hazard,
+                    plan=plan,
+                    action_id=normalized_action_id,
+                    item_id=normalized_item_id,
+                    actor_id=normalized_actor_id,
+                    target_actor_id=normalized_target_id,
+                    expected_actor_revision=expected_actor_revision,
+                    expected_target_revision=int(expected_target_revision),
+                    expected_campaign_revision=expected_revision,
+                    branch_id=resolved_branch_id,
+                    principal_id=principal_id,
+                    idempotency_key=str(idempotency_key),
+                    scope=scope,
+                    request_payload=request_payload,
+                )
         if item is None:
             raise ValueError("adventuring gear item is absent from the user's inventory")
         # Inventory templates carry the exact official source_key. The source
@@ -211,6 +287,53 @@ class InventoryService:
         source_item = {**item, "source_ref": ADVENTURING_GEAR_SOURCE_REF}
         plan = resolve_adventuring_gear_intent(source_item, normalized_intent)
         gear_name = str(item.get("name") or "").strip().casefold()
+        if gear_name == "candle" and normalized_intent == "light":
+            if object_target or normalized_target_id or expected_target_revision is not None:
+                raise _support.CombatEngineError("Candle lighting does not accept a target")
+            if action_context is not None:
+                raise _support.CombatEngineError(
+                    "Candle lighting accepts no caller-supplied time or light outcome"
+                )
+            if int(item.get("quantity", 0) or 0) < 1:
+                raise _support.CombatEngineError("a Candle is required to light it")
+            tinderbox = next(
+                (
+                    candidate
+                    for candidate in owner_sheet.get("inventory", {}).get("items", [])
+                    if str(candidate.get("name") or "").strip().casefold() == "tinderbox"
+                    and str(candidate.get("source_key") or "")
+                    == "dnd5e.content.srd2014.item.tinderbox"
+                    and int(candidate.get("quantity", 0) or 0) > 0
+                ),
+                None,
+            )
+            if tinderbox is None:
+                raise _support.CombatEngineError(
+                    "lighting a Candle requires an available source-bound Tinderbox"
+                )
+            return self.campaign_advance_effects(
+                campaign_id,
+                "minute",
+                count=1,
+                principal_id=principal_id,
+                expected_revision=expected_revision,
+                branch_id=resolved_branch_id,
+                idempotency_key=idempotency_key,
+                expected_elapsed_ticks=int(
+                    dict(state.get("game_time") or {}).get("elapsed_ticks", 0) or 0
+                )
+                + TICKS_PER_MINUTE,
+                candle_lighting={
+                    "action_id": normalized_action_id,
+                    "actor_id": normalized_actor_id,
+                    "item_id": normalized_item_id,
+                    "source_key": str(item.get("source_key") or ""),
+                    "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                    "expected_actor_revision": expected_actor_revision,
+                    "plan": _support.deepcopy(plan),
+                    "gear_request_payload": _support.deepcopy(request_payload),
+                },
+            )
         if gear_name == "block and tackle" and normalized_intent == "hoist":
             if (
                 object_target
@@ -302,15 +425,22 @@ class InventoryService:
                 action_context=action_context,
             )
         if (
-            normalized_intent == "spread"
+            normalized_intent in {"spread", "pour_ground", "set"}
             and str(item.get("name") or "").strip().casefold()
             in {
                 "ball bearings (bag of 1,000)",
                 "ball bearings",
                 "caltrops (bag of 20)",
                 "caltrops",
+                "oil (flask)",
+                "hunting trap",
             }
-            and plan.get("target") == "ground_area"
+            and plan.get("target") in {"ground_area", "level_ground_surface"}
+            or (
+                normalized_intent == "set"
+                and str(item.get("name") or "").strip().casefold() == "hunting trap"
+                and plan.get("target") == "ground_location"
+            )
         ):
             if normalized_target_id or expected_target_revision is not None:
                 raise _support.CombatEngineError(
@@ -1398,6 +1528,203 @@ class InventoryService:
         )
         return self.combat_response(campaign.id, principal_id, response)
 
+    def settle_hunting_trap_escape(
+        self,
+        *,
+        campaign: Any,
+        state: dict[str, Any],
+        owner: Any,
+        owner_sheet: dict[str, Any],
+        target: Any,
+        item: dict[str, Any],
+        hazard: dict[str, Any],
+        plan: dict[str, Any],
+        action_id: str,
+        item_id: str,
+        actor_id: str,
+        target_actor_id: str,
+        expected_actor_revision: int,
+        expected_target_revision: int,
+        expected_campaign_revision: int | None,
+        branch_id: str,
+        principal_id: str,
+        idempotency_key: str,
+        scope: str,
+        request_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Resolve a trapped creature escape and both character updates in one CAS."""
+        if expected_campaign_revision is None or campaign.revision != expected_campaign_revision:
+            raise ValueError("campaign revision conflict for Hunting Trap escape")
+        if (
+            owner.revision != expected_actor_revision
+            or target is None
+            or target.revision != expected_target_revision
+        ):
+            raise ValueError("character revision conflict for Hunting Trap escape")
+        if owner.campaign_id != campaign.id or target.campaign_id != campaign.id:
+            raise _support.CombatEngineError("Hunting Trap user and target must belong to campaign")
+        encounter = _support.deepcopy(dict(state.get("combat") or {}))
+        if (
+            encounter.get("active") is not True
+            or self.encounter_rules_edition(campaign.id, encounter) != "2014"
+        ):
+            raise _support.CombatEngineError("Hunting Trap escape requires active 2014 combat")
+        self.require_no_blocking_pending(encounter)
+        self.require_encounter_combatant(encounter, actor_id, role="Hunting Trap rescuer")
+        trapped = self.require_encounter_combatant(
+            encounter, target_actor_id, role="trapped creature"
+        )
+        if hazard.get("active") is not False or hazard.get("trapped_actor_id") != target_actor_id:
+            raise _support.CombatEngineError("Hunting Trap has no active capture for this target")
+        distance = self.madness_grid_distance_ft(encounter, actor_id, target_actor_id)
+        if actor_id != target_actor_id and distance > 5:
+            raise _support.NeedsRulingError(
+                "rescuer must be within reach of the trapped creature",
+                missing=("adventuring_gear.rescuer_reach",),
+                ruling_kind="agent_dm_adjudication",
+            )
+        encounter = _support.resolve_common_action(
+            encounter,
+            actor_id_value=actor_id,
+            action="use_object",
+            payload={"kind": "adventuring_gear", "intent": "escape", "item_id": item_id},
+        )
+        stream = _support.active_random_stream()
+        if stream is None:
+            with _support.use_random_stream(
+                _support.CampaignRandomStream.from_campaign_state(
+                    campaign.id,
+                    campaign.state,
+                    operation="campaign.adventuring_gear.hunting_trap_escape",
+                    idempotency_key=idempotency_key,
+                    campaign_revision=campaign.revision,
+                )
+            ):
+                return self.settle_hunting_trap_escape(
+                    campaign=campaign,
+                    state=state,
+                    owner=owner,
+                    owner_sheet=owner_sheet,
+                    target=target,
+                    item=item,
+                    hazard=hazard,
+                    plan=plan,
+                    action_id=action_id,
+                    item_id=item_id,
+                    actor_id=actor_id,
+                    target_actor_id=target_actor_id,
+                    expected_actor_revision=expected_actor_revision,
+                    expected_target_revision=expected_target_revision,
+                    expected_campaign_revision=expected_campaign_revision,
+                    branch_id=branch_id,
+                    principal_id=principal_id,
+                    idempotency_key=idempotency_key,
+                    scope=scope,
+                    request_payload=request_payload,
+                )
+        check_spec = dict(plan.get("check") or {})
+        check = _support.resolve_actor_check(
+            self.combat_actor_snapshot(actor_id),
+            kind="check",
+            ability=str(check_spec.get("ability") or "strength"),
+            dc=int(check_spec.get("dc") or 13),
+            encounter=encounter,
+            ruleset="2014",
+            rng=stream,
+        )
+        success = check.get("success") is True
+        next_target_sheet = _support.validate_character_sheet(target.sheet)
+        damage = None
+        stored_hazard = next(
+            item
+            for item in encounter.get("adventuring_gear_hazards", [])
+            if isinstance(item, dict) and item.get("id") == hazard.get("id")
+        )
+        if success:
+            stored_hazard["trapped_actor_id"] = None
+            stored_hazard["capture_status"] = "freed"
+            stored_hazard["active"] = False
+        else:
+            damage = _support.apply_damage_parts_to_sheet(
+                next_target_sheet,
+                [{"amount": 1, "damage_type": "piercing"}],
+                source=ADVENTURING_GEAR_SOURCE_REF,
+                ruleset="2014",
+                death_saves=self.combatant_zero_hp_buffered(trapped),
+            )
+            next_target_sheet = damage["sheet"]
+            self.sync_combatant_conditions(encounter, target_actor_id, next_target_sheet)
+        next_state = _support.deepcopy(state)
+        next_state["combat"] = encounter
+        response_campaign = _support.replace(
+            campaign,
+            state=_support.validate_party_state(next_state),
+            revision=campaign.revision + 1,
+        )
+        owner_after = _support.replace(
+            owner,
+            sheet=next_target_sheet if actor_id == target_actor_id else owner_sheet,
+            revision=owner.revision + 1,
+        )
+        target_after = (
+            owner_after
+            if actor_id == target_actor_id
+            else _support.replace(target, sheet=next_target_sheet, revision=target.revision + 1)
+        )
+        updates = [
+            _support.CharacterStateUpdate(
+                character_id=owner.id,
+                sheet=next_target_sheet if actor_id == target_actor_id else owner_sheet,
+                notes=_support.validate_character_notes(
+                    owner.notes, character_type=owner.character_type
+                ),
+                expected_revision=owner.revision,
+            )
+        ]
+        if target_actor_id != actor_id:
+            updates.append(
+                _support.CharacterStateUpdate(
+                    character_id=target_actor_id,
+                    sheet=next_target_sheet,
+                    notes=target.notes,
+                    expected_revision=target.revision,
+                )
+            )
+        response = {
+            "status": "committed",
+            "action_id": action_id,
+            "item_id": item_id,
+            "intent": "escape",
+            "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+            "rule_plan": _support.deepcopy(plan),
+            "check": check,
+            "success": success,
+            "damage": None if damage is None else {k: v for k, v in damage.items() if k != "sheet"},
+            "campaign": _support.asdict(response_campaign),
+            "owner": self.character_view(owner_after),
+            **(
+                {"target": self.character_view(target_after)} if actor_id != target_actor_id else {}
+            ),
+            "action_cost": "action",
+            "action_paid": True,
+        }
+        stream_receipt = stream.receipt()
+        response["random_stream_receipt"] = stream_receipt
+        _support.StateMutationService(self.storage.database).replace(
+            campaign.id,
+            campaign_state=response_campaign.state,
+            character_updates=updates,
+            expected_campaign_revision=expected_campaign_revision,
+            operation="campaign.adventuring_gear.hunting_trap_escape",
+            actor=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            idempotency_write=_support.IdempotencyWrite(
+                scope=scope, payload=request_payload, response=response
+            ),
+        )
+        return response
+
     def settle_adventuring_gear_ground_deployment(
         self,
         *,
@@ -1431,14 +1758,55 @@ class InventoryService:
             )
         if int(item.get("quantity", 0) or 0) < 1:
             raise _support.CombatEngineError("the source-bound gear item is unavailable")
-        if plan.get("intent") != "spread" or plan.get("target") != "ground_area":
+        item_name = str(item.get("name") or "").strip().casefold()
+        is_oil = item_name == "oil (flask)"
+        is_hunting_trap = item_name == "hunting trap"
+        if plan.get("intent") != (
+            "set" if is_hunting_trap else "pour_ground" if is_oil else "spread"
+        ) or plan.get("target") != (
+            "ground_location"
+            if is_hunting_trap
+            else "level_ground_surface"
+            if is_oil
+            else "ground_area"
+        ):
             raise _support.CombatEngineError("invalid bundled ground-area action plan")
         if plan.get("action_economy") != "action":
             raise _support.CombatEngineError("ground-area deployment requires its bundled action")
-        if not isinstance(action_context, dict) or set(action_context) != {"area_origin"}:
+        expected_context_keys = (
+            {
+                "area_origin",
+                "anchor_object_id",
+                "anchor_source_ref",
+                "anchor_source_excerpt",
+                "anchor_reason",
+                "trigger_reason",
+            }
+            if is_hunting_trap
+            else {"area_origin", "fire_source_id"}
+            if is_oil
+            else {"area_origin"}
+        )
+        if not isinstance(action_context, dict) or set(action_context) != expected_context_keys:
             raise _support.NeedsRulingError(
-                "ground-area deployment requires one exact grid origin",
-                missing=("adventuring_gear.area_origin",),
+                (
+                    "Hunting Trap deployment requires an exact Grid cell and reviewed "
+                    "anchor/pressure-plate facts"
+                )
+                if is_hunting_trap
+                else (
+                    "ground-area deployment requires its exact Grid cell and, for Oil, "
+                    "reviewed fire source"
+                ),
+                missing=("adventuring_gear.area_origin", "adventuring_gear.fire_source_id")
+                if is_oil
+                else (
+                    "adventuring_gear.area_origin",
+                    "adventuring_gear.immobile_anchor_review",
+                    "adventuring_gear.pressure_plate_review",
+                )
+                if is_hunting_trap
+                else ("adventuring_gear.area_origin",),
                 ruling_kind="source_or_scene_fact",
             )
         area_origin = action_context.get("area_origin")
@@ -1448,12 +1816,13 @@ class InventoryService:
             or any(type(area_origin.get(key)) is not int for key in ("x", "y"))
         ):
             raise _support.CombatEngineError("area_origin must contain integer x and y grid cells")
-        item_name = str(item.get("name") or "").strip().casefold()
         dimensions_by_item = {
             "ball bearings (bag of 1,000)": (2, 2),
             "ball bearings": (2, 2),
             "caltrops (bag of 20)": (1, 1),
             "caltrops": (1, 1),
+            "oil (flask)": (1, 1),
+            "hunting trap": (1, 1),
         }
         dimensions = dimensions_by_item.get(item_name)
         if dimensions is None:
@@ -1466,8 +1835,29 @@ class InventoryService:
             "width_feet": dimensions[0] * 5,
             "depth_feet": dimensions[1] * 5,
         }
-        if plan.get("area") != expected_area:
+        if not is_hunting_trap and plan.get("area") != expected_area:
             raise _support.CombatEngineError("ground-area gear requires its exact bundled square")
+        if is_hunting_trap and (
+            plan.get("area") != expected_area
+            or not all(
+                str(action_context.get(key) or "").strip()
+                for key in (
+                    "anchor_object_id",
+                    "anchor_source_ref",
+                    "anchor_source_excerpt",
+                    "anchor_reason",
+                    "trigger_reason",
+                )
+            )
+        ):
+            raise _support.NeedsRulingError(
+                "Hunting Trap requires a source-bound immobile anchor and pressure-plate review",
+                missing=(
+                    "adventuring_gear.immobile_anchor_review",
+                    "adventuring_gear.pressure_plate_review",
+                ),
+                ruling_kind="source_or_scene_fact",
+            )
 
         encounter = _support.deepcopy(dict(state.get("combat") or {}))
         if not encounter.get("active"):
@@ -1491,6 +1881,100 @@ class InventoryService:
                 missing=("combat.grid_scene_geometry",),
                 ruling_kind="agent_dm_adjudication",
             )
+        fire_source = None
+        anchor_review = None
+        if is_oil:
+            fire_source = next(
+                (
+                    record
+                    for record in state.get("fire_source_reviews", [])
+                    if isinstance(record, dict)
+                    and record.get("id") == action_context.get("fire_source_id")
+                    and record.get("active") is True
+                ),
+                None,
+            )
+            if (
+                not isinstance(fire_source, dict)
+                or fire_source.get("scene_id") != scene_id
+                or fire_source.get("encounter_id") != str(encounter.get("id") or "")
+                or fire_source.get("map_revision") != battle_map.get("map_revision")
+                or fire_source.get("map_sha256") != _support.json_sha256(battle_map)
+                or fire_source.get("cell") != area_origin
+                or fire_source.get("level_ground_surface") is not True
+            ):
+                raise _support.NeedsRulingError(
+                    "Oil must be poured in the currently reviewed fire-source cell",
+                    missing=("adventuring_gear.current_fire_source",),
+                    ruling_kind="missing_or_conflicting_source_review",
+                )
+            try:
+                _, exact_source_ref, expanded = self.managed_module_source_ref(
+                    campaign.id,
+                    fire_source.get("source_ref"),
+                    require_exact=True,
+                    expected_scene_id=scene_id,
+                    require_active_module=True,
+                )
+                if expanded is None or exact_source_ref != fire_source.get("source_ref"):
+                    raise ValueError("source ref changed")
+                self.managed_module_source_excerpt(
+                    expanded,
+                    fire_source.get("source_excerpt"),
+                    field="fire source source_excerpt",
+                    minimum_length=10,
+                )
+            except (AssertionError, LookupError, ValueError) as error:
+                raise _support.NeedsRulingError(
+                    "Oil fire source no longer matches the active module source",
+                    missing=("adventuring_gear.current_fire_source",),
+                    ruling_kind="missing_or_conflicting_source_review",
+                ) from error
+        if is_hunting_trap:
+            try:
+                _, exact_anchor_ref, expanded_anchor = self.managed_module_source_ref(
+                    campaign.id,
+                    action_context.get("anchor_source_ref"),
+                    require_exact=True,
+                    expected_scene_id=scene_id,
+                    require_active_module=True,
+                )
+                if expanded_anchor is None or exact_anchor_ref != action_context.get(
+                    "anchor_source_ref"
+                ):
+                    raise ValueError("anchor source changed")
+                self.managed_module_source_excerpt(
+                    expanded_anchor,
+                    action_context.get("anchor_source_excerpt"),
+                    field="Hunting Trap anchor source_excerpt",
+                    minimum_length=10,
+                )
+                anchor_text = str(action_context.get("anchor_source_excerpt") or "").casefold()
+                if (
+                    "immobile" not in anchor_text
+                    or str(action_context.get("anchor_object_id") or "").casefold()
+                    not in anchor_text
+                ):
+                    raise ValueError("anchor excerpt does not bind the named immobile object")
+                if (
+                    "pressure plate"
+                    not in str(action_context.get("trigger_reason") or "").casefold()
+                ):
+                    raise ValueError("trigger review does not identify the pressure plate")
+            except (AssertionError, LookupError, ValueError) as error:
+                raise _support.NeedsRulingError(
+                    "Hunting Trap anchor must match an active scene source",
+                    missing=("adventuring_gear.immobile_anchor_source",),
+                    ruling_kind="missing_or_conflicting_source_review",
+                ) from error
+            anchor_review = {
+                "object_id": str(action_context["anchor_object_id"]).strip(),
+                "source_ref": _support.deepcopy(action_context["anchor_source_ref"]),
+                "source_excerpt": str(action_context["anchor_source_excerpt"]).strip(),
+                "reviewed_by": principal_id,
+                "reason": str(action_context["anchor_reason"]).strip(),
+                "trigger_reason": str(action_context["trigger_reason"]).strip(),
+            }
         x, y = area_origin["x"], area_origin["y"]
         width, height = dimensions
         width_cells = bounds.get("width_cells")
@@ -1561,7 +2045,7 @@ class InventoryService:
             action="use_object",
             payload={
                 "kind": "adventuring_gear",
-                "intent": "spread",
+                "intent": "set" if is_hunting_trap else "pour_ground" if is_oil else "spread",
                 "item_id": item_id,
                 "source_key": item.get("source_key"),
             },
@@ -1585,6 +2069,31 @@ class InventoryService:
             "created_revision": campaign.revision + 1,
             "created_action_id": action_id,
         }
+        if is_hunting_trap:
+            hazard.update(
+                {"anchor_review": anchor_review, "trapped_actor_id": None, "tether_feet": 3}
+            )
+        if is_oil:
+            oil_effect = dict(plan.get("effect") or {}).get("if_lit")
+            if (
+                not isinstance(oil_effect, dict)
+                or oil_effect.get("duration_rounds") != 2
+                or oil_effect.get("trigger") != "creature_enters_or_ends_turn_in_area"
+                or oil_effect.get("damage") != "5"
+                or oil_effect.get("damage_type") != "fire"
+                or oil_effect.get("once_per_turn_per_creature") is not True
+            ):
+                raise _support.CombatEngineError("Oil ground plan differs from its bundled source")
+            hazard.update(
+                {
+                    "oil_lit": True,
+                    "fire_source_id": fire_source["id"],
+                    "created_round": int(encounter.get("round", 1) or 1),
+                    "expires_at_round": int(encounter.get("round", 1) or 1) + 2,
+                    "expires_at_actor_id": actor_id,
+                    "triggered_turn_tokens": {},
+                }
+            )
         hazards = list(next_encounter.get("adventuring_gear_hazards") or [])
         if any(
             isinstance(existing, dict) and existing.get("id") == hazard["id"]

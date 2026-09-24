@@ -8,6 +8,7 @@ from sagasmith_dnd.traps import (
     apply_locking_pit_spring_disable,
     build_poison_needle_condition_effect,
     falling_net_section_cut_qualifies,
+    record_sphere_annihilation_contact,
     settle_trap_object_spell,
     source_trap_object_facts,
     source_trap_profile,
@@ -20,7 +21,125 @@ from sagasmith_dnd.traps import (
     validate_rolling_sphere_trigger_fact,
     validate_source_pit_depth,
     validate_source_trap_area_spatial_facts,
+    validate_sphere_annihilation_contact_facts,
 )
+
+
+def test_sphere_contact_facts_bind_actor_revisions_and_exact_dm_decision():
+    profile = source_trap_profile(
+        {"profile_id": "srd5.1.sphere_of_annihilation"},
+        'trap_profile: {"profile_id":"srd5.1.sphere_of_annihilation"}',
+    )
+    facts = {
+        "decision_id": "sphere-contact-1",
+        "reason": "The target fully entered the stone mouth.",
+        "scene_id": "scene-1",
+        "trap_id": "sphere-1",
+        "target_actor_id": "actor-1",
+        "target_actor_revision": 7,
+        "source_ref": "module:crypt#sphere",
+        "campaign_revision": 12,
+        "reviewed_by": "principal:dm",
+        "enters_mouth": True,
+    }
+    accepted = validate_sphere_annihilation_contact_facts(
+        profile,
+        facts,
+        scene_id="scene-1",
+        trap_id="sphere-1",
+        source_ref="module:crypt#sphere",
+        campaign_revision=12,
+        reviewed_by="principal:dm",
+        target_actor_id="actor-1",
+        target_actor_revision=7,
+    )
+    state = record_sphere_annihilation_contact(
+        {}, source_ref="module:crypt#sphere", trap_id="sphere-1", contact=accepted
+    )
+    assert state["traps"]["sphere-1"]["profile_id"] == "srd5.1.sphere_of_annihilation"
+    assert state["traps"]["sphere-1"]["status"] == "armed"
+    assert state["traps"]["sphere-1"]["sphere_object_removed"] is False
+    assert state["traps"]["sphere-1"]["annihilation_contacts"] == [facts]
+
+    with pytest.raises(ValueError, match="target_actor_revision"):
+        validate_sphere_annihilation_contact_facts(
+            profile,
+            facts,
+            scene_id="scene-1",
+            trap_id="sphere-1",
+            source_ref="module:crypt#sphere",
+            campaign_revision=12,
+            reviewed_by="principal:dm",
+            target_actor_id="actor-1",
+            target_actor_revision=8,
+        )
+    false_contact = {**facts, "enters_mouth": False}
+    with pytest.raises(ValueError, match="entry into the stone mouth"):
+        validate_sphere_annihilation_contact_facts(
+            profile,
+            false_contact,
+            scene_id="scene-1",
+            trap_id="sphere-1",
+            source_ref="module:crypt#sphere",
+            campaign_revision=12,
+            reviewed_by="principal:dm",
+            target_actor_id="actor-1",
+            target_actor_revision=7,
+        )
+
+
+def test_sphere_object_contact_facts_bind_target_source_and_current_revisions():
+    profile = source_trap_profile(
+        {"profile_id": "srd5.1.sphere_of_annihilation"},
+        'trap_profile: {"profile_id":"srd5.1.sphere_of_annihilation"}',
+    )
+    facts = {
+        "decision_id": "sphere-object-contact",
+        "reason": "The object completely entered the stone mouth.",
+        "scene_id": "scene-1",
+        "trap_id": "sphere-1",
+        "target_scene_object_id": "relic-1",
+        "target_scene_object_source_ref": "module:crypt#relic",
+        "source_ref": "module:crypt#sphere",
+        "campaign_revision": 12,
+        "reviewed_by": "principal:dm",
+        "enters_mouth": True,
+    }
+    result = validate_sphere_annihilation_contact_facts(
+        profile,
+        facts,
+        scene_id="scene-1",
+        trap_id="sphere-1",
+        source_ref="module:crypt#sphere",
+        campaign_revision=12,
+        reviewed_by="principal:dm",
+        target_scene_object_id="relic-1",
+        target_scene_object_source_ref="module:crypt#relic",
+    )
+    with pytest.raises(ValueError, match="campaign_revision"):
+        validate_sphere_annihilation_contact_facts(
+            profile,
+            facts,
+            scene_id="scene-1",
+            trap_id="sphere-1",
+            source_ref="module:crypt#sphere",
+            campaign_revision=13,
+            reviewed_by="principal:dm",
+            target_scene_object_id="relic-1",
+            target_scene_object_source_ref="module:crypt#relic",
+        )
+    with pytest.raises(ValueError, match="authorized DM"):
+        validate_sphere_annihilation_contact_facts(
+            profile,
+            result,
+            scene_id="scene-1",
+            trap_id="sphere-1",
+            source_ref="module:crypt#sphere",
+            campaign_revision=12,
+            reviewed_by="principal:player",
+            target_scene_object_id="relic-1",
+            target_scene_object_source_ref="module:crypt#relic",
+        )
 
 
 @pytest.mark.parametrize(
@@ -167,13 +286,16 @@ def test_locking_pit_disable_facts_are_exact_and_bound_to_the_scene_trap_and_act
         "reason": "The captive can reach and see the spring mechanism.",
     }
 
-    assert validate_locking_pit_disable_scene_facts(
-        profile,
-        facts,
-        scene_id="scene-1",
-        trap_id="pit-1",
-        actor_id="captive-1",
-    ) == facts
+    assert (
+        validate_locking_pit_disable_scene_facts(
+            profile,
+            facts,
+            scene_id="scene-1",
+            trap_id="pit-1",
+            actor_id="captive-1",
+        )
+        == facts
+    )
     with pytest.raises(ValueError, match="source-defined scene"):
         validate_locking_pit_disable_scene_facts(
             profile,
@@ -290,9 +412,7 @@ def test_named_traps_explicitly_mark_incomplete_area_condition_and_complex_settl
 
 def test_fire_statue_and_sphere_profiles_keep_source_detection_and_spell_effects_bounded():
     fire_marker = 'trap_profile: {"profile_id":"srd5.1.fire_breathing_statue"}'
-    fire = source_trap_profile(
-        {"profile_id": "srd5.1.fire_breathing_statue"}, fire_marker
-    )
+    fire = source_trap_profile({"profile_id": "srd5.1.fire_breathing_statue"}, fire_marker)
     assert fire["detect"]["active"] == [
         {"ability": "perception", "dc": 15},
         {"ability": "arcana", "dc": 15},
@@ -301,9 +421,7 @@ def test_fire_statue_and_sphere_profiles_keep_source_detection_and_spell_effects
         "hidden_pressure_plate",
         "faint_scorch_marks_on_floor_and_walls",
     ]
-    assert fire["detect"]["reveals_on_success_by_ability"] == {
-        "arcana": ["magic_trap"]
-    }
+    assert fire["detect"]["reveals_on_success_by_ability"] == {"arcana": ["magic_trap"]}
     assert fire["disable"] == {"ability": "arcana", "dc": 15}
     assert fire["magic_detection"] == {
         "effect": "detect_magic_or_equivalent",
@@ -318,9 +436,7 @@ def test_fire_statue_and_sphere_profiles_keep_source_detection_and_spell_effects
     }
 
     sphere_marker = 'trap_profile: {"profile_id":"srd5.1.sphere_of_annihilation"}'
-    sphere = source_trap_profile(
-        {"profile_id": "srd5.1.sphere_of_annihilation"}, sphere_marker
-    )
+    sphere = source_trap_profile({"profile_id": "srd5.1.sphere_of_annihilation"}, sphere_marker)
     assert sphere["detect"]["active"] == [{"ability": "arcana", "dc": 20}]
     assert sphere["detect"]["reveals_on_success"] == [
         "sphere_of_annihilation_in_stone_mouth",
@@ -500,12 +616,15 @@ def test_rolling_sphere_pressure_trigger_fact_is_source_bound_and_inclusive_at_t
         "weight_lb": 20,
     }
 
-    assert validate_rolling_sphere_trigger_fact(
-        profile,
-        fact,
-        scene_id="scene-1",
-        trap_id="sphere-plate-1",
-    ) == fact
+    assert (
+        validate_rolling_sphere_trigger_fact(
+            profile,
+            fact,
+            scene_id="scene-1",
+            trap_id="sphere-plate-1",
+        )
+        == fact
+    )
     with pytest.raises(ValueError, match="20 lb or greater"):
         validate_rolling_sphere_trigger_fact(
             profile,
@@ -531,9 +650,7 @@ def test_rolling_sphere_pressure_trigger_fact_is_source_bound_and_inclusive_at_t
 
 def test_source_trap_area_spatial_facts_bind_every_actor_to_scene_trap_source_and_revision():
     marker = 'trap_profile: {"profile_id":"srd5.1.fire_breathing_statue"}'
-    profile = source_trap_profile(
-        {"profile_id": "srd5.1.fire_breathing_statue"}, marker
-    )
+    profile = source_trap_profile({"profile_id": "srd5.1.fire_breathing_statue"}, marker)
     facts = {
         "decision_id": "dm-area-review-1",
         "reason": "Reviewed the statue's cone and the current scene positions.",
@@ -894,9 +1011,7 @@ def test_falling_net_section_cut_releases_only_its_owned_restraints_and_accumula
         destroyed_object_id="net",
         destroyed_hit_points=0,
     )
-    assert destroyed["traps"]["net"]["released_actor_ids"] == [
-        "scout", "guard", "preexisting"
-    ]
+    assert destroyed["traps"]["net"]["released_actor_ids"] == ["scout", "guard", "preexisting"]
 
 
 def test_poison_needle_profile_and_owned_condition_are_fixed_and_bounded():
@@ -945,12 +1060,15 @@ def test_poison_needle_profile_and_owned_condition_are_fixed_and_bounded():
         separators=(",", ":"),
     )
     assert len(canonical_source) > 300
-    assert build_poison_needle_condition_effect(
-        profile_id=profile["profile_id"],
-        source_ref=canonical_source,
-        trap_id="needle-1",
-        target_actor_id="actor-1",
-    )["metadata"]["trap_state"]["source_ref"] == canonical_source
+    assert (
+        build_poison_needle_condition_effect(
+            profile_id=profile["profile_id"],
+            source_ref=canonical_source,
+            trap_id="needle-1",
+            target_actor_id="actor-1",
+        )["metadata"]["trap_state"]["source_ref"]
+        == canonical_source
+    )
     sheet = default_character_sheet()
     sheet["edition"] = "2014"
     sheet, _ = add_effect(sheet, effect)
@@ -1086,22 +1204,16 @@ def test_source_pit_depth_is_scene_fact_bounded_by_the_selected_profile():
         validate_source_pit_depth(profile("srd5.1.simple_pit"), True)
     assert validate_source_pit_depth(profile("srd5.1.locking_pit"), 10) == 10
     assert validate_source_pit_depth(profile("srd5.1.spiked_locking_pit"), 20) == 20
-    assert (
-        validate_source_pit_depth(profile("srd5.1.poisoned_spiked_locking_pit"), 10) == 10
-    )
+    assert validate_source_pit_depth(profile("srd5.1.poisoned_spiked_locking_pit"), 10) == 10
     with pytest.raises(ValueError, match="outside the fixed source profile"):
         validate_source_pit_depth(profile("srd5.1.locking_pit"), 15)
 
 
 def test_source_trap_spells_reveal_only_aura_and_apply_exact_dispel_effects():
     fire_marker = 'trap_profile: {"profile_id":"srd5.1.fire_breathing_statue"}'
-    fire = source_trap_profile(
-        {"profile_id": "srd5.1.fire_breathing_statue"}, fire_marker
-    )
+    fire = source_trap_profile({"profile_id": "srd5.1.fire_breathing_statue"}, fire_marker)
     sphere_marker = 'trap_profile: {"profile_id":"srd5.1.sphere_of_annihilation"}'
-    sphere = source_trap_profile(
-        {"profile_id": "srd5.1.sphere_of_annihilation"}, sphere_marker
-    )
+    sphere = source_trap_profile({"profile_id": "srd5.1.sphere_of_annihilation"}, sphere_marker)
     base = {
         "source_ref": "module:crypt#traps",
         "scene_id": "crypt-room",

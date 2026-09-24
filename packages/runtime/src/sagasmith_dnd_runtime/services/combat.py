@@ -32,6 +32,13 @@ class GridCellSearchTarget(TypedDict):
     y: int
 
 
+def _adventuring_gear_hazard_effect(plan: dict[str, Any], hazard_kind: str) -> dict[str, Any]:
+    effect = dict(plan.get("effect") or {})
+    if hazard_kind == "oil (flask)":
+        effect = dict(effect.get("if_lit") or {})
+    return effect
+
+
 def _without_repeated_preflight_cards(encounter: dict[str, Any]) -> dict[str, Any]:
     """Keep the source manifest but fetch its preparation-time cards on demand."""
     manifest = encounter.get("participant_manifest")
@@ -174,10 +181,9 @@ def _settle_adventuring_gear_burning_turn_start(
             "throw",
         )
         source_effect = dict(plan.get("effect") or {})
-        if (
-            effect.get("damage") != source_effect.get("ongoing_damage")
-            or effect.get("damage_type") != source_effect.get("ongoing_damage_type")
-        ):
+        if effect.get("damage") != source_effect.get("ongoing_damage") or effect.get(
+            "damage_type"
+        ) != source_effect.get("ongoing_damage_type"):
             raise _support.CombatEngineError(
                 "Alchemist's Fire turn effect differs from its source-defined plan"
             )
@@ -257,7 +263,9 @@ class CombatService:
         self.require_write_contract(expected_revision, idempotency_key)
         resolved_branch = self.require_current_branch(campaign_id, branch_id)
         payload = {
-            "trap_id": trap_id, "action": action, "source_ref": source_ref,
+            "trap_id": trap_id,
+            "action": action,
+            "source_ref": source_ref,
             "source_excerpt": source_excerpt,
         }
         scope = f"trap-state:{campaign_id}:{resolved_branch}:{principal_id}"
@@ -272,11 +280,17 @@ class CombatService:
                 f"{expected_revision}, found {campaign.revision}"
             )
         _, exact_source, expanded = self.managed_module_source_ref(
-            campaign_id, source_ref, require_exact=True, require_active_module=True,
+            campaign_id,
+            source_ref,
+            require_exact=True,
+            require_active_module=True,
         )
         assert expanded is not None
         self.managed_module_source_excerpt(
-            expanded, source_excerpt, field="trap source_excerpt", minimum_length=10,
+            expanded,
+            source_excerpt,
+            field="trap source_excerpt",
+            minimum_length=10,
         )
         next_state = _support.deepcopy(campaign.state)
         next_state["trap_state"] = transition_trap_state(
@@ -289,8 +303,10 @@ class CombatService:
 
         def response(revisions: list[Any]) -> dict[str, Any]:
             return {
-                "status": "committed", "resolution_id": resolution_id,
-                "trap_id": trap_id, "action": action,
+                "status": "committed",
+                "resolution_id": resolution_id,
+                "trap_id": trap_id,
+                "action": action,
                 "trap": next_state["trap_state"]["traps"][trap_id],
                 "campaign_revision": campaign.revision + 1,
                 "revisions": [_support.asdict(item) for item in revisions],
@@ -305,7 +321,9 @@ class CombatService:
             branch_id=resolved_branch,
             idempotency_key=idempotency_key,
             idempotency_write=_support.IdempotencyWrite(
-                scope=scope, payload=replay_payload, response=response,
+                scope=scope,
+                payload=replay_payload,
+                response=response,
             ),
         )
         return response(list(revisions or []))
@@ -1574,8 +1592,7 @@ class CombatService:
                             isinstance(effect, dict)
                             and effect.get("active", True)
                             and effect.get("kind") == "speed_penalty"
-                            and effect.get("mechanic_id")
-                            == "dnd5e.core.adventuring_gear.caltrops"
+                            and effect.get("mechanic_id") == "dnd5e.core.adventuring_gear.caltrops"
                             and effect.get("source_ref") == ADVENTURING_GEAR_SOURCE_REF
                             and str(effect.get("target_id") or "") == str(actor_id)
                             and effect.get("ends_when_hp_at_least") == 1
@@ -1658,6 +1675,66 @@ class CombatService:
             f"{int(encounter.get('turn_index', 0) or 0)}:"
             f"{str((current or {}).get('actor_id') or '')}"
         )
+
+    def validate_oil_fire_source(
+        self,
+        campaign_id: str,
+        state: dict[str, Any],
+        encounter: dict[str, Any],
+        battle_map: dict[str, Any],
+        hazard: dict[str, Any],
+    ) -> None:
+        """Fail closed unless Oil still matches its reviewed source and map snapshot."""
+        digest = _support.json_sha256(battle_map)
+        fire_source = next(
+            (
+                fact
+                for fact in state.get("fire_source_reviews", [])
+                if isinstance(fact, dict) and fact.get("id") == hazard.get("fire_source_id")
+            ),
+            None,
+        )
+        if (
+            hazard.get("oil_lit") is not True
+            or hazard.get("scene_id") != encounter.get("scene_id")
+            or hazard.get("encounter_id") != encounter.get("id")
+            or hazard.get("battle_map_sha256") != digest
+            or not isinstance(fire_source, dict)
+            or fire_source.get("active") is not True
+            or fire_source.get("scene_id") != encounter.get("scene_id")
+            or fire_source.get("encounter_id") != encounter.get("id")
+            or fire_source.get("map_revision") != battle_map.get("map_revision")
+            or fire_source.get("map_sha256") != digest
+            or fire_source.get("cell") != hazard.get("area_origin")
+            or fire_source.get("level_ground_surface") is not True
+        ):
+            raise _support.NeedsRulingError(
+                "Oil hazard no longer matches its reviewed scene/map/fire source",
+                missing=("adventuring_gear.current_fire_source",),
+                ruling_kind="missing_or_conflicting_source_review",
+            )
+        try:
+            _, exact_source_ref, expanded = self.managed_module_source_ref(
+                campaign_id,
+                fire_source.get("source_ref"),
+                require_exact=True,
+                expected_scene_id=str(encounter.get("scene_id") or ""),
+                require_active_module=True,
+            )
+            if expanded is None or exact_source_ref != fire_source.get("source_ref"):
+                raise ValueError("fire source changed")
+            self.managed_module_source_excerpt(
+                expanded,
+                fire_source.get("source_excerpt"),
+                field="fire source source_excerpt",
+                minimum_length=10,
+            )
+        except (AssertionError, LookupError, ValueError) as error:
+            raise _support.NeedsRulingError(
+                "Oil fire source no longer matches the active module source",
+                missing=("adventuring_gear.current_fire_source",),
+                ruling_kind="missing_or_conflicting_source_review",
+            ) from error
 
     def expire_standard_source_turn_effects(
         self,
@@ -1907,9 +1984,7 @@ class CombatService:
                     "Confusion requires a melee attack against its random creature"
                 )
         actor_record = (
-            self.characters.get(str(actor_id_value))
-            if hasattr(self, "characters")
-            else None
+            self.characters.get(str(actor_id_value)) if hasattr(self, "characters") else None
         )
         nearest_contract = nearest_attack_constraint(
             actor_record.sheet if actor_record is not None else {}, {}
@@ -2007,12 +2082,8 @@ class CombatService:
         left_sheet = self.characters.get(left_id).sheet
         right_sheet = self.characters.get(right_id).sheet
         battle_map = dict(encounter.get("battle_map") or {})
-        left_space = grid_space(
-            {"size": effective_size(left_sheet)}, left_point, battle_map
-        )
-        right_space = grid_space(
-            {"size": effective_size(right_sheet)}, right_point, battle_map
-        )
+        left_space = grid_space({"size": effective_size(left_sheet)}, left_point, battle_map)
+        right_space = grid_space({"size": effective_size(right_sheet)}, right_point, battle_map)
         return int(
             distance_between(
                 left_point,
@@ -3185,6 +3256,66 @@ class CombatService:
             battle_map=compiled_map,
             positioning_mode=positioning_mode,
         )
+        current_elapsed_ticks = int(
+            dict(campaign.state or {}).get("game_time", {}).get("elapsed_ticks", 0) or 0
+        )
+        participant_set = set(participant_ids)
+        projected_candle_lights = []
+        for effect in dict(campaign.state or {}).get("world_effects", []):
+            if (
+                not isinstance(effect, dict)
+                or effect.get("kind") != "adventuring_gear_candle_light"
+                or effect.get("active") is not True
+                or effect.get("source") != "bundled:srd2014/04_Equipment/Adventuring_Gear.md"
+            ):
+                continue
+            actor_id_value = str(effect.get("source_actor_id") or "")
+            metadata = dict(effect.get("metadata") or {})
+            due_ticks = metadata.get("fuel_due_elapsed_ticks")
+            if (
+                actor_id_value not in participant_set
+                or isinstance(due_ticks, bool)
+                or not isinstance(due_ticks, int)
+                or due_ticks <= current_elapsed_ticks
+                or metadata.get("item_name") != "Candle"
+                or metadata.get("source_ref") != "bundled:srd2014/04_Equipment/Adventuring_Gear.md"
+                or metadata.get("source_key") != "dnd5e.content.srd2014.item.candle"
+            ):
+                continue
+            spend = next(
+                (
+                    entry
+                    for entry in dict(campaign.state or {}).get("item_spends", [])
+                    if isinstance(entry, dict)
+                    and str(entry.get("id") or "") == str(metadata.get("action_id") or "")
+                    and str(entry.get("item_id") or "") == str(metadata.get("item_id") or "")
+                    and entry.get("quantity") == 1
+                    and entry.get("source_ref")
+                    == "bundled:srd2014/04_Equipment/Adventuring_Gear.md"
+                    and entry.get("source_key") == "dnd5e.content.srd2014.item.candle"
+                    and entry.get("character_id") == actor_id_value
+                ),
+                None,
+            )
+            if spend is None:
+                continue
+            projected_candle_lights.append(
+                {
+                    "id": f"candle-world:{effect.get('id')}",
+                    "item_id": metadata["item_id"],
+                    "item_name": "Candle",
+                    "source_key": metadata["source_key"],
+                    "source_ref": "bundled:srd2014/04_Equipment/Adventuring_Gear.md",
+                    "actor_id": actor_id_value,
+                    "active": True,
+                    "remaining_fuel_ticks": due_ticks - current_elapsed_ticks,
+                    "fuel_due_elapsed_ticks": due_ticks,
+                    "world_effect_id": effect.get("id"),
+                    "last_action_id": metadata.get("action_id"),
+                }
+            )
+        if projected_candle_lights:
+            encounter["adventuring_gear_lights"] = projected_candle_lights
         if preflight is not None:
             encounter["participant_manifest"] = preflight
         if compiled_map and compiled_map.get("deployment_zones"):
@@ -3657,10 +3788,9 @@ class CombatService:
             dict(current_combatant.get("turn_flags") or {}).get("madness_confusion") or {}
         )
         current_pending_movement = dict(current_confusion.get("movement_constraint") or {})
-        if (
-            current_confusion.get("turn_token") == self.encounter_turn_token(encounter)
-            and current_pending_movement.get("status") in {"pending", "pending_reaction"}
-        ):
+        if current_confusion.get("turn_token") == self.encounter_turn_token(
+            encounter
+        ) and current_pending_movement.get("status") in {"pending", "pending_reaction"}:
             raise _support.CombatEngineError(
                 "Confusion random movement must be completed before ending this turn"
             )
@@ -3683,9 +3813,8 @@ class CombatService:
             turn_budget = dict(current_combatant.get("turn_budget") or {})
             movement_available = max(0, int(turn_budget.get("movement", 0) or 0))
             movement_spent = max(0, int(turn_budget.get("movement_spent", 0) or 0))
-            if (
-                not current_turn_conditions.intersection(cannot_act_or_move)
-                and (movement_available or movement_spent)
+            if not current_turn_conditions.intersection(cannot_act_or_move) and (
+                movement_available or movement_spent
             ):
                 if current_madness_flee.get("dash_used_turn_token") != current_turn_token:
                     raise _support.CombatEngineError(
@@ -3699,6 +3828,85 @@ class CombatService:
         current = self.characters.get(actor_id)
         current_sheet = _support.deepcopy(current.sheet)
         next_encounter = _support.deepcopy(encounter)
+        oil_turn_events: list[dict[str, Any]] = []
+        ended_turn_token = self.encounter_turn_token(encounter)
+        current_position = dict(current_combatant.get("position") or {})
+        current_cell = f"{current_position.get('x')},{current_position.get('y')}"
+        current_map = dict(encounter.get("battle_map") or {})
+        current_map_digest = _support.json_sha256(current_map)
+        for hazard in next_encounter.get("adventuring_gear_hazards", []):
+            if (
+                not isinstance(hazard, dict)
+                or hazard.get("active") is not True
+                or hazard.get("hazard_kind") != "oil (flask)"
+            ):
+                continue
+            source_fact = next(
+                (
+                    entry
+                    for entry in dict(campaign.state or {}).get("fire_source_reviews", [])
+                    if isinstance(entry, dict) and entry.get("id") == hazard.get("fire_source_id")
+                ),
+                None,
+            )
+            if (
+                hazard.get("scene_id") != encounter.get("scene_id")
+                or hazard.get("encounter_id") != encounter.get("id")
+                or hazard.get("battle_map_sha256") != current_map_digest
+                or not isinstance(source_fact, dict)
+                or source_fact.get("active") is not True
+                or source_fact.get("scene_id") != encounter.get("scene_id")
+                or source_fact.get("encounter_id") != encounter.get("id")
+                or source_fact.get("map_revision") != current_map.get("map_revision")
+                or source_fact.get("map_sha256") != current_map_digest
+                or source_fact.get("level_ground_surface") is not True
+            ):
+                raise _support.NeedsRulingError(
+                    "Oil hazard no longer matches its reviewed scene/map/fire source",
+                    missing=("adventuring_gear.current_fire_source",),
+                    ruling_kind="missing_or_conflicting_source_review",
+                )
+            self.validate_oil_fire_source(
+                campaign_id, dict(campaign.state or {}), encounter, current_map, hazard
+            )
+            if current_cell not in set(hazard.get("cells") or []):
+                continue
+            triggered_tokens = dict(hazard.get("triggered_turn_tokens") or {})
+            if triggered_tokens.get(actor_id) == ended_turn_token:
+                continue
+            damage = _support.apply_damage_parts_to_sheet(
+                current_sheet,
+                [{"amount": 5, "damage_type": "fire"}],
+                source=ADVENTURING_GEAR_SOURCE_REF,
+                ruleset="2014",
+                death_saves=self.combatant_zero_hp_buffered(current_combatant),
+            )
+            current_sheet = damage["sheet"]
+            self.add_concentration_window(
+                next_encounter,
+                actor_id,
+                damage.get("concentration"),
+                next_revision=campaign.revision + 1,
+            )
+            triggered_tokens[actor_id] = ended_turn_token
+            hazard["triggered_turn_tokens"] = triggered_tokens
+            receipt = {
+                "actor_id": actor_id,
+                "turn_token": ended_turn_token,
+                "damage": {key: value for key, value in damage.items() if key != "sheet"},
+            }
+            hazard.setdefault("trigger_receipts", []).append(receipt)
+            hazard["trigger_receipts"] = hazard["trigger_receipts"][-100:]
+            oil_turn_events.append({"hazard_id": hazard["id"], **receipt})
+        if oil_turn_events:
+            self.sync_combatant_conditions(next_encounter, actor_id, current_sheet)
+            next_encounter["log"] = [
+                *list(next_encounter.get("log") or []),
+                *[
+                    {"type": "adventuring_gear_hazard_trigger", **event}
+                    for event in oil_turn_events
+                ],
+            ][-100:]
         if normalized_confusion_direction_map is not None:
             next_encounter["confusion_direction_map"] = normalized_confusion_direction_map
         self.require_no_blocking_pending(next_encounter)
@@ -3727,6 +3935,20 @@ class CombatService:
         next_state["combat"] = _support.end_turn(
             next_encounter, actor_id_value=actor_id, current_actor_sheet=current_sheet
         )
+        next_actor_after_end = _support.current_combatant(next_state["combat"])
+        if next_actor_after_end is not None:
+            next_actor_id_after_end = str(next_actor_after_end.get("actor_id") or "")
+            next_round_after_end = int(next_state["combat"].get("round", 1) or 1)
+            for hazard in next_state["combat"].get("adventuring_gear_hazards", []):
+                if (
+                    isinstance(hazard, dict)
+                    and hazard.get("active") is True
+                    and hazard.get("hazard_kind") == "oil (flask)"
+                    and next_round_after_end >= int(hazard.get("expires_at_round", 0) or 0)
+                    and next_actor_id_after_end == hazard.get("expires_at_actor_id")
+                ):
+                    hazard["active"] = False
+                    hazard["inactive_reason"] = "two_round_duration_expired"
         expired_attack_advantage = self.expire_next_attack_advantage(
             next_state["combat"],
             actor_id=actor_id,
@@ -3757,8 +3979,7 @@ class CombatService:
                 for effect in next_state["combat"].get("ongoing_effects", [])
             )
             needs_madness_rng = bool(
-                next_actor_record
-                and _active_madness_confusion_effects(next_actor_record.sheet)
+                next_actor_record and _active_madness_confusion_effects(next_actor_record.sheet)
             )
             if needs_poison_rng and _support.active_random_stream() is None:
                 with self.campaign_random_context(
@@ -3913,9 +4134,7 @@ class CombatService:
                         ),
                         ruling_kind="source_or_scene_fact",
                     )
-                source_actor_ids = sorted(
-                    {str(item["actor_id"]) for item in madness_flee_bindings}
-                )
+                source_actor_ids = sorted({str(item["actor_id"]) for item in madness_flee_bindings})
                 if next_actor_id in source_actor_ids:
                     raise _support.CombatEngineError(
                         "fleeing madness cannot use the affected actor as its fear source"
@@ -3928,9 +4147,7 @@ class CombatService:
                     ]
                     if str(item.get("actor_id") or "")
                 }
-                missing_encounter_sources = sorted(
-                    set(source_actor_ids) - encounter_members.keys()
-                )
+                missing_encounter_sources = sorted(set(source_actor_ids) - encounter_members.keys())
                 if missing_encounter_sources:
                     raise _support.NeedsRulingError(
                         "fleeing madness source must be present in the active encounter",
@@ -4163,9 +4380,7 @@ class CombatService:
                 )
                 flags = dict(next_combatant.get("turn_flags") or {})
                 flee_event = {
-                    "effect_ids": [
-                        str(item["effect_id"]) for item in madness_flee_bindings
-                    ],
+                    "effect_ids": [str(item["effect_id"]) for item in madness_flee_bindings],
                     "source_actor_ids": sorted(
                         {str(item["actor_id"]) for item in madness_flee_bindings}
                     ),
@@ -4175,9 +4390,7 @@ class CombatService:
                 }
                 flags["madness_flee"] = flee_event
                 next_combatant["turn_flags"] = flags
-                madness_turn_events.append(
-                    {"actor_id": next_actor_id, **flee_event}
-                )
+                madness_turn_events.append({"actor_id": next_actor_id, **flee_event})
                 madness_turn_receipts.extend(
                     _support.core_receipts(
                         rule_context,
@@ -4211,9 +4424,7 @@ class CombatService:
                 nearest_contract = nearest_attack_constraint(
                     source_sheets[next_actor_id], distances
                 )
-                nearest_ids = (
-                    nearest_contract["nearest_actor_ids"] if nearest_contract else []
-                )
+                nearest_ids = nearest_contract["nearest_actor_ids"] if nearest_contract else []
                 if not nearest_ids:
                     raise _support.NeedsRulingError(
                         "nearest-creature madness needs another encounter creature",
@@ -4411,6 +4622,7 @@ class CombatService:
                 "poison_events": poison_turn_events,
                 "madness_events": madness_turn_events,
                 "adventuring_gear_events": gear_turn_events,
+                "oil_hazard_events": oil_turn_events,
                 "rule_receipts": rule_receipts,
                 "ruleset_fingerprint": rule_context.fingerprint,
                 "campaign_revision": campaign.revision + 1,
@@ -4520,9 +4732,25 @@ class CombatService:
             raise _support.CombatEngineError(
                 "Caltrops have stopped this actor's movement for the turn"
             )
+        captured_trap = next(
+            (
+                hazard
+                for hazard in encounter.get("adventuring_gear_hazards", [])
+                if isinstance(hazard, dict)
+                and hazard.get("hazard_kind") == "hunting trap"
+                and hazard.get("trapped_actor_id") == actor_id
+                and hazard.get("capture_status") != "freed"
+            ),
+            None,
+        )
+        if captured_trap is not None:
+            raise _support.NeedsRulingError(
+                "captured movement is limited by a three-foot chain, below Grid resolution",
+                missing=("adventuring_gear.hunting_trap.subcell_tether_movement",),
+                ruling_kind="agent_dm_adjudication",
+            )
         confusion_event = dict(
-            dict((moving_combatant or {}).get("turn_flags") or {}).get("madness_confusion")
-            or {}
+            dict((moving_combatant or {}).get("turn_flags") or {}).get("madness_confusion") or {}
         )
         confusion_constraint = dict(confusion_event.get("movement_constraint") or {})
         confusion_move_pending = (
@@ -4600,9 +4828,7 @@ class CombatService:
                     ruling_kind="agent_dm_adjudication",
                 )
             normalized_points = [
-                (int(point[0]), int(point[1]))
-                for point in path_points
-                if point is not None
+                (int(point[0]), int(point[1])) for point in path_points if point is not None
             ]
             origin = (int(origin[0]), int(origin[1]))
             if normalized_points[0] != origin:
@@ -5019,9 +5245,7 @@ class CombatService:
                 _spend_movement_uninterrupted,
             )
 
-            confusion_movement_cost = _remaining_movement_ft(
-                moving_combatant, travel_mode
-            )
+            confusion_movement_cost = _remaining_movement_ft(moving_combatant, travel_mode)
             planned = _spend_movement_uninterrupted(
                 encounter,
                 actor_id,
@@ -5136,8 +5360,7 @@ class CombatService:
                     "gear hazard movement path must end at the settled destination"
                 )
             if any(
-                any(not coordinate.is_integer() for coordinate in point)
-                for point in route_points
+                any(not coordinate.is_integer() for coordinate in point) for point in route_points
             ):
                 raise _support.NeedsRulingError(
                     "deployed gear hazards require integer Grid cell positions",
@@ -5159,8 +5382,7 @@ class CombatService:
             for hazard in active_gear_hazards:
                 if (
                     str(hazard.get("encounter_id") or "") != str(encounter.get("id") or "")
-                    or str(hazard.get("scene_id") or "")
-                    != str(encounter.get("scene_id") or "")
+                    or str(hazard.get("scene_id") or "") != str(encounter.get("scene_id") or "")
                     or str(hazard.get("battle_map_sha256") or "") != current_map_digest
                     or hazard.get("source_ref") != ADVENTURING_GEAR_SOURCE_REF
                     or hazard.get("hazard_kind")
@@ -5169,6 +5391,8 @@ class CombatService:
                         "ball bearings",
                         "caltrops (bag of 20)",
                         "caltrops",
+                        "oil (flask)",
+                        "hunting trap",
                     }
                 ):
                     raise _support.NeedsRulingError(
@@ -5185,25 +5409,69 @@ class CombatService:
                     or not cells
                     or any(not isinstance(cell, str) for cell in cells)
                 ):
-                    raise _support.CombatEngineError(
-                        "deployed gear hazard state is malformed"
-                    )
+                    raise _support.CombatEngineError("deployed gear hazard state is malformed")
+                is_oil = hazard.get("hazard_kind") == "oil (flask)"
+                is_hunting_trap = hazard.get("hazard_kind") == "hunting trap"
                 plan = resolve_adventuring_gear_intent(
                     {
                         "name": hazard.get("hazard_kind"),
                         "source_key": hazard.get("source_key"),
                         "source_ref": ADVENTURING_GEAR_SOURCE_REF,
                     },
-                    "spread",
+                    "set" if is_hunting_trap else "pour_ground" if is_oil else "spread",
                 )
-                hazard_effect = dict(plan.get("effect") or {})
+                hazard_effect = _adventuring_gear_hazard_effect(
+                    plan, str(hazard.get("hazard_kind") or "")
+                )
                 hazard_trigger = str(hazard_effect.get("trigger") or "")
-                if plan.get("target") != "ground_area" or hazard_trigger not in {
-                    "creature_crosses_area",
-                    "creature_enters_area",
-                }:
+                if plan.get("target") != (
+                    "ground_location"
+                    if is_hunting_trap
+                    else "level_ground_surface"
+                    if is_oil
+                    else "ground_area"
+                ) or (
+                    hazard_trigger
+                    not in {
+                        "creature_crosses_area",
+                        "creature_enters_area",
+                    }
+                    and not (is_oil and hazard_trigger == "creature_enters_or_ends_turn_in_area")
+                    and not (
+                        is_hunting_trap and hazard_trigger == "creature_steps_on_pressure_plate"
+                    )
+                ):
                     raise _support.CombatEngineError(
                         "deployed gear hazard has no supported source movement contract"
+                    )
+                if is_oil:
+                    source_fact = next(
+                        (
+                            entry
+                            for entry in dict(campaign.state or {}).get("fire_source_reviews", [])
+                            if isinstance(entry, dict)
+                            and entry.get("id") == hazard.get("fire_source_id")
+                        ),
+                        None,
+                    )
+                    if (
+                        not isinstance(source_fact, dict)
+                        or source_fact.get("active") is not True
+                        or source_fact.get("scene_id") != encounter.get("scene_id")
+                        or source_fact.get("encounter_id") != encounter.get("id")
+                        or source_fact.get("map_revision") != battle_map.get("map_revision")
+                        or source_fact.get("map_sha256") != current_map_digest
+                        or source_fact.get("cell") != hazard.get("area_origin")
+                        or source_fact.get("level_ground_surface") is not True
+                        or hazard.get("oil_lit") is not True
+                    ):
+                        raise _support.NeedsRulingError(
+                            "Oil hazard no longer matches its reviewed fire source/map",
+                            missing=("adventuring_gear.current_fire_source",),
+                            ruling_kind="missing_or_conflicting_source_review",
+                        )
+                    self.validate_oil_fire_source(
+                        campaign_id, dict(campaign.state or {}), encounter, battle_map, hazard
                     )
                 area = dict(plan.get("area") or {})
                 origin_cell = dict(hazard.get("area_origin") or {})
@@ -5211,17 +5479,21 @@ class CombatService:
                 height = area.get("depth_feet")
                 expected_width = width // 5 if type(width) is int and width > 0 else 0
                 expected_height = height // 5 if type(height) is int and height > 0 else 0
-                expected_cells = {
-                    f"{int(origin_cell['x']) + dx},{int(origin_cell['y']) + dy}"
-                    for dx in range(expected_width)
-                    for dy in range(expected_height)
-                } if (
-                    type(origin_cell.get("x")) is int
-                    and type(origin_cell.get("y")) is int
-                    and area.get("shape") == "square"
-                    and width == height
-                    and width % 5 == 0
-                ) else set()
+                expected_cells = (
+                    {
+                        f"{int(origin_cell['x']) + dx},{int(origin_cell['y']) + dy}"
+                        for dx in range(expected_width)
+                        for dy in range(expected_height)
+                    }
+                    if (
+                        type(origin_cell.get("x")) is int
+                        and type(origin_cell.get("y")) is int
+                        and area.get("shape") == "square"
+                        and (width == height or is_hunting_trap)
+                        and width % 5 == 0
+                    )
+                    else set()
+                )
                 if (
                     expected_width < 1
                     or expected_height < 1
@@ -5242,6 +5514,36 @@ class CombatService:
                     )
                 hazard_cells_by_id[hazard_id] = set(cells)
                 hazard_plans[hazard_id] = plan
+                if is_hunting_trap and not isinstance(hazard.get("anchor_review"), dict):
+                    raise _support.NeedsRulingError(
+                        "Hunting Trap no longer has its reviewed anchor source",
+                        missing=("adventuring_gear.immobile_anchor_review",),
+                        ruling_kind="missing_or_conflicting_source_review",
+                    )
+                if is_hunting_trap:
+                    review = dict(hazard["anchor_review"])
+                    try:
+                        _, exact_ref, expanded = self.managed_module_source_ref(
+                            campaign_id,
+                            review.get("source_ref"),
+                            require_exact=True,
+                            expected_scene_id=str(encounter.get("scene_id") or ""),
+                            require_active_module=True,
+                        )
+                        if expanded is None or exact_ref != review.get("source_ref"):
+                            raise ValueError("anchor source changed")
+                        self.managed_module_source_excerpt(
+                            expanded,
+                            review.get("source_excerpt"),
+                            field="Hunting Trap anchor source_excerpt",
+                            minimum_length=10,
+                        )
+                    except (AssertionError, LookupError, ValueError) as error:
+                        raise _support.NeedsRulingError(
+                            "Hunting Trap anchor no longer matches the active module source",
+                            missing=("adventuring_gear.immobile_anchor_source",),
+                            ruling_kind="missing_or_conflicting_source_review",
+                        ) from error
             route_cells = [f"{int(point[0])},{int(point[1])}" for point in route_points]
             crossings = []
             for hazard in active_gear_hazards:
@@ -5261,6 +5563,23 @@ class CombatService:
                 dict(hazard_plans[str(hazard["id"])].get("effect") or {}).get("trigger")
                 == "creature_enters_area"
                 for hazard, _ in crossings
+            )
+            oil_crossings = [
+                entry
+                for entry in crossings
+                if _adventuring_gear_hazard_effect(
+                    hazard_plans[str(entry[0]["id"])],
+                    str(entry[0].get("hazard_kind") or ""),
+                ).get("trigger")
+                == "creature_enters_or_ends_turn_in_area"
+            ]
+            save_crossings = [entry for entry in crossings if entry not in oil_crossings]
+            mandatory_trap_save = any(
+                _adventuring_gear_hazard_effect(
+                    hazard_plans[str(hazard["id"])], str(hazard.get("hazard_kind") or "")
+                ).get("trigger")
+                == "creature_steps_on_pressure_plate"
+                for hazard, _ in save_crossings
             )
             if has_caltrops_crossing and (
                 movement_distance != (len(route_points) - 1) * 5
@@ -5288,7 +5607,11 @@ class CombatService:
                     )
                 )
                 half_speed = effective_walk > 0 and spent_after <= effective_walk // 2
-            if crossings and not half_speed and _support.active_random_stream() is None:
+            if (
+                save_crossings
+                and (not half_speed or mandatory_trap_save)
+                and _support.active_random_stream() is None
+            ):
                 with self.campaign_random_context(
                     campaign_id,
                     "combat_movement_adventuring_gear_hazard",
@@ -5312,7 +5635,7 @@ class CombatService:
                         jump=jump,
                     )
             stream = _support.active_random_stream()
-            if crossings and not half_speed:
+            if save_crossings and (not half_speed or mandatory_trap_save):
                 random_state = _support.validate_random_stream_state(
                     dict(campaign.state or {}).get("random_stream")
                     or _support.initial_random_stream(f"sagasmith-dnd:{campaign_id}")
@@ -5330,14 +5653,81 @@ class CombatService:
                     raise _support.CombatEngineError(
                         "gear hazard saves require the current campaign random snapshot"
                     )
-            actor_snapshot = self.combat_actor_snapshot(actor_id) if crossings else None
+            actor_snapshot = self.combat_actor_snapshot(actor_id) if save_crossings else None
             for hazard, route_index in crossings:
                 hazard_id = str(hazard["id"])
                 plan = hazard_plans[hazard_id]
-                effect = dict(plan.get("effect") or {})
+                effect = _adventuring_gear_hazard_effect(plan, str(hazard.get("hazard_kind") or ""))
                 trigger = str(effect.get("trigger") or "")
                 is_caltrops = trigger == "creature_enters_area"
-                if half_speed:
+                is_oil = trigger == "creature_enters_or_ends_turn_in_area"
+                is_hunting_trap = trigger == "creature_steps_on_pressure_plate"
+                if is_oil:
+                    turn_token = self.encounter_turn_token(encounter)
+                    prior_tokens = dict(hazard.get("triggered_turn_tokens") or {})
+                    if prior_tokens.get(actor_id) == turn_token:
+                        continue
+                    target_record = self.require_campaign_actor(campaign_id, actor_id)
+                    existing_update = next(
+                        (update for update in space_guards if update.character_id == actor_id),
+                        None,
+                    )
+                    actor_sheet = _support.deepcopy(
+                        existing_update.sheet
+                        if existing_update is not None
+                        else target_record.sheet
+                    )
+                    damage = _support.apply_damage_parts_to_sheet(
+                        actor_sheet,
+                        [{"amount": 5, "damage_type": "fire"}],
+                        source=ADVENTURING_GEAR_SOURCE_REF,
+                        ruleset="2014",
+                        death_saves=self.combatant_zero_hp_buffered(mover_after),
+                    )
+                    actor_sheet = damage["sheet"]
+                    resolution = {
+                        "hazard_id": hazard_id,
+                        "actor_id": actor_id,
+                        "source_key": hazard.get("source_key"),
+                        "trigger": "creature_enters_area",
+                        "turn_token": turn_token,
+                        "damage": {key: value for key, value in damage.items() if key != "sheet"},
+                        "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                    }
+                    self.add_concentration_window(
+                        next_encounter,
+                        actor_id,
+                        damage.get("concentration"),
+                        next_revision=campaign.revision + 1,
+                    )
+                    self.sync_combatant_conditions(next_encounter, actor_id, actor_sheet)
+                    update = _support.CharacterStateUpdate(
+                        character_id=actor_id,
+                        sheet=_support.validate_character_sheet(actor_sheet),
+                        notes=_support.validate_character_notes(target_record.notes),
+                        expected_revision=target_record.revision,
+                    )
+                    if existing_update is not None:
+                        space_guards[space_guards.index(existing_update)] = update
+                    else:
+                        space_guards.append(update)
+                    stored_hazard = next(
+                        item
+                        for item in next_encounter.get("adventuring_gear_hazards", [])
+                        if isinstance(item, dict) and item.get("id") == hazard_id
+                    )
+                    tokens = dict(stored_hazard.get("triggered_turn_tokens") or {})
+                    tokens[actor_id] = turn_token
+                    stored_hazard["triggered_turn_tokens"] = tokens
+                    stored_hazard.setdefault("trigger_receipts", []).append(
+                        {
+                            "actor_id": actor_id,
+                            "turn_token": turn_token,
+                            "damage": resolution["damage"],
+                        }
+                    )
+                    stored_hazard["trigger_receipts"] = stored_hazard["trigger_receipts"][-100:]
+                elif half_speed and not is_hunting_trap:
                     resolution = {
                         "hazard_id": hazard_id,
                         "actor_id": actor_id,
@@ -5386,7 +5776,7 @@ class CombatService:
                             "avoided"
                             if save.get("success") is True
                             else "damaged_and_stopped"
-                            if is_caltrops
+                            if is_caltrops or is_hunting_trap
                             else "prone"
                         ),
                         "route_index": route_index,
@@ -5403,10 +5793,15 @@ class CombatService:
                             if existing_update is not None
                             else actor_record.sheet
                         )
-                        if is_caltrops:
+                        if is_caltrops or is_hunting_trap:
+                            damage_amount = (
+                                int(_support.roll("1d4", rng=stream).total)
+                                if is_hunting_trap
+                                else 1
+                            )
                             damage = _support.apply_damage_parts_to_sheet(
                                 actor_sheet,
-                                [{"amount": 1, "damage_type": "piercing"}],
+                                [{"amount": damage_amount, "damage_type": "piercing"}],
                                 source=ADVENTURING_GEAR_SOURCE_REF,
                                 ruleset="2014",
                                 death_saves=self.combatant_zero_hp_buffered(mover_after),
@@ -5497,6 +5892,37 @@ class CombatService:
                             )
                             resolution["movement_stopped_this_turn"] = True
                             resolution["speed_penalty"] = _support.deepcopy(speed_effect)
+                        elif is_hunting_trap:
+                            stopped_position = route_points[route_index]
+                            mover_after["position"] = {
+                                "x": int(stopped_position[0]),
+                                "y": int(stopped_position[1]),
+                            }
+                            stopped_budget = dict(mover_after.get("turn_budget") or {})
+                            stopped_budget["movement_spent"] = (
+                                int(
+                                    dict(mover_before.get("turn_budget") or {}).get(
+                                        "movement_spent", 0
+                                    )
+                                    or 0
+                                )
+                                + route_index * 5
+                            )
+                            mover_after["turn_budget"] = stopped_budget
+                            stored_hazard = next(
+                                item
+                                for item in next_encounter.get("adventuring_gear_hazards", [])
+                                if isinstance(item, dict) and item.get("id") == hazard_id
+                            )
+                            stored_hazard["active"] = False
+                            stored_hazard["trapped_actor_id"] = actor_id
+                            stored_hazard["triggered_by_actor_id"] = actor_id
+                            stored_hazard["capture_status"] = "trapped"
+                            resolution["stopped_position"] = _support.deepcopy(
+                                mover_after["position"]
+                            )
+                            resolution["movement_stopped_this_turn"] = True
+                            resolution["tether_feet"] = 3
                         replacement = _support.CharacterStateUpdate(
                             character_id=actor_id,
                             sheet=_support.validate_character_sheet(actor_sheet),
@@ -5515,15 +5941,15 @@ class CombatService:
                         **_support.deepcopy(resolution),
                     },
                 ][-100:]
-                if is_caltrops and resolution.get("outcome") == "damaged_and_stopped":
+                if (is_caltrops or is_hunting_trap) and resolution.get(
+                    "outcome"
+                ) == "damaged_and_stopped":
                     break
         if confusion_move_pending:
             _set_confusion_movement_status(
                 next_encounter,
                 actor_id,
-                "pending_reaction"
-                if next_encounter.get("movement_continuation")
-                else "completed",
+                "pending_reaction" if next_encounter.get("movement_continuation") else "completed",
                 travel_mode=travel_mode,
                 movement_cost_ft=confusion_movement_cost,
             )
@@ -11379,9 +11805,8 @@ class CombatService:
                 f"expected {expected_revision}, found {campaign.revision}"
             )
         target = self.combat_actor_snapshot(target_id)
-        if (
-            _support.active_random_stream() is None
-            and damage_triggered_confusion_effect_ids(target["sheet"])
+        if _support.active_random_stream() is None and damage_triggered_confusion_effect_ids(
+            target["sheet"]
         ):
             with self.campaign_random_context(
                 campaign_id,

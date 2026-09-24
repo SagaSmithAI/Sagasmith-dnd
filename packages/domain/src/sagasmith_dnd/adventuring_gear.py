@@ -40,6 +40,13 @@ class GearAction:
 
 _ACTIONS = (
     GearAction(
+        "Candle",
+        "1 minute",
+        target="light",
+        duration="1 hour",
+        notes="bright 5-foot radius; dim for 5 more feet; light with a Tinderbox",
+    ),
+    GearAction(
         "Acid (vial)",
         "action",
         20,
@@ -301,6 +308,19 @@ _AREA_5 = {"shape": "square", "width_feet": 5, "depth_feet": 5}
 # These records are executable rule parameters, not settled outcomes. A caller
 # cannot supply damage, DCs, durations, or costs; only the action intent is input.
 _GEAR_INTENTS: dict[str, dict[str, dict[str, Any]]] = {
+    "candle": {
+        "light": _intent(
+            None,
+            "candle",
+            duration_ticks=TICKS_PER_HOUR,
+            effect={
+                "bright_light": {"shape": "radius", "feet": 5},
+                "dim_light_additional_feet": 5,
+            },
+            resource=_CONSUME_ONE,
+            requires=("source_bound_tinderbox",),
+        ),
+    },
     "acid_vial": {
         "splash": _intent(
             "action",
@@ -454,6 +474,7 @@ _GEAR_INTENTS: dict[str, dict[str, dict[str, Any]]] = {
         "set": _intent(
             "action",
             "ground_location",
+            area=_AREA_5,
             effect={
                 "trigger": "creature_steps_on_pressure_plate",
                 "save": {"ability": "dexterity", "dc": 13},
@@ -461,8 +482,9 @@ _GEAR_INTENTS: dict[str, dict[str, dict[str, Any]]] = {
                     "damage": "1d4",
                     "damage_type": "piercing",
                     "movement_stops": True,
-                    "movement_limit_feet": 3,
+                    "tether_feet": 3,
                 },
+                "anchor_requires_immobile_object_review": True,
             },
         ),
         "escape": _intent(
@@ -473,6 +495,7 @@ _GEAR_INTENTS: dict[str, dict[str, dict[str, Any]]] = {
                 "success": "free_trapped_creature",
                 "failure_damage": "1",
                 "failure_damage_type": "piercing",
+                "may_free_self_or_creature_within_reach": True,
             },
         ),
     },

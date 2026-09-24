@@ -9,16 +9,32 @@ from typing import Any
 def affected_state_slice(campaign, branch_id, updates, revision):
     """Project the exact documents used by a commit's durable response callback."""
     return {
-        "campaign_id": campaign.id, "branch_id": branch_id,
-        "timeline_epoch": campaign.timeline_epoch, "campaign_revision": revision,
+        "campaign_id": campaign.id,
+        "branch_id": branch_id,
+        "timeline_epoch": campaign.timeline_epoch,
+        "campaign_revision": revision,
         "actors": [
-            {"id": update.character_id,
-             "revision": (update.expected_revision + 1
-                          if update.expected_revision is not None else None),
-             "sheet": {key: deepcopy(update.sheet[key]) for key in (
-                 "combat", "resources", "conditions", "effects", "inventory",
-                 "spellcasting", "abilities", "proficiencies",
-             ) if key in update.sheet}}
+            {
+                "id": update.character_id,
+                "revision": (
+                    update.expected_revision + 1 if update.expected_revision is not None else None
+                ),
+                "sheet": {
+                    key: deepcopy(update.sheet[key])
+                    for key in (
+                        "combat",
+                        "resources",
+                        "conditions",
+                        "effects",
+                        "inventory",
+                        "body_state",
+                        "spellcasting",
+                        "abilities",
+                        "proficiencies",
+                    )
+                    if key in update.sheet
+                },
+            }
             for update in updates or []
         ],
     }
@@ -54,32 +70,44 @@ def tool_output_schema(tool: str) -> dict[str, Any]:
     }
     required: list[str] = []
     if tool == "trap_state_transition":
-        properties.update({
-            "trap_id": {"type": "string"},
-            "trap": {"type": "object"},
-            "check": {"type": ["object", "null"]},
-            "rescuer_id": {"type": "string"},
-            "target_id": {"type": "string"},
-            "action_cost": {"type": "string"},
-            "action_paid": {"type": "boolean"},
-        })
+        properties.update(
+            {
+                "trap_id": {"type": "string"},
+                "trap": {"type": "object"},
+                "check": {"type": ["object", "null"]},
+                "rescuer_id": {"type": "string"},
+                "target_id": {"type": "string"},
+                "action_cost": {"type": "string"},
+                "action_paid": {"type": "boolean"},
+            }
+        )
     elif tool == "character_check":
         # All check actions return the resolution directly, not a facade action envelope.
         properties["result"] = {"type": "object"}
         required = ["status", "result", "campaign_revision"]
-    elif tool in {"combat_choice", "combat_ready", "combat_hp_change", "combat_movement",
-                  "resolution_presentation"}:
+    elif tool in {
+        "combat_choice",
+        "combat_ready",
+        "combat_hp_change",
+        "combat_movement",
+        "resolution_presentation",
+    }:
         properties["result"] = {"type": "object"}
         required = ["status", "action", "result"]
     elif tool in {"combat_check", "combat_cast_spell", "combat_resolve_attack"}:
         properties["result"] = {
             "type": "object",
             "properties": {
-                "kind": {"type": "string"}, "action": {"type": "string"},
-                "actor_id": {"type": "string"}, "target_id": {"type": "string"},
-                "spell_id": {"type": "string"}, "total": {"type": "integer"},
-                "success": {"type": "boolean"}, "hit": {"type": "boolean"},
-                "critical": {"type": "boolean"}, "fumble": {"type": "boolean"},
+                "kind": {"type": "string"},
+                "action": {"type": "string"},
+                "actor_id": {"type": "string"},
+                "target_id": {"type": "string"},
+                "spell_id": {"type": "string"},
+                "total": {"type": "integer"},
+                "success": {"type": "boolean"},
+                "hit": {"type": "boolean"},
+                "critical": {"type": "boolean"},
+                "fumble": {"type": "boolean"},
             },
             "additionalProperties": True,
         }
@@ -87,15 +115,27 @@ def tool_output_schema(tool: str) -> dict[str, Any]:
         properties["choice"] = {"type": "object"}
         required = ["status", "result", "campaign_revision"]
     elif tool == "combat_preflight_attack":
-        properties.update({name: {"type": "string"} for name in (
-            "kind", "attacker_id", "target_id",
-        )})
+        properties.update(
+            {
+                name: {"type": "string"}
+                for name in (
+                    "kind",
+                    "attacker_id",
+                    "target_id",
+                )
+            }
+        )
         properties["weapon_id"] = {"type": ["string", "null"]}
         properties["opaque"] = {"type": "boolean"}
         required = ["status", "kind", "attacker_id", "target_id"]
     elif tool in {"dnd_check", "dnd_dice_roll"}:
-        required = ["resolution_id", "thread_id", "event_sequence",
-                    "campaign_revision", "random_stream_receipt"]
+        required = [
+            "resolution_id",
+            "thread_id",
+            "event_sequence",
+            "campaign_revision",
+            "random_stream_receipt",
+        ]
         properties["total"] = {"type": "integer"}
         if tool == "dnd_check":
             properties["success"] = {"type": "boolean"}

@@ -266,10 +266,7 @@ def test_ball_bearings_deploy_and_movement_trigger_share_atomic_replay(tmp_path:
             deploy_replay = await _call(server, "adventuring_gear_action", deploy)
             assert deploy_replay["receipt"] == deployed["receipt"]
             assert deploy_replay["hazard"] == deployed["hazard"]
-            assert (
-                await _campaign_and_characters(server, campaign["id"], actor_ids)
-                == after_deploy
-            )
+            assert await _campaign_and_characters(server, campaign["id"], actor_ids) == after_deploy
 
             await _call(
                 server,
@@ -300,9 +297,7 @@ def test_ball_bearings_deploy_and_movement_trigger_share_atomic_replay(tmp_path:
             cautious_resolution = cautious_result["adventuring_gear_area_resolutions"][0]
             assert cautious_resolution["avoided_by"] == "half_speed"
             assert "save" not in cautious_resolution
-            after_cautious, _ = await _campaign_and_characters(
-                server, campaign["id"], actor_ids
-            )
+            after_cautious, _ = await _campaign_and_characters(server, campaign["id"], actor_ids)
             assert after_cautious["state"].get("random_stream") == random_state_before_cautious
 
             await _call(
@@ -358,9 +353,10 @@ def test_ball_bearings_deploy_and_movement_trigger_share_atomic_replay(tmp_path:
             assert resolution["route_index"] == 6
             after_move = await _campaign_and_characters(server, campaign["id"], actor_ids)
             replay = await _call(server, "combat_movement", move)
-            assert replay["adventuring_gear_area_resolutions"] == moved[
-                "adventuring_gear_area_resolutions"
-            ]
+            assert (
+                replay["adventuring_gear_area_resolutions"]
+                == moved["adventuring_gear_area_resolutions"]
+            )
             assert replay["random_stream_receipt"] == moved["random_stream_receipt"]
             assert await _campaign_and_characters(server, campaign["id"], actor_ids) == after_move
             moved_first = next(actor for actor in after_move[1] if actor["id"] == first["id"])
@@ -372,6 +368,415 @@ def test_ball_bearings_deploy_and_movement_trigger_share_atomic_replay(tmp_path:
             )
             assert ("prone" in combatant["conditions"]) is (resolution["outcome"] == "prone")
             assert moved["random_stream_receipt"]["draw_count"] >= 1
+        finally:
+            close_server(server)
+
+    asyncio.run(exercise())
+
+
+def test_hunting_trap_deployment_requires_reviewed_anchor_without_writes(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        try:
+            campaign = await _call(
+                server,
+                "campaign_create",
+                {"name": "Trap review", "edition": "2014", "idempotency_key": "campaign"},
+            )
+            trap = next(
+                item for item in ADVENTURING_GEAR_ACTIONS.values() if item.name == "Hunting trap"
+            )
+            sheet = default_character_sheet()
+            sheet["edition"] = "2014"
+            sheet["inventory"]["items"] = [
+                {"id": "trap-1", "name": trap.name, "source_key": trap.source_key, "quantity": 1}
+            ]
+            actor = await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {"campaign_id": campaign["id"], "name": "Trap user", "sheet": sheet},
+                    "idempotency_key": "actor",
+                },
+            )
+            rescuer_sheet = default_character_sheet()
+            rescuer_sheet["edition"] = "2014"
+            rescuer_sheet["abilities"]["strength"]["score"] = 1
+            rescuer = await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "name": "Rescuer",
+                        "sheet": rescuer_sheet,
+                    },
+                    "idempotency_key": "rescuer",
+                },
+            )
+            actor_ids = [actor["id"], rescuer["id"]]
+            current, _ = await _campaign_and_characters(server, campaign["id"], actor_ids)
+            await _call(
+                server,
+                "game_phase",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "set",
+                    "tool_profile": "play",
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "phase",
+                },
+            )
+            current, _ = await _campaign_and_characters(server, campaign["id"], actor_ids)
+            await _call(
+                server,
+                "combat_start",
+                {
+                    "campaign_id": campaign["id"],
+                    "positioning_mode": "grid",
+                    "battle_map": {"width_cells": 5, "height_cells": 3},
+                    "participant_ids": actor_ids,
+                    "participant_config": [
+                        {"actor_id": actor["id"], "initiative": 20, "position": {"x": 0, "y": 0}},
+                        {"actor_id": rescuer["id"], "initiative": 10, "position": {"x": 0, "y": 1}},
+                    ],
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "combat",
+                },
+            )
+            current, actors = await _campaign_and_characters(server, campaign["id"], actor_ids)
+            before = (current, actors)
+            with pytest.raises(ToolError, match="anchor|pressure-plate"):
+                await _call(
+                    server,
+                    "adventuring_gear_action",
+                    {
+                        "campaign_id": campaign["id"],
+                        "action_id": "set-trap",
+                        "item_id": "trap-1",
+                        "intent": "set",
+                        "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                        "actor_id": actor["id"],
+                        "expected_actor_revision": actors[0]["revision"],
+                        "expected_revision": current["revision"],
+                        "action_context": {"area_origin": {"x": 2, "y": 1}},
+                        "idempotency_key": "set-trap",
+                    },
+                )
+            assert await _campaign_and_characters(server, campaign["id"], actor_ids) == before
+        finally:
+            close_server(server)
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize(
+    "random_seed,expected_escape_success",
+    [("trap", False), ("trap-success-0", True)],
+)
+def test_hunting_trap_deploy_trigger_escape_use_source_bound_transactions(
+    tmp_path: Path, random_seed: str, expected_escape_success: bool
+) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        try:
+            campaign = await _call(
+                server,
+                "campaign_create",
+                {
+                    "name": "Trap transaction",
+                    "edition": "2014",
+                    "random_seed": random_seed,
+                    "idempotency_key": "campaign",
+                },
+            )
+            scene_text = (
+                "Anchor-1 is an immobile iron post fixed to bedrock beside a pressure plate."
+            )
+            staged = await _call(
+                server,
+                "module_draft",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "start",
+                    "payload": {
+                        "name": "trap-scene.md",
+                        "content": f"# Trap\n\n{scene_text}",
+                        "source_key": "trap-scene",
+                        "title": "Trap Scene",
+                    },
+                    "idempotency_key": "draft",
+                },
+            )
+
+            async def authoring_call(runtime, name: str, arguments: dict):
+                return await _call(runtime, name, arguments)
+
+            activation = await finalize_and_activate_module(
+                authoring_call,
+                server,
+                campaign["id"],
+                staged,
+                source_key="trap-scene",
+                title="Trap Scene",
+                portable_id="dnd5e.module.trap-test",
+            )
+            hits = await _call(
+                server,
+                "module_search",
+                {"campaign_id": campaign["id"], "query": scene_text, "top_k": 1},
+            )
+            expanded = await _call(server, "module_expand", {"chunk_id": hits[0]["id"]})
+            source_ref = {
+                "module_id": activation["activated"]["activation"]["module_id"],
+                "scene_id": expanded["scene"]["id"],
+                "chunk_id": expanded["chunk_id"],
+                "page_start": expanded["page_start"],
+                "page_end": expanded["page_end"],
+                "heading_path": expanded["heading_path"],
+                "content_sha256": __import__("hashlib")
+                .sha256(expanded["content"].encode("utf-8"))
+                .hexdigest(),
+            }
+            trap_item = next(
+                item for item in ADVENTURING_GEAR_ACTIONS.values() if item.name == "Hunting trap"
+            )
+            sheet = default_character_sheet()
+            sheet["edition"] = "2014"
+            sheet["abilities"]["dexterity"]["score"] = 1
+            sheet["inventory"]["items"] = [
+                {
+                    "id": "trap-1",
+                    "name": trap_item.name,
+                    "source_key": trap_item.source_key,
+                    "quantity": 1,
+                }
+            ]
+            actor = await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {"campaign_id": campaign["id"], "name": "Trapper", "sheet": sheet},
+                    "idempotency_key": "actor",
+                },
+            )
+            rescuer_sheet = default_character_sheet()
+            rescuer_sheet["edition"] = "2014"
+            rescuer = await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "name": "Rescuer",
+                        "sheet": rescuer_sheet,
+                    },
+                    "idempotency_key": "rescuer",
+                },
+            )
+            actor_ids = [actor["id"], rescuer["id"]]
+            current, _ = await _campaign_and_characters(server, campaign["id"], actor_ids)
+            await _call(
+                server,
+                "game_phase",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "set",
+                    "tool_profile": "play",
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "phase",
+                },
+            )
+            current, _ = await _campaign_and_characters(server, campaign["id"], actor_ids)
+            await _call(
+                server,
+                "combat_start",
+                {
+                    "campaign_id": campaign["id"],
+                    "positioning_mode": "grid",
+                    "battle_map": {"width_cells": 5, "height_cells": 3},
+                    "scene_id": expanded["scene"]["id"],
+                    "participant_ids": actor_ids,
+                    "participant_config": [
+                        {"actor_id": actor["id"], "initiative": 20, "position": {"x": 0, "y": 0}},
+                        {"actor_id": rescuer["id"], "initiative": 10, "position": {"x": 0, "y": 1}},
+                    ],
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "combat",
+                },
+            )
+            current, actors = await _campaign_and_characters(server, campaign["id"], actor_ids)
+            actor_by_id = {entry["id"]: entry for entry in actors}
+            deploy_request = {
+                "campaign_id": campaign["id"],
+                "action_id": "deploy-trap",
+                "item_id": "trap-1",
+                "intent": "set",
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                "actor_id": actor["id"],
+                "expected_actor_revision": actor_by_id[actor["id"]]["revision"],
+                "expected_revision": current["revision"],
+                "action_context": {
+                    "area_origin": {"x": 1, "y": 0},
+                    "anchor_object_id": "anchor-1",
+                    "anchor_source_ref": source_ref,
+                    "anchor_source_excerpt": expanded["content"],
+                    "anchor_reason": "DM confirms the iron post is immobile.",
+                    "trigger_reason": "Pressure plate is exposed on the traversed cell.",
+                },
+                "idempotency_key": "deploy-trap",
+            }
+            deployed = await _call(server, "adventuring_gear_action", deploy_request)
+            assert deployed["hazard"]["anchor_review"]["object_id"] == "anchor-1"
+            deploy_replay = await _call(server, "adventuring_gear_action", deploy_request)
+            assert deploy_replay["hazard"] == deployed["hazard"]
+            assert deploy_replay["receipt"] == deployed["receipt"]
+            close_server(server)
+            server = create_server(_config(tmp_path))
+            restart_replay = await _call(server, "adventuring_gear_action", deploy_request)
+            assert restart_replay["hazard"] == deployed["hazard"]
+            assert restart_replay["receipt"] == deployed["receipt"]
+            await _call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": actor["id"],
+                    "expected_revision": deployed["campaign_revision"],
+                    "idempotency_key": "end-after-set",
+                },
+            )
+            current, _ = await _campaign_and_characters(server, campaign["id"], actor_ids)
+            await _call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": rescuer["id"],
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "end-rescuer",
+                },
+            )
+            current, _ = await _campaign_and_characters(server, campaign["id"], actor_ids)
+            moved = await _call(
+                server,
+                "combat_movement",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": actor["id"],
+                    "action": "move",
+                    "payload": {
+                        "distance": 5,
+                        "destination": {"x": 1, "y": 0},
+                        "path": [{"x": 0, "y": 0}, {"x": 1, "y": 0}],
+                    },
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "trigger-trap",
+                },
+            )
+            resolution = moved["adventuring_gear_area_resolutions"][0]
+            assert resolution["outcome"] == "damaged_and_stopped"
+            assert resolution["damage"]["applied_amount"] in {1, 2, 3, 4}
+            current, actors = await _campaign_and_characters(server, campaign["id"], actor_ids)
+            assert any(
+                hazard.get("trapped_actor_id") == actor["id"]
+                and hazard.get("capture_status") == "trapped"
+                for hazard in current["state"]["combat"]["adventuring_gear_hazards"]
+            )
+            before_tether_attempt = (current, actors)
+            tether_result = await _call(
+                server,
+                "combat_movement",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": actor["id"],
+                    "action": "move",
+                    "payload": {
+                        "distance": 5,
+                        "destination": {"x": 2, "y": 0},
+                        "path": [{"x": 1, "y": 0}, {"x": 2, "y": 0}],
+                    },
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "blocked-by-tether",
+                },
+            )
+            assert "three-foot chain" in str(tether_result).casefold()
+            assert (
+                await _campaign_and_characters(server, campaign["id"], actor_ids)
+                == before_tether_attempt
+            )
+            current, actors = await _campaign_and_characters(server, campaign["id"], actor_ids)
+            actor_by_id = {entry["id"]: entry for entry in actors}
+            await _call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": actor["id"],
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "end-after-trigger",
+                },
+            )
+            current, actors = await _campaign_and_characters(server, campaign["id"], actor_ids)
+            actor_by_id = {entry["id"]: entry for entry in actors}
+            escape = await _call(
+                server,
+                "adventuring_gear_action",
+                {
+                    "campaign_id": campaign["id"],
+                    "action_id": "escape-trap",
+                    "item_id": "trap-1",
+                    "intent": "escape",
+                    "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                    "actor_id": rescuer["id"],
+                    "target_actor_id": actor["id"],
+                    "expected_actor_revision": actor_by_id[rescuer["id"]]["revision"],
+                    "expected_target_revision": actor_by_id[actor["id"]]["revision"],
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "escape-trap",
+                },
+            )
+            assert escape["action_paid"] is True
+            assert escape["rule_plan"]["check"] == {"ability": "strength", "dc": 13}
+            assert escape["success"] is expected_escape_success, (
+                escape["check"],
+                escape["random_stream_receipt"],
+            )
+            after_escape = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": actor["id"]}},
+            )
+            assert (
+                after_escape["sheet"]["combat"]["hp"]["value"]
+                == escape["target"]["sheet"]["combat"]["hp"]["value"]
+            )
+            if escape["success"] is False:
+                assert escape["damage"]["applied_amount"] == 1
+            assert (
+                await _call(
+                    server,
+                    "adventuring_gear_action",
+                    {
+                        "campaign_id": campaign["id"],
+                        "action_id": "escape-trap",
+                        "item_id": "trap-1",
+                        "intent": "escape",
+                        "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                        "actor_id": rescuer["id"],
+                        "target_actor_id": actor["id"],
+                        "expected_actor_revision": actor_by_id[rescuer["id"]]["revision"],
+                        "expected_target_revision": actor_by_id[actor["id"]]["revision"],
+                        "expected_revision": current["revision"],
+                        "idempotency_key": "escape-trap",
+                    },
+                )
+                == escape
+            )
         finally:
             close_server(server)
 
@@ -684,9 +1089,10 @@ def test_caltrops_stop_damage_speed_recovery_and_replay_share_cas(tmp_path: Path
             assert penalty["source_ref"] == ADVENTURING_GEAR_SOURCE_REF
             assert penalty["active"] is True
             replay = await _call(server, "combat_movement", move)
-            assert replay["adventuring_gear_area_resolutions"] == moved[
-                "adventuring_gear_area_resolutions"
-            ]
+            assert (
+                replay["adventuring_gear_area_resolutions"]
+                == moved["adventuring_gear_area_resolutions"]
+            )
             assert replay["random_stream_receipt"] == moved["random_stream_receipt"]
             assert await _campaign_and_characters(server, campaign["id"], actor_ids) == after_move
 
@@ -728,6 +1134,588 @@ def test_caltrops_stop_damage_speed_recovery_and_replay_share_cas(tmp_path: Path
             )
             assert healed_fast["turn_budget"]["speed_modes"]["walk"] == 40
             assert healed_fast["hit_points"] == 1
+        finally:
+            close_server(server)
+
+    asyncio.run(exercise())
+
+
+def test_oil_ground_fire_is_source_bound_and_once_per_turn(tmp_path: Path) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        try:
+            campaign = await _call(
+                server,
+                "campaign_create",
+                {
+                    "name": "Oil fire",
+                    "edition": "2014",
+                    "random_seed": "oil",
+                    "idempotency_key": "campaign",
+                },
+            )
+            scene_text = "A maintained open flame burns in the marked stone cell."
+            staged = await _call(
+                server,
+                "module_draft",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "start",
+                    "payload": {
+                        "name": "oil-scene.md",
+                        "content": f"# Oil Scene\n\n{scene_text}",
+                        "source_key": "oil-scene",
+                        "title": "Oil Scene",
+                    },
+                    "idempotency_key": "draft",
+                },
+            )
+
+            async def authoring_call(runtime, name: str, arguments: dict):
+                return await _call(runtime, name, arguments)
+
+            activation = await finalize_and_activate_module(
+                authoring_call,
+                server,
+                campaign["id"],
+                staged,
+                source_key="oil-scene",
+                title="Oil Scene",
+                portable_id="dnd5e.module.oil-test",
+            )
+            hits = await _call(
+                server,
+                "module_search",
+                {"campaign_id": campaign["id"], "query": scene_text, "top_k": 1},
+            )
+            expanded = await _call(server, "module_expand", {"chunk_id": hits[0]["id"]})
+            source_ref = {
+                "module_id": activation["activated"]["activation"]["module_id"],
+                "scene_id": expanded["scene"]["id"],
+                "chunk_id": expanded["chunk_id"],
+                "page_start": expanded["page_start"],
+                "page_end": expanded["page_end"],
+                "heading_path": expanded["heading_path"],
+                "content_sha256": __import__("hashlib")
+                .sha256(expanded["content"].encode("utf-8"))
+                .hexdigest(),
+            }
+            oil_plan = next(
+                item for item in ADVENTURING_GEAR_ACTIONS.values() if item.name == "Oil (flask)"
+            )
+
+            def sheet(*, oil: bool = False, resist_fire: bool = False) -> dict:
+                result = default_character_sheet()
+                result["edition"] = "2014"
+                result["combat"]["hp"] = {"value": 20, "max": 20, "temp": 0}
+                if resist_fire:
+                    result["traits"]["resistances"] = ["fire"]
+                if oil:
+                    result["inventory"]["items"] = [
+                        {
+                            "id": "oil-1",
+                            "name": oil_plan.name,
+                            "source_key": oil_plan.source_key,
+                            "quantity": 2,
+                        }
+                    ]
+                return result
+
+            owner = await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "name": "Oil user",
+                        "sheet": sheet(oil=True),
+                    },
+                    "idempotency_key": "owner",
+                },
+            )
+            target = await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "name": "Resistant target",
+                        "sheet": sheet(resist_fire=True),
+                    },
+                    "idempotency_key": "target",
+                },
+            )
+            already_in_oil = await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "name": "Already in oil cell",
+                        "sheet": sheet(),
+                    },
+                    "idempotency_key": "already-in-oil",
+                },
+            )
+            ids = [owner["id"], target["id"], already_in_oil["id"]]
+            current, _ = await _campaign_and_characters(server, campaign["id"], ids)
+            await _call(
+                server,
+                "game_phase",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "set",
+                    "tool_profile": "play",
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "phase",
+                },
+            )
+            current, _ = await _campaign_and_characters(server, campaign["id"], ids)
+            await _call(
+                server,
+                "combat_start",
+                {
+                    "campaign_id": campaign["id"],
+                    "positioning_mode": "grid",
+                    "battle_map": {"width_cells": 8, "height_cells": 3},
+                    "scene_id": expanded["scene"]["id"],
+                    "participant_ids": ids,
+                    "participant_config": [
+                        {"actor_id": owner["id"], "initiative": 20, "position": {"x": 0, "y": 0}},
+                        {
+                            "actor_id": already_in_oil["id"],
+                            "initiative": 15,
+                            "position": {"x": 1, "y": 0},
+                        },
+                        {"actor_id": target["id"], "initiative": 10, "position": {"x": 4, "y": 0}},
+                    ],
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "combat",
+                },
+            )
+            current, actors = await _campaign_and_characters(server, campaign["id"], ids)
+            await _call(
+                server,
+                "access_grant",
+                {
+                    "scope": "campaign",
+                    "campaign_id": campaign["id"],
+                    "principal_id": "user:oil-player",
+                    "payload": {"role": "player"},
+                },
+            )
+            current, actors = await _campaign_and_characters(server, campaign["id"], ids)
+            review_args = {
+                "campaign_id": campaign["id"],
+                "action": "fire_source_review",
+                "payload": {
+                    "active": True,
+                    "cell": {"x": 1, "y": 0},
+                    "level_ground_surface": True,
+                    "source_ref": source_ref,
+                    "source_excerpt": scene_text,
+                    "reason": "DM confirms an active flame.",
+                },
+                "expected_revision": current["revision"],
+                "idempotency_key": "fire-review",
+            }
+            before_non_dm_review = await _campaign_and_characters(server, campaign["id"], ids)
+            with pytest.raises(ToolError, match="role|permission|campaign"):
+                await _call(
+                    server,
+                    "environment_change",
+                    {**review_args, "principal_id": "user:oil-player"},
+                )
+            assert (
+                await _campaign_and_characters(server, campaign["id"], ids) == before_non_dm_review
+            )
+            false_ground_review = {
+                **review_args,
+                "payload": {**review_args["payload"], "level_ground_surface": False},
+                "idempotency_key": "fire-review-not-level",
+            }
+            with pytest.raises(ToolError, match="level_ground_surface"):
+                await _call(server, "environment_change", false_ground_review)
+            assert (
+                await _campaign_and_characters(server, campaign["id"], ids) == before_non_dm_review
+            )
+            review = await _call(server, "environment_change", review_args)
+            await _call(
+                server,
+                "combat_end",
+                {
+                    "campaign_id": campaign["id"],
+                    "expected_revision": review["campaign_revision"],
+                    "idempotency_key": "end-before-map-change",
+                },
+            )
+            current, _ = await _campaign_and_characters(server, campaign["id"], ids)
+            await _call(
+                server,
+                "combat_start",
+                {
+                    "campaign_id": campaign["id"],
+                    "positioning_mode": "grid",
+                    "battle_map": {"width_cells": 10, "height_cells": 3},
+                    "scene_id": expanded["scene"]["id"],
+                    "participant_ids": ids,
+                    "participant_config": [
+                        {
+                            "actor_id": owner["id"],
+                            "initiative": 20,
+                            "position": {"x": 0, "y": 0},
+                        },
+                        {
+                            "actor_id": already_in_oil["id"],
+                            "initiative": 15,
+                            "position": {"x": 1, "y": 0},
+                        },
+                        {
+                            "actor_id": target["id"],
+                            "initiative": 10,
+                            "position": {"x": 4, "y": 0},
+                        },
+                    ],
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "combat-new-map",
+                },
+            )
+            current, actors = await _campaign_and_characters(server, campaign["id"], ids)
+            owner_record = next(actor for actor in actors if actor["id"] == owner["id"])
+            stale_map_deploy = {
+                "campaign_id": campaign["id"],
+                "action_id": "stale-map-pour",
+                "item_id": "oil-1",
+                "intent": "pour_ground",
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                "actor_id": owner["id"],
+                "expected_actor_revision": owner_record["revision"],
+                "expected_revision": current["revision"],
+                "action_context": {
+                    "area_origin": {"x": 1, "y": 0},
+                    "fire_source_id": review["fire_source"]["id"],
+                },
+                "idempotency_key": "stale-map-pour",
+            }
+            before_stale_map_deploy = await _campaign_and_characters(server, campaign["id"], ids)
+            with pytest.raises(ToolError, match="currently reviewed fire-source cell"):
+                await _call(server, "adventuring_gear_action", stale_map_deploy)
+            assert (
+                await _campaign_and_characters(server, campaign["id"], ids)
+                == before_stale_map_deploy
+            )
+            review = await _call(
+                server,
+                "environment_change",
+                {
+                    **review_args,
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "fire-review-new-map",
+                },
+            )
+            owner_record = next(actor for actor in actors if actor["id"] == owner["id"])
+            deploy = {
+                "campaign_id": campaign["id"],
+                "action_id": "pour-oil",
+                "item_id": "oil-1",
+                "intent": "pour_ground",
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                "actor_id": owner["id"],
+                "expected_actor_revision": owner_record["revision"],
+                "expected_revision": review["campaign_revision"],
+                "action_context": {
+                    "area_origin": {"x": 1, "y": 0},
+                    "fire_source_id": review["fire_source"]["id"],
+                },
+                "idempotency_key": "pour-oil",
+            }
+            before_unreviewed_fire = await _campaign_and_characters(server, campaign["id"], ids)
+            with pytest.raises(ToolError, match="currently reviewed fire-source cell"):
+                await _call(
+                    server,
+                    "adventuring_gear_action",
+                    {
+                        **deploy,
+                        "action_id": "unreviewed-pour",
+                        "action_context": {
+                            "area_origin": {"x": 1, "y": 0},
+                            "fire_source_id": "caller-invented-id",
+                        },
+                        "idempotency_key": "unreviewed-pour",
+                    },
+                )
+            assert (
+                await _campaign_and_characters(server, campaign["id"], ids)
+                == before_unreviewed_fire
+            )
+            before_stale_deploy = await _campaign_and_characters(server, campaign["id"], ids)
+            with pytest.raises(ToolError, match="campaign revision conflict"):
+                await _call(
+                    server,
+                    "adventuring_gear_action",
+                    {
+                        **deploy,
+                        "expected_revision": review["campaign_revision"] - 1,
+                        "idempotency_key": "stale-pour-oil",
+                    },
+                )
+            assert (
+                await _campaign_and_characters(server, campaign["id"], ids) == before_stale_deploy
+            )
+            deployed = await _call(server, "adventuring_gear_action", deploy)
+            assert deployed["hazard"]["oil_lit"] is True
+            assert deployed["hazard"]["expires_at_round"] == 3
+            assert deployed["receipt"]["quantity"] == 1
+            after_deploy = await _campaign_and_characters(server, campaign["id"], ids)
+            deployed_owner = next(actor for actor in after_deploy[1] if actor["id"] == owner["id"])
+            assert deployed_owner["sheet"]["inventory"]["items"][0]["quantity"] == 1
+            assert deployed["combat"]["combatants"][0]["turn_budget"]["main_action"] == 0
+            replay = await _call(server, "adventuring_gear_action", deploy)
+            assert replay["hazard"] == deployed["hazard"]
+            assert await _campaign_and_characters(server, campaign["id"], ids) == after_deploy
+            close_server(server)
+            server = create_server(_config(tmp_path))
+            restart_replay = await _call(server, "adventuring_gear_action", deploy)
+            assert restart_replay["hazard"] == deployed["hazard"]
+            assert await _campaign_and_characters(server, campaign["id"], ids) == after_deploy
+
+            ended_owner = await _call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": owner["id"],
+                    "expected_revision": deployed["campaign_revision"],
+                    "idempotency_key": "end-owner-r1",
+                },
+            )
+            standing_turn = await _call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": already_in_oil["id"],
+                    "expected_revision": ended_owner["campaign_revision"],
+                    "idempotency_key": "end-standing-oil-r1",
+                },
+            )
+            _, actors = await _campaign_and_characters(server, campaign["id"], ids)
+            standing_after_end = next(
+                actor for actor in actors if actor["id"] == already_in_oil["id"]
+            )
+            assert standing_turn["oil_hazard_events"][0]["damage"]["applied_amount"] == 5
+            assert standing_after_end["sheet"]["combat"]["hp"]["value"] == 15
+            assert standing_turn["combat"]["current_turn"]["actor_id"] == target["id"]
+            ended_target_r1 = await _call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": target["id"],
+                    "expected_revision": standing_turn["campaign_revision"],
+                    "idempotency_key": "end-target-r1-outside-oil",
+                },
+            )
+            await _call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": owner["id"],
+                    "expected_revision": ended_target_r1["campaign_revision"],
+                    "idempotency_key": "end-owner-r2",
+                },
+            )
+            current, _ = await _campaign_and_characters(server, campaign["id"], ids)
+            standing_move = await _call(
+                server,
+                "combat_movement",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": already_in_oil["id"],
+                    "action": "move",
+                    "payload": {
+                        "distance": 5,
+                        "destination": {"x": 1, "y": 1},
+                        "path": [{"x": 1, "y": 0}, {"x": 1, "y": 1}],
+                    },
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "standing-creature-leaves-oil",
+                },
+            )
+            await _call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": already_in_oil["id"],
+                    "expected_revision": standing_move["campaign_revision"],
+                    "idempotency_key": "end-standing-oil-r2",
+                },
+            )
+            current, actors = await _campaign_and_characters(server, campaign["id"], ids)
+            target_before = next(actor for actor in actors if actor["id"] == target["id"])
+            move_args = {
+                "campaign_id": campaign["id"],
+                "actor_id": target["id"],
+                "action": "move",
+                "payload": {
+                    "distance": 15,
+                    "destination": {"x": 1, "y": 0},
+                    "path": [
+                        {"x": 4, "y": 0},
+                        {"x": 3, "y": 0},
+                        {"x": 2, "y": 0},
+                        {"x": 1, "y": 0},
+                    ],
+                },
+                "expected_revision": current["revision"],
+                "idempotency_key": "move-into-oil",
+            }
+            move = await _call(server, "combat_movement", move_args)
+            target_after_move = await _call(
+                server,
+                "character_query",
+                {
+                    "view": "get",
+                    "payload": {"character_id": target["id"]},
+                },
+            )
+            assert (
+                target_after_move["sheet"]["combat"]["hp"]["value"]
+                == target_before["sheet"]["combat"]["hp"]["value"] - 2
+            ), (
+                move.get("adventuring_gear_area_resolutions"),
+                move["combat"].get("adventuring_gear_hazards"),
+            )
+            assert move["adventuring_gear_area_resolutions"][0]["damage"]["applied_amount"] == 2
+            after_move = await _campaign_and_characters(server, campaign["id"], ids)
+            move_replay = await _call(server, "combat_movement", move_args)
+            assert (
+                move_replay["adventuring_gear_area_resolutions"]
+                == move["adventuring_gear_area_resolutions"]
+            )
+            assert await _campaign_and_characters(server, campaign["id"], ids) == after_move
+            ended_target = await _call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": target["id"],
+                    "expected_revision": move["campaign_revision"],
+                    "idempotency_key": "end-target-r2",
+                },
+            )
+            assert ended_target["oil_hazard_events"] == []
+            assert (
+                target_after_move["sheet"]["combat"]["hp"]["value"]
+                == (
+                    await _call(
+                        server,
+                        "character_query",
+                        {"view": "get", "payload": {"character_id": target["id"]}},
+                    )
+                )["sheet"]["combat"]["hp"]["value"]
+            )
+            target_round_two = ended_target
+            campaign_after_expiry, _ = await _campaign_and_characters(server, campaign["id"], ids)
+            oil_hazard = next(
+                hazard
+                for hazard in campaign_after_expiry["state"]["combat"]["adventuring_gear_hazards"]
+                if hazard["id"] == deployed["hazard"]["id"]
+            )
+            assert target_round_two["combat"]["round"] == 3
+            assert oil_hazard["active"] is False
+            actors_after_expiry = await _campaign_and_characters(server, campaign["id"], ids)
+            owner_record = next(
+                actor for actor in actors_after_expiry[1] if actor["id"] == owner["id"]
+            )
+            second_deploy = {
+                **deploy,
+                "action_id": "pour-oil-after-expiry",
+                "expected_actor_revision": owner_record["revision"],
+                "expected_revision": campaign_after_expiry["revision"],
+                "idempotency_key": "pour-oil-after-expiry",
+            }
+            second_deployed = await _call(server, "adventuring_gear_action", second_deploy)
+            assert second_deployed["hazard"]["created_round"] == 3
+            revoked = await _call(
+                server,
+                "environment_change",
+                {
+                    "campaign_id": campaign["id"],
+                    "action": "fire_source_review",
+                    "payload": {
+                        "active": False,
+                        "fire_source_id": review["fire_source"]["id"],
+                        "reason": "The DM extinguishes the reviewed flame.",
+                    },
+                    "expected_revision": second_deployed["campaign_revision"],
+                    "idempotency_key": "revoke-fire-source",
+                },
+            )
+            assert revoked["fire_source"]["active"] is False
+            after_revoke, actors = await _campaign_and_characters(server, campaign["id"], ids)
+            revoked_hazard = next(
+                hazard
+                for hazard in after_revoke["state"]["combat"]["adventuring_gear_hazards"]
+                if hazard["id"] == second_deployed["hazard"]["id"]
+            )
+            assert revoked_hazard["active"] is False
+            assert revoked_hazard["inactive_reason"] == "fire_source_revoked"
+            target_hp_before = next(
+                actor["sheet"]["combat"]["hp"]["value"]
+                for actor in actors
+                if actor["id"] == target["id"]
+            )
+            owner_end_after_revoke = await _call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": owner["id"],
+                    "expected_revision": revoked["campaign_revision"],
+                    "idempotency_key": "end-owner-after-revoke",
+                },
+            )
+            standing_after_revoke = await _call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": already_in_oil["id"],
+                    "expected_revision": owner_end_after_revoke["campaign_revision"],
+                    "idempotency_key": "end-standing-after-revoke",
+                },
+            )
+            assert standing_after_revoke["oil_hazard_events"] == []
+            current, _ = await _campaign_and_characters(server, campaign["id"], ids)
+            after_revoke_move = await _call(
+                server,
+                "combat_movement",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": target["id"],
+                    "action": "move",
+                    "payload": {
+                        "distance": 5,
+                        "destination": {"x": 2, "y": 0},
+                        "path": [{"x": 1, "y": 0}, {"x": 2, "y": 0}],
+                    },
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "move-after-fire-revoke",
+                },
+            )
+            assert after_revoke_move["status"] == "committed"
+            target_after_revoke = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": target["id"]}},
+            )
+            assert target_after_revoke["sheet"]["combat"]["hp"]["value"] == target_hp_before
         finally:
             close_server(server)
 

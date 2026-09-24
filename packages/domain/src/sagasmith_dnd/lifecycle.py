@@ -15,6 +15,7 @@ from sagasmith_dnd.breathing import (
     settle_breathing_turn_start,
 )
 from sagasmith_dnd.character_schema import (
+    default_character_sheet,
     effective_ability_modifier,
     effective_hit_point_maximum,
     set_exhaustion_level,
@@ -136,6 +137,10 @@ def apply_raise_dead_to_sheet(
     value = deepcopy(sheet)
     if _sheet_edition(value) != "2014":
         raise CombatEngineError("this Raise Dead executor is bound to the 2014 rules")
+    if value.get("body_state", "present") == "annihilated":
+        raise CombatEngineError(
+            "Raise Dead cannot restore a body annihilated by a Sphere of Annihilation"
+        )
     if isinstance(elapsed_days, bool) or not isinstance(elapsed_days, int):
         raise CombatEngineError("Raise Dead elapsed_days must be an integer")
     if elapsed_days < 0 or elapsed_days > 10:
@@ -213,6 +218,34 @@ def apply_raise_dead_to_sheet(
         "source_actor_id": source_actor_id,
         "neutralized_effect_ids": neutralized_effect_ids,
     }
+
+
+def annihilate_character_body_to_sheet(
+    sheet: dict[str, Any], *, source_ref: str, trap_id: str
+) -> dict[str, Any]:
+    """Record Sphere contact as body annihilation and erase carried property."""
+    exact_source = str(source_ref or "").strip()
+    exact_trap_id = str(trap_id or "").strip()
+    if not exact_source or not exact_trap_id:
+        raise CombatEngineError("Sphere annihilation requires its exact source and trap id")
+    value = deepcopy(sheet)
+    if value.get("body_state", "present") == "annihilated":
+        raise CombatEngineError("an annihilated body cannot be annihilated again")
+    value["body_state"] = "annihilated"
+    value["inventory"] = deepcopy(default_character_sheet()["inventory"])
+    value["conditions"] = ["dead"]
+    combat = value.setdefault("combat", {})
+    hp = dict(combat.get("hp") or {})
+    hp["value"] = 0
+    hp["temp"] = 0
+    combat["hp"] = hp
+    combat["death_saves"] = {"successes": 0, "failures": 0}
+    for effect in value.get("effects", []):
+        if isinstance(effect, dict) and effect.get("active"):
+            effect["active"] = False
+            effect["ended_reason"] = "body_annihilated_by_sphere_of_annihilation"
+    reconcile_condition_projection(value, value["conditions"])
+    return value
 
 
 def reduce_revival_ordeal_after_long_rest(sheet: dict[str, Any]) -> dict[str, Any]:
@@ -309,19 +342,13 @@ def validate_rest_schedule(
     trance_minutes = TRANCE_LONG_REST_MINUTES if allows_trance else 0
     restable_minutes = duration_minutes - trance_minutes
     if activity_total > restable_minutes:
-        raise CombatEngineError(
-            "declared rest activity exceeds the available non-sleep rest time"
-        )
+        raise CombatEngineError("declared rest activity exceeds the available non-sleep rest time")
     sleep_minutes = restable_minutes - activity_total
     light_activity_minutes = activity_total - strenuous
     if not allows_trance and sleep_minutes < 360:
-        raise CombatEngineError(
-            "a 2014 long rest requires at least 6 hours of sleep"
-        )
+        raise CombatEngineError("a 2014 long rest requires at least 6 hours of sleep")
     if light_activity_minutes > 120:
-        raise CombatEngineError(
-            "a 2014 long rest permits at most 2 hours of light activity"
-        )
+        raise CombatEngineError("a 2014 long rest permits at most 2 hours of light activity")
     if allows_trance:
         return {
             "sleep_minutes": sleep_minutes,
@@ -465,9 +492,7 @@ def record_rest_completion(
             }
             if hit_die_healing_divisor > 1:
                 choice_window["hit_die_healing_divisor"] = hit_die_healing_divisor
-                choice_window["hit_die_healing_before_modifier"] = (
-                    hit_die_healing_before_modifier
-                )
+                choice_window["hit_die_healing_before_modifier"] = hit_die_healing_before_modifier
             combat["short_rest_hit_dice"] = choice_window
     return value
 
@@ -577,13 +602,9 @@ def apply_short_rest_hit_die_choice(
         int(rolled["total"]) + constitution_modifier,
     )
     hit_die_healing_divisor = int(window.get("hit_die_healing_divisor", 1) or 1)
-    hit_die_healing_before_modifier = int(
-        window.get("hit_die_healing_before_modifier", 0) or 0
-    )
+    hit_die_healing_before_modifier = int(window.get("hit_die_healing_before_modifier", 0) or 0)
     if hit_die_healing_divisor > 1:
-        previous_disease_healing = (
-            hit_die_healing_before_modifier // hit_die_healing_divisor
-        )
+        previous_disease_healing = hit_die_healing_before_modifier // hit_die_healing_divisor
         hit_die_healing_before_modifier += rolled_healing
         total_disease_healing = hit_die_healing_before_modifier // hit_die_healing_divisor
         applied_healing_request = max(0, total_disease_healing - previous_disease_healing)
@@ -631,9 +652,7 @@ def apply_short_rest_hit_die_choice(
         }
         if hit_die_healing_divisor > 1:
             continued_window["hit_die_healing_divisor"] = hit_die_healing_divisor
-            continued_window["hit_die_healing_before_modifier"] = (
-                hit_die_healing_before_modifier
-            )
+            continued_window["hit_die_healing_before_modifier"] = hit_die_healing_before_modifier
         combat["short_rest_hit_dice"] = continued_window
         status = "open"
     mechanic_ids = ["dnd5e.core.rest.hit_dice"]
@@ -662,7 +681,10 @@ def apply_short_rest_hit_die_choice(
 
 
 def advance_effect_durations(
-    sheet: dict[str, Any], *, period: str, amount: int = 1,
+    sheet: dict[str, Any],
+    *,
+    period: str,
+    amount: int = 1,
     advance_breathing: bool = True,
 ) -> dict[str, Any]:
     """Advance effects whose declared period matches and deactivate expired ones."""
@@ -676,21 +698,25 @@ def advance_effect_durations(
     expired: list[str] = []
     suspended: list[str] = []
     breathing_result: dict[str, Any] | None = None
-    if advance_breathing and (
-        normalized == "round"
-        or normalized == "turn_start"
+    if (
+        advance_breathing
+        and (
+            normalized == "round"
+            or normalized == "turn_start"
+            and any(
+                isinstance(effect, dict)
+                and effect.get("id") == BREATHING_EFFECT_ID
+                and effect.get("active")
+                and dict(effect.get("metadata") or {}).get("phase") == "suffocating"
+                for effect in value.get("effects", [])
+            )
+        )
         and any(
             isinstance(effect, dict)
             and effect.get("id") == BREATHING_EFFECT_ID
             and effect.get("active")
-            and dict(effect.get("metadata") or {}).get("phase") == "suffocating"
             for effect in value.get("effects", [])
         )
-    ) and any(
-        isinstance(effect, dict)
-        and effect.get("id") == BREATHING_EFFECT_ID
-        and effect.get("active")
-        for effect in value.get("effects", [])
     ):
         try:
             breathing_result = (
@@ -1093,19 +1119,14 @@ def _validate_rest_activity_contract(
 ) -> int:
     """Apply the 2014 interruption contract to already-normalized activities."""
     strenuous = sum(
-        minutes
-        for activity, minutes in activities.items()
-        if activity in REST_STRENUOUS_ACTIVITIES
+        minutes for activity, minutes in activities.items() if activity in REST_STRENUOUS_ACTIVITIES
     )
     if rest_type == "short_rest" and strenuous:
         raise CombatEngineError(
-            "a short rest cannot include strenuous activity "
-            f"({strenuous} minutes declared)"
+            f"a short rest cannot include strenuous activity ({strenuous} minutes declared)"
         )
     if rest_type == "long_rest" and strenuous >= 60:
-        raise CombatEngineError(
-            "long rest interrupted by at least 1 hour of strenuous activity"
-        )
+        raise CombatEngineError("long rest interrupted by at least 1 hour of strenuous activity")
     return strenuous
 
 
@@ -1245,7 +1266,8 @@ def apply_rest(
     if rest_type == "long_rest":
         exhaustion = int(combat.get("exhaustion", 0) or 0)
         exhaustion = edition_policy(edition).rest.recover_exhaustion(
-            exhaustion, food_and_drink=food_and_drink,
+            exhaustion,
+            food_and_drink=food_and_drink,
         )
         value = set_exhaustion_level(value, exhaustion)
         combat = value["combat"]
@@ -1267,9 +1289,7 @@ def apply_rest(
             roll_value = int(spend["roll"])
             mutate_bounded_resource(resource, amount=1, direction="spend")
             healing = roll_value + effective_ability_modifier(value, "constitution")
-            hit_die_healing_before_modifier += edition_policy(edition).rest.hit_die_healing(
-                healing
-            )
+            hit_die_healing_before_modifier += edition_policy(edition).rest.hit_die_healing(healing)
         hit_die_healing = hit_die_healing_before_modifier
         # Rules such as Sewer Plague modify the summed ordinary healing from
         # the spent dice. Keep the 2014 integer floor at the rest boundary.
@@ -1387,7 +1407,8 @@ def apply_rest(
         hit_dice = value.get("combat", {}).get("hit_dice", {})
         try:
             allocation = edition_policy(edition).rest.recover_hit_dice(
-                hit_dice, hit_dice_recovery,
+                hit_dice,
+                hit_dice_recovery,
             )
         except ValueError as error:
             raise CombatEngineError(str(error)) from error

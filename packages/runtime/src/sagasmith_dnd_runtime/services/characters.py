@@ -580,6 +580,17 @@ class CharactersService:
                 return {**character, **response_extra}
             return {"character": character, **response_extra}
 
+        if sheet is not None and str(before.sheet.get("body_state") or "present") == "annihilated":
+            if str(sheet.get("body_state") or "present") != "annihilated":
+                raise _support.CombatEngineError(
+                    "an annihilated body can only be restored by a source-supported "
+                    "resurrection executor"
+                )
+            if sheet != before.sheet:
+                raise _support.CombatEngineError(
+                    "an annihilated character sheet cannot be modified by an ordinary "
+                    "character update"
+                )
         if sheet is not None and operation != "character.content.apply":
             _support._require_preserved_intrinsic_attack_provenance(before.sheet, sheet)
             _support._require_preserved_official_item_provenance(before.sheet, sheet)
@@ -1712,9 +1723,12 @@ class CharactersService:
         sight_modifiers = {
             snapshot["id"]: modifier
             for snapshot in snapshots
-            if (modifier := sight_rot_check_modifier(
-                snapshot, relies_on_sight=sensory_basis == "sight"
-            )) is not None
+            if (
+                modifier := sight_rot_check_modifier(
+                    snapshot, relies_on_sight=sensory_basis == "sight"
+                )
+            )
+            is not None
         }
         rules_by_actor_id = {
             actor_id_value: self.effective_rule_context(
@@ -1732,8 +1746,11 @@ class CharactersService:
                     "ability": ability,
                     "dc": dc,
                     "group_actor_ids": list(actor_ids),
-                    **({"check_context": normalized_check_context}
-                       if normalized_check_context is not None else {}),
+                    **(
+                        {"check_context": normalized_check_context}
+                        if normalized_check_context is not None
+                        else {}
+                    ),
                 },
                 branch_id=resolved_branch_id,
             )
@@ -1773,7 +1790,8 @@ class CharactersService:
             )
             participant["check"]["disease_modifier"] = disease_receipt
             participant["check"]["rule_receipts"] = [
-                *list(participant["check"].get("rule_receipts") or []), disease_receipt,
+                *list(participant["check"].get("rule_receipts") or []),
+                disease_receipt,
             ]
             disease_receipts.append(disease_receipt)
         if disease_receipts:
@@ -1966,12 +1984,10 @@ class CharactersService:
             target_ability=target_ability,
             source_proficient=source_proficient,
             target_proficient=target_proficient,
-            source_bonus=source_bonus + (
-                source_sight_modifier["penalty"] if source_sight_modifier else 0
-            ),
-            target_bonus=target_bonus + (
-                target_sight_modifier["penalty"] if target_sight_modifier else 0
-            ),
+            source_bonus=source_bonus
+            + (source_sight_modifier["penalty"] if source_sight_modifier else 0),
+            target_bonus=target_bonus
+            + (target_sight_modifier["penalty"] if target_sight_modifier else 0),
             source_advantage=source_advantage,
             source_disadvantage=source_disadvantage,
             target_advantage=target_advantage,
@@ -2691,9 +2707,7 @@ class CharactersService:
             "category": category,
             "trigger_reason": normalized_reason,
         }
-        scope = (
-            f"character-write:{current.campaign_id}:{branch_id}:{principal_id}:{character_id}"
-        )
+        scope = f"character-write:{current.campaign_id}:{branch_id}:{principal_id}:{character_id}"
         replay = self.replay_idempotent(scope, idempotency_key, mutation_payload)
         if replay is not None:
             return replay
@@ -2828,9 +2842,7 @@ class CharactersService:
             "effect_id": effect_id,
             "charm_actor_id": charm_actor_id,
         }
-        scope = (
-            f"character-write:{current.campaign_id}:{branch_id}:{principal_id}:{character_id}"
-        )
+        scope = f"character-write:{current.campaign_id}:{branch_id}:{principal_id}:{character_id}"
         replay = self.replay_idempotent(scope, idempotency_key, payload)
         if replay is not None:
             return replay
@@ -2938,9 +2950,7 @@ class CharactersService:
             "effect_id": effect_id,
             "choice": normalized_choice,
         }
-        scope = (
-            f"character-write:{current.campaign_id}:{branch_id}:{principal_id}:{character_id}"
-        )
+        scope = f"character-write:{current.campaign_id}:{branch_id}:{principal_id}:{character_id}"
         replay = self.replay_idempotent(scope, idempotency_key, payload)
         if replay is not None:
             return replay
@@ -3044,9 +3054,7 @@ class CharactersService:
             "effect_id": effect_id,
             "spell_id": normalized_spell_id,
         }
-        scope = (
-            f"character-write:{current.campaign_id}:{branch_id}:{principal_id}:{character_id}"
-        )
+        scope = f"character-write:{current.campaign_id}:{branch_id}:{principal_id}:{character_id}"
         replay = self.replay_idempotent(scope, idempotency_key, mutation_payload)
         if replay is not None:
             return replay
@@ -3059,11 +3067,7 @@ class CharactersService:
             (item for item in current.sheet.get("effects", []) if item.get("id") == effect_id),
             None,
         )
-        if (
-            effect is None
-            or not effect.get("active")
-            or effect.get("source") != madness.SOURCE_REF
-        ):
+        if effect is None or not effect.get("active") or effect.get("source") != madness.SOURCE_REF:
             raise ValueError("madness transition requires an exact active source-owned effect")
         effect_metadata = dict(effect.get("metadata") or {})
         madness_metadata = dict(effect_metadata.get("madness") or {})
@@ -6211,9 +6215,7 @@ boundary.
             return result
         data = self.facade_payload(payload)
         if "relies_on_sight" in data:
-            raise ValueError(
-                "checks require a structured check_context, not relies_on_sight"
-            )
+            raise ValueError("checks require a structured check_context, not relies_on_sight")
         if data["kind"] not in _support.ACTOR_CHECK_KINDS:
             raise ValueError(
                 "character_check(check).payload.kind must be ability, check, save, or death_save"
