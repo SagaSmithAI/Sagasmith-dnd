@@ -381,17 +381,15 @@ class AttacksService:
             raise _support.CombatEngineError(
                 "combat gear attacks support Acid, Alchemist's Fire, and Holy Water source intents"
             )
+        holy_water_damage_applies = True
         if item_name == "holy water (flask)":
             target_type = _gear_target_creature_type(
                 _support.validate_character_sheet(target.sheet)
             )
-            if not any(
+            holy_water_damage_applies = any(
                 token.strip(" ,.;:-()") in {"fiend", "undead"}
                 for token in target_type.split()
-            ):
-                raise _support.CombatEngineError(
-                    "Holy Water damage requires authoritative target type fiend or undead"
-                )
+            )
         if not action_id_value or len(action_id_value) > 200:
             raise ValueError("action_id must contain 1 to 200 characters")
         return self._settle_combat_attack(
@@ -406,6 +404,8 @@ class AttacksService:
             gear_action={
                 "request": request,
                 "rule_plan": plan,
+                "damage_suppressed": item_name == "holy water (flask)"
+                and not holy_water_damage_applies,
             },
         )
 
@@ -1229,16 +1229,21 @@ class AttacksService:
             attack_modifier = int(abilities.get("strength", 0) or 0)
             maximum_range = gear_plan.get("maximum_range_feet")
             gear_effect = dict(gear_plan.get("effect") or {})
-            damage_expression = str(
-                gear_effect.get("damage") or gear_effect.get("hit_damage") or ""
+            damage_suppressed = bool(gear_action.get("damage_suppressed"))
+            damage_expression = (
+                ""
+                if damage_suppressed
+                else str(gear_effect.get("damage") or gear_effect.get("hit_damage") or "")
             )
-            damage_type = str(
-                gear_effect.get("damage_type") or gear_effect.get("hit_damage_type") or ""
+            damage_type = (
+                ""
+                if damage_suppressed
+                else str(gear_effect.get("damage_type") or gear_effect.get("hit_damage_type") or "")
             )
             if (
                 not gear_item_id
-                or not damage_expression
-                or not damage_type
+                or (not damage_suppressed and not damage_expression)
+                or (not damage_suppressed and not damage_type)
                 or isinstance(maximum_range, bool)
                 or not isinstance(maximum_range, int)
                 or maximum_range < 1
@@ -1253,6 +1258,7 @@ class AttacksService:
                     "attack_ability": "strength",
                     "attack_ability_modifier": attack_modifier,
                     "attack_bonus": attack_modifier,
+                    "range_ft": {"normal": maximum_range, "long": maximum_range},
                     "normal_range_ft": maximum_range,
                     "long_range_ft": maximum_range,
                     "damage_expression": damage_expression,
@@ -3858,10 +3864,13 @@ class AttacksService:
                 request.get("intent"),
             )
             item_name = str(source_item.get("name") or "").strip().casefold()
+            if item_name == "alchemist's fire (flask)":
+                raise _support.CombatEngineError(
+                    "Alchemist's Fire against scene objects is unsupported because no "
+                    "object-turn burning lifecycle exists"
+                )
             allowed_gear = (
                 item_name == "acid (vial)" and gear_plan["intent"] == "throw"
-            ) or (
-                item_name == "alchemist's fire (flask)" and gear_plan["intent"] == "throw"
             )
             if not allowed_gear or gear_plan.get("attack") != "ranged_improvised":
                 raise _support.CombatEngineError(

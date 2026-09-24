@@ -710,7 +710,7 @@ def test_manacles_binding_key_escape_break_and_pick_settle_atomically(tmp_path: 
                 sheet["abilities"]["dexterity"]["score"] = 30
                 sheet["abilities"]["strength"]["score"] = 30
                 if index == 0:
-                    sheet["conditions"] = ["restrained"]
+                    sheet["conditions"] = ["restrained", "incapacitated"]
                 target = await _call(
                     server,
                     "character_create_from",
@@ -847,6 +847,7 @@ def test_manacles_binding_key_escape_break_and_pick_settle_atomically(tmp_path: 
             bound, bind_request = await act(1, 0, "bind", "bind-with-key", bind_context)
             binding = bound["binding"]
             assert bound["success"] is True
+            assert bound["action_cost"] == "action" and bound["action_paid"] is True
             assert binding["status"] == "bound"
             assert binding["owner_actor_id"] == source["id"]
             assert binding["item_id"] == "manacles-1"
@@ -855,10 +856,41 @@ def test_manacles_binding_key_escape_break_and_pick_settle_atomically(tmp_path: 
             assert binding["key_available"] is True
             assert binding["key_review"]["reviewed_actor_id"] == source["id"]
             assert await _call(server, "adventuring_gear_action", bind_request) == bound
+            paid_state = await get_campaign()
+            paid_actor = next(
+                item
+                for item in paid_state["state"]["combat"]["combatants"]
+                if item["actor_id"] == source["id"]
+            )
+            assert paid_actor["turn_budget"]["main_action"] == 0
+            bind_receipt = next(
+                entry for entry in paid_state["state"]["item_spends"]
+                if entry["id"] == "bind-with-key"
+            )
+            assert bind_receipt["action_cost"] == "action"
+            assert bind_receipt["action_paid"] is True
             holder = await get_character(source["id"])
             assert all(item["quantity"] == 1 for item in holder["sheet"]["inventory"]["items"])
             restrained_target = await get_character(targets[0]["id"])
             assert "restrained" in restrained_target["sheet"]["conditions"]
+            await assert_rejected_without_writes(
+                1,
+                0,
+                "unlock",
+                "unlock-during-combat-unspecified-cost",
+                match="unavailable during active combat",
+            )
+            paid_state = await get_campaign()
+            await _call(
+                server,
+                "combat_end",
+                {
+                    "campaign_id": campaign["id"],
+                    "outcome": {"status": "victory", "summary": "The encounter ended."},
+                    "expected_revision": paid_state["revision"],
+                    "idempotency_key": "end-manacles-combat",
+                },
+            )
 
             await assert_rejected_without_writes(
                 1, 0, "pick", "pick-with-key", match="unavailable"
@@ -961,6 +993,7 @@ def test_manacles_pick_requires_proficiency_and_rejection_is_no_write(tmp_path: 
             target_sheet = default_character_sheet()
             target_sheet["edition"] = "2014"
             target_sheet["traits"]["size"] = "small"
+            target_sheet["conditions"] = ["incapacitated"]
             target = await _call(
                 server,
                 "character_create_from",
@@ -1042,6 +1075,21 @@ def test_manacles_pick_requires_proficiency_and_rejection_is_no_write(tmp_path: 
                 },
             )
             assert bound["binding"]["key_available"] is False
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            await _call(
+                server,
+                "combat_end",
+                {
+                    "campaign_id": campaign["id"],
+                    "outcome": {"status": "victory", "summary": "Binding complete."},
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "end-untrained-manacles-combat",
+                },
+            )
             holder_before = await _call(
                 server,
                 "character_query",
@@ -1095,6 +1143,177 @@ def test_manacles_pick_requires_proficiency_and_rejection_is_no_write(tmp_path: 
             assert "restrained" not in target_after["sheet"]["conditions"]
             assert state_after["revision"] == state_before["revision"]
             assert state_after["state"] == state_before["state"]
+        finally:
+            close_server(server)
+
+    asyncio.run(exercise())
+
+
+def test_manacles_active_binding_requires_incapacitation_and_current_turn(
+    tmp_path: Path,
+) -> None:
+    async def exercise() -> None:
+        server = create_server(_config(tmp_path))
+        try:
+            campaign = await _call(
+                server,
+                "campaign_create",
+                {
+                    "name": "Manacles active turn gates",
+                    "edition": "2014",
+                    "idempotency_key": "campaign",
+                },
+            )
+            holder_sheet = default_character_sheet()
+            holder_sheet["edition"] = "2014"
+            holder_sheet["inventory"]["items"] = [
+                _gear_item(
+                    "Manacles",
+                    "dnd5e.content.srd2014.item.manacles",
+                    "manacles-active-gates",
+                )
+            ]
+            holder = await _call(
+                server,
+                "character_create_from",
+                {
+                    "mode": "direct",
+                    "payload": {
+                        "campaign_id": campaign["id"],
+                        "name": "Current-turn holder",
+                        "sheet": holder_sheet,
+                    },
+                    "idempotency_key": "holder",
+                },
+            )
+
+            targets = []
+            for name, conditions in (
+                ("Unconstrained target", []),
+                ("Incapacitated target", ["incapacitated"]),
+            ):
+                sheet = default_character_sheet()
+                sheet["edition"] = "2014"
+                sheet["traits"]["size"] = "small"
+                sheet["conditions"] = conditions
+                targets.append(
+                    await _call(
+                        server,
+                        "character_create_from",
+                        {
+                            "mode": "direct",
+                            "payload": {
+                                "campaign_id": campaign["id"],
+                                "name": name,
+                                "sheet": sheet,
+                            },
+                            "idempotency_key": name,
+                        },
+                    )
+                )
+
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            started = await _call(
+                server,
+                "combat_start",
+                {
+                    "campaign_id": campaign["id"],
+                    "positioning_mode": "grid",
+                    "battle_map": {"width_cells": 8, "height_cells": 4},
+                    "participant_ids": [holder["id"], *(target["id"] for target in targets)],
+                    "participant_config": [
+                        {
+                            "actor_id": holder["id"],
+                            "initiative": 20,
+                            "position": {"x": 0, "y": 0},
+                        },
+                        {
+                            "actor_id": targets[0]["id"],
+                            "initiative": 10,
+                            "position": {"x": 2, "y": 0},
+                        },
+                        {
+                            "actor_id": targets[1]["id"],
+                            "initiative": 0,
+                            "position": {"x": 4, "y": 0},
+                        },
+                    ],
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "combat-start",
+                },
+            )
+
+            async def get_campaign() -> dict:
+                return await _call(
+                    server,
+                    "campaign_query",
+                    {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+                )
+
+            async def bind(target: dict, action_id: str) -> dict:
+                owner_now = await _call(
+                    server,
+                    "character_query",
+                    {"view": "get", "payload": {"character_id": holder["id"]}},
+                )
+                target_now = await _call(
+                    server,
+                    "character_query",
+                    {"view": "get", "payload": {"character_id": target["id"]}},
+                )
+                state = await get_campaign()
+                return await _call(
+                    server,
+                    "adventuring_gear_action",
+                    {
+                        "campaign_id": campaign["id"],
+                        "action_id": action_id,
+                        "item_id": "manacles-active-gates",
+                        "intent": "bind",
+                        "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                        "actor_id": holder["id"],
+                        "target_actor_id": target["id"],
+                        "expected_actor_revision": owner_now["revision"],
+                        "expected_target_revision": target_now["revision"],
+                        "expected_revision": state["revision"],
+                        "idempotency_key": action_id,
+                        "action_context": {
+                            "binding_possible": True,
+                            "reason": "The incapacitated target can be bound.",
+                            "key_available": True,
+                            "key_reason": "The supplied key remains with the holder.",
+                        },
+                    },
+                )
+
+            before_nonincapacitated = await get_campaign()
+            with pytest.raises(ToolError, match="requires an authoritative incapacitated"):
+                await bind(targets[0], "bind-nonincapacitated")
+            after_nonincapacitated = await get_campaign()
+            assert after_nonincapacitated["revision"] == before_nonincapacitated["revision"]
+            assert after_nonincapacitated["state"] == before_nonincapacitated["state"]
+
+            after_holder_turn = await _call(
+                server,
+                "combat_end_turn",
+                {
+                    "campaign_id": campaign["id"],
+                    "actor_id": holder["id"],
+                    "expected_revision": started["campaign_revision"],
+                    "idempotency_key": "holder-ends-turn",
+                },
+            )
+            turn_state = await get_campaign()
+            assert turn_state["revision"] == after_holder_turn["campaign_revision"]
+            with pytest.raises(ToolError, match="not this actor's turn"):
+                await bind(targets[1], "bind-off-turn")
+            after_off_turn = await get_campaign()
+            assert after_off_turn["revision"] == turn_state["revision"]
+            assert after_off_turn["state"] == turn_state["state"]
         finally:
             close_server(server)
 
@@ -1542,9 +1761,43 @@ def test_acid_and_alchemists_fire_attack_source_objects_atomically(tmp_path: Pat
             assert unchanged_actor["revision"] == actor["revision"]
             assert unchanged_actor["sheet"]["inventory"]["items"][0]["quantity"] == 1
 
+            current_campaign = unchanged_campaign
+            actor = unchanged_actor
+            rejected_fire_object = {
+                **invalid_request,
+                "action_id": "fire-object-no-lifecycle",
+                "item_id": "fire-1",
+                "object_source_ref": object_source_ref,
+                "expected_actor_revision": actor["revision"],
+                "expected_revision": current_campaign["revision"],
+                "idempotency_key": "fire-object-no-lifecycle",
+            }
+            with pytest.raises(ToolError, match="object-turn burning lifecycle"):
+                await _call(server, "adventuring_gear_action", rejected_fire_object)
+            after_rejected_fire_campaign = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign["id"]}},
+            )
+            after_rejected_fire_actor = await _call(
+                server,
+                "character_query",
+                {"view": "get", "payload": {"character_id": actor["id"]}},
+            )
+            assert after_rejected_fire_campaign["revision"] == current_campaign["revision"]
+            assert after_rejected_fire_campaign["state"].get("scene_objects", {}) == {}
+            assert after_rejected_fire_campaign["state"].get("item_spends", []) == []
+            assert after_rejected_fire_campaign["state"].get("random_stream") == (
+                current_campaign["state"].get("random_stream")
+            )
+            assert after_rejected_fire_actor["revision"] == actor["revision"]
+            assert all(
+                item["quantity"] == 1
+                for item in after_rejected_fire_actor["sheet"]["inventory"]["items"]
+            )
+
             for item_id, intent, damage_expression in (
                 ("acid-1", "throw", "2d6"),
-                ("fire-1", "throw", "1d4"),
             ):
                 result = None
                 last_request = None
@@ -1817,7 +2070,7 @@ def test_acid_and_alchemists_fire_attack_source_objects_atomically(tmp_path: Pat
                 "expected_revision": spent_campaign["revision"],
                 "idempotency_key": "combat-fire-object-no-action",
             }
-            with pytest.raises(ToolError, match="action payment|legal action"):
+            with pytest.raises(ToolError, match="object-turn burning lifecycle"):
                 await _call(server, "adventuring_gear_action", rejected_fire)
             unchanged_after_rejection = await _call(
                 server,

@@ -162,6 +162,13 @@ _ACTIONS = (
         ),
     ),
     GearAction(
+        "Torch",
+        "action",
+        target="light",
+        duration="1 hour",
+        notes="bright 20-foot radius; dim for 20 more feet; lighting uses a tinderbox",
+    ),
+    GearAction(
         "Lock",
         "unspecified",
         target="lock",
@@ -361,7 +368,12 @@ _GEAR_INTENTS: dict[str, dict[str, dict[str, Any]]] = {
         ),
     },
     "block_and_tackle": {
-        "hoist": _intent(None, "load", effect={"maximum_lift_multiplier": 4}),
+        "hoist": _intent(
+            None,
+            "load",
+            effect={"maximum_lift_multiplier": 4},
+            requires=("reviewed_load_weight_lb", "authoritative_normal_lift_capacity_lb"),
+        ),
     },
     "caltrops_bag_of_20": {
         "spread": _intent(
@@ -512,6 +524,18 @@ _GEAR_INTENTS: dict[str, dict[str, dict[str, Any]]] = {
             },
         ),
         "extinguish": _intent(None, "lantern", effect={"light_off": True}),
+    },
+    "torch": {
+        "light": _intent(
+            "action",
+            "torch",
+            duration_ticks=TICKS_PER_HOUR,
+            effect={
+                "bright_light": {"shape": "radius", "feet": 20},
+                "dim_light_additional_feet": 20,
+            },
+        ),
+        "extinguish": _intent(None, "torch", effect={"light_off": True}),
     },
     "lock": {
         "unlock": _intent(

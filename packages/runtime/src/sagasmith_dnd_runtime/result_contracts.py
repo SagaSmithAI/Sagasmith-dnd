@@ -53,7 +53,17 @@ def tool_output_schema(tool: str) -> dict[str, Any]:
         },
     }
     required: list[str] = []
-    if tool == "character_check":
+    if tool == "trap_state_transition":
+        properties.update({
+            "trap_id": {"type": "string"},
+            "trap": {"type": "object"},
+            "check": {"type": ["object", "null"]},
+            "rescuer_id": {"type": "string"},
+            "target_id": {"type": "string"},
+            "action_cost": {"type": "string"},
+            "action_paid": {"type": "boolean"},
+        })
+    elif tool == "character_check":
         # All check actions return the resolution directly, not a facade action envelope.
         properties["result"] = {"type": "object"}
         required = ["status", "result", "campaign_revision"]

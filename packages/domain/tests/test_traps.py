@@ -270,11 +270,11 @@ def test_named_traps_explicitly_mark_incomplete_area_condition_and_complex_settl
         )
     }
     assert profiles["srd5.1.collapsing_roof"]["settlement"] == (
-        "supported_confirmed_area_damage_rubble_record_only"
+        "supported_area_damage_and_agent_rubble_movement"
     )
     assert profiles["srd5.1.falling_net"]["trigger"]["object"]["hp"] == 20
     assert profiles["srd5.1.falling_net"]["settlement"] == (
-        "supported_multiple_targets_object_hp_unsupported"
+        "supported_multiple_targets_and_object_hp"
     )
     assert profiles["srd5.1.poison_darts"]["settlement"] == (
         "supported_if_eligible_target_area_confirmed"
@@ -293,11 +293,18 @@ def test_fire_statue_and_sphere_profiles_keep_source_detection_and_spell_effects
     fire = source_trap_profile(
         {"profile_id": "srd5.1.fire_breathing_statue"}, fire_marker
     )
-    assert fire["detect"]["active"] == [{"ability": "perception", "dc": 15}]
+    assert fire["detect"]["active"] == [
+        {"ability": "perception", "dc": 15},
+        {"ability": "arcana", "dc": 15},
+    ]
     assert fire["detect"]["reveals_on_success"] == [
         "hidden_pressure_plate",
         "faint_scorch_marks_on_floor_and_walls",
     ]
+    assert fire["detect"]["reveals_on_success_by_ability"] == {
+        "arcana": ["magic_trap"]
+    }
+    assert fire["disable"] == {"ability": "arcana", "dc": 15}
     assert fire["magic_detection"] == {
         "effect": "detect_magic_or_equivalent",
         "target": "statue",
@@ -457,6 +464,11 @@ def test_rolling_sphere_profile_preserves_bundled_initiative_movement_and_contac
     marker = 'trap_profile: {"profile_id":"srd5.1.rolling_sphere"}'
     profile = source_trap_profile({"profile_id": "srd5.1.rolling_sphere"}, marker)
 
+    assert profile["detect"]["active"] == [
+        {"ability": "perception", "dc": 15},
+        {"ability": "investigation", "dc": 15},
+    ]
+    assert profile["detect"]["passive_dc"] == 15
     assert profile["bypass_methods"] == ["wedge_pressure_plate"]
     assert profile["trigger"] == {
         "kind": "complex_trap",
@@ -562,24 +574,24 @@ def test_source_trap_area_spatial_facts_bind_every_actor_to_scene_trap_source_an
             reviewed_by="system:local",
             actor_ids=["actor-1", "actor-2"],
         )
-    with pytest.raises(ValueError, match="no eligible targets"):
-        validate_source_trap_area_spatial_facts(
-            profile,
-            {
-                **facts,
-                "actor_facts": [
-                    {"actor_id": "actor-1", "in_area": False},
-                    {"actor_id": "actor-2", "in_area": False},
-                ],
-            },
-            scene_id="scene-1",
-            trap_id="statue-1",
-            encounter_id="encounter-1",
-            source_ref="exact-module-chunk-ref",
-            campaign_revision=12,
-            reviewed_by="system:local",
-            actor_ids=["actor-1", "actor-2"],
-        )
+    empty_area = validate_source_trap_area_spatial_facts(
+        profile,
+        {
+            **facts,
+            "actor_facts": [
+                {"actor_id": "actor-1", "in_area": False},
+                {"actor_id": "actor-2", "in_area": False},
+            ],
+        },
+        scene_id="scene-1",
+        trap_id="statue-1",
+        encounter_id="encounter-1",
+        source_ref="exact-module-chunk-ref",
+        campaign_revision=12,
+        reviewed_by="system:local",
+        actor_ids=["actor-1", "actor-2"],
+    )
+    assert empty_area["affected_actor_ids"] == []
     with pytest.raises(ValueError, match="stale"):
         validate_source_trap_area_spatial_facts(
             profile,
@@ -616,6 +628,72 @@ def test_source_trap_area_spatial_facts_bind_every_actor_to_scene_trap_source_an
             reviewed_by="another-principal",
             actor_ids=["actor-1", "actor-2"],
         )
+
+
+def test_falling_net_area_spatial_facts_allow_empty_area_for_agent_and_grid():
+    marker = 'trap_profile: {"profile_id":"srd5.1.falling_net"}'
+    profile = source_trap_profile({"profile_id": "srd5.1.falling_net"}, marker)
+    common_facts = {
+        "decision_id": "dm-empty-net-review",
+        "reason": "Reviewed the fixed net footprint and all encounter positions.",
+        "scene_id": "scene-1",
+        "trap_id": "net-1",
+        "encounter_id": "encounter-1",
+        "source_ref": "exact-module-chunk-ref",
+        "campaign_revision": 12,
+        "reviewed_by": "system:local",
+    }
+    actor_facts = {
+        **common_facts,
+        "actor_facts": [
+            {"actor_id": "actor-1", "in_area": False},
+            {"actor_id": "actor-2", "in_area": False},
+        ],
+    }
+    normalized_agent = validate_source_trap_area_spatial_facts(
+        profile,
+        actor_facts,
+        scene_id="scene-1",
+        trap_id="net-1",
+        encounter_id="encounter-1",
+        source_ref="exact-module-chunk-ref",
+        campaign_revision=12,
+        reviewed_by="system:local",
+        actor_ids=["actor-1", "actor-2"],
+    )
+    assert normalized_agent["affected_actor_ids"] == []
+
+    grid_facts = {
+        **common_facts,
+        "grid_area": {
+            "map_id": "map-1",
+            "map_revision": 4,
+            "cells": ["0,0", "0,1", "1,0", "1,1"],
+        },
+    }
+    normalized_grid = validate_source_trap_area_spatial_facts(
+        profile,
+        grid_facts,
+        scene_id="scene-1",
+        trap_id="net-1",
+        encounter_id="encounter-1",
+        source_ref="exact-module-chunk-ref",
+        campaign_revision=12,
+        reviewed_by="system:local",
+        actor_ids=["actor-1", "actor-2"],
+        positioning_mode="grid",
+        battle_map={
+            "id": "map-1",
+            "map_revision": 4,
+            "grid": {"kind": "square", "cell_ft": 5},
+            "bounds": {"width_cells": 8, "height_cells": 8},
+        },
+        combatants=[
+            {"actor_id": "actor-1", "position": {"x": 4, "y": 4}},
+            {"actor_id": "actor-2", "position": {"x": 6, "y": 6}},
+        ],
+    )
+    assert normalized_grid["affected_actor_ids"] == []
 
 
 def test_poison_darts_area_targets_are_sorted_before_runtime_rng_selection():
@@ -678,6 +756,12 @@ def test_source_profiles_preserve_disable_failure_trigger_rule():
 def test_collapsing_roof_source_profile_has_fixed_damage_and_area_effect():
     marker = 'trap_profile: {"profile_id":"srd5.1.collapsing_roof"}'
     profile = source_trap_profile({"profile_id": "srd5.1.collapsing_roof"}, marker)
+    assert profile["detect"]["no_roll"] == [
+        {
+            "method": "inspect_support_beams",
+            "reveals_on_success": ["wedged_support_beams"],
+        }
+    ]
     assert profile["trigger"] == {
         "kind": "area_save_damage",
         "save_ability": "dexterity",
@@ -688,7 +772,7 @@ def test_collapsing_roof_source_profile_has_fixed_damage_and_area_effect():
         "area": "beneath_unstable_ceiling",
         "effects": ["rubble_difficult_terrain"],
     }
-    assert profile["settlement"] == "supported_confirmed_area_damage_rubble_record_only"
+    assert profile["settlement"] == "supported_area_damage_and_agent_rubble_movement"
 
 
 def test_falling_net_escape_removes_only_the_bound_actor():

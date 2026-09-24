@@ -139,6 +139,12 @@ async def setup(tmp_path, *, include_helper: bool = False) -> World:
                 "source_key": "dnd5e.content.srd2014.item.ram-portable",
                 "quantity": 1,
             },
+            {
+                "id": "block-and-tackle-1",
+                "name": "Block and Tackle",
+                "source_key": "dnd5e.content.srd2014.item.block-and-tackle",
+                "quantity": 1,
+            },
         ]
         actor = await world.call(
             "character_create_from",
@@ -475,6 +481,66 @@ def test_portable_ram_pays_combat_help_and_check_in_one_cas(tmp_path):
             )
             assert actor_combatant["turn_budget"]["main_action"] == 0
             assert "helping" not in helper_combatant.get("turn_flags", {})
+        finally:
+            world.close()
+
+    asyncio.run(run())
+
+
+def test_block_and_tackle_requires_authoritative_load_facts_and_fails_closed(tmp_path):
+    async def run():
+        world = await setup(tmp_path)
+        try:
+            campaign, actor = await world.snapshot()
+            request = {
+                "campaign_id": world.cid,
+                "action_id": "block-tackle-missing-facts",
+                "item_id": "block-and-tackle-1",
+                "intent": "hoist",
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                "actor_id": world.aid,
+                "expected_actor_revision": actor["revision"],
+                "expected_revision": campaign["revision"],
+                "idempotency_key": "block-tackle-missing-facts",
+            }
+            before = await world.snapshot()
+            with pytest.raises(
+                Exception,
+                match="requires one DM-reviewed load weight bound to an exact scene object",
+            ):
+                await world.call("adventuring_gear_action", request)
+            assert await world.snapshot() == before
+
+            # The same idempotency key remains a no-write failure on replay.
+            with pytest.raises(
+                Exception,
+                match="requires one DM-reviewed load weight bound to an exact scene object",
+            ):
+                await world.call("adventuring_gear_action", request)
+            assert await world.snapshot() == before
+
+            forged = {
+                **request,
+                "action_id": "block-tackle-forged-facts",
+                "idempotency_key": "block-tackle-forged-facts",
+                "action_context": {"load_weight_lb": 1, "normal_lift_capacity_lb": 9999},
+            }
+            with pytest.raises(
+                Exception,
+                match="requires one DM-reviewed load weight bound to an exact scene object",
+            ):
+                await world.call("adventuring_gear_action", forged)
+            assert await world.snapshot() == before
+
+            stale = {
+                **request,
+                "action_id": "block-tackle-stale",
+                "idempotency_key": "block-tackle-stale",
+            }
+            stale["expected_revision"] -= 1
+            with pytest.raises(Exception, match="revision conflict"):
+                await world.call("adventuring_gear_action", stale)
+            assert await world.snapshot() == before
         finally:
             world.close()
 

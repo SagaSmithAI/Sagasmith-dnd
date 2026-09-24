@@ -1,4 +1,4 @@
-"""Confirmed-area Collapsing Roof settlement and durable replay."""
+"""Reviewed-space Collapsing Roof settlement and durable replay."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from sagasmith_dnd_mcp.server import close_server, create_server
 from tests.authoring_helpers import finalize_and_activate_module
 
 
-def test_collapsing_roof_uses_only_explicit_area_targets_and_replays(tmp_path: Path) -> None:
+def test_collapsing_roof_uses_reviewed_area_facts_and_replays(tmp_path: Path) -> None:
     profile = {"profile_id": "srd5.1.collapsing_roof"}
     marker = json.dumps(profile, sort_keys=True, separators=(",", ":"))
     excerpt = (
@@ -116,6 +116,30 @@ def test_collapsing_roof_uses_only_explicit_area_targets_and_replays(tmp_path: P
                     "payload": {"campaign_id": campaign_id},
                 },
             )
+            await _call(
+                server,
+                "combat_start",
+                {
+                    "campaign_id": campaign_id,
+                    "positioning_mode": "agent",
+                    "scene_id": expanded["scene"]["id"],
+                    "participant_ids": [actor["id"]],
+                    "participant_config": [
+                        {"actor_id": actor["id"], "initiative": 10}
+                    ],
+                    "expected_revision": current["revision"],
+                    "idempotency_key": "roof-encounter",
+                },
+            )
+            current = await _call(
+                server,
+                "campaign_query",
+                {
+                    "view": "get",
+                    "payload": {"campaign_id": campaign_id},
+                },
+            )
+            encounter_id = current["state"]["combat"]["id"]
             before_actor = await _call(
                 server,
                 "character_query",
@@ -132,8 +156,22 @@ def test_collapsing_roof_uses_only_explicit_area_targets_and_replays(tmp_path: P
                 "source_excerpt": excerpt,
                 "profile": profile,
                 "actor_id": actor["id"],
-                "target_ids": [actor["id"]],
-                "area_confirmed": True,
+                "target_ids": None,
+                "area_confirmed": None,
+                "spatial_facts": {
+                    "decision_id": f"review-roof-section-1-{current['revision']}",
+                    "reason": (
+                        "Reviewed the only active encounter combatant against the "
+                        "source-defined roof area."
+                    ),
+                    "scene_id": expanded["scene"]["id"],
+                    "trap_id": "roof-section-1",
+                    "encounter_id": encounter_id,
+                    "source_ref": source_ref,
+                    "campaign_revision": current["revision"],
+                    "reviewed_by": "system:local",
+                    "actor_facts": [{"actor_id": actor["id"], "in_area": True}],
+                },
                 "trigger_fact": {
                     "kind": "knock_wedged_beam",
                     "scene_id": expanded["scene"]["id"],
@@ -143,23 +181,23 @@ def test_collapsing_roof_uses_only_explicit_area_targets_and_replays(tmp_path: P
                 "expected_revision": current["revision"],
                 "idempotency_key": "roof-trigger-1",
             }
-            with pytest.raises(ToolError, match="confirmed source-defined area"):
+            with pytest.raises(ToolError, match="spatial_facts require"):
                 await _call(
                     server,
                     "trap_state_transition",
                     {
                         **args,
-                        "area_confirmed": False,
-                        "idempotency_key": "roof-area-unconfirmed",
+                        "spatial_facts": None,
+                        "idempotency_key": "roof-area-unreviewed",
                     },
                 )
-            with pytest.raises(ToolError, match="explicitly confirmed targets"):
+            with pytest.raises(ToolError, match="derive all affected actors"):
                 await _call(
                     server,
                     "trap_state_transition",
                     {
                         **args,
-                        "target_ids": [],
+                        "target_ids": [actor["id"]],
                         "idempotency_key": "roof-no-targets",
                     },
                 )
@@ -211,6 +249,164 @@ def test_collapsing_roof_uses_only_explicit_area_targets_and_replays(tmp_path: P
                 "trap_id": "roof-section-1",
                 "active": True,
             }
+            after_trigger = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign_id}},
+            )
+            movement_args = {
+                "campaign_id": campaign_id,
+                "actor_id": actor["id"],
+                "action": "move",
+                "payload": {
+                    "distance": 10,
+                    "spatial_facts": {
+                        "decision_id": "review-roof-rubble-movement",
+                        "reason": "The second five-foot segment crosses the collapsed roof rubble.",
+                        "destination_legal": True,
+                        "distance_ft": 10,
+                        "opportunity_attack_actor_ids": [],
+                        "trap_terrain_review": {
+                            "decision_id": "roof-rubble-path-review",
+                            "reason": "Reviewed every segment against the active rubble area.",
+                            "scene_id": expanded["scene"]["id"],
+                            "encounter_id": encounter_id,
+                            "campaign_revision": after_trigger["revision"],
+                            "actor_id": actor["id"],
+                            "segments": [
+                                {"distance_ft": 5, "difficult_terrain": False, "sources": []},
+                                {
+                                    "distance_ft": 5,
+                                    "difficult_terrain": False,
+                                    "sources": [
+                                        {"trap_id": "roof-section-1", "source_ref": source_ref}
+                                    ],
+                                },
+                            ],
+                        },
+                        "space_segments": [
+                            {
+                                "distance_ft": 5,
+                                "occupant_ids": [],
+                                "passage_width_ft": None,
+                                "difficult_terrain": False,
+                            },
+                            {
+                                "distance_ft": 5,
+                                "occupant_ids": [],
+                                "passage_width_ft": None,
+                                "difficult_terrain": True,
+                                "difficult_terrain_sources": [
+                                    {"trap_id": "roof-section-1", "source_ref": source_ref}
+                                ],
+                            },
+                        ],
+                    },
+                },
+                "expected_revision": after_trigger["revision"],
+                "idempotency_key": "roof-rubble-movement",
+            }
+            missing_review_facts = {
+                **movement_args["payload"]["spatial_facts"]
+            }
+            missing_review_facts.pop("trap_terrain_review")
+            missing_review = await _call(
+                server,
+                "combat_movement",
+                {
+                    **movement_args,
+                    "payload": {
+                        **movement_args["payload"],
+                        "spatial_facts": missing_review_facts,
+                    },
+                    "idempotency_key": "roof-rubble-movement-no-review",
+                },
+            )
+            assert missing_review["status"] == "pending_ruling"
+            stale_review_facts = json.loads(json.dumps(movement_args["payload"]["spatial_facts"]))
+            stale_review_facts["trap_terrain_review"]["campaign_revision"] -= 1
+            with pytest.raises(ToolError, match="current scene, encounter, campaign revision"):
+                await _call(
+                    server,
+                    "combat_movement",
+                    {
+                        **movement_args,
+                        "payload": {
+                            **movement_args["payload"],
+                            "spatial_facts": stale_review_facts,
+                        },
+                        "idempotency_key": "roof-rubble-movement-stale-review",
+                    },
+                )
+            with pytest.raises(ToolError):
+                await _call(
+                    server,
+                    "combat_movement",
+                    {**movement_args, "principal_id": "player:untrusted"},
+                )
+            unchanged_after_unreviewed_moves = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign_id}},
+            )
+            assert unchanged_after_unreviewed_moves["revision"] == after_trigger["revision"]
+            with pytest.raises(ToolError, match="only currently active, source-bound traps"):
+                await _call(
+                    server,
+                    "combat_movement",
+                    {
+                        **movement_args,
+                        "payload": {
+                            **movement_args["payload"],
+                            "spatial_facts": {
+                                **movement_args["payload"]["spatial_facts"],
+                            "trap_terrain_review": {
+                                **movement_args["payload"]["spatial_facts"]["trap_terrain_review"],
+                                "segments": [
+                                    {"distance_ft": 5, "difficult_terrain": False, "sources": []},
+                                    {
+                                        "distance_ft": 5,
+                                        "difficult_terrain": False,
+                                        "sources": [
+                                            {
+                                                "trap_id": "roof-section-1",
+                                                "source_ref": "unreviewed-source",
+                                            }
+                                        ],
+                                    },
+                                ],
+                            },
+                                "space_segments": [
+                                    *movement_args["payload"]["spatial_facts"]["space_segments"][:1],
+                                    {
+                                        **movement_args["payload"]["spatial_facts"]["space_segments"][1],
+                                        "difficult_terrain_sources": [
+                                            {
+                                                "trap_id": "roof-section-1",
+                                                "source_ref": "unreviewed-source",
+                                            }
+                                        ],
+                                    },
+                                ],
+                            },
+                        },
+                        "idempotency_key": "roof-rubble-movement-invalid-source",
+                    },
+                )
+            unchanged_after_invalid_move = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign_id}},
+            )
+            assert unchanged_after_invalid_move["revision"] == after_trigger["revision"]
+            rubble_movement = await _call(server, "combat_movement", movement_args)
+            mover = next(
+                item
+                for item in rubble_movement["combat"]["combatants"]
+                if item["actor_id"] == actor["id"]
+            )
+            assert mover["turn_budget"]["movement_spent"] == 15
+            assert await _call(server, "combat_movement", movement_args) == rubble_movement
             assert await _call(server, "trap_state_transition", args) == result
             after_actor = await _call(
                 server,

@@ -70,7 +70,7 @@ def test_gear_action_requires_exact_source_key_reference_and_name(field: str, va
 
 
 def test_all_prioritized_gear_actions_round_trip_by_source_identity() -> None:
-    assert len(ADVENTURING_GEAR_ACTIONS) == 21
+    assert len(ADVENTURING_GEAR_ACTIONS) == 22
     for action in ADVENTURING_GEAR_ACTIONS.values():
         assert adventuring_gear_action(_item(action)) == action
 
@@ -167,6 +167,19 @@ def test_2014_lamp_and_lantern_plans_keep_light_radius_fuel_and_duration(
         "source_key": "dnd5e.content.srd2014.item.oil-flask",
         "quantity": 1,
     }
+
+
+def test_2014_torch_plan_uses_action_and_one_hour_source_light_without_fuel() -> None:
+    torch = next(action for action in ADVENTURING_GEAR_ACTIONS.values() if action.name == "Torch")
+    light = resolve_adventuring_gear_intent(_item(torch), "light")
+    extinguish = resolve_adventuring_gear_intent(_item(torch), "extinguish")
+
+    assert light["action_economy"] == "action"
+    assert light["duration_ticks"] == TICKS_PER_HOUR
+    assert light["effect"]["bright_light"] == {"shape": "radius", "feet": 20}
+    assert light["effect"]["dim_light_additional_feet"] == 20
+    assert light["resource_cost"] == {}
+    assert extinguish["effect"] == {"light_off": True}
 
 
 def test_2014_hooded_lantern_lowering_and_oil_ground_effect_are_bounded() -> None:

@@ -31,7 +31,16 @@ _DAMAGE = {
 _SRD_TRAPS: dict[str, dict[str, Any]] = {
     "srd5.1.collapsing_roof": {
         "name": "Collapsing Roof",
-        "detect": {"active": [{"ability": "perception", "dc": 10}], "passive_dc": 10},
+        "detect": {
+            "active": [{"ability": "perception", "dc": 10}],
+            "passive_dc": 10,
+            "no_roll": [
+                {
+                    "method": "inspect_support_beams",
+                    "reveals_on_success": ["wedged_support_beams"],
+                }
+            ],
+        },
         "disable": {
             "ability": "dexterity",
             "dc": 15,
@@ -50,7 +59,7 @@ _SRD_TRAPS: dict[str, dict[str, Any]] = {
             "area": "beneath_unstable_ceiling",
             "effects": ["rubble_difficult_terrain"],
         },
-        "settlement": "supported_confirmed_area_damage_rubble_record_only",
+        "settlement": "supported_area_damage_and_agent_rubble_movement",
     },
     "srd5.1.falling_net": {
         "name": "Falling Net",
@@ -78,18 +87,23 @@ _SRD_TRAPS: dict[str, dict[str, Any]] = {
                 "slashing_damage_to_destroy_section": 5,
             },
         },
-        "settlement": "supported_multiple_targets_object_hp_unsupported",
+        "settlement": "supported_multiple_targets_and_object_hp",
     },
     "srd5.1.fire_breathing_statue": {
         "name": "Fire-Breathing Statue",
         "detect": {
-            "active": [{"ability": "perception", "dc": 15}],
+            "active": [
+                {"ability": "perception", "dc": 15},
+                {"ability": "arcana", "dc": 15},
+            ],
             "passive_dc": 15,
             "reveals_on_success": [
                 "hidden_pressure_plate",
                 "faint_scorch_marks_on_floor_and_walls",
             ],
+            "reveals_on_success_by_ability": {"arcana": ["magic_trap"]},
         },
+        "disable": {"ability": "arcana", "dc": 15},
         "magic_detection": {
             "effect": "detect_magic_or_equivalent",
             "target": "statue",
@@ -101,7 +115,6 @@ _SRD_TRAPS: dict[str, dict[str, Any]] = {
             "target": "statue",
             "effect": "destroy_trap",
         },
-        "disable": None,
         "bypass_methods": ["wedge_pressure_plate"],
         "trigger": {
             "kind": "area_save_damage",
@@ -336,7 +349,13 @@ _SRD_TRAPS: dict[str, dict[str, Any]] = {
     },
     "srd5.1.rolling_sphere": {
         "name": "Rolling Sphere",
-        "detect": {"active": [{"ability": "perception", "dc": 15}], "passive_dc": 15},
+        "detect": {
+            "active": [
+                {"ability": "perception", "dc": 15},
+                {"ability": "investigation", "dc": 15},
+            ],
+            "passive_dc": 15,
+        },
         "disable": None,
         "bypass_methods": ["wedge_pressure_plate"],
         "trigger": {
@@ -654,6 +673,66 @@ def validate_falling_net_section_spatial_facts(
     }
 
 
+def validate_falling_net_rescue_facts(
+    profile: Any,
+    facts: Any,
+    *,
+    scene_id: str,
+    scene_revision: int,
+    trap_id: str,
+    source_ref: str,
+    campaign_revision: int,
+    reviewed_by: str,
+    rescuer_id: str,
+    target_id: str,
+) -> dict[str, Any]:
+    """Validate DM-reviewed reach facts for freeing another creature from a net."""
+    if not isinstance(profile, dict) or profile.get("profile_id") != "srd5.1.falling_net":
+        raise ValueError("rescue facts require the Falling Net profile")
+    keys = {
+        "decision_id",
+        "reason",
+        "scene_id",
+        "scene_revision",
+        "trap_id",
+        "source_ref",
+        "campaign_revision",
+        "reviewed_by",
+        "rescuer_id",
+        "target_id",
+        "within_reach",
+    }
+    if not isinstance(facts, dict) or set(facts) != keys:
+        raise ValueError("Falling Net rescue requires a complete DM-reviewed reach decision")
+    if (
+        not str(facts.get("decision_id") or "").strip()
+        or not str(facts.get("reason") or "").strip()
+    ):
+        raise ValueError("Falling Net rescue requires a decision id and reason")
+    expected = {
+        "scene_id": scene_id,
+        "scene_revision": scene_revision,
+        "trap_id": trap_id,
+        "source_ref": source_ref,
+        "campaign_revision": campaign_revision,
+        "reviewed_by": reviewed_by,
+        "rescuer_id": rescuer_id,
+        "target_id": target_id,
+    }
+    for key, value in expected.items():
+        if facts.get(key) != value:
+            raise ValueError(f"Falling Net rescue fact {key} is stale or mismatched")
+    if type(facts.get("within_reach")) is not bool or facts["within_reach"] is not True:
+        raise ValueError("Falling Net rescue target must be DM-confirmed within reach")
+    if rescuer_id == target_id:
+        raise ValueError("Falling Net rescue target must be another creature")
+    return {
+        **facts,
+        "decision_id": facts["decision_id"].strip(),
+        "reason": " ".join(facts["reason"].split()),
+    }
+
+
 def falling_net_section_cut_qualifies(profile: Any, attack: Any, damage: Any) -> bool:
     """Return whether an engine-resolved hit dealt the source's section-cut damage."""
     threshold = source_trap_object_facts(profile)["slashing_damage_to_destroy_section"]
@@ -744,6 +823,9 @@ def validate_source_trap_area_spatial_facts(
     reviewed_by: str,
     actor_ids: list[str],
     eligible_actor_ids: list[str] | None = None,
+    positioning_mode: str = "agent",
+    battle_map: dict[str, Any] | None = None,
+    combatants: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Validate a complete Agent-reviewed area decision bound to one encounter revision."""
     if (
@@ -760,12 +842,13 @@ def validate_source_trap_area_spatial_facts(
         "source_ref",
         "campaign_revision",
         "reviewed_by",
-        "actor_facts",
     }
+    grid_mode = positioning_mode == "grid"
+    expected_fields.add("grid_area") if grid_mode else expected_fields.add("actor_facts")
     if not isinstance(facts, dict) or set(facts) != expected_fields:
         raise ValueError(
             "area spatial_facts require decision_id, reason, scene_id, trap_id, encounter_id, "
-            "source_ref, campaign_revision, reviewed_by, and complete actor_facts"
+            "source_ref, campaign_revision, reviewed_by, and the exact reviewed area facts"
         )
     decision_id = str(facts.get("decision_id") or "").strip()
     reason = " ".join(str(facts.get("reason") or "").split())
@@ -799,6 +882,85 @@ def validate_source_trap_area_spatial_facts(
         or not set(eligible_ids).issubset(actor_ids)
     ):
         raise ValueError("area spatial facts require eligible actors from the active encounter")
+    if grid_mode:
+        if profile["profile_id"] != "srd5.1.falling_net":
+            raise ValueError(
+                "Grid area settlement currently supports only the fixed 10-foot Falling Net"
+            )
+        grid_area = facts.get("grid_area")
+        map_value = battle_map if isinstance(battle_map, dict) else {}
+        grid = map_value.get("grid") if isinstance(map_value.get("grid"), dict) else {}
+        if (
+            not isinstance(grid_area, dict)
+            or set(grid_area) != {"map_id", "map_revision", "cells"}
+            or not isinstance(map_value.get("id"), str)
+            or grid_area.get("map_id") != map_value.get("id")
+            or type(map_value.get("map_revision")) is not int
+            or grid_area.get("map_revision") != map_value.get("map_revision")
+            or grid.get("kind") != "square"
+            or grid.get("cell_ft") != 5
+        ):
+            raise ValueError(
+                "Grid area review must match the current 5-foot square battle map and revision"
+            )
+        cells = grid_area.get("cells")
+        if not isinstance(cells, list) or len(cells) != 4 or any(
+            not isinstance(cell, str) for cell in cells
+        ) or len(set(cells)) != 4:
+            raise ValueError("Falling Net Grid area must contain exactly four distinct cells")
+        points = []
+        for cell in cells:
+            parts = cell.split(",")
+            if len(parts) != 2 or any(not part.isdecimal() for part in parts):
+                raise ValueError("Grid area cells must use canonical non-negative x,y coordinates")
+            point = (int(parts[0]), int(parts[1]))
+            if f"{point[0]},{point[1]}" != cell:
+                raise ValueError("Grid area cells must use canonical non-negative x,y coordinates")
+            points.append(point)
+        xs = {point[0] for point in points}
+        ys = {point[1] for point in points}
+        if len(xs) != 2 or len(ys) != 2 or {
+            (x, y) for x in xs for y in ys
+        } != set(points):
+            raise ValueError("Falling Net Grid area cells must form one exact 2-by-2 square")
+        bounds = map_value.get("bounds") if isinstance(map_value.get("bounds"), dict) else {}
+        if bounds and any(
+            x >= bounds.get("width_cells", 0) or y >= bounds.get("height_cells", 0)
+            for x, y in points
+        ):
+            raise ValueError("Grid area cells must lie inside the reviewed battle map")
+        from .spaces import grid_space, overlap
+
+        by_id = {str(item.get("actor_id") or ""): item for item in (combatants or [])}
+        affected_actor_ids = []
+        for actor_id in eligible_ids:
+            actor = by_id.get(actor_id)
+            position = actor.get("position") if isinstance(actor, dict) else None
+            if not isinstance(position, dict) or not all(key in position for key in ("x", "y")):
+                raise ValueError(
+                    "Grid trap targeting requires authoritative positions for every eligible actor"
+                )
+            actor_point = (position["x"], position["y"])
+            actor_space = grid_space(actor, actor_point, map_value)["space_ft"]
+            if any(overlap((x, y), 5, actor_point, actor_space) for x, y in points):
+                affected_actor_ids.append(actor_id)
+        if not affected_actor_ids and profile["profile_id"] != "srd5.1.falling_net":
+            raise ValueError("source trap area has no eligible targets")
+        normalized = {
+            "decision_id": decision_id,
+            "reason": reason,
+            "scene_id": scene_id,
+            "trap_id": trap_id,
+            "encounter_id": encounter_id,
+            "source_ref": source_ref,
+            "campaign_revision": revision,
+            "reviewed_by": reviewed_by,
+            "grid_area": {"map_id": map_value["id"], "map_revision": map_value["map_revision"],
+                          "cells": sorted(cells)},
+            "affected_actor_ids": sorted(affected_actor_ids),
+        }
+        return normalized
+
     actor_facts = facts.get("actor_facts")
     if not isinstance(actor_facts, list) or not actor_facts:
         raise ValueError("area spatial_facts require one fact for every active encounter combatant")
@@ -826,7 +988,12 @@ def validate_source_trap_area_spatial_facts(
         for item in ordered_facts
         if item["in_area"] and item["actor_id"] in eligible_set
     ]
-    if not affected_actor_ids:
+    if not affected_actor_ids and profile["profile_id"] not in {
+        "srd5.1.collapsing_roof",
+        "srd5.1.poison_darts",
+        "srd5.1.falling_net",
+        "srd5.1.fire_breathing_statue",
+    }:
         raise ValueError("source trap area has no eligible targets")
     if profile["profile_id"] == "srd5.1.poison_darts":
         affected_actor_ids.sort()
@@ -1078,7 +1245,10 @@ def transition_trap_state(
         raise ValueError("destroyed object facts are accepted only for destroy_object")
     if action == "cut_object_section":
         if not isinstance(section_id, str) or section_id not in {
-            "northwest", "northeast", "southwest", "southeast"
+            "northwest",
+            "northeast",
+            "southwest",
+            "southeast",
         }:
             raise ValueError("cut_object_section requires one of the four net section ids")
         if (

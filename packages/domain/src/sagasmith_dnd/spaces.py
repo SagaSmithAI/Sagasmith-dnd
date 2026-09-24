@@ -133,9 +133,12 @@ def validate_segments(segments, distance):
         raise _error("space_segments must be a bounded list of reviewed path segments")
     total = 0
     for segment in segments:
-        if not isinstance(segment, dict) or set(segment) != {
+        if not isinstance(segment, dict) or set(segment) - {
             "distance_ft", "occupant_ids", "passage_width_ft", "difficult_terrain",
-        }:
+            "difficult_terrain_sources",
+        } or {
+            "distance_ft", "occupant_ids", "passage_width_ft", "difficult_terrain",
+        } - set(segment):
             raise _error("space segments require distance_ft, occupant_ids, passage_width_ft, "
                          "and difficult_terrain")
         length = segment["distance_ft"]
@@ -144,6 +147,25 @@ def validate_segments(segments, distance):
                 or not isinstance(ids, list) or any(not isinstance(x, str) or not x for x in ids)
                 or len(ids) != len(set(ids)) or type(segment["difficult_terrain"]) is not bool):
             raise _error("space segment distance, occupants, or terrain are malformed")
+        sources = segment.get("difficult_terrain_sources", [])
+        if (
+            not isinstance(sources, list)
+            or any(
+                not isinstance(source, dict)
+                or set(source) != {"trap_id", "source_ref"}
+                or not isinstance(source.get("trap_id"), str)
+                or not source["trap_id"].strip()
+                or not isinstance(source.get("source_ref"), str)
+                or not source["source_ref"].strip()
+                for source in sources
+            )
+            or len({(source["trap_id"], source["source_ref"]) for source in sources})
+            != len(sources)
+            or (sources and not segment["difficult_terrain"])
+        ):
+            raise _error(
+                "difficult terrain sources must identify unique traps on difficult terrain"
+            )
         # Validate the width independently of a creature's size.
         width = segment["passage_width_ft"]
         if width is not None and (type(width) not in (int, float)

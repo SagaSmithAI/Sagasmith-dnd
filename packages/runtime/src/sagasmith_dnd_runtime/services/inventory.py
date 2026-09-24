@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Literal
 
 from sagasmith_dnd.adventuring_gear import (
@@ -10,6 +11,9 @@ from sagasmith_dnd.adventuring_gear import (
     normalize_gear_intent,
     resolve_adventuring_gear_intent,
 )
+from sagasmith_dnd.character_schema import effective_ability_scores, effective_size
+from sagasmith_dnd.conditions import effect_is_suspended_by_petrification
+from sagasmith_dnd.objects import validate_object_profile
 
 from .. import application_support as _support
 
@@ -103,6 +107,24 @@ class InventoryService:
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"{field} must be a non-negative integer")
 
+        if not object_target and normalized_intent in {"splash", "throw"}:
+            return self.campaign_adventuring_gear_attack(
+                campaign_id=campaign_id,
+                action_id=normalized_action_id,
+                item_id=normalized_item_id,
+                intent=normalized_intent,
+                source_ref=ADVENTURING_GEAR_SOURCE_REF,
+                actor_id=normalized_actor_id,
+                target_actor_id=normalized_target_id,
+                expected_actor_revision=expected_actor_revision,
+                expected_target_revision=expected_target_revision,
+                principal_id=principal_id,
+                expected_revision=expected_revision,
+                branch_id=resolved_branch_id,
+                idempotency_key=idempotency_key,
+                action_context=action_context,
+            )
+
         scope = f"campaign-gear-action:{campaign_id}:{resolved_branch_id}:{principal_id}"
         request_payload = {
             "action_id": normalized_action_id,
@@ -144,6 +166,7 @@ class InventoryService:
                 "lamp",
                 "lantern, bullseye",
                 "lantern, hooded",
+                "torch",
             }:
                 pass
             else:
@@ -188,7 +211,73 @@ class InventoryService:
         source_item = {**item, "source_ref": ADVENTURING_GEAR_SOURCE_REF}
         plan = resolve_adventuring_gear_intent(source_item, normalized_intent)
         gear_name = str(item.get("name") or "").strip().casefold()
-        if gear_name in {"lamp", "lantern, bullseye", "lantern, hooded"}:
+        if gear_name == "block and tackle" and normalized_intent == "hoist":
+            if (
+                object_target
+                or normalized_target_id
+                or expected_target_revision is not None
+                or any(
+                    value is not None
+                    for value in (object_source_ref, object_reason, object_ruling, attack_ruling)
+                )
+            ):
+                raise _support.CombatEngineError(
+                    "Block and Tackle hoisting accepts its load only through the exact "
+                    "DM-reviewed action_context contract"
+                )
+            return self.settle_adventuring_gear_hoist(
+                campaign=campaign,
+                state=state,
+                owner=owner,
+                owner_sheet=owner_sheet,
+                item=item,
+                plan=plan,
+                action_id=normalized_action_id,
+                item_id=normalized_item_id,
+                actor_id=normalized_actor_id,
+                expected_actor_revision=expected_actor_revision,
+                expected_campaign_revision=expected_revision,
+                branch_id=resolved_branch_id,
+                principal_id=principal_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+                request_payload=request_payload,
+                action_context=action_context,
+            )
+        if gear_name == "magnifying glass" and normalized_intent == "inspect":
+            if not object_target or normalized_target_id or expected_target_revision is not None:
+                raise _support.CombatEngineError(
+                    "Magnifying Glass inspection requires one reviewed scene object"
+                )
+            if any(
+                value is not None
+                for value in (object_source_ref, object_reason, object_ruling, attack_ruling)
+            ):
+                raise _support.CombatEngineError(
+                    "Magnifying Glass uses the stored signed object profile and accepts "
+                    "no caller outcome"
+                )
+            return self.settle_magnifying_glass_inspection(
+                campaign=campaign,
+                state=state,
+                owner=owner,
+                owner_sheet=owner_sheet,
+                item=item,
+                plan=plan,
+                target_object=target_object,
+                action_id=normalized_action_id,
+                item_id=normalized_item_id,
+                actor_id=normalized_actor_id,
+                expected_actor_revision=expected_actor_revision,
+                expected_campaign_revision=expected_revision,
+                branch_id=resolved_branch_id,
+                principal_id=principal_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+                request_payload=request_payload,
+                action_context=action_context,
+            )
+        if gear_name in {"lamp", "lantern, bullseye", "lantern, hooded", "torch"}:
             if object_target or normalized_target_id or expected_target_revision is not None:
                 raise _support.CombatEngineError(
                     "lamp and lantern actions do not accept a character or object target"
@@ -252,9 +341,7 @@ class InventoryService:
             item_name = str(item.get("name") or "").strip().casefold()
             supported_strength_check = (
                 item_name == "crowbar" and normalized_intent == "apply_leverage"
-            ) or (
-                item_name == "ram, portable" and normalized_intent == "break_door"
-            )
+            ) or (item_name == "ram, portable" and normalized_intent == "break_door")
             if supported_strength_check:
                 if set(target_object) != {"id", "scene_id"}:
                     raise _support.CombatEngineError(
@@ -301,9 +388,7 @@ class InventoryService:
                 )
             supported_object_attack = (
                 item_name == "acid (vial)" and normalized_intent == "throw"
-            ) or (
-                item_name == "alchemist's fire (flask)" and normalized_intent == "throw"
-            )
+            ) or (item_name == "alchemist's fire (flask)" and normalized_intent == "throw")
             if helper_actor_id is not None:
                 raise _support.CombatEngineError(
                     "only Portable Ram object checks accept a helper actor"
@@ -373,10 +458,7 @@ class InventoryService:
             str(item.get("name") or "").casefold() == "antitoxin (vial)"
             and normalized_intent == "drink"
         ):
-            if (
-                self.authoritative_phase(campaign_id)
-                != _support.PROFILE_PLAY
-            ):
+            if self.authoritative_phase(campaign_id) != _support.PROFILE_PLAY:
                 raise _support.CombatEngineError(
                     "Antitoxin use is unavailable during active combat until its action cost "
                     "is settled"
@@ -420,14 +502,18 @@ class InventoryService:
                 action_context=action_context,
             )
         if (
-            str(item.get("name") or "").casefold() == "lock"
-            and normalized_intent in {"pick", "unlock"}
-        ) or (
-            str(item.get("name") or "").casefold() == "rope, hempen (50 feet)"
-            and normalized_intent == "burst"
-        ) or (
-            str(item.get("name") or "").casefold() == "chain (10 feet)"
-            and normalized_intent == "burst"
+            (
+                str(item.get("name") or "").casefold() == "lock"
+                and normalized_intent in {"pick", "unlock"}
+            )
+            or (
+                str(item.get("name") or "").casefold() == "rope, hempen (50 feet)"
+                and normalized_intent == "burst"
+            )
+            or (
+                str(item.get("name") or "").casefold() == "chain (10 feet)"
+                and normalized_intent == "burst"
+            )
         ):
             return self.settle_adventuring_gear_object_check(
                 campaign=campaign,
@@ -656,6 +742,256 @@ class InventoryService:
         )
         return response
 
+    def settle_adventuring_gear_hoist(
+        self,
+        *,
+        campaign: Any,
+        state: dict[str, Any],
+        owner: Any,
+        owner_sheet: dict[str, Any],
+        item: dict[str, Any],
+        plan: dict[str, Any],
+        action_id: str,
+        item_id: str,
+        actor_id: str,
+        expected_actor_revision: int,
+        expected_campaign_revision: int | None,
+        branch_id: str,
+        principal_id: str,
+        idempotency_key: str,
+        scope: str,
+        request_payload: dict[str, Any],
+        action_context: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Atomically compare a DM-reviewed scene load against source lift capacity."""
+        if expected_campaign_revision is None or campaign.revision != expected_campaign_revision:
+            raise ValueError(f"campaign revision conflict: {campaign.id}")
+        if owner.campaign_id != campaign.id or owner.id != actor_id:
+            raise _support.CombatEngineError("Block and Tackle user must belong to the campaign")
+        if owner.revision != expected_actor_revision:
+            raise ValueError(
+                f"character revision conflict: expected {expected_actor_revision}, "
+                f"found {owner.revision}"
+            )
+        if item.get("name") != "Block and Tackle" or item.get("source_key") != (
+            "dnd5e.content.srd2014.item.block-and-tackle"
+        ):
+            raise _support.CombatEngineError("hoisting requires the exact source-bound item")
+        if (
+            plan.get("intent") != "hoist"
+            or dict(plan.get("effect") or {}).get("maximum_lift_multiplier") != 4
+        ):
+            raise _support.CombatEngineError("hoisting requires the bundled four-times rule")
+        if not isinstance(action_context, dict) or set(action_context) != {
+            "load_object",
+            "source_ref",
+            "load_weight_lb",
+            "review_reason",
+        }:
+            raise _support.NeedsRulingError(
+                "Block and Tackle requires one DM-reviewed load weight bound to an exact "
+                "scene object and source",
+                missing=("adventuring_gear.reviewed_load_weight_lb",),
+                ruling_kind="source_or_scene_fact",
+            )
+        load_object = action_context["load_object"]
+        if (
+            not isinstance(load_object, dict)
+            or set(load_object) != {"id", "scene_id"}
+            or not all(isinstance(load_object.get(key), str) for key in ("id", "scene_id"))
+            or not load_object["id"].strip()
+            or not load_object["scene_id"].strip()
+        ):
+            raise _support.CombatEngineError(
+                "load_object must identify exactly one scene object by id and scene_id"
+            )
+        weight_lb = action_context["load_weight_lb"]
+        if isinstance(weight_lb, bool) or not isinstance(weight_lb, int) or weight_lb < 0:
+            raise _support.CombatEngineError(
+                "reviewed load_weight_lb must be a non-negative integer"
+            )
+        review_reason = str(action_context["review_reason"] or "").strip()
+        if not review_reason or len(review_reason) > 600:
+            raise _support.CombatEngineError("load weight review requires a bounded reason")
+
+        scene_id = load_object["scene_id"].strip()
+        object_id = load_object["id"].strip()
+        _, normalized_source_ref, expanded = self.managed_module_source_ref(
+            campaign.id,
+            action_context["source_ref"],
+            require_exact=True,
+            expected_scene_id=scene_id,
+            require_active_module=True,
+        )
+        if normalized_source_ref is None or expanded is None:
+            raise _support.CombatEngineError("load source must be an exact active scene reference")
+        scene_objects = dict(state.get("scene_objects") or {})
+        scene_object = dict(dict(scene_objects.get(scene_id) or {}).get(object_id) or {})
+        if not scene_object:
+            raise _support.CombatEngineError(
+                "load must be an existing DM-reviewed scene object with a signed profile"
+            )
+        profile = validate_object_profile(scene_object.get("profile"))
+        profile_approval = scene_object.get("profile_approval")
+        approval = _support.verify_receipt_signature(
+            profile_approval,
+            self.content_authority_secret,
+            missing_error="load scene object profile approval is missing",
+            invalid_error="load scene object profile approval is invalid",
+        )
+        expected_profile_digest = _support.json_sha256(profile)
+        if (
+            profile.get("id") != object_id
+            or profile.get("scene_id") != scene_id
+            or approval.get("purpose") != "source_object_profile"
+            or approval.get("campaign_id") != campaign.id
+            or approval.get("profile_digest") != expected_profile_digest
+            or approval.get("source_ref") != normalized_source_ref
+            or scene_object.get("source_ref") != normalized_source_ref
+        ):
+            raise _support.CombatEngineError(
+                "reviewed load does not match the exact approved scene object and source"
+            )
+
+        strength = effective_ability_scores(owner_sheet).get("strength")
+        size = effective_size(owner_sheet)
+        size_multiplier = {
+            "tiny": 0.5,
+            "small": 1,
+            "medium": 1,
+            "large": 2,
+            "huge": 4,
+            "gargantuan": 8,
+        }.get(size)
+        if isinstance(strength, bool) or not isinstance(strength, int) or strength < 0:
+            raise _support.CombatEngineError("authoritative Strength score is unavailable")
+        if size_multiplier is None:
+            raise _support.CombatEngineError("effective creature size has no SRD lift multiplier")
+
+        carrying_multiplier = 1.0
+        recognized_modifiers: list[dict[str, Any]] = []
+        bull_strength_effects = 0
+        for effect in owner_sheet.get("effects", []):
+            if not effect.get("active") or effect_is_suspended_by_petrification(
+                owner_sheet, effect
+            ):
+                continue
+            source_spell_id = str(effect.get("source_spell_id") or "")
+            is_bulls_strength = (
+                source_spell_id == "dnd5e.content.srd2014.spell.enhance-ability"
+                and str(effect.get("source") or "") == "spell.cast"
+                and " ".join(str(effect.get("name") or "").casefold().split())
+                in {"bull's strength", "bulls strength"}
+            )
+            has_bulls_strength_multiplier = False
+            for change in effect.get("changes", []):
+                path = str(change.get("path") or "").casefold()
+                if path == "carrying_capacity.multiplier":
+                    multiplier = change.get("value")
+                    if (
+                        not is_bulls_strength
+                        or change.get("mode") != "multiply"
+                        or isinstance(multiplier, bool)
+                        or not isinstance(multiplier, (int, float))
+                        or not math.isfinite(float(multiplier))
+                        or float(multiplier) != 2.0
+                    ):
+                        raise _support.CombatEngineError(
+                            "unrecognized carrying-capacity modifier; only source-bound "
+                            "Bull's Strength x2 is currently supported"
+                        )
+                    has_bulls_strength_multiplier = True
+                elif any(token in path for token in ("carry", "capacity", "lift", "push", "drag")):
+                    raise _support.CombatEngineError(
+                        "unrecognized carrying-capacity modifier cannot be applied safely"
+                    )
+            if is_bulls_strength and (not effect.get("changes") or has_bulls_strength_multiplier):
+                bull_strength_effects += 1
+        if bull_strength_effects > 1:
+            raise _support.CombatEngineError(
+                "multiple Bull's Strength carrying-capacity effects have unresolved stacking"
+            )
+        if bull_strength_effects:
+            carrying_multiplier = 2.0
+            recognized_modifiers.append(
+                {
+                    "source_spell_id": "dnd5e.content.srd2014.spell.enhance-ability",
+                    "effect": "bulls_strength",
+                    "multiplier": 2,
+                }
+            )
+        normal_lift_lb = 30 * strength * float(size_multiplier) * carrying_multiplier
+        maximum_hoist_lb = normal_lift_lb * int(plan["effect"]["maximum_lift_multiplier"])
+        if not math.isfinite(normal_lift_lb) or not math.isfinite(maximum_hoist_lb):
+            raise _support.CombatEngineError("derived lift capacity is outside supported bounds")
+        lifted_within_capacity = weight_lb <= maximum_hoist_lb
+
+        hoist_result = {
+            "status": "within_capacity" if lifted_within_capacity else "over_capacity",
+            "within_capacity": lifted_within_capacity,
+            "load_weight_lb": weight_lb,
+            "normal_lift_capacity_lb": normal_lift_lb,
+            "block_and_tackle_capacity_lb": maximum_hoist_lb,
+            "strength_score": strength,
+            "effective_size": size,
+            "size_multiplier": size_multiplier,
+            "carrying_capacity_modifiers": recognized_modifiers,
+            "load_object": {"id": object_id, "scene_id": scene_id},
+            "destination": None,
+            "weight_review": {
+                "reviewed_by": principal_id,
+                "reviewed_campaign_revision": campaign.revision,
+                "reason": review_reason,
+                "source_ref": normalized_source_ref,
+            },
+        }
+        spends = list(state.get("item_spends") or [])
+        if any(
+            isinstance(entry, dict) and str(entry.get("id") or "") == action_id for entry in spends
+        ):
+            raise ValueError("gear action_id already exists on this branch")
+        receipt = {
+            "id": action_id,
+            "item_id": item_id,
+            "quantity": 0,
+            "reason": "Block and Tackle hoist capacity determination",
+            "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+            "source_key": item.get("source_key"),
+            "character_id": actor_id,
+            "gear_intent": "hoist",
+            "rule_plan": _support.deepcopy(plan),
+            "result": _support.deepcopy(hoist_result),
+        }
+        spends.append(receipt)
+        state["item_spends"] = spends
+        normalized_state = _support.validate_party_state(state)
+        response = {
+            "status": "committed",
+            "action_id": action_id,
+            "item_id": item_id,
+            "intent": "hoist",
+            "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+            "rule_plan": _support.deepcopy(plan),
+            "hoist": hoist_result,
+            "rule_receipts": _support.core_receipts(
+                self.effective_rule_context(campaign.id, branch_id=branch_id),
+                ["dnd5e.core.encumbrance"],
+                "adventuring_gear.block_and_tackle.hoist",
+            ),
+        }
+        return self.commit_campaign_state(
+            campaign,
+            normalized_state,
+            operation="campaign.adventuring_gear.block_and_tackle.hoist",
+            principal_id=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=request_payload,
+            response_fields=response,
+            expected_campaign_revision=expected_campaign_revision,
+        )
+
     def settle_adventuring_gear_light_lifecycle(
         self,
         *,
@@ -677,7 +1013,7 @@ class InventoryService:
         request_payload: dict[str, Any],
         action_context: dict[str, Any] | None,
     ) -> dict[str, Any]:
-        """Settle bundled Lamp and Lantern light state, fuel, and hood mode."""
+        """Settle bundled Lamp, Lantern, and Torch light state and lifecycle."""
         if expected_campaign_revision is None or campaign.revision != expected_campaign_revision:
             raise ValueError("campaign revision conflict for adventuring gear light")
         if owner.campaign_id != campaign.id or owner.id != actor_id:
@@ -700,9 +1036,7 @@ class InventoryService:
                 "dynamic adventuring gear lights require an active encounter scene"
             )
         if self.encounter_rules_edition(campaign.id, next_encounter) != "2014":
-            raise _support.CombatEngineError(
-                "adventuring gear lights require the 2014 rules"
-            )
+            raise _support.CombatEngineError("adventuring gear lights require the 2014 rules")
         self.require_no_blocking_pending(next_encounter)
         if next_encounter.get("positioning_mode") != "grid":
             raise _support.NeedsRulingError(
@@ -712,9 +1046,7 @@ class InventoryService:
             )
         battle_map = dict(next_encounter.get("battle_map") or {})
         map_source = dict(battle_map.get("source") or {})
-        scene_id = str(
-            next_encounter.get("scene_id") or map_source.get("scene_id") or ""
-        ).strip()
+        scene_id = str(next_encounter.get("scene_id") or map_source.get("scene_id") or "").strip()
         map_checksum = str(battle_map.get("checksum") or "").strip()
         map_revision = battle_map.get("map_revision")
         grid = dict(battle_map.get("grid") or {})
@@ -752,8 +1084,7 @@ class InventoryService:
         matches = [
             record
             for record in light_records
-            if isinstance(record, dict)
-            and str(record.get("id") or "") == light_id
+            if isinstance(record, dict) and str(record.get("id") or "") == light_id
         ]
         if len(matches) > 1:
             raise _support.CombatEngineError("duplicate source-bound gear light state")
@@ -761,10 +1092,42 @@ class InventoryService:
         now_ticks = int(dict(state.get("game_time") or {}).get("elapsed_ticks", 0) or 0)
         next_owner_sheet = _support.validate_character_sheet(owner_sheet)
         consumed_oil: dict[str, Any] | None = None
+        action_paid = False
 
         if plan["intent"] == "light":
             if prior is not None and bool(prior.get("active")):
                 raise _support.CombatEngineError("this source-bound gear light is already lit")
+            if item_name.casefold() == "torch":
+                if plan.get("action_economy") != "action":
+                    raise _support.CombatEngineError(
+                        "lighting a Torch requires its source-defined action"
+                    )
+                tinderbox = next(
+                    (
+                        candidate
+                        for candidate in next_owner_sheet.get("inventory", {}).get("items", [])
+                        if str(candidate.get("name") or "").strip().casefold() == "tinderbox"
+                        and str(candidate.get("source_key") or "")
+                        == "dnd5e.content.srd2014.item.tinderbox"
+                        and int(candidate.get("quantity", 0) or 0) > 0
+                    ),
+                    None,
+                )
+                if tinderbox is None:
+                    raise _support.CombatEngineError(
+                        "lighting a Torch requires an available source-bound Tinderbox"
+                    )
+                next_encounter = _support.resolve_common_action(
+                    next_encounter,
+                    actor_id_value=actor_id,
+                    action="use_object",
+                    payload={
+                        "kind": "adventuring_gear",
+                        "intent": "light",
+                        "item_id": item_id,
+                    },
+                )
+                action_paid = True
             orientation: str | None = None
             if item_name.casefold() == "lantern, bullseye":
                 required_context = {
@@ -794,42 +1157,50 @@ class InventoryService:
                     )
             elif action_context is not None:
                 raise _support.CombatEngineError(
-                    "Lamp and Hooded Lantern lighting accept no caller scene facts"
+                    "Lamp, Hooded Lantern, and Torch lighting accept no caller scene facts"
                 )
 
             remaining = int((prior or {}).get("remaining_fuel_ticks", 0) or 0)
             if prior is not None and bool(prior.get("active")):
                 remaining = max(
                     0,
-                    int(prior.get("fuel_due_elapsed_ticks", now_ticks) or now_ticks)
-                    - now_ticks,
+                    int(prior.get("fuel_due_elapsed_ticks", now_ticks) or now_ticks) - now_ticks,
                 )
             if remaining <= 0:
-                fuel_spec = dict(dict(plan.get("resource_cost") or {}).get("fuel") or {})
+                resource_cost = dict(plan.get("resource_cost") or {})
+                fuel_spec = dict(resource_cost.get("fuel") or {})
+                if not fuel_spec and item_name.casefold() == "torch":
+                    remaining = int(plan.get("duration_ticks") or 0)
+                if not fuel_spec and item_name.casefold() != "torch":
+                    raise _support.CombatEngineError("light fuel is unavailable in the source plan")
                 fuel_source_key = str(fuel_spec.get("source_key") or "")
-                fuel_item = next(
-                    (
-                        candidate
-                        for candidate in sorted(
-                            next_owner_sheet.get("inventory", {}).get("items", []),
-                            key=lambda entry: str(entry.get("id") or ""),
-                        )
-                        if str(candidate.get("source_key") or "") == fuel_source_key
-                        and str(candidate.get("name") or "").strip().casefold()
-                        == "oil (flask)"
-                        and int(candidate.get("quantity", 0) or 0) >= 1
-                    ),
-                    None,
-                )
-                if fuel_item is None:
-                    raise _support.CombatEngineError(
-                        "lighting requires one owned, source-matched Oil (flask)"
+                fuel_item = (
+                    next(
+                        (
+                            candidate
+                            for candidate in sorted(
+                                next_owner_sheet.get("inventory", {}).get("items", []),
+                                key=lambda entry: str(entry.get("id") or ""),
+                            )
+                            if str(candidate.get("source_key") or "") == fuel_source_key
+                            and str(candidate.get("name") or "").strip().casefold() == "oil (flask)"
+                            and int(candidate.get("quantity", 0) or 0) >= 1
+                        ),
+                        None,
                     )
-                next_owner_sheet, _ = _support.remove_inventory_item(
-                    next_owner_sheet, str(fuel_item["id"]), 1
+                    if fuel_spec
+                    else None
                 )
-                consumed_oil = _support.deepcopy(fuel_item)
-                remaining = int(plan.get("duration_ticks") or 0)
+                if fuel_spec:
+                    if fuel_item is None:
+                        raise _support.CombatEngineError(
+                            "lighting requires one owned, source-matched Oil (flask)"
+                        )
+                    next_owner_sheet, _ = _support.remove_inventory_item(
+                        next_owner_sheet, str(fuel_item["id"]), 1
+                    )
+                    consumed_oil = _support.deepcopy(fuel_item)
+                    remaining = int(plan.get("duration_ticks") or 0)
             if remaining <= 0:
                 raise _support.CombatEngineError("light fuel duration is unavailable")
             prior = {
@@ -891,16 +1262,13 @@ class InventoryService:
                     raise _support.CombatEngineError("this source-bound gear light is not lit")
                 prior["remaining_fuel_ticks"] = max(
                     0,
-                    int(prior.get("fuel_due_elapsed_ticks", now_ticks) or now_ticks)
-                    - now_ticks,
+                    int(prior.get("fuel_due_elapsed_ticks", now_ticks) or now_ticks) - now_ticks,
                 )
                 prior["active"] = False
                 prior["fuel_due_elapsed_ticks"] = None
             elif plan["intent"] in {"lower_hood", "raise_hood"}:
                 if item_name.casefold() != "lantern, hooded":
-                    raise _support.CombatEngineError(
-                        "only a Hooded Lantern has a hood state"
-                    )
+                    raise _support.CombatEngineError("only a Hooded Lantern has a hood state")
                 if not prior.get("active"):
                     raise _support.CombatEngineError("the Hooded Lantern must be lit")
                 desired = "lowered" if plan["intent"] == "lower_hood" else "raised"
@@ -941,6 +1309,7 @@ class InventoryService:
             "gear_intent": plan["intent"],
             "rule_plan": _support.deepcopy(plan),
             "resulting_light": _support.deepcopy(prior),
+            **({"action_cost": "action", "action_paid": True} if action_paid else {}),
             "reviewer_principal_id": principal_id
             if plan["intent"] == "light" and item_name.casefold() == "lantern, bullseye"
             else None,
@@ -988,6 +1357,7 @@ class InventoryService:
                 "source_ref": ADVENTURING_GEAR_SOURCE_REF,
                 "rule_plan": _support.deepcopy(plan),
                 "light": _support.deepcopy(prior),
+                **({"action_cost": "action", "action_paid": True} if action_paid else {}),
                 "fuel": {
                     "oil_item_id": str(consumed_oil.get("id") or ""),
                     "quantity_spent": 1,
@@ -1077,9 +1447,7 @@ class InventoryService:
             or set(area_origin) != {"x", "y"}
             or any(type(area_origin.get(key)) is not int for key in ("x", "y"))
         ):
-            raise _support.CombatEngineError(
-                "area_origin must contain integer x and y grid cells"
-            )
+            raise _support.CombatEngineError("area_origin must contain integer x and y grid cells")
         item_name = str(item.get("name") or "").strip().casefold()
         dimensions_by_item = {
             "ball bearings (bag of 1,000)": (2, 2),
@@ -1099,17 +1467,13 @@ class InventoryService:
             "depth_feet": dimensions[1] * 5,
         }
         if plan.get("area") != expected_area:
-            raise _support.CombatEngineError(
-                "ground-area gear requires its exact bundled square"
-            )
+            raise _support.CombatEngineError("ground-area gear requires its exact bundled square")
 
         encounter = _support.deepcopy(dict(state.get("combat") or {}))
         if not encounter.get("active"):
             raise _support.CombatEngineError("ground-area deployment requires active combat")
         if self.encounter_rules_edition(campaign.id, encounter) != "2014":
-            raise _support.CombatEngineError(
-                "ground-area gear deployment requires the 2014 rules"
-            )
+            raise _support.CombatEngineError("ground-area gear deployment requires the 2014 rules")
         self.require_no_blocking_pending(encounter)
         if encounter.get("positioning_mode") != "grid":
             raise _support.NeedsRulingError(
@@ -1163,11 +1527,14 @@ class InventoryService:
             )
         from sagasmith_dnd.spaces import grid_space
 
-        footprint = grid_space(
-            deployer,
-            (deployer_position["x"], deployer_position["y"]),
-            battle_map,
-        )["space_ft"] // 5
+        footprint = (
+            grid_space(
+                deployer,
+                (deployer_position["x"], deployer_position["y"]),
+                battle_map,
+            )["space_ft"]
+            // 5
+        )
         actor_x, actor_y = int(deployer_position["x"]), int(deployer_position["y"])
         actor_cells = {
             (cell_x, cell_y)
@@ -1253,8 +1620,7 @@ class InventoryService:
         )
         spends = list(state.get("item_spends") or [])
         if any(
-            isinstance(entry, dict) and str(entry.get("id") or "") == action_id
-            for entry in spends
+            isinstance(entry, dict) and str(entry.get("id") or "") == action_id for entry in spends
         ):
             raise ValueError("gear action_id already exists on this branch")
         receipt = {
@@ -1476,9 +1842,7 @@ class InventoryService:
 
         spends = list(state.get("item_spends") or [])
         if any(
-            str(entry.get("id") or "") == action_id
-            for entry in spends
-            if isinstance(entry, dict)
+            str(entry.get("id") or "") == action_id for entry in spends if isinstance(entry, dict)
         ):
             raise ValueError("gear action_id already exists on this branch")
         receipt = {
@@ -1607,10 +1971,10 @@ class InventoryService:
             raise ValueError("same-actor Manacles action requires matching character revisions")
 
         encounter = _support.deepcopy(dict(state.get("combat") or {}))
-        if not encounter.get("active"):
-            raise _support.CombatEngineError("Manacles actions require active encounter actors")
-        self.require_encounter_combatant(encounter, actor_id, role="Manacles user")
-        self.require_encounter_combatant(encounter, target_actor_id, role="Manacles target")
+        active_combat = encounter.get("active") is True
+        if active_combat:
+            self.require_encounter_combatant(encounter, actor_id, role="Manacles user")
+            self.require_encounter_combatant(encounter, target_actor_id, role="Manacles target")
         target_sheet = (
             owner_sheet
             if target_actor_id == actor_id
@@ -1650,6 +2014,24 @@ class InventoryService:
             )
 
         intent = str(plan.get("intent") or "")
+        if active_combat and intent != "bind":
+            raise _support.CombatEngineError(
+                "Manacles escape, break, unlock, and pick are unavailable during active combat "
+                "until their action costs are explicitly adjudicated"
+            )
+        if active_combat and intent == "bind":
+            if "incapacitated" not in _support.condition_ids(target_sheet.get("conditions")):
+                raise _support.CombatEngineError(
+                    "active-combat Manacles binding requires an authoritative incapacitated "
+                    "condition on the target"
+                )
+            encounter = _support.resolve_common_action(
+                encounter,
+                actor_id_value=actor_id,
+                action="use_object",
+                payload={"item_id": item_id, "intent": "manacles_bind"},
+                payment="main_action",
+            )
         success = True
         check: dict[str, Any] | None = None
         next_binding: dict[str, Any]
@@ -1668,9 +2050,7 @@ class InventoryService:
                 None,
             )
             if active_binding_for_item is not None:
-                raise _support.CombatEngineError(
-                    "this Manacles set already has an active binding"
-                )
+                raise _support.CombatEngineError("this Manacles set already has an active binding")
             if prior.get("status") == "broken":
                 raise _support.CombatEngineError("broken Manacles cannot bind another target")
             required_fields = {
@@ -1793,9 +2173,7 @@ class InventoryService:
                     )
 
                 check_spec = dict(plan.get("check") or {})
-                check_actor_id = (
-                    actor_id if intent == "pick" else target_actor_id
-                )
+                check_actor_id = actor_id if intent == "pick" else target_actor_id
                 stream = _support.active_random_stream()
                 if stream is None:
                     with _support.use_random_stream(
@@ -1871,6 +2249,8 @@ class InventoryService:
         bindings[binding_key] = next_binding
         next_state = _support.deepcopy(state)
         next_state["adventuring_gear_bindings"] = bindings
+        if active_combat:
+            next_state["combat"] = encounter
 
         check_success = True if check is None else success
         receipt = {
@@ -1890,6 +2270,8 @@ class InventoryService:
             "key_available": next_binding.get("key_available"),
             "resulting_state": _support.deepcopy(next_binding),
         }
+        if active_combat:
+            receipt.update({"action_cost": "action", "action_paid": True})
         spends = [*existing_spends, receipt]
         next_state["item_spends"] = spends
         resolution = {
@@ -1903,6 +2285,8 @@ class InventoryService:
             "check": _support.deepcopy(check),
             "binding": _support.deepcopy(next_binding),
         }
+        if active_combat:
+            resolution.update({"action_cost": "action", "action_paid": True})
         next_state["resolution_log"] = [
             *list(next_state.get("resolution_log") or []),
             resolution,
@@ -1969,6 +2353,8 @@ class InventoryService:
                 else {}
             ),
         }
+        if active_combat:
+            response.update({"action_cost": "action", "action_paid": True})
         response["campaign"]["state"] = normalized_state
         stream = _support.active_random_stream()
         if stream is not None and stream.draw_count > 0:
@@ -1986,6 +2372,277 @@ class InventoryService:
                 scope=scope,
                 payload=request_payload,
                 response=response,
+            ),
+        )
+        return response
+
+    def settle_magnifying_glass_inspection(
+        self,
+        *,
+        campaign: Any,
+        state: dict[str, Any],
+        owner: Any,
+        owner_sheet: dict[str, Any],
+        item: dict[str, Any],
+        plan: dict[str, Any],
+        target_object: dict[str, Any],
+        action_id: str,
+        item_id: str,
+        actor_id: str,
+        expected_actor_revision: int,
+        expected_campaign_revision: int | None,
+        branch_id: str,
+        principal_id: str,
+        idempotency_key: str,
+        scope: str,
+        request_payload: dict[str, Any],
+        action_context: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Resolve source-granted advantage against one signed Small item."""
+        if expected_campaign_revision is None or campaign.revision != expected_campaign_revision:
+            raise ValueError("campaign revision conflict for Magnifying Glass inspection")
+        if owner.id != actor_id or owner.campaign_id != campaign.id:
+            raise _support.CombatEngineError("inspection requires its owning campaign actor")
+        if owner.revision != expected_actor_revision:
+            raise ValueError("character revision conflict for Magnifying Glass inspection")
+        if self.campaign_rules_edition(campaign.id) != "2014":
+            raise _support.CombatEngineError("Magnifying Glass requires the 2014 ruleset")
+        if bool(dict(state.get("combat") or {}).get("active")):
+            raise _support.CombatEngineError(
+                "Magnifying Glass checks are unavailable during active combat until "
+                "their action cost is settled"
+            )
+        if str(item.get("source_key") or "") != "dnd5e.content.srd2014.item.magnifying-glass":
+            raise _support.CombatEngineError("Magnifying Glass item source identity is invalid")
+        if item.get("quantity", 0) < 1:
+            raise _support.CombatEngineError("Magnifying Glass is not available in inventory")
+        if (
+            not isinstance(action_context, dict)
+            or set(action_context) != {"purpose", "ability", "dc"}
+            or action_context.get("purpose") not in {"appraise", "inspect"}
+        ):
+            raise _support.NeedsRulingError(
+                "Magnifying Glass requires a DM-defined appraise or inspect check",
+                missing=("adventuring_gear.appraise_or_inspect_ability_check",),
+                ruling_kind="source_or_scene_fact",
+            )
+        ability = str(action_context.get("ability") or "").strip().casefold()
+        if ability not in {
+            "strength",
+            "dexterity",
+            "constitution",
+            "intelligence",
+            "wisdom",
+            "charisma",
+        }:
+            raise _support.CombatEngineError("DM-reviewed check ability must be a core ability")
+        dc = action_context.get("dc")
+        if isinstance(dc, bool) or not isinstance(dc, int) or not 1 <= dc <= 40:
+            raise _support.CombatEngineError("DM-reviewed check DC must be an integer from 1 to 40")
+        if not isinstance(target_object, dict) or set(target_object) != {"id", "scene_id"}:
+            raise _support.CombatEngineError("target_object accepts only exact id and scene_id")
+        scene_id = str(target_object.get("scene_id") or "").strip()
+        object_id = str(target_object.get("id") or "").strip()
+        if not scene_id or not object_id:
+            raise _support.CombatEngineError("target_object requires id and scene_id")
+        objects = dict(state.get("scene_objects") or {})
+        obj = dict(dict(objects.get(scene_id) or {}).get(object_id) or {})
+        if not obj:
+            raise _support.CombatEngineError("inspection target has no DM-reviewed scene profile")
+        _, source_ref, expanded = self.managed_module_source_ref(
+            campaign.id,
+            obj.get("source_ref"),
+            require_exact=True,
+            expected_scene_id=scene_id,
+            require_active_module=True,
+        )
+        if source_ref is None or expanded is None:
+            raise _support.CombatEngineError(
+                "inspection target must belong to an exact active scene"
+            )
+        profile = validate_object_profile(obj.get("profile"))
+        approval = _support.verify_receipt_signature(
+            obj.get("profile_approval"),
+            self.content_authority_secret,
+            missing_error="inspection target profile approval is missing",
+            invalid_error="inspection target profile approval is invalid",
+        )
+        if (
+            profile["id"] != object_id
+            or profile["scene_id"] != scene_id
+            or profile["size"] not in {"tiny", "small"}
+            or approval.get("purpose") != "source_object_profile"
+            or approval.get("campaign_id") != campaign.id
+            or approval.get("profile_digest") != _support.json_sha256(profile)
+            or approval.get("source_ref") != source_ref
+            or obj.get("source_ref") != source_ref
+        ):
+            raise _support.NeedsRulingError(
+                "Advantage needs a signed Tiny or Small item; highly detailed status is "
+                "not represented",
+                missing=("scene_object.profile.size_or_reviewed_detail",),
+                ruling_kind="source_or_scene_fact",
+            )
+        if any(
+            isinstance(row, dict) and row.get("id") == action_id
+            for row in state.get("item_spends", [])
+        ):
+            raise ValueError("gear action_id already exists on this branch")
+        stream = _support.active_random_stream()
+        if stream is None:
+            with _support.use_random_stream(
+                _support.CampaignRandomStream.from_campaign_state(
+                    campaign.id,
+                    campaign.state,
+                    operation="campaign.adventuring_gear.magnifying_glass_inspection",
+                    idempotency_key=idempotency_key,
+                    campaign_revision=campaign.revision,
+                )
+            ):
+                return self.settle_magnifying_glass_inspection(
+                    campaign=campaign,
+                    state=state,
+                    owner=owner,
+                    owner_sheet=owner_sheet,
+                    item=item,
+                    plan=plan,
+                    target_object=target_object,
+                    action_id=action_id,
+                    item_id=item_id,
+                    actor_id=actor_id,
+                    expected_actor_revision=expected_actor_revision,
+                    expected_campaign_revision=expected_campaign_revision,
+                    branch_id=branch_id,
+                    principal_id=principal_id,
+                    idempotency_key=idempotency_key,
+                    scope=scope,
+                    request_payload=request_payload,
+                    action_context=action_context,
+                )
+        random_state = _support.validate_random_stream_state(
+            dict(campaign.state or {}).get("random_stream")
+            or _support.initial_random_stream(f"sagasmith-dnd:{campaign.id}")
+        )
+        if (
+            stream.campaign_id != campaign.id
+            or stream.seed != random_state["seed"]
+            or stream.start_position != random_state["position"]
+            or (
+                stream.campaign_revision is not None
+                and stream.campaign_revision != campaign.revision
+            )
+        ):
+            raise _support.CombatEngineError(
+                "inspection check requires the current random snapshot"
+            )
+        rules = self.effective_rule_context(
+            campaign.id,
+            branch_id=branch_id,
+            facts={
+                "action": "magnifying_glass_inspect",
+                "actor_id": actor_id,
+                "target_id": object_id,
+            },
+        )
+        check = _support.resolve_actor_check(
+            self.combat_actor_snapshot(actor_id),
+            kind="check",
+            ability=ability,
+            action=f"magnifying_glass_{action_context['purpose']}",
+            dc=dc,
+            bonus=0,
+            advantage=True,
+            rules=rules,
+            ruleset="2014",
+            rng=stream,
+        )
+        check["source_item_modifier"] = {
+            "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+            "source_key": item["source_key"],
+            "advantage": True,
+            "reviewed_object_profile_digest": _support.json_sha256(profile),
+        }
+        success = check.get("success") is True
+        next_state = _support.deepcopy(state)
+        receipt = {
+            "id": action_id,
+            "item_id": item_id,
+            "quantity": 0,
+            "reason": f"Magnifying Glass {action_context['purpose']} check",
+            "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+            "source_key": item["source_key"],
+            "owner_actor_id": actor_id,
+            "owner_revision_before": owner.revision,
+            "owner_revision_after": owner.revision + 1,
+            "target_scene_id": scene_id,
+            "target_object_id": object_id,
+            "target_source_ref": source_ref,
+            "profile_approval_digest": _support.json_sha256(obj["profile_approval"]),
+            "check": _support.deepcopy(check),
+            "success": success,
+            "rule_plan": _support.deepcopy(plan),
+        }
+        next_state["item_spends"] = [*list(next_state.get("item_spends") or []), receipt]
+        next_state["resolution_log"] = [
+            *list(next_state.get("resolution_log") or []),
+            {
+                "id": f"resolution-{_support.uuid4().hex}",
+                "type": "adventuring_gear_magnifying_glass_inspection",
+                "operation": "campaign.adventuring_gear.magnifying_glass_inspection",
+                "campaign_revision": campaign.revision + 1,
+                "branch_id": branch_id,
+                "actor_id": actor_id,
+                "scene_id": scene_id,
+                "object_id": object_id,
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                "success": success,
+                "result": receipt,
+            },
+        ][-100:]
+        normalized_state = _support.validate_party_state(next_state)
+        updated_owner = _support.replace(owner, sheet=owner_sheet, revision=owner.revision + 1)
+        response = {
+            "status": "committed",
+            "action_id": action_id,
+            "intent": "inspect",
+            "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+            "rule_plan": _support.deepcopy(plan),
+            "check": _support.deepcopy(check),
+            "success": success,
+            "target_object": {
+                "id": object_id,
+                "scene_id": scene_id,
+                "profile_approval": _support.deepcopy(obj["profile_approval"]),
+            },
+            "owner": self.character_view(updated_owner),
+            "campaign": _support.asdict(
+                _support.replace(campaign, state=normalized_state, revision=campaign.revision + 1)
+            ),
+            "receipt": receipt,
+        }
+        response["campaign"]["state"] = normalized_state
+        if stream.draw_count > 0:
+            response["random_stream_receipt"] = stream.receipt()
+        _support.StateMutationService(self.storage.database).replace(
+            campaign.id,
+            campaign_state=normalized_state,
+            character_updates=[
+                _support.CharacterStateUpdate(
+                    character_id=owner.id,
+                    sheet=owner_sheet,
+                    notes=_support.validate_character_notes(
+                        owner.notes, character_type=owner.character_type
+                    ),
+                    expected_revision=owner.revision,
+                )
+            ],
+            expected_campaign_revision=expected_campaign_revision,
+            operation="campaign.adventuring_gear.magnifying_glass_inspection",
+            actor=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            idempotency_write=_support.IdempotencyWrite(
+                scope=scope, payload=request_payload, response=response
             ),
         )
         return response
@@ -2028,8 +2685,10 @@ class InventoryService:
             )
         name = str(item.get("name") or "")
         item_key = str(item.get("source_key") or "")
-        state_key = "lock" if name.casefold() == "lock" else (
-            "chain" if name.casefold() == "chain (10 feet)" else "rope"
+        state_key = (
+            "lock"
+            if name.casefold() == "lock"
+            else ("chain" if name.casefold() == "chain (10 feet)" else "rope")
         )
         intent = str(plan.get("intent") or "")
         if action_context is not None and not (state_key == "lock" and intent == "pick"):
@@ -2115,9 +2774,7 @@ class InventoryService:
                 raise _support.CombatEngineError("unsupported source-defined Lock intent")
         requirements = set(plan.get("requirements") or [])
         if "thieves_tools_proficiency" in requirements:
-            proficiencies = dict(
-                dict(owner_sheet.get("traits") or {}).get("proficiencies") or {}
-            )
+            proficiencies = dict(dict(owner_sheet.get("traits") or {}).get("proficiencies") or {})
             tools = {
                 " ".join(str(value).casefold().replace("’", "'").split())
                 for value in proficiencies.get("tools", [])
@@ -2237,8 +2894,7 @@ class InventoryService:
 
         spends = list(campaign_state.get("item_spends") or [])
         if any(
-            isinstance(entry, dict) and str(entry.get("id") or "") == action_id
-            for entry in spends
+            isinstance(entry, dict) and str(entry.get("id") or "") == action_id for entry in spends
         ):
             raise ValueError("gear action_id already exists on this branch")
         receipt = {
@@ -2695,7 +3351,6 @@ class InventoryService:
         )
         return response
 
-
     def settle_adventuring_gear_antitoxin(
         self,
         campaign: Any,
@@ -2731,8 +3386,7 @@ class InventoryService:
                 "Antitoxin requires an authoritative target creature type"
             )
         if any(
-            token.strip(" ,.;:-()") in {"undead", "construct"}
-            for token in creature_type.split()
+            token.strip(" ,.;:-()") in {"undead", "construct"} for token in creature_type.split()
         ):
             raise _support.CombatEngineError("Antitoxin has no effect on undead or constructs")
         active_antitoxin = any(
@@ -2779,8 +3433,7 @@ class InventoryService:
 
         spends = list(state.get("item_spends") or [])
         if any(
-            isinstance(entry, dict) and str(entry.get("id") or "") == action_id
-            for entry in spends
+            isinstance(entry, dict) and str(entry.get("id") or "") == action_id for entry in spends
         ):
             raise ValueError("gear action_id already exists on this branch")
         spends.append(
@@ -2804,9 +3457,7 @@ class InventoryService:
             _support.CharacterStateUpdate(
                 owner.id,
                 owner_after,
-                _support.validate_character_notes(
-                    owner.notes, character_type=owner.character_type
-                ),
+                _support.validate_character_notes(owner.notes, character_type=owner.character_type),
                 expected_actor_revision,
             )
         ]

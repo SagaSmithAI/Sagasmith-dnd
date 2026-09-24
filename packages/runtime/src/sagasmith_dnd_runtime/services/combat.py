@@ -1238,6 +1238,10 @@ class CombatService:
         self,
         encounter: dict[str, Any],
         spatial_facts: dict[str, Any] | None,
+        active_trap_terrain_sources: set[tuple[str, str]] | None = None,
+        *,
+        actor_id: str | None = None,
+        campaign_revision: int | None = None,
     ) -> dict[str, Any] | None:
         """Validate the Agent's coordinate-free movement judgment."""
 
@@ -1246,6 +1250,13 @@ class CombatService:
             if spatial_facts is not None:
                 raise _support.CombatEngineError(
                     "grid movement derives spatial facts from encounter coordinates"
+                )
+            if active_trap_terrain_sources:
+                raise _support.NeedsRulingError(
+                    "Grid movement is blocked while source-bound Roof rubble is active because "
+                    "the encounter map has no reviewed rubble cells",
+                    missing=("movement.roof_rubble.grid_cells",),
+                    ruling_kind="agent_dm_adjudication",
                 )
             return None
         if not isinstance(spatial_facts, dict):
@@ -1268,6 +1279,7 @@ class CombatService:
             "opportunity_attack_actor_ids",
             "opportunity_attack_boundaries",
             "space_segments",
+            "trap_terrain_review",
             "grapple_drag",
         }
         required_fields = {"decision_id", "reason", "destination_legal", "distance_ft"}
@@ -1292,10 +1304,100 @@ class CombatService:
                     missing=("movement.spatial_facts.space_segments",),
                     ruling_kind="agent_dm_adjudication",
                 )
+            active_sources = active_trap_terrain_sources or set()
+            if active_sources:
+                review = spatial_facts.get("trap_terrain_review")
+                required_review_fields = {
+                    "decision_id",
+                    "reason",
+                    "scene_id",
+                    "encounter_id",
+                    "campaign_revision",
+                    "actor_id",
+                    "segments",
+                }
+                if not isinstance(review, dict) or set(review) != required_review_fields:
+                    raise _support.NeedsRulingError(
+                        "active Roof rubble requires a complete DM-reviewed path intersection "
+                        "for every movement segment",
+                        missing=("movement.spatial_facts.trap_terrain_review",),
+                        ruling_kind="agent_dm_adjudication",
+                    )
+                current_scene_id = str(encounter.get("scene_id") or "")
+                current_encounter_id = str(encounter.get("id") or "")
+                if (
+                    review.get("scene_id") != current_scene_id
+                    or review.get("encounter_id") != current_encounter_id
+                    or review.get("campaign_revision") != campaign_revision
+                    or review.get("actor_id") != actor_id
+                    or not str(review.get("decision_id") or "").strip()
+                    or not str(review.get("reason") or "").strip()
+                ):
+                    raise _support.CombatEngineError(
+                        "Roof rubble path review must match the current scene, encounter, "
+                        "campaign revision, and moving actor"
+                    )
+                raw_segments = spatial_facts["space_segments"]
+                reviewed_segments = review.get("segments")
+                if (
+                    not isinstance(raw_segments, list)
+                    or not isinstance(reviewed_segments, list)
+                    or len(reviewed_segments) != len(raw_segments)
+                ):
+                    raise _support.NeedsRulingError(
+                        "Roof rubble review must explicitly cover every movement segment",
+                        missing=("movement.spatial_facts.trap_terrain_review.segments",),
+                        ruling_kind="agent_dm_adjudication",
+                    )
+                normalized_segments = []
+                for raw_segment, reviewed_segment in zip(raw_segments, reviewed_segments):
+                    if (
+                        not isinstance(raw_segment, dict)
+                        or not isinstance(reviewed_segment, dict)
+                        or set(reviewed_segment) != {"distance_ft", "difficult_terrain", "sources"}
+                        or reviewed_segment.get("distance_ft") != raw_segment.get("distance_ft")
+                        or not isinstance(reviewed_segment.get("difficult_terrain"), bool)
+                        or not isinstance(reviewed_segment.get("sources"), list)
+                    ):
+                        raise _support.CombatEngineError(
+                            "Roof rubble segment review must exactly match each path segment"
+                        )
+                    reviewed_sources = reviewed_segment["sources"]
+                    if any(
+                        not isinstance(source, dict)
+                        or set(source) != {"trap_id", "source_ref"}
+                        or (source.get("trap_id"), source.get("source_ref")) not in active_sources
+                        for source in reviewed_sources
+                    ):
+                        raise _support.CombatEngineError(
+                            "Roof rubble review may cite only currently active, source-bound traps"
+                        )
+                    normalized_segment = {
+                        **raw_segment,
+                        "difficult_terrain": bool(
+                            reviewed_segment["difficult_terrain"] or reviewed_sources
+                        ),
+                    }
+                    if reviewed_sources:
+                        normalized_segment["difficult_terrain_sources"] = reviewed_sources
+                    else:
+                        normalized_segment.pop("difficult_terrain_sources", None)
+                    normalized_segments.append(normalized_segment)
+                spatial_facts = {
+                    **spatial_facts,
+                    "space_segments": normalized_segments,
+                }
             segments = validate_segments(
                 spatial_facts["space_segments"],
                 spatial_facts["distance_ft"],
             )
+            for segment in segments:
+                for source in segment.get("difficult_terrain_sources", []):
+                    if (source["trap_id"], source["source_ref"]) not in active_sources:
+                        raise _support.CombatEngineError(
+                            "difficult terrain source must be a currently active, source-bound "
+                            "trap effect"
+                        )
             ground_cost = sum(s["distance_ft"] for s in segments if s["difficult_terrain"])
             if (
                 "difficult_terrain_extra_ft" in spatial_facts
@@ -4554,7 +4656,43 @@ class CombatService:
                         idempotency_key,
                         jump=jump,
                     )
-        normalized_spatial_facts = self.validate_agent_movement_facts(encounter, spatial_facts)
+        active_trap_terrain_sources = set()
+        trap_state = dict(dict(campaign.state or {}).get("trap_state") or {})
+        for trap_id, trap in dict(trap_state.get("traps") or {}).items():
+            if not isinstance(trap, dict):
+                continue
+            source_ref = trap.get("source_ref")
+            if not isinstance(source_ref, str) or not source_ref:
+                continue
+            if any(
+                isinstance(effect, dict)
+                and effect.get("kind") == "difficult_terrain"
+                and effect.get("effect") == "rubble"
+                and effect.get("area") == "beneath_unstable_ceiling"
+                and effect.get("source_ref") == source_ref
+                and effect.get("trap_id") == trap_id
+                and effect.get("active") is True
+                for effect in list(trap.get("terrain_effects") or [])
+            ):
+                active_trap_terrain_sources.add((str(trap_id), source_ref))
+        if active_trap_terrain_sources:
+            self.access.require_campaign(
+                campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES
+            )
+        normalized_spatial_facts = self.validate_agent_movement_facts(
+            encounter,
+            spatial_facts,
+            active_trap_terrain_sources,
+            actor_id=actor_id,
+            campaign_revision=campaign.revision,
+        )
+        if any(
+            segment.get("difficult_terrain_sources")
+            for segment in list((normalized_spatial_facts or {}).get("space_segments") or [])
+        ):
+            self.access.require_campaign(
+                campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES
+            )
         if (
             encounter.get("positioning_mode") == "agent"
             and encounter.get("ruleset") == "2014"
@@ -12556,11 +12694,14 @@ class CombatService:
         attacker_vision and target_vision scene facts, targetable, in_range, and
         cover_degree; Runtime derives sight and attack modifiers from them.
         For 2014 agent movement, space_segments must cover the entire distance:
-        [{distance_ft,occupant_ids,passage_width_ft,difficult_terrain}]. Name the
-        actual current occupants; null width explicitly means open space. Use
-        positive five-foot segment lengths and boolean difficult_terrain. The
-        engine derives size eligibility, occupied terrain, and squeezing cost;
-        do not supply computed modifiers. End a willing move in an empty space.
+        [{distance_ft,occupant_ids,passage_width_ft,difficult_terrain,
+        difficult_terrain_sources?}]. Name the actual current occupants; null width
+        explicitly means open space. Use positive five-foot segment lengths and
+        boolean difficult_terrain. Each optional source ref binds a segment to an
+        active, source-bound trap effect. Runtime checks references against
+        committed trap state. The engine derives size eligibility, occupied
+        terrain, and squeezing cost; do not supply computed modifiers. End a
+        willing move in an empty space.
         Grid mode derives these facts from current footprints and reviewed map
         cells; a map boundary alone never implies a narrow physical passage.
         Drag a source-owned 2014 grapple by listing its exact grapple ID. Agent
