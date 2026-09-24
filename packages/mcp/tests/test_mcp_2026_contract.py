@@ -272,9 +272,7 @@ def test_modern_hosted_tool_policy_rejects_player_and_allows_local_dm(
                 ),
             )
             assert player_migrate.is_error is True
-            assert player_migrate.structured_content["error"]["code"] == (
-                "authorization_denied"
-            )
+            assert player_migrate.structured_content["error"]["code"] == ("authorization_denied")
             assert "local system principal" in player_migrate.content[0].text
 
             player_seed = await client.call_tool(
@@ -290,9 +288,7 @@ def test_modern_hosted_tool_policy_rejects_player_and_allows_local_dm(
                 ),
             )
             assert player_seed.is_error is True
-            assert player_seed.structured_content["error"]["code"] == (
-                "authorization_denied"
-            )
+            assert player_seed.structured_content["error"]["code"] == ("authorization_denied")
 
             local_migrate = await client.call_tool(
                 "storage_migrate",
@@ -325,7 +321,7 @@ def test_modern_hosted_tool_policy_rejects_player_and_allows_local_dm(
 
 @pytest.mark.parametrize(
     ("mode", "legacy_exposure", "expected_count"),
-    [("legacy", False, 84), ("legacy", True, 7), ("2026-07-28", True, 84)],
+    [("legacy", False, 94), ("legacy", True, 7), ("2026-07-28", True, 94)],
 )
 def test_real_stdio_legacy_modern_contract_matrix(
     tmp_path: Path,
@@ -359,10 +355,13 @@ def test_real_stdio_legacy_modern_contract_matrix(
             assert status.content
             assert status.structured_content is not None
             if not legacy_exposure:
-                created = await client.call_tool("campaign_create", {
-                    "name": "Stable catalog legacy client",
-                    "idempotency_key": "stable-catalog-create",
-                })
+                created = await client.call_tool(
+                    "campaign_create",
+                    {
+                        "name": "Stable catalog legacy client",
+                        "idempotency_key": "stable-catalog-create",
+                    },
+                )
                 assert created.is_error is False
                 refreshed = await client.list_tools(cache_mode="reload")
                 assert [t.name for t in refreshed.tools] == names

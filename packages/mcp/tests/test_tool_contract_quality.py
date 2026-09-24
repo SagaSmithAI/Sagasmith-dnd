@@ -32,7 +32,7 @@ def _server(tmp_path: Path):
 def test_every_public_tool_has_model_usable_contract_metadata(tmp_path: Path) -> None:
     async def exercise() -> None:
         tools = await _server(tmp_path).list_tools()
-        assert len(tools) == 84
+        assert len(tools) == 94
         for tool in tools:
             assert tool.description.strip(), tool.name
             properties = tool.input_schema.get("properties") or {}
@@ -60,15 +60,22 @@ def test_every_public_tool_has_model_usable_contract_metadata(tmp_path: Path) ->
                 # it is intentionally not a Runtime application operation.
                 continue
             section = catalog.section(
-                kind="asset", identifier="dnd:full/references/generated-operations.md",
-                heading=name, max_chars=20_000,
+                kind="asset",
+                identifier="dnd:full/references/generated-operations.md",
+                heading=name,
+                max_chars=20_000,
             )
             assert not section["truncated"], name
             schema = json.loads(section["content"].split("```json\n", 1)[1].split("```", 1)[0])
             assert schema["properties"].keys() == by_name[name].input_schema["properties"].keys()
-        for name in ("character_content_apply", "character_ability_apply",
-                     "character_metadata_update", "character_spell_prepare", "combat_end",
-                     "module_set_progress"):
+        for name in (
+            "character_content_apply",
+            "character_ability_apply",
+            "character_metadata_update",
+            "character_spell_prepare",
+            "combat_end",
+            "module_set_progress",
+        ):
             schema = by_name[name].input_schema
             revision = (
                 "expected_state_version" if name == "module_set_progress" else "expected_revision"
@@ -133,9 +140,7 @@ def test_transport_propagates_standard_trace_context(tmp_path: Path) -> None:
             meta={},
             request=SimpleNamespace(
                 headers={
-                    "traceparent": (
-                        "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
-                    ),
+                    "traceparent": ("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
                     "tracestate": "vendor=opaque",
                     "baggage": "deployment=test",
                 }
