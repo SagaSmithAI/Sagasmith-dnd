@@ -48,6 +48,13 @@ ACTION_PAYLOADS: dict[str, dict[str, type[Payload]]] = {
             reason=(str, ...), actors=(list[dict[str, Any]], []),
             objects=(list[dict[str, Any]], []),
         ),
+        "object_strength_review": _payload(
+            "SceneObjectStrengthReview",
+            object=(dict[str, Any], ...),
+            object_source_ref=(dict[str, Any], ...),
+            object_ruling=(dict[str, Any], ...),
+            strength_check=(dict[str, Any], ...),
+        ),
     },
     "character_check": {
         "working_together": _payload(

@@ -3656,6 +3656,44 @@ class SharedService:
             next_state = stepped["state"]
             advanced.extend(stepped["advanced"])
             expired.extend(stepped["expired"])
+        encounter = next_state.get("combat")
+        if elapsed_ticks and isinstance(encounter, dict):
+            light_records = encounter.get("adventuring_gear_lights")
+            if isinstance(light_records, list):
+                now_ticks = int(
+                    dict(next_state.get("game_time") or {}).get("elapsed_ticks", 0) or 0
+                )
+                settled_lights = []
+                lights_changed = False
+                for raw_light in light_records:
+                    if not isinstance(raw_light, dict):
+                        settled_lights.append(raw_light)
+                        continue
+                    light = _support.deepcopy(raw_light)
+                    if light.get("active") is True:
+                        due_ticks = light.get("fuel_due_elapsed_ticks")
+                        remaining = (
+                            max(0, int(due_ticks) - now_ticks)
+                            if isinstance(due_ticks, int) and not isinstance(due_ticks, bool)
+                            else max(
+                                0,
+                                int(light.get("remaining_fuel_ticks", 0) or 0)
+                                - elapsed_ticks,
+                            )
+                        )
+                        if remaining != light.get("remaining_fuel_ticks"):
+                            lights_changed = True
+                        light["remaining_fuel_ticks"] = remaining
+                        if remaining == 0:
+                            light["active"] = False
+                            light["fuel_due_elapsed_ticks"] = None
+                            lights_changed = True
+                            expired.append(str(light.get("id") or ""))
+                        else:
+                            advanced.append(str(light.get("id") or ""))
+                    settled_lights.append(light)
+                if lights_changed:
+                    encounter["adventuring_gear_lights"] = settled_lights
         return {
             "state": next_state,
             "advanced": list(dict.fromkeys(advanced)),

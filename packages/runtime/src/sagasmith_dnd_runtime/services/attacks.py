@@ -3751,6 +3751,11 @@ class AttacksService:
         sunlight: dict[str, Any] | None = None,
         weapon_grip: str | None = None,
         use_great_weapon_fighting: bool = False,
+        branch_id: str | None = None,
+        gear_action: dict[str, Any] | None = None,
+        idempotency_scope: str | None = None,
+        idempotency_payload: dict[str, Any] | None = None,
+        section_spatial_facts: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Attack a source-defined destructible scene object outside combat.
 
@@ -3760,9 +3765,19 @@ class AttacksService:
         misses underwater. No coordinates are inferred from the source.
         """
         from sagasmith_dnd.objects import object_attack_plan, resolve_object_attack
-        from sagasmith_dnd.traps import transition_trap_state
+        from sagasmith_dnd.traps import (
+            falling_net_section_cut_qualifies,
+            source_trap_object_facts,
+            transition_trap_state,
+        )
 
-        from .source_objects import approved_attack_context, approved_profile, project_response
+        from .source_objects import (
+            approved_attack_context,
+            approved_profile,
+            bind_falling_net_object_request,
+            project_response,
+            reviewed_falling_net_section_facts,
+        )
 
         if type(advantage) is not bool or type(disadvantage) is not bool:
             raise ValueError("object attack advantage and disadvantage must be booleans")
@@ -3770,13 +3785,14 @@ class AttacksService:
             raise ValueError("use_great_weapon_fighting must be boolean")
         current = self.characters.get(character_id)
         self.require_character_control(current, principal_id)
-        self.require_outside_active_combat(current, "source object attacks")
+        if gear_action is None:
+            self.require_outside_active_combat(current, "source object attacks")
         self.require_write_contract(expected_revision, idempotency_key)
         if expected_campaign_revision is None:
             raise ValueError("expected_campaign_revision is required")
         campaign_id = str(current.campaign_id or "")
         campaign = self.campaigns.get(campaign_id)
-        resolved_branch_id = self.require_current_branch(campaign_id, None)
+        resolved_branch_id = self.require_current_branch(campaign_id, branch_id)
         normalized_reason = str(reason).strip()
         if not normalized_reason:
             raise ValueError("source object attack requires a reason")
@@ -3805,12 +3821,77 @@ class AttacksService:
         )
         if exact_source is None:
             raise AssertionError("exact source object citations always resolve to a managed chunk")
+        normalized_gear_action: dict[str, Any] | None = None
+        if gear_action is not None:
+            from sagasmith_dnd.adventuring_gear import (
+                ADVENTURING_GEAR_SOURCE_REF,
+                resolve_adventuring_gear_intent,
+            )
+
+            request = dict(gear_action.get("request") or {})
+            if set(request) != {"action_id", "item_id", "intent", "source_ref"}:
+                raise _support.CombatEngineError(
+                    "object gear attack request has unsupported fields"
+                )
+            if request.get("source_ref") != ADVENTURING_GEAR_SOURCE_REF:
+                raise _support.CombatEngineError(
+                    "object gear attack source must match bundled 2014 adventuring gear"
+                )
+            action_id = str(request.get("action_id") or "").strip()
+            item_id = str(request.get("item_id") or "").strip()
+            if not action_id or len(action_id) > 200 or not item_id:
+                raise ValueError("object gear attack requires action_id and item_id")
+            source_item = next(
+                (
+                    item
+                    for item in dict(current.sheet.get("inventory") or {}).get("items", [])
+                    if isinstance(item, dict) and str(item.get("id") or "") == item_id
+                ),
+                None,
+            )
+            if source_item is None:
+                raise _support.CombatEngineError(
+                    "adventuring gear item is absent from the attacker's inventory"
+                )
+            gear_plan = resolve_adventuring_gear_intent(
+                {**source_item, "source_ref": ADVENTURING_GEAR_SOURCE_REF},
+                request.get("intent"),
+            )
+            item_name = str(source_item.get("name") or "").strip().casefold()
+            allowed_gear = (
+                item_name == "acid (vial)" and gear_plan["intent"] == "throw"
+            ) or (
+                item_name == "alchemist's fire (flask)" and gear_plan["intent"] == "throw"
+            )
+            if not allowed_gear or gear_plan.get("attack") != "ranged_improvised":
+                raise _support.CombatEngineError(
+                    "destructible object attacks support only Acid and Alchemist's Fire"
+                )
+            resource_cost = dict(gear_plan.get("resource_cost") or {})
+            if resource_cost.get("item_quantity") != 1:
+                raise _support.CombatEngineError(
+                    "object gear attack resource cost must be one source-defined item quantity"
+                )
+            normalized_gear_action = {
+                "request": {
+                    "action_id": action_id,
+                    "item_id": item_id,
+                    "intent": gear_plan["intent"],
+                    "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                },
+                "rule_plan": gear_plan,
+            }
         payload = {
             "character_id": character_id,
             "object_state": requested,
             "weapon_id": weapon_id,
             "source_ref": exact_source,
             "reason": normalized_reason,
+            **(
+                {"section_spatial_facts": _support.deepcopy(section_spatial_facts)}
+                if section_spatial_facts is not None
+                else {}
+            ),
             "advantage": bool(advantage),
             "disadvantage": bool(disadvantage),
             "branch_id": resolved_branch_id,
@@ -3819,11 +3900,32 @@ class AttacksService:
             **({"weapon_grip": weapon_grip} if weapon_grip is not None else {}),
             **({"use_great_weapon_fighting": True} if use_great_weapon_fighting else {}),
             **({"sunlight": _support.deepcopy(sunlight)} if sunlight is not None else {}),
+            **(
+                {"gear_action": _support.deepcopy(normalized_gear_action["request"])}
+                if normalized_gear_action is not None
+                else {}
+            ),
         }
-        scope = f"source-object-attack:{campaign_id}:{resolved_branch_id}:{principal_id}"
-        replay = self.replay_idempotent(scope, idempotency_key, payload)
+        scope_prefix = (
+            "campaign-gear-object-attack"
+            if normalized_gear_action is not None
+            else "source-object-attack"
+        )
+        scope = f"{scope_prefix}:{campaign_id}:{resolved_branch_id}:{principal_id}"
+        if (idempotency_scope is None) != (idempotency_payload is None):
+            raise ValueError("idempotency_scope and idempotency_payload must be provided together")
+        transaction_scope = idempotency_scope or scope
+        transaction_payload = _support.deepcopy(idempotency_payload or payload)
+        replay = self.replay_idempotent(transaction_scope, idempotency_key, transaction_payload)
         if replay is not None:
             return project_response(replay, dm=self.is_dm(campaign_id, principal_id))
+        if normalized_gear_action is not None and any(
+            isinstance(spend, dict)
+            and str(spend.get("id") or "")
+            == normalized_gear_action["request"]["action_id"]
+            for spend in list(dict(campaign.state or {}).get("item_spends") or [])
+        ):
+            raise ValueError("gear action_id already exists on this branch")
         if current.revision != expected_revision:
             raise ValueError(
                 "character revision conflict: "
@@ -3837,7 +3939,11 @@ class AttacksService:
         if _support.active_random_stream() is None:
             with self.campaign_random_context(
                 campaign_id,
-                "character.source_object.attack",
+                (
+                    "campaign.adventuring_gear.object_attack"
+                    if normalized_gear_action is not None
+                    else "character.source_object.attack"
+                ),
                 {"idempotency_key": idempotency_key},
             ):
                 return self.character_source_object_attack(
@@ -3857,13 +3963,111 @@ class AttacksService:
                     sunlight=sunlight,
                     weapon_grip=weapon_grip,
                     use_great_weapon_fighting=use_great_weapon_fighting,
+                    branch_id=resolved_branch_id,
+                    gear_action=normalized_gear_action,
+                    idempotency_scope=idempotency_scope,
+                    idempotency_payload=idempotency_payload,
+                    section_spatial_facts=section_spatial_facts,
                 )
 
+        next_encounter: dict[str, Any] | None = None
+        active_encounter = dict(campaign.state or {}).get("combat")
+        if (
+            normalized_gear_action is not None
+            and isinstance(active_encounter, dict)
+            and active_encounter.get("active", False)
+        ):
+            self.require_no_blocking_pending(active_encounter)
+            self.require_encounter_combatant(active_encounter, character_id)
+            next_encounter = _support.resolve_common_action(
+                active_encounter,
+                actor_id_value=character_id,
+                action="improvise",
+                payment="main_action",
+                payload={
+                    "gear_action_id": normalized_gear_action["request"]["action_id"],
+                    "target_object_id": str(object_state.get("id") or ""),
+                    "target_scene_id": str(object_state.get("scene_id") or ""),
+                },
+            )
+
         attacker = self.combat_actor_snapshot(character_id)
+        if normalized_gear_action is not None:
+            gear_plan = dict(normalized_gear_action["rule_plan"])
+            abilities = dict(attacker.get("derived", {}).get("ability_modifiers") or {})
+            attack_modifier = int(abilities.get("strength", 0) or 0)
+            derived_inventory = attacker.setdefault("derived", {}).setdefault("inventory", {})
+            derived_inventory.setdefault("weapon_attacks", []).append(
+                {
+                    "item_id": normalized_gear_action["request"]["item_id"],
+                    "name": str(gear_plan.get("item_name") or "Adventuring Gear"),
+                    "attack_type": "ranged",
+                    "attack_ability": "strength",
+                    "attack_ability_modifier": attack_modifier,
+                    "attack_bonus": attack_modifier,
+                    "normal_range_ft": gear_plan["maximum_range_feet"],
+                    "long_range_ft": gear_plan["maximum_range_feet"],
+                    "damage_expression": str(
+                        dict(gear_plan.get("effect") or {}).get("damage")
+                        or dict(gear_plan.get("effect") or {}).get("hit_damage")
+                        or ""
+                    ),
+                    "damage_type": str(
+                        dict(gear_plan.get("effect") or {}).get("damage_type")
+                        or dict(gear_plan.get("effect") or {}).get("hit_damage_type")
+                        or ""
+                    ),
+                    "properties": [],
+                    "proficient": False,
+                }
+            )
         scene_objects = _support.deepcopy(dict(campaign.state.get("scene_objects") or {}))
         scene_state = _support.deepcopy(dict(scene_objects.get(scene_id) or {}))
         existing = _support.deepcopy(dict(scene_state.get(object_id) or {}))
         assert expanded is not None
+        trap_state = _support.deepcopy(dict(campaign.state.get("trap_state") or {}))
+        trap_instances = dict(trap_state.get("traps") or {})
+        bound_net = trap_instances.get(object_id)
+        normalized_net_section_facts = None
+        try:
+            requested, falling_net_profile, falling_net_object_facts = (
+                bind_falling_net_object_request(
+                    requested,
+                    source_content=expanded["content"],
+                    bound_trap=bound_net,
+                    object_id=object_id,
+                    scene_id=scene_id,
+                    source_ref=exact_source,
+                )
+            )
+        except (KeyError, TypeError, ValueError) as error:
+            raise _support.CombatEngineError(str(error)) from error
+        if falling_net_profile is not None:
+            try:
+                normalized_net_section_facts = reviewed_falling_net_section_facts(
+                    self,
+                    campaign_id=campaign_id,
+                    principal_id=principal_id,
+                    profile=falling_net_profile,
+                    scene_id=scene_id,
+                    trap_id=object_id,
+                    object_id=object_id,
+                    source_ref=exact_source,
+                    facts=section_spatial_facts,
+                    campaign_revision=campaign.revision,
+                    restrained_actor_ids=list(bound_net.get("restrained_actor_ids") or []),
+                    severed_section_ids=list(bound_net.get("severed_section_ids") or []),
+                )
+            except (TypeError, ValueError) as error:
+                raise _support.CombatEngineError(str(error)) from error
+            if normalized_net_section_facts["target_section_id"] in set(
+                bound_net.get("severed_section_ids") or []
+            ):
+                raise _support.CombatEngineError("Falling Net section was already destroyed")
+        elif section_spatial_facts is not None:
+            raise _support.CombatEngineError(
+                "section_spatial_facts are accepted only for a triggered Falling Net"
+            )
         profile, approval, hit_points_before = approved_profile(
             self,
             campaign_id=campaign_id,
@@ -3875,6 +4079,11 @@ class AttacksService:
             expanded=expanded,
             ruling=object_ruling,
         )
+        if falling_net_profile is not None:
+            try:
+                source_trap_object_facts(falling_net_profile, profile)
+            except ValueError as error:
+                raise _support.CombatEngineError(str(error)) from error
         if hit_points_before <= 0 or existing.get("destroyed"):
             raise _support.CombatEngineError("source object is already destroyed")
         context_approval = approved_attack_context(
@@ -3958,6 +4167,24 @@ class AttacksService:
                 next_attacker_sheet,
                 str(weapon_id),
             )
+        gear_receipt: dict[str, Any] | None = None
+        if normalized_gear_action is not None:
+            request = normalized_gear_action["request"]
+            gear_plan = normalized_gear_action["rule_plan"]
+            next_attacker_sheet, removed = _support.remove_inventory_item(
+                next_attacker_sheet,
+                str(request["item_id"]),
+                1,
+            )
+            gear_receipt = {
+                "action_id": request["action_id"],
+                "item_id": request["item_id"],
+                "intent": request["intent"],
+                "source_ref": request["source_ref"],
+                "source_key": gear_plan["source_key"],
+                "rule_plan": _support.deepcopy(gear_plan),
+                "removed": _support.deepcopy(removed),
+            }
         hit_points_after = int(
             (settled.get("damage") or {}).get("hit_points_after", hit_points_before)
         )
@@ -3969,6 +4196,11 @@ class AttacksService:
                if "water_environment" in existing else {}),
             "hit_points": hit_points_after,
             "destroyed": hit_points_after <= 0,
+            **(
+                {"severed_section_ids": list(existing.get("severed_section_ids") or [])}
+                if falling_net_profile is not None
+                else {}
+            ),
             "last_attack": {
                 "character_id": character_id,
                 "weapon_id": str(weapon_id),
@@ -3981,9 +4213,21 @@ class AttacksService:
                     "weapon_trait_requirement_met"
                 ),
                 "context_approval": context_approval,
+                **(
+                    {"section_spatial_facts": _support.deepcopy(normalized_net_section_facts)}
+                    if normalized_net_section_facts is not None
+                    else {}
+                ),
+                **(
+                    {"adventuring_gear": _support.deepcopy(gear_receipt)}
+                    if gear_receipt is not None
+                    else {}
+                ),
             },
         }
         next_campaign_state = _support.deepcopy(dict(campaign.state or {}))
+        if next_encounter is not None:
+            next_campaign_state["combat"] = next_encounter
         trap_state = _support.deepcopy(dict(next_campaign_state.get("trap_state") or {}))
         trap_instances = dict(trap_state.get("traps") or {})
         bound_net = trap_instances.get(object_id)
@@ -4009,6 +4253,68 @@ class AttacksService:
                     "Falling Net object profile must preserve source AC 10, HP 20, "
                     "and slashing-only damage"
                 )
+            if normalized_net_section_facts is None:
+                raise _support.CombatEngineError(
+                    "Falling Net section_spatial_facts are required for object attacks"
+                )
+            attack_facts = dict(object_after.get("last_attack") or {})
+            attack_result = dict(attack_facts.get("attack") or {})
+            damage_result = dict(attack_facts.get("damage") or {})
+            if falling_net_section_cut_qualifies(
+                falling_net_profile,
+                attack_result,
+                damage_result,
+            ):
+                section_id = str(normalized_net_section_facts["target_section_id"])
+                released_ids = list(normalized_net_section_facts["affected_actor_ids"])
+                trap_state = transition_trap_state(
+                    trap_state,
+                    source_ref=net_source_ref,
+                    trap_id=object_id,
+                    action="cut_object_section",
+                    section_id=section_id,
+                    released_actor_ids=released_ids,
+                )
+                object_after["severed_section_ids"] = list(
+                    trap_state["traps"][object_id].get("severed_section_ids") or []
+                )
+                net_released_actors.extend(released_ids)
+                released_owned_ids = set(
+                    bound_net.get("trap_added_restrained_actor_ids") or []
+                ).intersection(released_ids)
+                updated_character_sheets: dict[str, tuple[Any, dict[str, Any]]] = {
+                    character_id: (current, next_attacker_sheet)
+                }
+                for released_id in sorted(released_owned_ids):
+                    if released_id == character_id:
+                        released_sheet = next_attacker_sheet
+                    else:
+                        released_record = self.characters.get(released_id)
+                        released_snapshot = self.combat_actor_snapshot(released_id)
+                        released_sheet = _support.deepcopy(released_snapshot["sheet"])
+                        updated_character_sheets[released_id] = (
+                            released_record,
+                            released_sheet,
+                        )
+                    _support.apply_condition_change(
+                        released_sheet, condition_id="restrained", add=False
+                    )
+                for released_id, (released_record, released_sheet) in (
+                    updated_character_sheets.items()
+                ):
+                    if released_id == character_id:
+                        next_attacker_sheet = released_sheet
+                    elif released_id in released_owned_ids:
+                        character_updates.append(
+                            _support.CharacterStateUpdate(
+                                character_id=released_id,
+                                sheet=_support.validate_character_sheet(released_sheet),
+                                notes=_support.validate_character_notes(released_record.notes),
+                                expected_revision=released_record.revision,
+                            )
+                        )
+                trap_instances = dict(trap_state.get("traps") or {})
+                bound_net = trap_instances[object_id]
             if object_after["destroyed"]:
                 attack_facts = dict(object_after.get("last_attack") or {})
                 attack_result = dict(attack_facts.get("attack") or {})
@@ -4040,7 +4346,7 @@ class AttacksService:
                     destroyed_object_id=object_id,
                     destroyed_hit_points=hit_points_after,
                 )
-                net_released_actors = old_restrained_ids
+                net_released_actors.extend(old_restrained_ids)
                 updated_character_sheets: dict[str, tuple[Any, dict[str, Any]]] = {
                     character_id: (current, next_attacker_sheet)
                 }
@@ -4075,7 +4381,7 @@ class AttacksService:
                             )
                         )
                 trap_instances = dict(trap_state.get("traps") or {})
-                next_campaign_state["trap_state"] = trap_state
+            next_campaign_state["trap_state"] = trap_state
         scene_state[object_id] = object_after
         scene_objects[scene_id] = scene_state
         next_campaign_state["scene_objects"] = scene_objects
@@ -4088,10 +4394,38 @@ class AttacksService:
                 "scene_id": scene_id,
                 "attack": _support.deepcopy(attack_roll),
                 "damage": _support.deepcopy(settled.get("damage")),
+                **(
+                    {"section_spatial_facts": _support.deepcopy(normalized_net_section_facts)}
+                    if normalized_net_section_facts is not None
+                    else {}
+                ),
                 "hit_points_before": hit_points_before,
                 "hit_points_after": hit_points_after,
+                **(
+                    {"adventuring_gear": _support.deepcopy(gear_receipt)}
+                    if gear_receipt is not None
+                    else {}
+                ),
             },
         ][-100:]
+        if gear_receipt is not None:
+            next_campaign_state["item_spends"] = [
+                *list(next_campaign_state.get("item_spends") or []),
+                {
+                    "id": gear_receipt["action_id"],
+                    "item_id": gear_receipt["item_id"],
+                    "quantity": 1,
+                    "reason": f"adventuring_gear:{gear_receipt['intent']}",
+                    "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                    "source_key": gear_receipt["source_key"],
+                    "character_id": character_id,
+                    "owner": {"kind": "character", "character_id": character_id},
+                    "target_object_id": object_id,
+                    "target_scene_id": scene_id,
+                    "rule_plan": _support.deepcopy(gear_receipt["rule_plan"]),
+                    "removed": _support.deepcopy(gear_receipt["removed"]),
+                },
+            ]
         # Even a miss with no expenditure depends on this exact attacker card.
         # Keep its CAS in the same transaction as object HP and the RNG receipt.
         character_updates.append(
@@ -4126,8 +4460,14 @@ class AttacksService:
                 "status": "committed",
                 **choice_fields,
                 "object": object_after,
+                **({"combat": next_encounter} if next_encounter is not None else {}),
                 "attack": attack_roll,
                 "damage": settled.get("damage"),
+                **(
+                    {"adventuring_gear": _support.deepcopy(gear_receipt)}
+                    if gear_receipt is not None
+                    else {}
+                ),
                 "ammunition": ammunition,
                 "limited_use": limited_use,
                 **({"released_actors": net_released_actors} if net_released_actors else {}),
@@ -4150,13 +4490,17 @@ class AttacksService:
             campaign_state=_support.validate_party_state(next_campaign_state),
             character_updates=character_updates,
             expected_campaign_revision=campaign.revision,
-            operation="character.source_object.attack",
+            operation=(
+                "campaign.adventuring_gear.object_attack"
+                if gear_receipt is not None
+                else "character.source_object.attack"
+            ),
             actor=principal_id,
             branch_id=resolved_branch_id,
             idempotency_key=idempotency_key,
             idempotency_write=_support.IdempotencyWrite(
-                scope=scope,
-                payload=payload,
+                scope=transaction_scope,
+                payload=transaction_payload,
                 response=source_object_response,
             ),
             rule_receipts=object_receipts,

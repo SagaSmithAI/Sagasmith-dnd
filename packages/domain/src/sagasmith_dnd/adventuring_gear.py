@@ -514,16 +514,25 @@ _GEAR_INTENTS: dict[str, dict[str, dict[str, Any]]] = {
         "extinguish": _intent(None, "lantern", effect={"light_off": True}),
     },
     "lock": {
+        "unlock": _intent(
+            None,
+            "lock",
+            effect={
+                "requires_state": "locked",
+                "requires_provided_key": True,
+                "success_state": "open",
+            },
+        ),
         "pick": _intent(
             None,
             "lock",
             check={"ability": "dexterity", "dc": 15},
             effect={
                 "key_provided_by_source": True,
+                "requires_key_unavailable": True,
                 "requires_state": "locked",
                 "success_state": "open",
                 "failure_state": "locked",
-                "broken_state": "broken",
             },
             requires=("thieves_tools_proficiency",),
         ),
@@ -542,10 +551,20 @@ _GEAR_INTENTS: dict[str, dict[str, dict[str, Any]]] = {
         ),
     },
     "manacles": {
+        "bind": _intent(
+            None,
+            "small_or_medium_creature",
+            effect={"binding_state": "bound"},
+        ),
         "escape": _intent(
             None, "bound_small_or_medium_creature", check={"ability": "dexterity", "dc": 20}
         ),
         "break": _intent(None, "manacles", object_hp=15, check={"ability": "strength", "dc": 20}),
+        "unlock": _intent(
+            None,
+            "bound_small_or_medium_creature",
+            effect={"requires_provided_key": True, "binding_state": "released"},
+        ),
         "pick": _intent(
             None,
             "manacles_lock",

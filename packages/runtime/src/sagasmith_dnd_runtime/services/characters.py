@@ -2909,7 +2909,7 @@ class CharactersService:
         actor_choice = (
             normalized_choice.get("actor_id")
             if normalized_choice.get("kind")
-            in {"target_actor", "lucky_charm_actor", "person_actor"}
+            in {"target_actor", "lucky_charm_actor", "person_actor", "fear_source_actor"}
             else None
         )
         if actor_choice is not None:
@@ -2923,6 +2923,11 @@ class CharactersService:
                 and actor_choice == character_id
             ):
                 raise ValueError("a lucky charm must identify another campaign actor")
+            if (
+                normalized_choice.get("kind") == "fear_source_actor"
+                and actor_choice == character_id
+            ):
+                raise ValueError("a madness fear source must identify another campaign actor")
             self.require_campaign_actor(current.campaign_id, actor_choice)
             normalized_choice["actor_id"] = actor_choice
         campaign = self.campaigns.get(current.campaign_id)
@@ -8514,6 +8519,7 @@ boundary.
                 "sunlight",
                 "weapon_grip",
                 "use_great_weapon_fighting",
+                "section_spatial_facts",
             }
             if unexpected:
                 raise ValueError(f"unsupported source object attack fields: {sorted(unexpected)}")
@@ -8534,6 +8540,7 @@ boundary.
                 sunlight=data.get("sunlight"),
                 weapon_grip=data.get("weapon_grip"),
                 use_great_weapon_fighting=self.facade_bool(data, "use_great_weapon_fighting"),
+                section_spatial_facts=data.get("section_spatial_facts"),
             )
         return self.facade_result(action, result)
 

@@ -36,6 +36,37 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
     spiked_locking_pit_excerpt = (
         f"A spiked locking pit traps creatures below.\ntrap_profile: {spiked_locking_pit_marker}"
     )
+    rolling_sphere_profile = {"profile_id": "srd5.1.rolling_sphere"}
+    rolling_sphere_marker = json.dumps(
+        rolling_sphere_profile, sort_keys=True, separators=(",", ":")
+    )
+    rolling_sphere_excerpt = (
+        "When 20 or more pounds of pressure are placed on this trap's pressure plate, "
+        "a hidden trapdoor in the ceiling opens, releasing a 10-foot diameter rolling "
+        "sphere of solid stone.\n\n"
+        "With a successful DC 15 Wisdom (Perception) check, a character can spot the "
+        "trapdoor and pressure plate. A search of the floor accompanied by a successful "
+        "DC 15 Intelligence (Investigation) check reveals variations in the mortar and "
+        "stone that betray the pressure plate's presence. The same check made while "
+        "inspecting the ceiling notes variations in the stonework that reveal the "
+        "trapdoor. Wedging an iron spike or other object under the pressure plate "
+        "prevents the trap from activating.\n\n"
+        "Activation of the sphere requires all creatures present to roll initiative. "
+        "The sphere rolls initiative with a +8 bonus. On its turn, it moves 60 feet in "
+        "a straight line. The sphere can move through creatures' spaces, and creatures "
+        "can move through its space, treating it as difficult terrain. Whenever the "
+        "sphere enters a creature's space or a creature enters its space while it's "
+        "rolling, that creature must succeed on a DC 15 Dexterity saving throw or take "
+        "55 (10d10) bludgeoning damage and be knocked prone.\n\n"
+        "The sphere stops when it hits a wall or similar barrier. It can't go around "
+        "corners, but smart dungeon builders incorporate gentle, curving turns into "
+        "nearby passages that allow the sphere to keep moving.\n\n"
+        "As an action, a creature within 5 feet of the sphere can attempt to slow it "
+        "down with a DC 20 Strength check. On a successful check, the sphere's speed "
+        "is reduced by 15 feet. If the sphere's speed drops to 0, it stops moving and "
+        "is no longer a threat.\n"
+        f"trap_profile: {rolling_sphere_marker}"
+    )
     sphere_profile = {"profile_id": "srd5.1.sphere_of_annihilation"}
     sphere_marker = json.dumps(sphere_profile, sort_keys=True, separators=(",", ":"))
     sphere_excerpt = (
@@ -48,7 +79,11 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
     )
     net_profile = {"profile_id": "srd5.1.falling_net"}
     net_marker = json.dumps(net_profile, sort_keys=True, separators=(",", ":"))
-    net_excerpt = f"A net covers a ten-foot square.\ntrap_profile: {net_marker}"
+    net_excerpt = (
+        "A net covers a ten-foot square. Creatures in the area are restrained; "
+        "each makes a DC 10 Strength save and those that fail are also knocked "
+        f"prone.\ntrap_profile: {net_marker}"
+    )
     needle_profile = {"profile_id": "srd5.1.poison_needle"}
     needle_marker = json.dumps(needle_profile, sort_keys=True, separators=(",", ":"))
     needle_excerpt = (
@@ -62,6 +97,7 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
         f"## Poisoned Spiked Hidden Pit\n\n{pit_excerpt}\n\n"
         f"## Locking Pit\n\n{locking_pit_excerpt}\n\n"
         f"## Spiked Locking Pit\n\n{spiked_locking_pit_excerpt}\n\n"
+        f"## Rolling Sphere\n\n{rolling_sphere_excerpt}\n\n"
         f"## Sphere of annihilation\n\n{sphere_excerpt}\n\n"
         f"## Poison darts\n\n{darts_excerpt}\n\n"
         f"## Falling net\n\n{net_excerpt}\n\n"
@@ -142,6 +178,8 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
             captive_sheet["edition"] = "2014"
             captive_sheet["combat"]["hp"] = {"value": 200, "max": 200, "temp": 0}
             captive_sheet["abilities"]["strength"]["score"] = 3
+            captive_sheet["abilities"]["dexterity"]["score"] = 1
+            captive_sheet["conditions"] = ["poisoned"]
             captive = await _call(
                 server,
                 "character_create_from",
@@ -159,6 +197,10 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
             locksmith_sheet["edition"] = "2014"
             locksmith_sheet["combat"]["hp"] = {"value": 200, "max": 200, "temp": 0}
             locksmith_sheet["abilities"]["dexterity"]["score"] = 30
+            locksmith_sheet["abilities"]["intelligence"]["score"] = 30
+            locksmith_sheet["abilities"]["wisdom"]["score"] = 20
+            locksmith_sheet["skills"]["arcana"]["proficiency"] = "expertise"
+            locksmith_sheet["skills"]["perception"]["proficiency"] = "expertise"
             # A level-20 proficient locksmith makes the successful disable
             # branch deterministic even when the seeded d20 is low.
             locksmith_sheet["progression"]["level"] = 20
@@ -222,15 +264,126 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
             assert detected["trap"]["detected"] is True
             assert "random_stream_receipt" not in detected
             assert await _call(server, "trap_state_transition", detect_args) == detected
+            fire_hits = await _call(
+                server,
+                "module_search",
+                {"campaign_id": campaign_id, "query": "Fire-Breathing Statue", "top_k": 3},
+            )
+            fire_chunk = await _call(
+                server, "module_expand", {"chunk_id": fire_hits[0]["id"]}
+            )
+            fire_source_ref = json.dumps(
+                fire_chunk["source_ref"], sort_keys=True, separators=(",", ":")
+            )
+            before_fire_detect = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign_id}},
+            )
+            fire_detect_args = {
+                **detect_args,
+                "trap_id": "statue-detected",
+                "action": "detect",
+                "source_ref": fire_source_ref,
+                "source_excerpt": fire_excerpt,
+                "profile": fire_profile,
+                "actor_id": locksmith["id"],
+                "expected_revision": before_fire_detect["revision"],
+                "idempotency_key": "statue-detect-active",
+            }
+            fire_detect = await _call(
+                server, "trap_state_transition", fire_detect_args
+            )
+            assert fire_detect["check"]["ability"] == "perception"
+            assert fire_detect["check"]["success"] is True
+            assert fire_detect["revealed_facts"] == [
+                "hidden_pressure_plate",
+                "faint_scorch_marks_on_floor_and_walls",
+            ]
+            assert "random_stream_receipt" in fire_detect
+            assert await _call(
+                server, "trap_state_transition", fire_detect_args
+            ) == fire_detect
+            before_spell_disable = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign_id}},
+            )
+            fire_spell_disable_args = {
+                **fire_detect_args,
+                "trap_id": "statue-dispel-attempt",
+                "action": "disable",
+                "method": None,
+                "expected_revision": before_spell_disable["revision"],
+                "idempotency_key": "statue-dispel-without-object-spell-contract",
+            }
+            with pytest.raises(ToolError, match="has no disable check"):
+                await _call(
+                    server, "trap_state_transition", fire_spell_disable_args
+                )
+            after_spell_disable = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign_id}},
+            )
+            assert after_spell_disable["revision"] == before_spell_disable["revision"]
+            encounter_revision = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign_id}},
+            )
+            await _call(
+                server,
+                "combat_start",
+                {
+                    "campaign_id": campaign_id,
+                    "positioning_mode": "agent",
+                    "participant_ids": [actor["id"], captive["id"], locksmith["id"]],
+                    "participant_config": [
+                        {"actor_id": actor["id"], "initiative": 20},
+                        {"actor_id": captive["id"], "initiative": 10},
+                        {"actor_id": locksmith["id"], "initiative": 5},
+                    ],
+                    "expected_revision": encounter_revision["revision"],
+                    "idempotency_key": "trap-area-encounter",
+                },
+            )
+            active_encounter = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign_id}},
+            )
+            encounter_id = active_encounter["state"]["combat"]["id"]
+
+            def reviewed_area_facts(
+                *, scene_id: str, trap_id: str, source_ref: str,
+                campaign_revision: int, in_area_ids: set[str],
+            ) -> dict:
+                participants = [actor, captive, locksmith]
+                return {
+                    "decision_id": f"review-{trap_id}-{campaign_revision}",
+                    "reason": "Reviewed every active encounter combatant against the trap area.",
+                    "scene_id": scene_id,
+                    "trap_id": trap_id,
+                    "encounter_id": encounter_id,
+                    "source_ref": source_ref,
+                    "campaign_revision": campaign_revision,
+                    "reviewed_by": "system:local",
+                    "actor_facts": [
+                        {"actor_id": item["id"], "in_area": item["id"] in in_area_ids}
+                        for item in participants
+                    ],
+                }
+
             disable_args = {
                 **detect_args,
                 "action": "disable",
                 "method": "thieves_tools",
                 "area_confirmed": True,
-                "expected_revision": detected["campaign_revision"],
+                "expected_revision": active_encounter["revision"],
                 "idempotency_key": "disable-wire",
             }
-            with pytest.raises(ToolError, match="distinct explicitly confirmed targets"):
+            with pytest.raises(ToolError, match="reviewed spatial_facts"):
                 await _call(server, "trap_state_transition", disable_args)
             after_reject = await _call(
                 server,
@@ -240,7 +393,7 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
                     "payload": {"campaign_id": campaign_id},
                 },
             )
-            assert after_reject["revision"] == detected["campaign_revision"]
+            assert after_reject["revision"] == active_encounter["revision"]
 
             roof_unconfirmed_args = {
                 **detect_args,
@@ -250,7 +403,7 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
                 "expected_revision": after_reject["revision"],
                 "idempotency_key": "roof-unconfirmed-failure",
             }
-            with pytest.raises(ToolError, match="explicit confirmed source-defined area fact"):
+            with pytest.raises(ToolError, match="area spatial_facts require"):
                 await _call(server, "trap_state_transition", roof_unconfirmed_args)
             roof_after_unconfirmed = await _call(
                 server,
@@ -265,8 +418,15 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
                 "action": "disable",
                 "method": "thieves_tools",
                 "actor_id": locksmith["id"],
-                "area_confirmed": True,
-                "target_ids": [actor["id"]],
+                "area_confirmed": None,
+                "target_ids": None,
+                "spatial_facts": reviewed_area_facts(
+                    scene_id=expanded["scene"]["id"],
+                    trap_id="roof-disabled",
+                    source_ref=source_ref,
+                    campaign_revision=roof_after_unconfirmed["revision"],
+                    in_area_ids={actor["id"]},
+                ),
                 "expected_revision": roof_after_unconfirmed["revision"],
                 "idempotency_key": "roof-disable-success",
             }
@@ -293,8 +453,15 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
                 "trap_id": "roof-failed-disable-triggered",
                 "action": "disable",
                 "method": "edged_tool",
-                "area_confirmed": True,
-                "target_ids": [actor["id"]],
+                "area_confirmed": None,
+                "target_ids": None,
+                "spatial_facts": reviewed_area_facts(
+                    scene_id=expanded["scene"]["id"],
+                    trap_id="roof-failed-disable-triggered",
+                    source_ref=source_ref,
+                    campaign_revision=roof_current["revision"],
+                    in_area_ids={actor["id"], captive["id"]},
+                ),
                 "expected_revision": roof_current["revision"],
                 "idempotency_key": "roof-disable-failure",
             }
@@ -310,7 +477,10 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
             assert roof_disable_failure["damage_roll"]["expression"] == "4d10"
             assert roof_disable_failure["terrain_effect"]["effect"] == "rubble"
             assert roof_disable_failure["terrain_effect"]["source_ref"] == source_ref
-            assert roof_disable_failure["trap"]["affected_actor_ids"] == [actor["id"]]
+            assert roof_disable_failure["trap"]["affected_actor_ids"] == [
+                actor["id"],
+                captive["id"],
+            ]
             assert (
                 await _call(server, "trap_state_transition", roof_disable_failure_args)
                 == roof_disable_failure
@@ -332,6 +502,9 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
                     "chunk_id": sphere_hits[0]["id"],
                 },
             )
+            sphere_source_ref = json.dumps(
+                sphere_chunk["source_ref"], sort_keys=True, separators=(",", ":")
+            )
             current = await _call(
                 server,
                 "campaign_query",
@@ -348,15 +521,43 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
                         **detect_args,
                         "trap_id": "sphere-1",
                         "action": "passive_detect",
-                        "source_ref": json.dumps(
-                            sphere_chunk["source_ref"], sort_keys=True, separators=(",", ":")
-                        ),
+                        "source_ref": sphere_source_ref,
                         "source_excerpt": sphere_excerpt,
                         "profile": sphere_profile,
                         "expected_revision": current["revision"],
                         "idempotency_key": "sphere-passive",
                     },
                 )
+            sphere_detect_args = {
+                **detect_args,
+                "trap_id": "sphere-1",
+                "action": "detect",
+                "source_ref": sphere_source_ref,
+                "source_excerpt": sphere_excerpt,
+                "profile": sphere_profile,
+                "actor_id": locksmith["id"],
+                "expected_revision": current["revision"],
+                "idempotency_key": "sphere-arcana-detect",
+            }
+            sphere_detect = await _call(
+                server, "trap_state_transition", sphere_detect_args
+            )
+            assert sphere_detect["check"]["ability"] == "arcana"
+            assert sphere_detect["check"]["success"] is True
+            assert sphere_detect["revealed_facts"] == [
+                "sphere_of_annihilation_in_stone_mouth",
+                "sphere_cannot_be_controlled_or_moved",
+            ]
+            assert "random_stream_receipt" in sphere_detect
+            assert (
+                await _call(server, "trap_state_transition", sphere_detect_args)
+                == sphere_detect
+            )
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign_id}},
+            )
             with pytest.raises(ToolError, match="has no disable check"):
                 await _call(
                     server,
@@ -365,9 +566,7 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
                         **detect_args,
                         "trap_id": "sphere-1",
                         "action": "disable",
-                        "source_ref": json.dumps(
-                            sphere_chunk["source_ref"], sort_keys=True, separators=(",", ":")
-                        ),
+                        "source_ref": sphere_source_ref,
                         "source_excerpt": sphere_excerpt,
                         "profile": sphere_profile,
                         "idempotency_key": "sphere-disable",
@@ -423,8 +622,17 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
                 ),
                 "source_excerpt": darts_excerpt,
                 "profile": darts_profile,
-                "target_ids": [actor["id"]],
-                "area_confirmed": True,
+                "target_ids": None,
+                "area_confirmed": None,
+                "spatial_facts": reviewed_area_facts(
+                    scene_id=darts_chunk["scene"]["id"],
+                    trap_id="darts-1",
+                    source_ref=json.dumps(
+                        darts_chunk["source_ref"], sort_keys=True, separators=(",", ":")
+                    ),
+                    campaign_revision=current["revision"],
+                    in_area_ids={actor["id"], captive["id"]},
+                ),
                 "trigger_fact": {
                     "kind": "pressure_plate_weight",
                     "scene_id": darts_chunk["scene"]["id"],
@@ -438,6 +646,10 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
             assert darts_result["trap"]["status"] == "spent"
             assert darts_result["trap"]["trigger_fact"] == darts_args["trigger_fact"]
             assert len(darts_result["darts"]) == 4
+            assert darts_result["eligible_target_ids"] == sorted(
+                [actor["id"], captive["id"]]
+            )
+            assert locksmith["id"] not in darts_result["eligible_target_ids"]
             assert darts_result["random_stream_receipt"]["draw_count"] >= 8
             assert await _call(server, "trap_state_transition", darts_args) == darts_result
 
@@ -468,34 +680,50 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
                 ),
                 "source_excerpt": net_excerpt,
                 "profile": net_profile,
-                "area_confirmed": True,
+                "target_ids": None,
+                "area_confirmed": None,
+                "spatial_facts": reviewed_area_facts(
+                    scene_id=net_chunk["scene"]["id"],
+                    trap_id="net-1",
+                    source_ref=json.dumps(
+                        net_chunk["source_ref"], sort_keys=True, separators=(",", ":")
+                    ),
+                    campaign_revision=current["revision"],
+                    in_area_ids={actor["id"], captive["id"]},
+                ),
                 "expected_revision": current["revision"],
                 "idempotency_key": "net-trigger",
             }
             net_result = await _call(server, "trap_state_transition", net_args)
             assert net_result["trap"]["status"] == "triggered"
-            assert net_result["check"]["ability"] == "dexterity"
+            assert net_result["check"]["ability"] == "strength"
+            assert net_result["check"]["success"] is True
+            assert actor["id"] in net_result["trap"]["restrained_actor_ids"]
+            assert net_result["targets"][1]["target_id"] == captive["id"]
+            for target_result in net_result["targets"]:
+                assert target_result["restrained"] is True
+                assert target_result["prone"] is (not target_result["check"]["success"])
+            assert locksmith["id"] not in net_result["affected_actor_ids"]
             assert "random_stream_receipt" in net_result
-            if net_result["check"]["success"] is False:
-                assert actor["id"] in net_result["trap"]["restrained_actor_ids"]
-                current = await _call(
-                    server,
-                    "campaign_query",
-                    {
-                        "view": "get",
-                        "payload": {"campaign_id": campaign_id},
-                    },
-                )
-                escape_args = {
-                    **net_args,
-                    "action": "escape",
-                    "area_confirmed": None,
-                    "expected_revision": current["revision"],
-                    "idempotency_key": "net-escape",
-                }
-                escaped = await _call(server, "trap_state_transition", escape_args)
-                assert escaped["check"]["success"] is True
-                assert actor["id"] not in escaped["trap"]["restrained_actor_ids"]
+            current = await _call(
+                server,
+                "campaign_query",
+                {
+                    "view": "get",
+                    "payload": {"campaign_id": campaign_id},
+                },
+            )
+            escape_args = {
+                **net_args,
+                "action": "escape",
+                "area_confirmed": None,
+                "spatial_facts": None,
+                "expected_revision": current["revision"],
+                "idempotency_key": "net-escape",
+            }
+            escaped = await _call(server, "trap_state_transition", escape_args)
+            assert escaped["check"]["success"] is True
+            assert actor["id"] not in escaped["trap"]["restrained_actor_ids"]
 
             current = await _call(
                 server,
@@ -511,6 +739,17 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
                 "action": "disable",
                 "actor_id": locksmith["id"],
                 "method": "thieves_tools",
+                "area_confirmed": None,
+                "target_ids": None,
+                "spatial_facts": reviewed_area_facts(
+                    scene_id=net_chunk["scene"]["id"],
+                    trap_id="net-disabled",
+                    source_ref=json.dumps(
+                        net_chunk["source_ref"], sort_keys=True, separators=(",", ":")
+                    ),
+                    campaign_revision=current["revision"],
+                    in_area_ids={actor["id"], captive["id"]},
+                ),
                 "expected_revision": current["revision"],
                 "idempotency_key": "net-disable-success",
             }
@@ -537,6 +776,17 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
                 "trap_id": "net-triggered-by-failure",
                 "action": "disable",
                 "method": "edged_tool",
+                "area_confirmed": None,
+                "target_ids": None,
+                "spatial_facts": reviewed_area_facts(
+                    scene_id=net_chunk["scene"]["id"],
+                    trap_id="net-triggered-by-failure",
+                    source_ref=json.dumps(
+                        net_chunk["source_ref"], sort_keys=True, separators=(",", ":")
+                    ),
+                    campaign_revision=current["revision"],
+                    in_area_ids={actor["id"], captive["id"]},
+                ),
                 "expected_revision": current["revision"],
                 "idempotency_key": "net-disable-failure",
             }
@@ -561,6 +811,17 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
             needle_source_ref = json.dumps(
                 needle_chunk["source_ref"], sort_keys=True, separators=(",", ":")
             )
+            needle_scene_progress = await _call(
+                server,
+                "module_set_progress",
+                {
+                    "campaign_id": campaign_id,
+                    "scene_id": needle_chunk["scene"]["id"],
+                    "status": "current",
+                    "expected_state_version": 0,
+                    "idempotency_key": "make-needle-scene-current",
+                },
+            )
             current = await _call(
                 server,
                 "campaign_query",
@@ -575,7 +836,20 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
                 "profile": needle_profile,
                 "actor_id": locksmith["id"],
                 "method": "thieves_tools",
-                "area_confirmed": True,
+                "spatial_facts": {
+                    "decision_id": "needle-disable-range-review",
+                    "reason": (
+                        "The DM reviewed the locksmith at the lock within the needle's reach."
+                    ),
+                    "scene_id": needle_chunk["scene"]["id"],
+                    "scene_revision": needle_scene_progress["state_version"],
+                    "trap_id": "needle-safe",
+                    "target_actor_id": locksmith["id"],
+                    "source_ref": needle_source_ref,
+                    "campaign_revision": current["revision"],
+                    "reviewed_by": "system:local",
+                    "distance_inches": 3,
+                },
                 "expected_revision": current["revision"],
                 "idempotency_key": "needle-disable-success",
             }
@@ -600,7 +874,14 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
             needle_failure_args = {
                 **needle_success_args,
                 "trap_id": "needle-triggered-by-failure",
-                "actor_id": actor["id"],
+                "actor_id": captive["id"],
+                "spatial_facts": {
+                    **needle_success_args["spatial_facts"],
+                    "decision_id": "needle-disable-failure-range-review",
+                    "trap_id": "needle-triggered-by-failure",
+                    "target_actor_id": captive["id"],
+                    "campaign_revision": current["revision"],
+                },
                 "expected_revision": current["revision"],
                 "idempotency_key": "needle-disable-failure",
             }
@@ -610,7 +891,7 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
             assert needle_failure["disable_check"]["success"] is False
             assert needle_failure["trap"]["status"] == "spent"
             assert needle_failure["trap"]["source_ref"] == needle_source_ref
-            assert needle_failure["target_id"] == actor["id"]
+            assert needle_failure["target_id"] == captive["id"]
             assert needle_failure["piercing"]["hp_damage"] == 1
             assert needle_failure["poison"]["damage_expression"] == "2d10"
             if needle_failure["poison"]["success"] is False:
@@ -628,15 +909,6 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
                 == needle_failure
             )
 
-            fire_hits = await _call(
-                server,
-                "module_search",
-                {"campaign_id": campaign_id, "query": "Fire-Breathing Statue", "top_k": 3},
-            )
-            fire_chunk = await _call(server, "module_expand", {"chunk_id": fire_hits[0]["id"]})
-            fire_source_ref = json.dumps(
-                fire_chunk["source_ref"], sort_keys=True, separators=(",", ":")
-            )
             current = await _call(
                 server,
                 "campaign_query",
@@ -655,7 +927,7 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
                 "expected_revision": current["revision"],
                 "idempotency_key": "statue-unconfirmed",
             }
-            with pytest.raises(ToolError, match="area fact"):
+            with pytest.raises(ToolError, match="reviewed spatial_facts"):
                 await _call(server, "trap_state_transition", fire_rejected_args)
             unchanged = await _call(
                 server,
@@ -663,9 +935,131 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
                 {"view": "get", "payload": {"campaign_id": campaign_id}},
             )
             assert unchanged["revision"] == current["revision"]
+            caller_selected_targets_args = {
+                **fire_rejected_args,
+                "target_ids": [actor["id"]],
+                "area_confirmed": None,
+                "spatial_facts": None,
+                "idempotency_key": "statue-caller-targets-only",
+            }
+            with pytest.raises(ToolError, match="derive all affected actors"):
+                await _call(server, "trap_state_transition", caller_selected_targets_args)
+            empty_area_args = {
+                **fire_rejected_args,
+                "target_ids": None,
+                "area_confirmed": None,
+                "spatial_facts": reviewed_area_facts(
+                    scene_id=fire_chunk["scene"]["id"],
+                    trap_id="statue-1",
+                    source_ref=fire_source_ref,
+                    campaign_revision=unchanged["revision"],
+                    in_area_ids=set(),
+                ),
+                "trigger_fact": {
+                    "kind": "pressure_plate_weight",
+                    "scene_id": fire_chunk["scene"]["id"],
+                    "plate_id": "statue-1",
+                    "weight_lb": 21,
+                },
+                "idempotency_key": "statue-empty-area",
+            }
+            with pytest.raises(ToolError, match="no eligible targets"):
+                await _call(server, "trap_state_transition", empty_area_args)
+            incomplete_area_args = {
+                **empty_area_args,
+                "spatial_facts": {
+                    **empty_area_args["spatial_facts"],
+                    "actor_facts": empty_area_args["spatial_facts"]["actor_facts"][:-1],
+                },
+                "idempotency_key": "statue-incomplete-area-review",
+            }
+            with pytest.raises(ToolError, match="cover every active encounter combatant"):
+                await _call(server, "trap_state_transition", incomplete_area_args)
+            stale_area_revision_args = {
+                **empty_area_args,
+                "spatial_facts": {
+                    **empty_area_args["spatial_facts"],
+                    "campaign_revision": unchanged["revision"] - 1,
+                    "actor_facts": [
+                        {"actor_id": actor["id"], "in_area": True},
+                        {"actor_id": captive["id"], "in_area": False},
+                        {"actor_id": locksmith["id"], "in_area": False},
+                    ],
+                },
+                "expected_revision": unchanged["revision"],
+                "idempotency_key": "statue-stale-spatial-review",
+            }
+            with pytest.raises(ToolError, match="stale for the current campaign revision"):
+                await _call(server, "trap_state_transition", stale_area_revision_args)
+            wrong_reviewer_args = {
+                **empty_area_args,
+                "spatial_facts": {
+                    **empty_area_args["spatial_facts"],
+                    "reviewed_by": "untrusted:caller",
+                    "actor_facts": [
+                        {"actor_id": actor["id"], "in_area": True},
+                        {"actor_id": captive["id"], "in_area": False},
+                        {"actor_id": locksmith["id"], "in_area": False},
+                    ],
+                },
+                "idempotency_key": "statue-untrusted-reviewer",
+            }
+            with pytest.raises(ToolError, match="authorized DM principal"):
+                await _call(server, "trap_state_transition", wrong_reviewer_args)
+            stale_encounter_args = {
+                **empty_area_args,
+                "spatial_facts": {
+                    **empty_area_args["spatial_facts"],
+                    "encounter_id": "encounter-from-another-scene",
+                    "actor_facts": [
+                        {"actor_id": actor["id"], "in_area": True},
+                        {"actor_id": captive["id"], "in_area": False},
+                        {"actor_id": locksmith["id"], "in_area": False},
+                    ],
+                },
+                "idempotency_key": "statue-stale-encounter",
+            }
+            with pytest.raises(ToolError, match="active encounter"):
+                await _call(server, "trap_state_transition", stale_encounter_args)
+            stale_revision_args = {
+                **fire_rejected_args,
+                "target_ids": None,
+                "area_confirmed": None,
+                "spatial_facts": reviewed_area_facts(
+                    scene_id=fire_chunk["scene"]["id"],
+                    trap_id="statue-1",
+                    source_ref=fire_source_ref,
+                    campaign_revision=unchanged["revision"],
+                    in_area_ids={actor["id"]},
+                ),
+                "trigger_fact": {
+                    "kind": "pressure_plate_weight",
+                    "scene_id": fire_chunk["scene"]["id"],
+                    "plate_id": "statue-1",
+                    "weight_lb": 21,
+                },
+                "expected_revision": unchanged["revision"] - 1,
+                "idempotency_key": "statue-cas-conflict",
+            }
+            with pytest.raises(ToolError, match="campaign revision conflict"):
+                await _call(server, "trap_state_transition", stale_revision_args)
+            after_area_rejections = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign_id}},
+            )
+            assert after_area_rejections["revision"] == unchanged["revision"]
             fire_args = {
                 **fire_rejected_args,
-                "area_confirmed": True,
+                "target_ids": None,
+                "area_confirmed": None,
+                "spatial_facts": reviewed_area_facts(
+                    scene_id=fire_chunk["scene"]["id"],
+                    trap_id="statue-1",
+                    source_ref=fire_source_ref,
+                    campaign_revision=unchanged["revision"],
+                    in_area_ids={actor["id"], captive["id"]},
+                ),
                 "trigger_fact": {
                     "kind": "pressure_plate_weight",
                     "scene_id": fire_chunk["scene"]["id"],
@@ -708,9 +1102,206 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
             assert fire_result["trap"]["status"] == "spent"
             assert fire_result["trap"]["trigger_fact"] == fire_args["trigger_fact"]
             assert fire_result["damage_roll"]["expression"] == "4d10"
+            assert fire_result["affected_actor_ids"] == [actor["id"], captive["id"]]
+            assert locksmith["id"] not in fire_result["affected_actor_ids"]
             assert isinstance(fire_result["targets"][0]["save"]["success"], bool)
             assert fire_result["random_stream_receipt"]["draw_count"] >= 2
             assert await _call(server, "trap_state_transition", fire_args) == fire_result
+
+            before_wedge = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign_id}},
+            )
+            wedge_args = {
+                **fire_args,
+                "trap_id": "statue-wedged-1",
+                "action": "bypass",
+                "method": "wedge_pressure_plate",
+                "target_ids": None,
+                "area_confirmed": None,
+                "spatial_facts": None,
+                "trigger_fact": None,
+                "trap_depth_ft": None,
+                "expected_revision": before_wedge["revision"],
+                "idempotency_key": "statue-wedge-pressure-plate",
+            }
+            wedged = await _call(server, "trap_state_transition", wedge_args)
+            assert wedged["trap"]["bypassed"] is True
+            assert wedged["trap"]["status"] == "armed"
+            assert wedged["trap"]["bypass_method"] == "wedge_pressure_plate"
+            assert "random_stream_receipt" not in wedged
+            assert await _call(server, "trap_state_transition", wedge_args) == wedged
+
+            before_blocked_trigger = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign_id}},
+            )
+            blocked_trigger_args = {
+                **fire_args,
+                "trap_id": "statue-wedged-1",
+                "method": None,
+                "expected_revision": before_blocked_trigger["revision"],
+                "spatial_facts": reviewed_area_facts(
+                    scene_id=fire_chunk["scene"]["id"],
+                    trap_id="statue-wedged-1",
+                    source_ref=fire_source_ref,
+                    campaign_revision=before_blocked_trigger["revision"],
+                    in_area_ids={actor["id"], captive["id"]},
+                ),
+                "trigger_fact": {
+                    "kind": "pressure_plate_weight",
+                    "scene_id": fire_chunk["scene"]["id"],
+                    "plate_id": "statue-wedged-1",
+                    "weight_lb": 21,
+                },
+                "idempotency_key": "statue-wedged-trigger-rejected",
+            }
+            with pytest.raises(ToolError, match="pressure-plate wedge prevents"):
+                await _call(
+                    server, "trap_state_transition", blocked_trigger_args
+                )
+            after_blocked_trigger = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign_id}},
+            )
+            assert after_blocked_trigger["revision"] == before_blocked_trigger["revision"]
+            assert (
+                after_blocked_trigger["state"]["random_stream"]
+                == before_blocked_trigger["state"]["random_stream"]
+            )
+            wedged_state = after_blocked_trigger["state"]["trap_state"]["traps"][
+                "statue-wedged-1"
+            ]
+            assert wedged_state["bypassed"] is True
+            assert wedged_state["status"] == "armed"
+
+            rolling_hits = await _call(
+                server,
+                "module_search",
+                {"campaign_id": campaign_id, "query": "Rolling Sphere", "top_k": 3},
+            )
+            rolling_chunk = await _call(
+                server, "module_expand", {"chunk_id": rolling_hits[0]["id"]}
+            )
+            rolling_source_ref = json.dumps(
+                rolling_chunk["source_ref"], sort_keys=True, separators=(",", ":")
+            )
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign_id}},
+            )
+            rolling_args = {
+                **detect_args,
+                "trap_id": "rolling-sphere-plate",
+                "action": "trigger",
+                "source_ref": rolling_source_ref,
+                "source_excerpt": rolling_sphere_excerpt,
+                "profile": rolling_sphere_profile,
+                "actor_id": actor["id"],
+                "target_ids": None,
+                "area_confirmed": None,
+                "trap_depth_ft": None,
+                "trigger_fact": {
+                    "kind": "pressure_plate_weight",
+                    "scene_id": rolling_chunk["scene"]["id"],
+                    "plate_id": "rolling-sphere-plate",
+                    "weight_lb": 20,
+                },
+                "expected_revision": current["revision"],
+                "idempotency_key": "rolling-sphere-source-trigger",
+            }
+            with pytest.raises(ToolError, match="20 lb or greater"):
+                await _call(
+                    server,
+                    "trap_state_transition",
+                    {
+                        **rolling_args,
+                        "trigger_fact": {**rolling_args["trigger_fact"], "weight_lb": 19},
+                        "idempotency_key": "rolling-sphere-below-threshold",
+                    },
+                )
+            with pytest.raises(ToolError, match="source-defined scene"):
+                await _call(
+                    server,
+                    "trap_state_transition",
+                    {
+                        **rolling_args,
+                        "trigger_fact": {
+                            **rolling_args["trigger_fact"],
+                            "scene_id": "other-scene",
+                        },
+                        "idempotency_key": "rolling-sphere-wrong-scene",
+                    },
+                )
+            unchanged = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign_id}},
+            )
+            assert unchanged["revision"] == current["revision"]
+            with pytest.raises(ToolError, match="revision conflict"):
+                await _call(
+                    server,
+                    "trap_state_transition",
+                    {
+                        **rolling_args,
+                        "expected_revision": current["revision"] - 1,
+                        "idempotency_key": "rolling-sphere-stale-revision",
+                    },
+                )
+            unchanged = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign_id}},
+            )
+            assert unchanged["revision"] == current["revision"]
+            with pytest.raises(ToolError, match="does not accept caller-confirmed area facts"):
+                await _call(
+                    server,
+                    "trap_state_transition",
+                    {
+                        **rolling_args,
+                        "area_confirmed": True,
+                        "idempotency_key": "rolling-sphere-caller-area",
+                    },
+                )
+            unchanged = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign_id}},
+            )
+            assert unchanged["revision"] == current["revision"]
+            with pytest.raises(ToolError, match="unresolved authoritative path"):
+                await _call(
+                    server,
+                    "trap_state_transition",
+                    {
+                        **rolling_args,
+                        "target_ids": [actor["id"]],
+                        "idempotency_key": "rolling-sphere-caller-target",
+                    },
+                )
+            unchanged = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign_id}},
+            )
+            assert unchanged["revision"] == current["revision"]
+            rolling_args["expected_revision"] = unchanged["revision"]
+            with pytest.raises(ToolError, match="no trap initiative participant"):
+                await _call(server, "trap_state_transition", rolling_args)
+            with pytest.raises(ToolError, match="no trap initiative participant"):
+                await _call(server, "trap_state_transition", rolling_args)
+            unchanged = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign_id}},
+            )
+            assert unchanged["revision"] == current["revision"]
 
             pit_hits = await _call(
                 server,
@@ -738,8 +1329,15 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
                 "source_excerpt": pit_excerpt,
                 "profile": pit_profile,
                 "actor_id": actor["id"],
-                "target_ids": [actor["id"]],
-                "area_confirmed": True,
+                "target_ids": None,
+                "area_confirmed": None,
+                "spatial_facts": reviewed_area_facts(
+                    scene_id=pit_chunk["scene"]["id"],
+                    trap_id="pit-1",
+                    source_ref=pit_source_ref,
+                    campaign_revision=current["revision"],
+                    in_area_ids={actor["id"]},
+                ),
                 "trap_depth_ft": 15,
                 "trigger_fact": {
                     "kind": "step_on_cover",
@@ -816,8 +1414,15 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
                 "source_ref": locking_source_ref,
                 "source_excerpt": locking_pit_excerpt,
                 "profile": locking_pit_profile,
-                "target_ids": [captive["id"]],
-                "area_confirmed": True,
+                "target_ids": None,
+                "area_confirmed": None,
+                "spatial_facts": reviewed_area_facts(
+                    scene_id=locking_chunk["scene"]["id"],
+                    trap_id="locking-pit-invalid-depth",
+                    source_ref=locking_source_ref,
+                    campaign_revision=current["revision"],
+                    in_area_ids={captive["id"]},
+                ),
                 "trap_depth_ft": 15,
                 "trigger_fact": {
                     "kind": "step_on_cover",
@@ -842,8 +1447,15 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
                 "source_ref": locking_source_ref,
                 "source_excerpt": locking_pit_excerpt,
                 "profile": locking_pit_profile,
-                "target_ids": [actor["id"], captive["id"]],
-                "area_confirmed": True,
+                "target_ids": None,
+                "area_confirmed": None,
+                "spatial_facts": reviewed_area_facts(
+                    scene_id=locking_chunk["scene"]["id"],
+                    trap_id="locking-pit-10ft",
+                    source_ref=locking_source_ref,
+                    campaign_revision=unchanged["revision"],
+                    in_area_ids={actor["id"], captive["id"], locksmith["id"]},
+                ),
                 "trap_depth_ft": 10,
                 "trigger_fact": {
                     "kind": "step_on_cover",
@@ -861,6 +1473,7 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
             assert set(locking_result["trap"]["contained_actor_ids"]) == {
                 actor["id"],
                 captive["id"],
+                locksmith["id"],
             }
             assert "position" not in locking_result["trap"]
             assert await _call(server, "trap_state_transition", locking_args) == locking_result
@@ -875,6 +1488,7 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
                 "action": "escape",
                 "target_ids": None,
                 "area_confirmed": None,
+                "spatial_facts": None,
                 "trap_depth_ft": None,
                 "actor_id": captive["id"],
                 "expected_revision": current["revision"],
@@ -918,7 +1532,84 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
             assert strong_escape["trap"]["status"] == "triggered"
             assert actor["id"] not in strong_escape["trap"]["contained_actor_ids"]
             assert captive["id"] in strong_escape["trap"]["contained_actor_ids"]
+            assert locksmith["id"] in strong_escape["trap"]["contained_actor_ids"]
             assert "position" not in strong_escape["trap"]
+
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign_id}},
+            )
+            locking_disable_facts = {
+                "inside_pit": True,
+                "mechanism_reachable": True,
+                "can_see": True,
+                "scene_id": locking_chunk["scene"]["id"],
+                "trap_id": "locking-pit-10ft",
+                "actor_id": locksmith["id"],
+                "decision_id": "locking-pit-disable-ruling",
+                "reason": "The locksmith is inside the pit and can see and reach its spring.",
+            }
+            locking_disable_args = {
+                **locking_args,
+                "action": "disable",
+                "actor_id": locksmith["id"],
+                "method": "thieves_tools",
+                "target_ids": None,
+                "area_confirmed": None,
+                "trap_depth_ft": None,
+                "trigger_fact": None,
+                "scene_facts": locking_disable_facts,
+                "spatial_facts": None,
+                "expected_revision": current["revision"],
+                "idempotency_key": "locking-pit-disable-success",
+            }
+            with pytest.raises(ToolError, match="exact reviewed scene facts"):
+                await _call(
+                    server,
+                    "trap_state_transition",
+                    {
+                        **locking_disable_args,
+                        "scene_facts": None,
+                        "idempotency_key": "locking-pit-disable-missing-facts",
+                    },
+                )
+            with pytest.raises(ToolError, match="source-defined scene"):
+                await _call(
+                    server,
+                    "trap_state_transition",
+                    {
+                        **locking_disable_args,
+                        "scene_facts": {**locking_disable_facts, "scene_id": "other-scene"},
+                        "idempotency_key": "locking-pit-disable-wrong-scene",
+                    },
+                )
+            unchanged = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign_id}},
+            )
+            assert unchanged["revision"] == current["revision"]
+            locking_disable_args["expected_revision"] = unchanged["revision"]
+            locking_disable_success = await _call(
+                server, "trap_state_transition", locking_disable_args
+            )
+            assert locking_disable_success["disable_check"]["ability"] == "dexterity"
+            assert locking_disable_success["disable_check"]["dc"] == 15
+            assert locking_disable_success["disable_check"]["tool"] == "thieves_tools"
+            assert locking_disable_success["disable_check"]["tool_proficient"] is True
+            assert locking_disable_success["disable_check"]["success"] is True
+            assert locking_disable_success["trap"]["spring_disabled"] is True
+            assert locking_disable_success["trap"]["status"] == "triggered"
+            assert set(locking_disable_success["trap"]["contained_actor_ids"]) == {
+                captive["id"],
+                locksmith["id"],
+            }
+            assert locking_disable_success["scene_facts"] == locking_disable_facts
+            assert "random_stream_receipt" in locking_disable_success
+            assert await _call(
+                server, "trap_state_transition", locking_disable_args
+            ) == locking_disable_success
 
             spiked_hits = await _call(
                 server,
@@ -942,7 +1633,15 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
                 "source_ref": spiked_source_ref,
                 "source_excerpt": spiked_locking_pit_excerpt,
                 "profile": spiked_locking_pit_profile,
-                "target_ids": [captive["id"]],
+                "target_ids": None,
+                "area_confirmed": None,
+                "spatial_facts": reviewed_area_facts(
+                    scene_id=spiked_chunk["scene"]["id"],
+                    trap_id="spiked-locking-pit-20ft",
+                    source_ref=spiked_source_ref,
+                    campaign_revision=current["revision"],
+                    in_area_ids={captive["id"]},
+                ),
                 "trap_depth_ft": 20,
                 "trigger_fact": {
                     "kind": "step_on_cover",
@@ -971,6 +1670,7 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
                 "action": "escape",
                 "target_ids": None,
                 "area_confirmed": None,
+                "spatial_facts": None,
                 "trap_depth_ft": None,
                 "actor_id": captive["id"],
                 "expected_revision": current["revision"],
@@ -982,6 +1682,44 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
             assert spiked_escape["check"]["success"] is False
             assert captive["id"] in spiked_escape["trap"]["contained_actor_ids"]
             assert await _call(server, "trap_state_transition", spiked_escape_args) == spiked_escape
+
+            current = await _call(
+                server,
+                "campaign_query",
+                {"view": "get", "payload": {"campaign_id": campaign_id}},
+            )
+            spiked_disable_args = {
+                **spiked_escape_args,
+                "action": "disable",
+                "method": "thieves_tools",
+                "trigger_fact": None,
+                "scene_facts": {
+                    "inside_pit": True,
+                    "mechanism_reachable": True,
+                    "can_see": True,
+                    "scene_id": spiked_chunk["scene"]["id"],
+                    "trap_id": "spiked-locking-pit-20ft",
+                    "actor_id": captive["id"],
+                    "decision_id": "spiked-locking-pit-disable-ruling",
+                    "reason": "The captive can reach and see the spring mechanism.",
+                },
+                "expected_revision": current["revision"],
+                "idempotency_key": "spiked-locking-pit-disable-failure",
+            }
+            spiked_disable_failure = await _call(
+                server, "trap_state_transition", spiked_disable_args
+            )
+            assert spiked_disable_failure["disable_check"]["ability"] == "dexterity"
+            assert spiked_disable_failure["disable_check"]["dc"] == 15
+            assert spiked_disable_failure["disable_check"]["tool_proficient"] is False
+            assert spiked_disable_failure["disable_check"]["success"] is False
+            assert spiked_disable_failure["trap"]["spring_disabled"] is False
+            assert spiked_disable_failure["trap"]["status"] == "triggered"
+            assert captive["id"] in spiked_disable_failure["trap"]["contained_actor_ids"]
+            assert "random_stream_receipt" in spiked_disable_failure
+            assert await _call(
+                server, "trap_state_transition", spiked_disable_args
+            ) == spiked_disable_failure
         finally:
             close_server(server)
 
@@ -1016,6 +1754,10 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
             assert await _call(restarted, "trap_state_transition", fire_args) == fire_result
             assert await _call(restarted, "trap_state_transition", pit_args) == pit_result
             assert await _call(restarted, "trap_state_transition", locking_args) == locking_result
+            assert (
+                await _call(restarted, "trap_state_transition", locking_disable_args)
+                == locking_disable_success
+            )
             assert await _call(restarted, "trap_state_transition", weak_escape_args) == weak_escape
             for replay_args, replay_result in strong_escape_attempts:
                 assert (
@@ -1026,6 +1768,10 @@ def test_trap_passive_detection_is_source_bound_fail_closed_and_replayable(tmp_p
             assert (
                 await _call(restarted, "trap_state_transition", spiked_escape_args)
                 == spiked_escape
+            )
+            assert (
+                await _call(restarted, "trap_state_transition", spiked_disable_args)
+                == spiked_disable_failure
             )
         finally:
             close_server(restarted)

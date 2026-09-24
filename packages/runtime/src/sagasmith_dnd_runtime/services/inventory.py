@@ -42,14 +42,20 @@ class InventoryService:
         intent: str,
         source_ref: str,
         actor_id: str,
-        target_actor_id: str,
         expected_actor_revision: int,
-        expected_target_revision: int,
+        target_actor_id: str | None = None,
+        expected_target_revision: int | None = None,
         principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
         expected_revision: int | None = None,
         branch_id: str | None = None,
         idempotency_key: str | None = None,
         action_context: dict[str, Any] | None = None,
+        target_object: dict[str, Any] | None = None,
+        object_source_ref: dict[str, Any] | None = None,
+        object_reason: str | None = None,
+        object_ruling: dict[str, Any] | None = None,
+        attack_ruling: dict[str, Any] | None = None,
+        helper_actor_id: str | None = None,
     ) -> dict[str, Any]:
         """Atomically settle supported source-bound gear actions.
 
@@ -64,25 +70,39 @@ class InventoryService:
         normalized_action_id = str(action_id).strip()
         normalized_item_id = str(item_id).strip()
         normalized_actor_id = str(actor_id).strip()
-        normalized_target_id = str(target_actor_id).strip()
+        normalized_target_id = str(target_actor_id or "").strip()
+        object_target = target_object is not None
+        if helper_actor_id is not None and not object_target:
+            raise _support.CombatEngineError(
+                "helper_actor_id applies only to Portable Ram object checks"
+            )
+        normalized_intent = normalize_gear_intent(intent)
         if not normalized_action_id or len(normalized_action_id) > 200:
             raise ValueError("action_id must contain 1 to 200 characters")
         if not normalized_item_id or len(normalized_item_id) > 200:
             raise ValueError("item_id must contain 1 to 200 characters")
-        if not normalized_actor_id or not normalized_target_id:
-            raise ValueError("actor_id and target_actor_id are required")
+        if not normalized_actor_id:
+            raise ValueError("actor_id is required")
+        if object_target:
+            if normalized_target_id:
+                raise ValueError("supply target_object or target_actor_id, not both")
+            if expected_target_revision is not None:
+                raise ValueError("expected_target_revision applies only to a character target")
+            if not isinstance(target_object, dict):
+                raise ValueError("target_object must be a scene object reference")
         if str(source_ref).strip() != ADVENTURING_GEAR_SOURCE_REF:
             raise _support.CombatEngineError(
                 "gear source_ref must match bundled 2014 adventuring gear"
             )
-        for field, value in (
-            ("expected_actor_revision", expected_actor_revision),
-            ("expected_target_revision", expected_target_revision),
-        ):
+        revisions = [("expected_actor_revision", expected_actor_revision)]
+        if normalized_target_id:
+            revisions.append(("expected_target_revision", expected_target_revision))
+        elif expected_target_revision is not None:
+            raise ValueError("expected_target_revision requires a character target")
+        for field, value in revisions:
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"{field} must be a non-negative integer")
 
-        normalized_intent = normalize_gear_intent(intent)
         scope = f"campaign-gear-action:{campaign_id}:{resolved_branch_id}:{principal_id}"
         request_payload = {
             "action_id": normalized_action_id,
@@ -90,36 +110,67 @@ class InventoryService:
             "intent": normalized_intent,
             "source_ref": ADVENTURING_GEAR_SOURCE_REF,
             "actor_id": normalized_actor_id,
-            "target_actor_id": normalized_target_id,
+            "target_actor_id": normalized_target_id if not object_target else None,
+            "target_object": _support.deepcopy(target_object) if object_target else None,
+            "object_source_ref": _support.deepcopy(object_source_ref) if object_target else None,
+            "object_reason": str(object_reason or "").strip() if object_target else None,
+            "object_ruling": _support.deepcopy(object_ruling) if object_target else None,
+            "attack_ruling": _support.deepcopy(attack_ruling) if object_target else None,
+            "action_context": _support.deepcopy(action_context),
+            "helper_actor_id": str(helper_actor_id or "").strip() or None,
             "expected_actor_revision": expected_actor_revision,
             "expected_target_revision": expected_target_revision,
             "branch_id": resolved_branch_id,
         }
         replay = self.replay_idempotent(scope, idempotency_key, request_payload)
         if replay is not None:
+            if normalized_intent in {"light", "lower_hood", "raise_hood"}:
+                return self.combat_response(campaign_id, principal_id, replay)
             return replay
 
         if normalized_intent == "extinguish":
-            return self.campaign_adventuring_gear_extinguish(
-                campaign_id=campaign_id,
-                action_id=normalized_action_id,
-                item_id=normalized_item_id,
-                source_ref=ADVENTURING_GEAR_SOURCE_REF,
-                actor_id=normalized_actor_id,
-                target_actor_id=normalized_target_id,
-                expected_actor_revision=expected_actor_revision,
-                expected_target_revision=expected_target_revision,
-                principal_id=principal_id,
-                expected_revision=expected_revision,
-                branch_id=resolved_branch_id,
-                idempotency_key=idempotency_key,
-                action_context=action_context,
+            extinguish_owner = self.characters.get(normalized_actor_id)
+            extinguish_item = next(
+                (
+                    candidate
+                    for candidate in dict(extinguish_owner.sheet.get("inventory") or {}).get(
+                        "items", []
+                    )
+                    if str(candidate.get("id") or "") == normalized_item_id
+                ),
+                None,
             )
+            if str((extinguish_item or {}).get("name") or "").strip().casefold() in {
+                "lamp",
+                "lantern, bullseye",
+                "lantern, hooded",
+            }:
+                pass
+            else:
+                return self.campaign_adventuring_gear_extinguish(
+                    campaign_id=campaign_id,
+                    action_id=normalized_action_id,
+                    item_id=normalized_item_id,
+                    source_ref=ADVENTURING_GEAR_SOURCE_REF,
+                    actor_id=normalized_actor_id,
+                    target_actor_id=normalized_target_id,
+                    expected_actor_revision=expected_actor_revision,
+                    expected_target_revision=expected_target_revision,
+                    principal_id=principal_id,
+                    expected_revision=expected_revision,
+                    branch_id=resolved_branch_id,
+                    idempotency_key=idempotency_key,
+                    action_context=action_context,
+                )
 
         owner = self.characters.get(normalized_actor_id)
-        target = self.characters.get(normalized_target_id)
-        if owner.campaign_id != campaign_id or target.campaign_id != campaign_id:
-            raise ValueError("gear user and target must belong to the campaign")
+        if owner.campaign_id != campaign_id:
+            raise ValueError("gear user must belong to the campaign")
+        target = None
+        if not object_target and normalized_target_id:
+            target = self.characters.get(normalized_target_id)
+            if target.campaign_id != campaign_id:
+                raise ValueError("gear user and target must belong to the campaign")
         owner_sheet = _support.validate_character_sheet(owner.sheet)
         item = next(
             (
@@ -136,12 +187,186 @@ class InventoryService:
         # legacy materialized templates do not duplicate source_ref on each item.
         source_item = {**item, "source_ref": ADVENTURING_GEAR_SOURCE_REF}
         plan = resolve_adventuring_gear_intent(source_item, normalized_intent)
+        gear_name = str(item.get("name") or "").strip().casefold()
+        if gear_name in {"lamp", "lantern, bullseye", "lantern, hooded"}:
+            if object_target or normalized_target_id or expected_target_revision is not None:
+                raise _support.CombatEngineError(
+                    "lamp and lantern actions do not accept a character or object target"
+                )
+            return self.settle_adventuring_gear_light_lifecycle(
+                campaign=campaign,
+                state=state,
+                owner=owner,
+                owner_sheet=owner_sheet,
+                item=item,
+                plan=plan,
+                action_id=normalized_action_id,
+                item_id=normalized_item_id,
+                actor_id=normalized_actor_id,
+                expected_actor_revision=expected_actor_revision,
+                expected_campaign_revision=expected_revision,
+                branch_id=resolved_branch_id,
+                principal_id=principal_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+                request_payload=request_payload,
+                action_context=action_context,
+            )
+        if (
+            normalized_intent == "spread"
+            and str(item.get("name") or "").strip().casefold()
+            in {
+                "ball bearings (bag of 1,000)",
+                "ball bearings",
+                "caltrops (bag of 20)",
+                "caltrops",
+            }
+            and plan.get("target") == "ground_area"
+        ):
+            if normalized_target_id or expected_target_revision is not None:
+                raise _support.CombatEngineError(
+                    "ground-area deployment does not accept a character target"
+                )
+            return self.settle_adventuring_gear_ground_deployment(
+                campaign=campaign,
+                state=state,
+                owner=owner,
+                owner_sheet=owner_sheet,
+                item=item,
+                plan=plan,
+                action_id=normalized_action_id,
+                item_id=normalized_item_id,
+                actor_id=normalized_actor_id,
+                expected_actor_revision=expected_actor_revision,
+                expected_campaign_revision=expected_revision,
+                branch_id=resolved_branch_id,
+                principal_id=principal_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+                request_payload=request_payload,
+                action_context=action_context,
+            )
+        if not normalized_target_id and not object_target:
+            raise ValueError("target_actor_id is required for a character target")
+        if object_target:
+            item_name = str(item.get("name") or "").strip().casefold()
+            supported_strength_check = (
+                item_name == "crowbar" and normalized_intent == "apply_leverage"
+            ) or (
+                item_name == "ram, portable" and normalized_intent == "break_door"
+            )
+            if supported_strength_check:
+                if set(target_object) != {"id", "scene_id"}:
+                    raise _support.CombatEngineError(
+                        "Crowbar and Portable Ram object targets accept only the reviewed "
+                        "object id and scene_id"
+                    )
+                if any(
+                    value is not None
+                    for value in (
+                        action_context,
+                        object_source_ref,
+                        object_reason,
+                        object_ruling,
+                        attack_ruling,
+                    )
+                ):
+                    raise _support.CombatEngineError(
+                        "Crowbar and Portable Ram use the stored DM-reviewed object fact; "
+                        "caller check DCs and outcomes are not accepted"
+                    )
+                if helper_actor_id is not None and item_name != "ram, portable":
+                    raise _support.CombatEngineError(
+                        "only Portable Ram checks accept a helper actor"
+                    )
+                return self.settle_scene_object_gear_strength_check(
+                    campaign=campaign,
+                    state=state,
+                    owner=owner,
+                    owner_sheet=owner_sheet,
+                    item=item,
+                    plan=plan,
+                    target_object=target_object,
+                    action_id=normalized_action_id,
+                    item_id=normalized_item_id,
+                    actor_id=normalized_actor_id,
+                    expected_actor_revision=expected_actor_revision,
+                    expected_campaign_revision=expected_revision,
+                    branch_id=resolved_branch_id,
+                    principal_id=principal_id,
+                    idempotency_key=idempotency_key,
+                    scope=scope,
+                    request_payload=request_payload,
+                    helper_actor_id=helper_actor_id,
+                )
+            supported_object_attack = (
+                item_name == "acid (vial)" and normalized_intent == "throw"
+            ) or (
+                item_name == "alchemist's fire (flask)" and normalized_intent == "throw"
+            )
+            if helper_actor_id is not None:
+                raise _support.CombatEngineError(
+                    "only Portable Ram object checks accept a helper actor"
+                )
+            if not supported_object_attack or not plan.get("attack"):
+                raise _support.CombatEngineError(
+                    "destructible object targets support only Acid and Alchemist's Fire attacks"
+                )
+            if not isinstance(object_source_ref, dict):
+                raise ValueError("object_source_ref is required for a destructible object attack")
+            if not isinstance(object_reason, str) or not object_reason.strip():
+                raise ValueError("object_reason is required for a destructible object attack")
+            if action_context is not None:
+                raise _support.CombatEngineError(
+                    "object attacks use reviewed source rulings, not action_context"
+                )
+            return self.character_source_object_attack(
+                normalized_actor_id,
+                _support.deepcopy(target_object),
+                normalized_item_id,
+                _support.deepcopy(object_source_ref),
+                str(object_reason or "").strip(),
+                principal_id=principal_id,
+                expected_revision=expected_actor_revision,
+                expected_campaign_revision=expected_revision,
+                idempotency_key=idempotency_key,
+                object_ruling=_support.deepcopy(object_ruling),
+                attack_ruling=_support.deepcopy(attack_ruling),
+                branch_id=resolved_branch_id,
+                gear_action={
+                    "request": {
+                        "action_id": normalized_action_id,
+                        "item_id": normalized_item_id,
+                        "intent": normalized_intent,
+                        "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                    },
+                    "rule_plan": _support.deepcopy(plan),
+                },
+                idempotency_scope=scope,
+                idempotency_payload=request_payload,
+            )
         gear_name = str(item.get("name") or "").casefold()
         if gear_name == "manacles":
-            self.require_authoritative_manacles_binding(
+            return self.settle_adventuring_gear_manacles(
+                campaign=campaign,
                 state=state,
-                target_actor_id=normalized_target_id,
+                owner=owner,
+                owner_sheet=owner_sheet,
+                target=target,
+                item=item,
+                plan=plan,
+                action_id=normalized_action_id,
+                item_id=normalized_item_id,
                 actor_id=normalized_actor_id,
+                target_actor_id=normalized_target_id,
+                expected_actor_revision=expected_actor_revision,
+                expected_target_revision=expected_target_revision,
+                expected_campaign_revision=expected_revision,
+                branch_id=resolved_branch_id,
+                principal_id=principal_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+                request_payload=request_payload,
                 action_context=action_context,
             )
         if (
@@ -196,7 +421,7 @@ class InventoryService:
             )
         if (
             str(item.get("name") or "").casefold() == "lock"
-            and normalized_intent == "pick"
+            and normalized_intent in {"pick", "unlock"}
         ) or (
             str(item.get("name") or "").casefold() == "rope, hempen (50 feet)"
             and normalized_intent == "burst"
@@ -225,6 +450,36 @@ class InventoryService:
                 request_payload=request_payload,
                 action_context=action_context,
             )
+        if (
+            str(item.get("name") or "").casefold() == "healer's kit"
+            and normalized_intent == "stabilize"
+            and bool(dict(state.get("combat") or {}).get("active"))
+        ):
+            if action_context is not None:
+                raise _support.CombatEngineError(
+                    "Healer's Kit stabilization uses the bundled automatic effect"
+                )
+            return self.settle_adventuring_gear_combat_stabilize(
+                campaign=campaign,
+                state=state,
+                owner=owner,
+                owner_sheet=owner_sheet,
+                target=target,
+                item=item,
+                plan=plan,
+                action_id=normalized_action_id,
+                item_id=normalized_item_id,
+                actor_id=normalized_actor_id,
+                target_actor_id=normalized_target_id,
+                expected_actor_revision=expected_actor_revision,
+                expected_target_revision=expected_target_revision,
+                expected_campaign_revision=expected_revision,
+                branch_id=resolved_branch_id,
+                principal_id=principal_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+                request_payload=request_payload,
+            )
         if self.authoritative_phase(campaign_id) != _support.PROFILE_PLAY:
             raise _support.CombatEngineError(
                 "non-attack adventuring gear actions are available only outside active combat"
@@ -241,14 +496,17 @@ class InventoryService:
                 "Healer's Kit stabilize requires a target at 0 hit points"
             )
         if normalized_actor_id != normalized_target_id:
-            stabilized_sheet = _support.stabilize_sheet(target_sheet)
+            stabilized_sheet = _support.stabilize_sheet(target_sheet)["sheet"]
         else:
             stabilized_sheet = None
 
-        uses = dict(item.get("uses") or {})
         use_key = "healer_s_kit"
-        use_state = uses.get(use_key)
-        if use_state is None:
+        use_state = dict(item.get("uses") or {})
+        if not use_state or (
+            use_state.get("max") == 0
+            and use_state.get("value") == 0
+            and not use_state.get("source_key")
+        ):
             use_state = {
                 "label": "Healer's Kit uses",
                 "value": 10,
@@ -272,8 +530,7 @@ class InventoryService:
         if isinstance(remaining, bool) or not isinstance(remaining, int) or remaining < 1:
             raise _support.CombatEngineError("Healer's Kit has no uses remaining")
         use_state["value"] = remaining - 1
-        uses[use_key] = use_state
-        item["uses"] = uses
+        item["uses"] = use_state
         owner_sheet = _support.validate_character_sheet(owner_sheet)
 
         spends = list(state.get("item_spends") or [])
@@ -399,46 +656,1339 @@ class InventoryService:
         )
         return response
 
-    def require_authoritative_manacles_binding(
+    def settle_adventuring_gear_light_lifecycle(
         self,
         *,
+        campaign: Any,
         state: dict[str, Any],
-        target_actor_id: str,
+        owner: Any,
+        owner_sheet: dict[str, Any],
+        item: dict[str, Any],
+        plan: dict[str, Any],
+        action_id: str,
+        item_id: str,
         actor_id: str,
+        expected_actor_revision: int,
+        expected_campaign_revision: int | None,
+        branch_id: str,
+        principal_id: str,
+        idempotency_key: str,
+        scope: str,
+        request_payload: dict[str, Any],
         action_context: dict[str, Any] | None,
-    ) -> None:
-        """Fail closed when only a generic restrained condition proves no binding source.
-
-        The bundled 2014 text defines escape/break/pick parameters but no
-        application procedure, so Runtime has no way to establish an item-owned
-        link between this exact manacle set and its target.
-        """
-        if action_context is not None:
-            raise _support.CombatEngineError(
-                "Manacles do not accept caller-supplied binding, DC, or outcome context"
+    ) -> dict[str, Any]:
+        """Settle bundled Lamp and Lantern light state, fuel, and hood mode."""
+        if expected_campaign_revision is None or campaign.revision != expected_campaign_revision:
+            raise ValueError("campaign revision conflict for adventuring gear light")
+        if owner.campaign_id != campaign.id or owner.id != actor_id:
+            raise _support.CombatEngineError("light source owner must belong to the campaign")
+        if owner.revision != expected_actor_revision:
+            raise ValueError(
+                f"character revision conflict: expected {expected_actor_revision}, "
+                f"found {owner.revision}"
             )
-        encounter = dict(state.get("combat") or {})
+        if int(item.get("quantity", 0) or 0) < 1:
+            raise _support.CombatEngineError("the source-bound light item is unavailable")
+        if str(item.get("source_key") or "") != str(plan.get("source_key") or ""):
+            raise _support.CombatEngineError("light item source identity is invalid")
+        if plan.get("intent") not in {"light", "extinguish", "lower_hood", "raise_hood"}:
+            raise _support.CombatEngineError("unsupported source-defined light intent")
+
+        next_encounter = _support.deepcopy(dict(state.get("combat") or {}))
+        if not next_encounter.get("active"):
+            raise _support.CombatEngineError(
+                "dynamic adventuring gear lights require an active encounter scene"
+            )
+        if self.encounter_rules_edition(campaign.id, next_encounter) != "2014":
+            raise _support.CombatEngineError(
+                "adventuring gear lights require the 2014 rules"
+            )
+        self.require_no_blocking_pending(next_encounter)
+        if next_encounter.get("positioning_mode") != "grid":
+            raise _support.NeedsRulingError(
+                "dynamic gear lights require authoritative Grid geometry",
+                missing=("combat.grid_positions",),
+                ruling_kind="agent_dm_adjudication",
+            )
+        battle_map = dict(next_encounter.get("battle_map") or {})
+        map_source = dict(battle_map.get("source") or {})
+        scene_id = str(
+            next_encounter.get("scene_id") or map_source.get("scene_id") or ""
+        ).strip()
+        map_checksum = str(battle_map.get("checksum") or "").strip()
+        map_revision = battle_map.get("map_revision")
+        grid = dict(battle_map.get("grid") or {})
+        if (
+            not scene_id
+            or not map_checksum
+            or isinstance(map_revision, bool)
+            or not isinstance(map_revision, int)
+            or map_revision < 1
+            or grid.get("kind") != "square"
+            or grid.get("cell_ft") != 5
+        ):
+            raise _support.NeedsRulingError(
+                "dynamic gear lights require a signed five-foot square scene map",
+                missing=("combat.grid_scene_geometry",),
+                ruling_kind="agent_dm_adjudication",
+            )
+        light_user = self.require_encounter_combatant(
+            next_encounter, actor_id, role="adventuring gear light user"
+        )
+        from sagasmith_dnd.spatial import validate_position
+
+        position = light_user.get("position")
+        if not isinstance(position, dict):
+            raise _support.NeedsRulingError(
+                "dynamic gear lights require the user's recorded grid position",
+                missing=("combat.grid_positions",),
+                ruling_kind="agent_dm_adjudication",
+            )
+        validate_position(battle_map, position)
+
+        item_name = str(item.get("name") or "").strip()
+        light_records = list(next_encounter.get("adventuring_gear_lights") or [])
+        light_id = f"gear-light:{actor_id}:{item_id}"
+        matches = [
+            record
+            for record in light_records
+            if isinstance(record, dict)
+            and str(record.get("id") or "") == light_id
+        ]
+        if len(matches) > 1:
+            raise _support.CombatEngineError("duplicate source-bound gear light state")
+        prior = _support.deepcopy(matches[0]) if matches else None
+        now_ticks = int(dict(state.get("game_time") or {}).get("elapsed_ticks", 0) or 0)
+        next_owner_sheet = _support.validate_character_sheet(owner_sheet)
+        consumed_oil: dict[str, Any] | None = None
+
+        if plan["intent"] == "light":
+            if prior is not None and bool(prior.get("active")):
+                raise _support.CombatEngineError("this source-bound gear light is already lit")
+            orientation: str | None = None
+            if item_name.casefold() == "lantern, bullseye":
+                required_context = {
+                    "direction",
+                    "scene_id",
+                    "map_checksum",
+                    "map_revision",
+                }
+                if not isinstance(action_context, dict) or set(action_context) != required_context:
+                    raise _support.NeedsRulingError(
+                        "Bullseye Lantern lighting requires a DM-reviewed cone direction",
+                        missing=("adventuring_gear.bullseye_orientation_review",),
+                        ruling_kind="agent_dm_adjudication",
+                    )
+                orientation = str(action_context.get("direction") or "").strip().casefold()
+                if orientation not in {"north", "east", "south", "west"}:
+                    raise _support.CombatEngineError(
+                        "Bullseye Lantern direction must be north, east, south, or west"
+                    )
+                if (
+                    action_context.get("scene_id") != scene_id
+                    or action_context.get("map_checksum") != map_checksum
+                    or action_context.get("map_revision") != map_revision
+                ):
+                    raise _support.CombatEngineError(
+                        "Bullseye Lantern review must match the current scene and map revision"
+                    )
+            elif action_context is not None:
+                raise _support.CombatEngineError(
+                    "Lamp and Hooded Lantern lighting accept no caller scene facts"
+                )
+
+            remaining = int((prior or {}).get("remaining_fuel_ticks", 0) or 0)
+            if prior is not None and bool(prior.get("active")):
+                remaining = max(
+                    0,
+                    int(prior.get("fuel_due_elapsed_ticks", now_ticks) or now_ticks)
+                    - now_ticks,
+                )
+            if remaining <= 0:
+                fuel_spec = dict(dict(plan.get("resource_cost") or {}).get("fuel") or {})
+                fuel_source_key = str(fuel_spec.get("source_key") or "")
+                fuel_item = next(
+                    (
+                        candidate
+                        for candidate in sorted(
+                            next_owner_sheet.get("inventory", {}).get("items", []),
+                            key=lambda entry: str(entry.get("id") or ""),
+                        )
+                        if str(candidate.get("source_key") or "") == fuel_source_key
+                        and str(candidate.get("name") or "").strip().casefold()
+                        == "oil (flask)"
+                        and int(candidate.get("quantity", 0) or 0) >= 1
+                    ),
+                    None,
+                )
+                if fuel_item is None:
+                    raise _support.CombatEngineError(
+                        "lighting requires one owned, source-matched Oil (flask)"
+                    )
+                next_owner_sheet, _ = _support.remove_inventory_item(
+                    next_owner_sheet, str(fuel_item["id"]), 1
+                )
+                consumed_oil = _support.deepcopy(fuel_item)
+                remaining = int(plan.get("duration_ticks") or 0)
+            if remaining <= 0:
+                raise _support.CombatEngineError("light fuel duration is unavailable")
+            prior = {
+                "id": light_id,
+                "actor_id": actor_id,
+                "item_id": item_id,
+                "item_name": str(plan.get("item_name") or item_name),
+                "source_key": str(item.get("source_key") or ""),
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                "active": True,
+                "remaining_fuel_ticks": remaining,
+                "fuel_due_elapsed_ticks": now_ticks + remaining,
+                "hood": "raised",
+                "orientation": orientation,
+                "reviewer_principal_id": principal_id if orientation else None,
+                "reviewed_scene_id": scene_id if orientation else None,
+                "reviewed_map_checksum": map_checksum if orientation else None,
+                "reviewed_map_revision": map_revision if orientation else None,
+                "last_action_id": action_id,
+            }
+        else:
+            if action_context is not None:
+                raise _support.CombatEngineError(
+                    "light state changes accept no caller-provided outcomes or scene facts"
+                )
+            if prior is None:
+                raise _support.CombatEngineError(
+                    "no source-bound light state matches this owner and item"
+                )
+            if (
+                prior.get("actor_id") != actor_id
+                or prior.get("item_id") != item_id
+                or prior.get("source_key") != item.get("source_key")
+                or prior.get("source_ref") != ADVENTURING_GEAR_SOURCE_REF
+                or prior.get("item_name") != str(plan.get("item_name") or item_name)
+            ):
+                raise _support.CombatEngineError("stored light source identity does not match")
+            if item_name.casefold() == "lantern, bullseye" and (
+                prior.get("reviewed_scene_id") != scene_id
+                or prior.get("reviewed_map_checksum") != map_checksum
+                or prior.get("reviewed_map_revision") != map_revision
+            ):
+                raise _support.CombatEngineError(
+                    "Bullseye Lantern direction review is stale for the current map"
+                )
+            if item_name.casefold() == "lantern, bullseye":
+                reviewer_principal = str(prior.get("reviewer_principal_id") or "")
+                if not reviewer_principal:
+                    raise _support.CombatEngineError(
+                        "Bullseye Lantern direction has no recorded DM reviewer"
+                    )
+                self.access.require_campaign(
+                    campaign.id,
+                    reviewer_principal,
+                    roles=_support.CAMPAIGN_DM_ROLES,
+                )
+            if plan["intent"] == "extinguish":
+                if not prior.get("active"):
+                    raise _support.CombatEngineError("this source-bound gear light is not lit")
+                prior["remaining_fuel_ticks"] = max(
+                    0,
+                    int(prior.get("fuel_due_elapsed_ticks", now_ticks) or now_ticks)
+                    - now_ticks,
+                )
+                prior["active"] = False
+                prior["fuel_due_elapsed_ticks"] = None
+            elif plan["intent"] in {"lower_hood", "raise_hood"}:
+                if item_name.casefold() != "lantern, hooded":
+                    raise _support.CombatEngineError(
+                        "only a Hooded Lantern has a hood state"
+                    )
+                if not prior.get("active"):
+                    raise _support.CombatEngineError("the Hooded Lantern must be lit")
+                desired = "lowered" if plan["intent"] == "lower_hood" else "raised"
+                if prior.get("hood") == desired:
+                    raise _support.CombatEngineError(
+                        f"the Hooded Lantern hood is already {desired}"
+                    )
+                if plan.get("action_economy") == "action":
+                    next_encounter = _support.resolve_common_action(
+                        next_encounter,
+                        actor_id_value=actor_id,
+                        action="use_object",
+                        payload={
+                            "kind": "adventuring_gear",
+                            "intent": plan["intent"],
+                            "item_id": item_id,
+                        },
+                    )
+                prior["hood"] = desired
+                prior["last_action_id"] = action_id
+            else:
+                raise _support.CombatEngineError("unsupported source-defined light intent")
+
+        existing_spends = list(state.get("item_spends") or [])
+        if any(
+            isinstance(entry, dict) and str(entry.get("id") or "") == action_id
+            for entry in existing_spends
+        ):
+            raise ValueError("gear action_id already exists on this branch")
+        action_receipt = {
+            "id": action_id,
+            "item_id": item_id,
+            "quantity": 0,
+            "reason": f"adventuring gear light:{plan['intent']}",
+            "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+            "source_key": item.get("source_key"),
+            "character_id": actor_id,
+            "gear_intent": plan["intent"],
+            "rule_plan": _support.deepcopy(plan),
+            "resulting_light": _support.deepcopy(prior),
+            "reviewer_principal_id": principal_id
+            if plan["intent"] == "light" and item_name.casefold() == "lantern, bullseye"
+            else None,
+        }
+        spends = [*existing_spends, action_receipt]
+        if consumed_oil is not None:
+            fuel_spend_id = f"{action_id}:fuel"
+            if any(
+                isinstance(entry, dict) and str(entry.get("id") or "") == fuel_spend_id
+                for entry in spends
+            ):
+                raise ValueError("gear fuel action_id already exists on this branch")
+            spends.append(
+                {
+                    "id": fuel_spend_id,
+                    "item_id": str(consumed_oil.get("id") or ""),
+                    "quantity": 1,
+                    "reason": f"Fuel {item_name}",
+                    "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                    "source_key": consumed_oil.get("source_key"),
+                    "character_id": actor_id,
+                    "gear_intent": "fuel",
+                    "light_action_id": action_id,
+                }
+            )
+        state["item_spends"] = spends
+        light_records = [record for record in light_records if record.get("id") != light_id]
+        light_records.append(prior)
+        next_encounter["adventuring_gear_lights"] = light_records
+        state["combat"] = next_encounter
+        response = self.commit_campaign_state(
+            campaign,
+            _support.validate_party_state(state),
+            operation="campaign.adventuring_gear.light_lifecycle",
+            principal_id=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=request_payload,
+            response_fields={
+                "status": "committed",
+                "action_id": action_id,
+                "item_id": item_id,
+                "intent": plan["intent"],
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                "rule_plan": _support.deepcopy(plan),
+                "light": _support.deepcopy(prior),
+                "fuel": {
+                    "oil_item_id": str(consumed_oil.get("id") or ""),
+                    "quantity_spent": 1,
+                    "remaining_fuel_ticks": prior["remaining_fuel_ticks"],
+                }
+                if consumed_oil is not None
+                else {"quantity_spent": 0, "remaining_fuel_ticks": prior["remaining_fuel_ticks"]},
+                "owner": {"kind": "character", "character_id": actor_id},
+                "combat": next_encounter,
+                **(
+                    {
+                        "character": self.character_view(
+                            _support.replace(
+                                owner,
+                                sheet=next_owner_sheet,
+                                revision=owner.revision + 1,
+                            )
+                        )
+                    }
+                    if consumed_oil is not None
+                    else {}
+                ),
+            },
+            character_updates=(
+                [
+                    _support.CharacterStateUpdate(
+                        character_id=actor_id,
+                        sheet=next_owner_sheet,
+                        notes=_support.validate_character_notes(
+                            owner.notes, character_type=owner.character_type
+                        ),
+                        expected_revision=owner.revision,
+                    )
+                ]
+                if consumed_oil is not None
+                else None
+            ),
+        )
+        return self.combat_response(campaign.id, principal_id, response)
+
+    def settle_adventuring_gear_ground_deployment(
+        self,
+        *,
+        campaign: Any,
+        state: dict[str, Any],
+        owner: Any,
+        owner_sheet: dict[str, Any],
+        item: dict[str, Any],
+        plan: dict[str, Any],
+        action_id: str,
+        item_id: str,
+        actor_id: str,
+        expected_actor_revision: int,
+        expected_campaign_revision: int | None,
+        branch_id: str,
+        principal_id: str,
+        idempotency_key: str,
+        scope: str,
+        request_payload: dict[str, Any],
+        action_context: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Deploy exact bundled ground hazards on a reviewed five-foot combat grid."""
+        if expected_campaign_revision is None or campaign.revision != expected_campaign_revision:
+            raise ValueError("campaign revision conflict for ground-area deployment")
+        if owner.campaign_id != campaign.id or owner.id != actor_id:
+            raise _support.CombatEngineError("ground-area gear user must belong to the campaign")
+        if owner.revision != expected_actor_revision:
+            raise ValueError(
+                f"character revision conflict: expected {expected_actor_revision}, "
+                f"found {owner.revision}"
+            )
+        if int(item.get("quantity", 0) or 0) < 1:
+            raise _support.CombatEngineError("the source-bound gear item is unavailable")
+        if plan.get("intent") != "spread" or plan.get("target") != "ground_area":
+            raise _support.CombatEngineError("invalid bundled ground-area action plan")
+        if plan.get("action_economy") != "action":
+            raise _support.CombatEngineError("ground-area deployment requires its bundled action")
+        if not isinstance(action_context, dict) or set(action_context) != {"area_origin"}:
+            raise _support.NeedsRulingError(
+                "ground-area deployment requires one exact grid origin",
+                missing=("adventuring_gear.area_origin",),
+                ruling_kind="source_or_scene_fact",
+            )
+        area_origin = action_context.get("area_origin")
+        if (
+            not isinstance(area_origin, dict)
+            or set(area_origin) != {"x", "y"}
+            or any(type(area_origin.get(key)) is not int for key in ("x", "y"))
+        ):
+            raise _support.CombatEngineError(
+                "area_origin must contain integer x and y grid cells"
+            )
+        item_name = str(item.get("name") or "").strip().casefold()
+        dimensions_by_item = {
+            "ball bearings (bag of 1,000)": (2, 2),
+            "ball bearings": (2, 2),
+            "caltrops (bag of 20)": (1, 1),
+            "caltrops": (1, 1),
+        }
+        dimensions = dimensions_by_item.get(item_name)
+        if dimensions is None:
+            raise _support.CombatEngineError(
+                "the current ground-area settlement supports only source-bound "
+                "Ball Bearings and Caltrops"
+            )
+        expected_area = {
+            "shape": "square",
+            "width_feet": dimensions[0] * 5,
+            "depth_feet": dimensions[1] * 5,
+        }
+        if plan.get("area") != expected_area:
+            raise _support.CombatEngineError(
+                "ground-area gear requires its exact bundled square"
+            )
+
+        encounter = _support.deepcopy(dict(state.get("combat") or {}))
+        if not encounter.get("active"):
+            raise _support.CombatEngineError("ground-area deployment requires active combat")
+        if self.encounter_rules_edition(campaign.id, encounter) != "2014":
+            raise _support.CombatEngineError(
+                "ground-area gear deployment requires the 2014 rules"
+            )
+        self.require_no_blocking_pending(encounter)
+        if encounter.get("positioning_mode") != "grid":
+            raise _support.NeedsRulingError(
+                "ground-area gear requires authoritative Grid geometry",
+                missing=("combat.grid_positions",),
+                ruling_kind="agent_dm_adjudication",
+            )
+        scene_id = str(encounter.get("scene_id") or "").strip()
+        battle_map = _support.deepcopy(dict(encounter.get("battle_map") or {}))
+        grid = dict(battle_map.get("grid") or {})
+        bounds = dict(battle_map.get("bounds") or {})
+        if not scene_id or grid.get("kind") != "square" or grid.get("cell_ft") != 5:
+            raise _support.NeedsRulingError(
+                "ground-area gear requires an encounter scene and five-foot square grid",
+                missing=("combat.grid_scene_geometry",),
+                ruling_kind="agent_dm_adjudication",
+            )
+        x, y = area_origin["x"], area_origin["y"]
+        width, height = dimensions
+        width_cells = bounds.get("width_cells")
+        height_cells = bounds.get("height_cells")
+        if (
+            type(width_cells) is not int
+            or type(height_cells) is not int
+            or x < 0
+            or y < 0
+            or x + width > width_cells
+            or y + height > height_cells
+        ):
+            raise _support.CombatEngineError(
+                "ground-area deployment must fit within the authoritative battle map"
+            )
+        cells = [
+            {"x": cell_x, "y": cell_y}
+            for cell_x in range(x, x + width)
+            for cell_y in range(y, y + height)
+        ]
+        from sagasmith_dnd.spatial import validate_position
+
+        for cell in cells:
+            validate_position(battle_map, cell)
+        deployer = self.require_encounter_combatant(
+            encounter, actor_id, role="ground-area gear user"
+        )
+        deployer_position = deployer.get("position")
+        if not isinstance(deployer_position, dict):
+            raise _support.NeedsRulingError(
+                "ground-area deployment requires the user's recorded grid position",
+                missing=("combat.grid_positions",),
+                ruling_kind="agent_dm_adjudication",
+            )
+        from sagasmith_dnd.spaces import grid_space
+
+        footprint = grid_space(
+            deployer,
+            (deployer_position["x"], deployer_position["y"]),
+            battle_map,
+        )["space_ft"] // 5
+        actor_x, actor_y = int(deployer_position["x"]), int(deployer_position["y"])
+        actor_cells = {
+            (cell_x, cell_y)
+            for cell_x in range(actor_x, actor_x + footprint)
+            for cell_y in range(actor_y, actor_y + footprint)
+        }
+        area_cells = {(cell["x"], cell["y"]) for cell in cells}
+        if area_cells & actor_cells:
+            raise _support.CombatEngineError(
+                "ground-area deployment cannot cover the user's occupied cells"
+            )
+        gap_x = max(0, actor_x - (x + width - 1), x - (actor_x + footprint - 1))
+        gap_y = max(0, actor_y - (y + height - 1), y - (actor_y + footprint - 1))
+        if max(gap_x, gap_y) > 1:
+            raise _support.NeedsRulingError(
+                "ground-area deployment must be within one grid cell of its user",
+                missing=("adventuring_gear.deployment_reach",),
+                ruling_kind="agent_dm_adjudication",
+            )
+
+        next_encounter = _support.resolve_common_action(
+            encounter,
+            actor_id_value=actor_id,
+            action="use_object",
+            payload={
+                "kind": "adventuring_gear",
+                "intent": "spread",
+                "item_id": item_id,
+                "source_key": item.get("source_key"),
+            },
+        )
+        hazard = {
+            "id": f"gear-hazard-{_support.uuid4().hex}",
+            "kind": "adventuring_gear_ground_hazard",
+            "hazard_kind": item_name,
+            "item_id": item_id,
+            "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+            "source_key": item.get("source_key"),
+            "source_actor_id": actor_id,
+            "encounter_id": str(encounter.get("id") or ""),
+            "scene_id": scene_id,
+            "battle_map_sha256": _support.json_sha256(battle_map),
+            "area_origin": {"x": x, "y": y},
+            "width_cells": width,
+            "height_cells": height,
+            "cells": [f"{cell['x']},{cell['y']}" for cell in cells],
+            "active": True,
+            "created_revision": campaign.revision + 1,
+            "created_action_id": action_id,
+        }
+        hazards = list(next_encounter.get("adventuring_gear_hazards") or [])
+        if any(
+            isinstance(existing, dict) and existing.get("id") == hazard["id"]
+            for existing in hazards
+        ):
+            raise _support.CombatEngineError("ground-area hazard identity already exists")
+        hazards.append(hazard)
+        next_encounter["adventuring_gear_hazards"] = hazards
+        next_encounter["log"] = [
+            *list(next_encounter.get("log") or []),
+            {"type": "adventuring_gear_hazard_deployed", "hazard": _support.deepcopy(hazard)},
+        ][-100:]
+
+        owner_sheet = _support.validate_character_sheet(owner_sheet)
+        inventory_item = next(
+            (
+                candidate
+                for candidate in owner_sheet.get("inventory", {}).get("items", [])
+                if str(candidate.get("id") or "") == item_id
+            ),
+            None,
+        )
+        if inventory_item is None or int(inventory_item.get("quantity", 0) or 0) < 1:
+            raise _support.CombatEngineError("ground-area gear disappeared during settlement")
+        owner_sheet, _ = _support.remove_inventory_item(owner_sheet, item_id, 1)
+        remaining_quantity = next(
+            (
+                int(candidate.get("quantity", 0) or 0)
+                for candidate in owner_sheet.get("inventory", {}).get("items", [])
+                if str(candidate.get("id") or "") == item_id
+            ),
+            0,
+        )
+        spends = list(state.get("item_spends") or [])
+        if any(
+            isinstance(entry, dict) and str(entry.get("id") or "") == action_id
+            for entry in spends
+        ):
+            raise ValueError("gear action_id already exists on this branch")
+        receipt = {
+            "id": action_id,
+            "item_id": item_id,
+            "quantity": 1,
+            "reason": f"Deploy {item.get('name')}",
+            "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+            "source_key": item.get("source_key"),
+            "character_id": actor_id,
+            "owner": {"kind": "character", "character_id": actor_id},
+            "gear_intent": plan["intent"],
+            "combat_action": "use_object",
+            "hazard_id": hazard["id"],
+        }
+        spends.append(receipt)
+        state["item_spends"] = spends
+        state["combat"] = next_encounter
+        response = self.commit_campaign_state(
+            campaign,
+            _support.validate_party_state(state),
+            operation="campaign.adventuring_gear.deploy_ground_hazard",
+            principal_id=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=request_payload,
+            response_fields={
+                "status": "committed",
+                "action_id": action_id,
+                "item_id": item_id,
+                "intent": plan["intent"],
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                "rule_plan": plan,
+                "resource": {"quantity_spent": 1, "remaining": remaining_quantity},
+                "receipt": receipt,
+                "hazard": hazard,
+                "owner": {"kind": "character", "character_id": actor_id},
+                "combat": next_encounter,
+                "character": self.character_view(
+                    _support.replace(owner, sheet=owner_sheet, revision=owner.revision + 1)
+                ),
+            },
+            character_updates=[
+                _support.CharacterStateUpdate(
+                    character_id=actor_id,
+                    sheet=owner_sheet,
+                    notes=_support.validate_character_notes(owner.notes),
+                    expected_revision=owner.revision,
+                )
+            ],
+        )
+        return self.combat_response(campaign.id, principal_id, response)
+
+    def settle_adventuring_gear_combat_stabilize(
+        self,
+        *,
+        campaign: Any,
+        state: dict[str, Any],
+        owner: Any,
+        owner_sheet: dict[str, Any],
+        target: Any,
+        item: dict[str, Any],
+        plan: dict[str, Any],
+        action_id: str,
+        item_id: str,
+        actor_id: str,
+        target_actor_id: str,
+        expected_actor_revision: int,
+        expected_target_revision: int,
+        expected_campaign_revision: int | None,
+        branch_id: str,
+        principal_id: str,
+        idempotency_key: str,
+        scope: str,
+        request_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Use a source-bound Healer's Kit as one paid combat action."""
+        if expected_campaign_revision is None or campaign.revision != expected_campaign_revision:
+            raise ValueError("campaign revision conflict for Healer's Kit stabilization")
+        if self.campaign_rules_edition(campaign.id) != "2014":
+            raise _support.CombatEngineError(
+                "Healer's Kit combat stabilization requires the 2014 rules"
+            )
+        if owner.campaign_id != campaign.id or target.campaign_id != campaign.id:
+            raise _support.CombatEngineError(
+                "Healer's Kit user and target must belong to the campaign"
+            )
+        if owner.id != actor_id or target.id != target_actor_id:
+            raise _support.CombatEngineError(
+                "Healer's Kit stabilization requires its exact user and target"
+            )
+        if owner.revision != expected_actor_revision:
+            raise ValueError(
+                f"character revision conflict: expected {expected_actor_revision}, "
+                f"found {owner.revision}"
+            )
+        if target.revision != expected_target_revision:
+            raise ValueError(
+                f"character revision conflict: expected {expected_target_revision}, "
+                f"found {target.revision}"
+            )
+        if actor_id == target_actor_id:
+            raise _support.CombatEngineError(
+                "an unconscious 0 HP combatant cannot use a Healer's Kit"
+            )
+        if int(item.get("quantity", 0) or 0) < 1:
+            raise _support.CombatEngineError("the source-bound Healer's Kit is unavailable")
+        if plan.get("intent") != "stabilize" or plan.get("action_economy") != "action":
+            raise _support.CombatEngineError("invalid bundled Healer's Kit action plan")
+
+        use_key = "healer_s_kit"
+        use_state = dict(item.get("uses") or {})
+        if not use_state or (
+            use_state.get("max") == 0
+            and use_state.get("value") == 0
+            and not use_state.get("source_key")
+        ):
+            use_state = {
+                "label": "Healer's Kit uses",
+                "value": 10,
+                "max": 10,
+                "unlimited": False,
+                "recovers_on": "none",
+                "source_key": item["source_key"],
+            }
+        else:
+            use_state = dict(use_state)
+            if (
+                use_state.get("max") != 10
+                or use_state.get("unlimited") is not False
+                or use_state.get("recovers_on") != "none"
+                or use_state.get("source_key") != item.get("source_key")
+            ):
+                raise _support.CombatEngineError(
+                    "Healer's Kit use resource has invalid source identity"
+                )
+        remaining = use_state.get("value")
+        if isinstance(remaining, bool) or not isinstance(remaining, int) or remaining < 1:
+            raise _support.CombatEngineError("Healer's Kit has no uses remaining")
+
+        encounter = _support.deepcopy(dict(state.get("combat") or {}))
         if not encounter.get("active"):
             raise _support.CombatEngineError(
-                "Manacles escape, break, and pick require active encounter actors"
+                "Healer's Kit combat stabilization requires active combat"
             )
+        self.encounter_rules_edition(campaign.id, encounter)
+        self.require_no_blocking_pending(encounter)
+        self.require_encounter_combatant(encounter, actor_id, role="Healer's Kit user")
+        target_combatant = self.require_encounter_combatant(
+            encounter, target_actor_id, role="Healer's Kit target"
+        )
+        if not target_combatant.get("death_saves", False):
+            raise _support.CombatEngineError(
+                "Healer's Kit stabilization requires a combatant that uses death saves"
+            )
+
+        target_sheet = _support.validate_character_sheet(target.sheet)
+        hp_value = int(dict(target_sheet.get("combat", {}).get("hp") or {}).get("value", 0) or 0)
+        if hp_value != 0:
+            raise _support.CombatEngineError(
+                "Healer's Kit stabilize requires a target at 0 hit points"
+            )
+        if int(target_combatant.get("hit_points", -1)) != hp_value:
+            raise _support.CombatEngineError(
+                "Healer's Kit target hit points diverge from active combat"
+            )
+        stabilized = _support.stabilize_sheet(target_sheet)
+        updated_target_sheet = _support.validate_character_sheet(stabilized["sheet"])
+
+        next_encounter = _support.resolve_common_action(
+            encounter,
+            actor_id_value=actor_id,
+            action="use_object",
+            payload={
+                "kind": "adventuring_gear",
+                "intent": "stabilize",
+                "item_id": item_id,
+                "source_key": item.get("source_key"),
+                "target_actor_id": target_actor_id,
+            },
+        )
+        self.sync_combatant_conditions(next_encounter, target_actor_id, updated_target_sheet)
+        _support.reconcile_readied_spells(next_encounter, target_actor_id, updated_target_sheet)
+        result = {key: value for key, value in stabilized.items() if key != "sheet"}
+        result.update(
+            {
+                "kind": "healer_kit_stabilization",
+                "actor_id": actor_id,
+                "target_id": target_actor_id,
+                "action": "use_object",
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                "source_key": item.get("source_key"),
+                "medicine_check_required": False,
+            }
+        )
+
+        item["uses"] = use_state
+        owner_sheet = _support.validate_character_sheet(owner_sheet)
+        inventory_item = next(
+            (
+                candidate
+                for candidate in owner_sheet.get("inventory", {}).get("items", [])
+                if str(candidate.get("id") or "") == item_id
+            ),
+            None,
+        )
+        if inventory_item is None:
+            raise _support.CombatEngineError("Healer's Kit disappeared from the user's inventory")
+        inventory_use_state = dict(inventory_item.get("uses") or {})
+        if (
+            inventory_use_state.get("value") != remaining
+            or inventory_use_state.get("max") != 10
+            or inventory_use_state.get("source_key") != item.get("source_key")
+        ):
+            raise _support.CombatEngineError("Healer's Kit use state changed during settlement")
+        inventory_use_state["value"] = remaining - 1
+        inventory_item["uses"] = inventory_use_state
+
+        spends = list(state.get("item_spends") or [])
+        if any(
+            str(entry.get("id") or "") == action_id
+            for entry in spends
+            if isinstance(entry, dict)
+        ):
+            raise ValueError("gear action_id already exists on this branch")
+        receipt = {
+            "id": action_id,
+            "item_id": item_id,
+            "quantity": 0,
+            "reason": "Healer's Kit stabilize",
+            "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+            "source_key": item.get("source_key"),
+            "character_id": actor_id,
+            "owner": {"kind": "character", "character_id": actor_id},
+            "gear_intent": plan["intent"],
+            "target_character_id": target_actor_id,
+            "uses_key": use_key,
+            "uses_spent": 1,
+            "uses_remaining": remaining - 1,
+            "combat_action": "use_object",
+        }
+        spends.append(receipt)
+        state["item_spends"] = spends
+        state["combat"] = next_encounter
+        normalized_state = _support.validate_party_state(state)
+        response = self.commit_campaign_state(
+            campaign,
+            normalized_state,
+            operation="campaign.adventuring_gear.action",
+            principal_id=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=request_payload,
+            response_fields={
+                "status": "committed",
+                "action_id": action_id,
+                "item_id": item_id,
+                "intent": plan["intent"],
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                "rule_plan": plan,
+                "resource": {"key": use_key, "spent": 1, "remaining": remaining - 1},
+                "receipt": receipt,
+                "stabilization": result,
+                "target": {"character_id": target_actor_id, "stabilization": result},
+                "owner": {"kind": "character", "character_id": actor_id},
+                "combat": next_encounter,
+                "character": self.character_view(
+                    _support.replace(owner, sheet=owner_sheet, revision=owner.revision + 1)
+                ),
+                "target_character": self.character_view(
+                    _support.replace(
+                        target,
+                        sheet=updated_target_sheet,
+                        revision=target.revision + 1,
+                    )
+                ),
+            },
+            character_updates=[
+                _support.CharacterStateUpdate(
+                    owner.id,
+                    owner_sheet,
+                    _support.validate_character_notes(
+                        owner.notes, character_type=owner.character_type
+                    ),
+                    expected_actor_revision,
+                ),
+                _support.CharacterStateUpdate(
+                    target.id,
+                    updated_target_sheet,
+                    _support.validate_character_notes(
+                        target.notes, character_type=target.character_type
+                    ),
+                    expected_target_revision,
+                ),
+            ],
+            expected_campaign_revision=expected_campaign_revision,
+        )
+        return response
+
+    def settle_adventuring_gear_manacles(
+        self,
+        *,
+        campaign: Any,
+        state: dict[str, Any],
+        owner: Any,
+        owner_sheet: dict[str, Any],
+        target: Any,
+        item: dict[str, Any],
+        plan: dict[str, Any],
+        action_id: str,
+        item_id: str,
+        actor_id: str,
+        target_actor_id: str,
+        expected_actor_revision: int,
+        expected_target_revision: int,
+        expected_campaign_revision: int,
+        branch_id: str,
+        principal_id: str,
+        idempotency_key: str,
+        scope: str,
+        request_payload: dict[str, Any],
+        action_context: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        """Settle exact Manacles binding, key, and source-fixed escape outcomes."""
+        if self.campaign_rules_edition(campaign.id) != "2014":
+            raise _support.CombatEngineError("source-bound Manacles require the 2014 ruleset")
+        if owner.campaign_id != campaign.id or target.campaign_id != campaign.id:
+            raise _support.CombatEngineError(
+                "Manacles users and targets must belong to the campaign"
+            )
+        if owner.revision != expected_actor_revision:
+            raise ValueError(
+                f"Manacles user character revision conflict: expected {expected_actor_revision}, "
+                f"found {owner.revision}"
+            )
+        if target.revision != expected_target_revision:
+            raise ValueError(
+                "Manacles target character revision conflict: "
+                f"expected {expected_target_revision}, "
+                f"found {target.revision}"
+            )
+        if campaign.revision != expected_campaign_revision:
+            raise ValueError(
+                f"campaign revision conflict: expected {expected_campaign_revision}, "
+                f"found {campaign.revision}"
+            )
+        if actor_id == target_actor_id and expected_actor_revision != expected_target_revision:
+            raise ValueError("same-actor Manacles action requires matching character revisions")
+
+        encounter = _support.deepcopy(dict(state.get("combat") or {}))
+        if not encounter.get("active"):
+            raise _support.CombatEngineError("Manacles actions require active encounter actors")
         self.require_encounter_combatant(encounter, actor_id, role="Manacles user")
         self.require_encounter_combatant(encounter, target_actor_id, role="Manacles target")
-        target = self.characters.get(target_actor_id)
-        target_sheet = _support.validate_character_sheet(target.sheet)
+        target_sheet = (
+            owner_sheet
+            if target_actor_id == actor_id
+            else _support.validate_character_sheet(target.sheet)
+        )
         size = str(dict(target_sheet.get("traits") or {}).get("size") or "").casefold()
         if size not in {"small", "medium"}:
             raise _support.CombatEngineError(
                 "source-defined Manacles can bind only Small or Medium creatures"
             )
-        if "restrained" not in set(target_sheet.get("conditions") or []):
+        if not isinstance(action_id, str) or not action_id or len(action_id) > 200:
+            raise ValueError("Manacles action_id must contain 1 to 200 characters")
+        if item.get("name") != "Manacles":
+            raise _support.CombatEngineError("Manacles settlement requires the exact source item")
+
+        existing_spends = list(dict(campaign.state or {}).get("item_spends") or [])
+        if any(
+            isinstance(entry, dict) and str(entry.get("id") or "") == action_id
+            for entry in existing_spends
+        ):
+            raise ValueError("gear action_id already exists on this branch")
+
+        bindings = _support.deepcopy(dict(state.get("adventuring_gear_bindings") or {}))
+        binding_key = f"{branch_id}:{actor_id}:{item_id}:{target_actor_id}"
+        prior = dict(bindings.get(binding_key) or {})
+        if prior and (
+            prior.get("source_ref") != ADVENTURING_GEAR_SOURCE_REF
+            or prior.get("source_key") != item.get("source_key")
+            or prior.get("item_name") != "Manacles"
+            or prior.get("owner_actor_id") != actor_id
+            or prior.get("item_id") != item_id
+            or prior.get("target_actor_id") != target_actor_id
+            or prior.get("branch_id") != branch_id
+        ):
             raise _support.CombatEngineError(
-                "source-defined Manacles escape, break, or pick requires a restrained target"
+                "Manacles binding state has a mismatched source identity"
             )
-        raise _support.CombatEngineError(
-            "Manacles action requires a source-owned binding receipt; the bundled 2014 source "
-            "does not define a binding procedure, and restrained alone is not sufficient"
+
+        intent = str(plan.get("intent") or "")
+        success = True
+        check: dict[str, Any] | None = None
+        next_binding: dict[str, Any]
+        target_sheet_after = _support.deepcopy(target_sheet)
+        if intent == "bind":
+            active_binding_for_item = next(
+                (
+                    entry
+                    for entry in bindings.values()
+                    if isinstance(entry, dict)
+                    and entry.get("branch_id") == branch_id
+                    and entry.get("owner_actor_id") == actor_id
+                    and entry.get("item_id") == item_id
+                    and entry.get("status") == "bound"
+                ),
+                None,
+            )
+            if active_binding_for_item is not None:
+                raise _support.CombatEngineError(
+                    "this Manacles set already has an active binding"
+                )
+            if prior.get("status") == "broken":
+                raise _support.CombatEngineError("broken Manacles cannot bind another target")
+            required_fields = {
+                "binding_possible",
+                "reason",
+                "key_available",
+                "key_reason",
+            }
+            if not isinstance(action_context, dict) or set(action_context) != required_fields:
+                raise _support.CombatEngineError(
+                    "Manacles bind requires a bounded review of binding possibility and key state"
+                )
+            if action_context.get("binding_possible") is not True:
+                raise _support.CombatEngineError(
+                    "the reviewed facts do not permit binding this target"
+                )
+            if type(action_context.get("key_available")) is not bool:
+                raise _support.CombatEngineError("Manacles key_available review must be boolean")
+            review_reason = str(action_context.get("reason") or "").strip()
+            key_reason = str(action_context.get("key_reason") or "").strip()
+            if not review_reason or len(review_reason) > 600:
+                raise _support.CombatEngineError(
+                    "Manacles binding review requires a bounded reason"
+                )
+            if not key_reason or len(key_reason) > 600:
+                raise _support.CombatEngineError("Manacles key review requires a bounded reason")
+            next_binding = {
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                "source_key": str(item.get("source_key") or ""),
+                "item_name": "Manacles",
+                "owner_actor_id": actor_id,
+                "item_id": item_id,
+                "target_actor_id": target_actor_id,
+                "branch_id": branch_id,
+                "binding_action_id": action_id,
+                "status": "bound",
+                "size": size,
+                "key_holder_actor_id": actor_id,
+                "key_available": action_context["key_available"],
+                "binding_review": {
+                    "reviewed_by": principal_id,
+                    "reviewed_actor_id": actor_id,
+                    "reason": review_reason,
+                },
+                "key_review": {
+                    "reviewed_by": principal_id,
+                    "reviewed_actor_id": actor_id,
+                    "available": action_context["key_available"],
+                    "reason": key_reason,
+                },
+            }
+        else:
+            if prior.get("status") != "bound":
+                raise _support.CombatEngineError(
+                    "Manacles escape, break, unlock, and pick require an "
+                    "active source-owned binding"
+                )
+            if prior.get("key_holder_actor_id") != actor_id:
+                raise _support.CombatEngineError(
+                    "only the actor bound to this Manacles set may use its recorded key"
+                )
+            if intent == "unlock":
+                if action_context is not None:
+                    raise _support.CombatEngineError(
+                        "Manacles unlock does not accept caller-supplied key or outcome data"
+                    )
+                if prior.get("key_available") is not True:
+                    raise _support.CombatEngineError(
+                        "the source-provided Manacles key is not authoritatively available"
+                    )
+                success = True
+            elif intent in {"escape", "break", "pick"}:
+                if intent == "pick":
+                    proficiencies = dict(
+                        dict(owner_sheet.get("traits") or {}).get("proficiencies") or {}
+                    )
+                    tools = {
+                        " ".join(str(value).casefold().replace("’", "'").split())
+                        for value in proficiencies.get("tools", [])
+                    }
+                    if "thieves' tools" not in tools:
+                        raise _support.CombatEngineError(
+                            "source-defined Manacles picking requires authoritative "
+                            "thieves' tools proficiency"
+                        )
+                    if prior.get("key_available") is True:
+                        if (
+                            not isinstance(action_context, dict)
+                            or set(action_context) != {"key_unavailable", "reason"}
+                            or action_context.get("key_unavailable") is not True
+                            or not str(action_context.get("reason") or "").strip()
+                        ):
+                            raise _support.CombatEngineError(
+                                "Manacles picking requires a bounded review that "
+                                "the held key is unavailable"
+                            )
+                        reason = str(action_context["reason"]).strip()
+                        if len(reason) > 600:
+                            raise _support.CombatEngineError(
+                                "Manacles key review reason is too long"
+                            )
+                        prior["key_available"] = False
+                        prior["key_review"] = {
+                            "reviewed_by": principal_id,
+                            "reviewed_actor_id": actor_id,
+                            "available": False,
+                            "reason": reason,
+                        }
+                    elif action_context is not None:
+                        raise _support.CombatEngineError(
+                            "Manacles key unavailability is already recorded on this binding"
+                        )
+                    if prior.get("key_available") is not False:
+                        raise _support.CombatEngineError(
+                            "Manacles picking requires no currently available key"
+                        )
+                elif action_context is not None:
+                    raise _support.CombatEngineError(
+                        "Manacles escape and break do not accept caller-supplied check outcomes"
+                    )
+
+                check_spec = dict(plan.get("check") or {})
+                check_actor_id = (
+                    actor_id if intent == "pick" else target_actor_id
+                )
+                stream = _support.active_random_stream()
+                if stream is None:
+                    with _support.use_random_stream(
+                        _support.CampaignRandomStream.from_campaign_state(
+                            campaign.id,
+                            campaign.state,
+                            operation="campaign.adventuring_gear.manacles",
+                            idempotency_key=idempotency_key,
+                            campaign_revision=campaign.revision,
+                        )
+                    ):
+                        return self.settle_adventuring_gear_manacles(
+                            campaign=campaign,
+                            state=state,
+                            owner=owner,
+                            owner_sheet=owner_sheet,
+                            target=target,
+                            item=item,
+                            plan=plan,
+                            action_id=action_id,
+                            item_id=item_id,
+                            actor_id=actor_id,
+                            target_actor_id=target_actor_id,
+                            expected_actor_revision=expected_actor_revision,
+                            expected_target_revision=expected_target_revision,
+                            expected_campaign_revision=expected_campaign_revision,
+                            branch_id=branch_id,
+                            principal_id=principal_id,
+                            idempotency_key=idempotency_key,
+                            scope=scope,
+                            request_payload=request_payload,
+                            action_context=action_context,
+                        )
+                random_state = _support.validate_random_stream_state(
+                    dict(campaign.state or {}).get("random_stream")
+                    or _support.initial_random_stream(f"sagasmith-dnd:{campaign.id}")
+                )
+                if (
+                    stream.campaign_id != campaign.id
+                    or stream.seed != random_state["seed"]
+                    or stream.start_position != random_state["position"]
+                    or (
+                        stream.campaign_revision is not None
+                        and stream.campaign_revision != campaign.revision
+                    )
+                ):
+                    raise _support.CombatEngineError(
+                        "Manacles checks require the current campaign random snapshot"
+                    )
+                check = _support.resolve_actor_check(
+                    self.combat_actor_snapshot(check_actor_id),
+                    kind="check",
+                    ability=str(check_spec.get("ability") or ""),
+                    dc=int(check_spec["dc"]),
+                    proficient=(intent == "pick"),
+                    ruleset="2014",
+                    rng=stream,
+                )
+                success = check.get("success") is True
+            else:
+                raise _support.CombatEngineError("unsupported source-defined Manacles intent")
+
+            next_binding = _support.deepcopy(prior)
+            if success:
+                next_binding["status"] = "broken" if intent == "break" else "released"
+                next_binding["last_action_id"] = action_id
+                next_binding["last_intent"] = intent
+                if intent == "break":
+                    next_binding["object_hit_points"] = 0
+            elif intent == "break":
+                next_binding["object_hit_points"] = int(plan.get("object_hit_points") or 0)
+
+        bindings[binding_key] = next_binding
+        next_state = _support.deepcopy(state)
+        next_state["adventuring_gear_bindings"] = bindings
+
+        check_success = True if check is None else success
+        receipt = {
+            "id": action_id,
+            "item_id": item_id,
+            "quantity": 0,
+            "reason": f"adventuring gear manacles:{intent}",
+            "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+            "source_key": str(item.get("source_key") or ""),
+            "character_id": owner.id,
+            "target_character_id": target_actor_id,
+            "gear_intent": intent,
+            "rule_plan": _support.deepcopy(plan),
+            "check": _support.deepcopy(check),
+            "success": check_success,
+            "key_holder_actor_id": next_binding.get("key_holder_actor_id"),
+            "key_available": next_binding.get("key_available"),
+            "resulting_state": _support.deepcopy(next_binding),
+        }
+        spends = [*existing_spends, receipt]
+        next_state["item_spends"] = spends
+        resolution = {
+            "type": "adventuring_gear_manacles",
+            "action_id": action_id,
+            "actor_id": actor_id,
+            "target_actor_id": target_actor_id,
+            "item_id": item_id,
+            "intent": intent,
+            "success": check_success,
+            "check": _support.deepcopy(check),
+            "binding": _support.deepcopy(next_binding),
+        }
+        next_state["resolution_log"] = [
+            *list(next_state.get("resolution_log") or []),
+            resolution,
+        ][-100:]
+        normalized_state = _support.validate_party_state(next_state)
+
+        updates_by_id: dict[str, Any] = {}
+        updates_by_id[owner.id] = _support.CharacterStateUpdate(
+            character_id=owner.id,
+            sheet=_support.validate_character_sheet(
+                target_sheet_after if target_actor_id == owner.id else owner_sheet
+            ),
+            notes=_support.validate_character_notes(
+                target.notes if target_actor_id == owner.id else owner.notes,
+                character_type=owner.character_type,
+            ),
+            expected_revision=owner.revision,
         )
+        if target_actor_id != owner.id:
+            updates_by_id[target_actor_id] = _support.CharacterStateUpdate(
+                character_id=target_actor_id,
+                sheet=_support.validate_character_sheet(target_sheet_after),
+                notes=_support.validate_character_notes(
+                    target.notes,
+                    character_type=target.character_type,
+                ),
+                expected_revision=target.revision,
+            )
+        updated_owner = _support.replace(
+            owner,
+            sheet=updates_by_id[owner.id].sheet,
+            revision=owner.revision + 1,
+        )
+        updated_target = (
+            updated_owner
+            if target_actor_id == owner.id
+            else _support.replace(
+                target,
+                sheet=updates_by_id[target_actor_id].sheet,
+                revision=target.revision + 1,
+            )
+        )
+        response = {
+            "status": "committed",
+            "action_id": action_id,
+            "item_id": item_id,
+            "intent": intent,
+            "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+            "rule_plan": _support.deepcopy(plan),
+            "success": check_success,
+            "binding": _support.deepcopy(next_binding),
+            "check": _support.deepcopy(check),
+            "campaign": _support.asdict(
+                _support.replace(
+                    campaign,
+                    state=normalized_state,
+                    revision=campaign.revision + 1,
+                )
+            ),
+            "owner": self.character_view(updated_owner),
+            **(
+                {"target": self.character_view(updated_target)}
+                if target_actor_id != owner.id
+                else {}
+            ),
+        }
+        response["campaign"]["state"] = normalized_state
+        stream = _support.active_random_stream()
+        if stream is not None and stream.draw_count > 0:
+            response["random_stream_receipt"] = stream.receipt()
+        _support.StateMutationService(self.storage.database).replace(
+            campaign.id,
+            campaign_state=normalized_state,
+            character_updates=list(updates_by_id.values()),
+            expected_campaign_revision=expected_campaign_revision,
+            operation="campaign.adventuring_gear.manacles",
+            actor=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            idempotency_write=_support.IdempotencyWrite(
+                scope=scope,
+                payload=request_payload,
+                response=response,
+            ),
+        )
+        return response
 
     def settle_adventuring_gear_object_check(
         self,
@@ -464,10 +2014,6 @@ class InventoryService:
         action_context: dict[str, Any] | None,
     ) -> dict[str, Any]:
         """Settle source-fixed object checks and persist object state atomically."""
-        if action_context is not None:
-            raise _support.CombatEngineError(
-                "adventuring gear object checks do not accept caller rule or outcome context"
-            )
         if actor_id != target_actor_id or expected_actor_revision != expected_target_revision:
             raise _support.CombatEngineError(
                 "gear object checks require the owning actor as both actor and target"
@@ -485,6 +2031,11 @@ class InventoryService:
         state_key = "lock" if name.casefold() == "lock" else (
             "chain" if name.casefold() == "chain (10 feet)" else "rope"
         )
+        intent = str(plan.get("intent") or "")
+        if action_context is not None and not (state_key == "lock" and intent == "pick"):
+            raise _support.CombatEngineError(
+                "adventuring gear object checks do not accept caller rule or outcome context"
+            )
         object_states = dict(state.get("adventuring_gear_objects") or {})
         object_state_key = f"{actor_id}:{item_id}"
         gear_state = dict(object_states.get(object_state_key) or {})
@@ -496,6 +2047,22 @@ class InventoryService:
             or gear_state.get("item_id") != item_id
         ):
             raise _support.CombatEngineError("gear object state has a mismatched source identity")
+        key_holder_actor_id = actor_id
+        key_available = True
+        key_review = None
+        if state_key == "lock":
+            if gear_state and (
+                gear_state.get("key_holder_actor_id") != actor_id
+                or type(gear_state.get("key_available")) is not bool
+                or gear_state.get("key_source") != "provided_with_lock"
+            ):
+                raise _support.CombatEngineError(
+                    "Lock key state has a mismatched source or holder identity"
+                )
+            if gear_state:
+                key_holder_actor_id = str(gear_state["key_holder_actor_id"])
+                key_available = gear_state["key_available"]
+                key_review = _support.deepcopy(gear_state.get("key_review"))
         default_state = "locked" if state_key == "lock" else "intact"
         current_state = str(gear_state.get("state") or default_state)
         required_state = str(dict(plan.get("effect") or {}).get("requires_state") or "")
@@ -503,6 +2070,49 @@ class InventoryService:
             raise _support.CombatEngineError(
                 f"{state_key} must be {required_state} to use this source-defined action"
             )
+        if state_key == "lock":
+            if key_holder_actor_id != actor_id:
+                raise _support.CombatEngineError(
+                    "only the actor holding the source-provided Lock key may unlock it"
+                )
+            if intent == "unlock":
+                if key_available is not True:
+                    raise _support.CombatEngineError(
+                        "the source-provided Lock key is not authoritatively available"
+                    )
+            elif intent == "pick":
+                if key_available is True:
+                    if (
+                        not isinstance(action_context, dict)
+                        or set(action_context) != {"key_unavailable", "reason"}
+                        or action_context.get("key_unavailable") is not True
+                    ):
+                        raise _support.CombatEngineError(
+                            "Lock picking requires a bounded review that the "
+                            "provided key is unavailable"
+                        )
+                    reason = str(action_context.get("reason") or "").strip()
+                    if not reason or len(reason) > 600:
+                        raise _support.CombatEngineError(
+                            "Lock key review requires a bounded reason"
+                        )
+                    key_available = False
+                    key_review = {
+                        "reviewed_by": principal_id,
+                        "reviewed_actor_id": actor_id,
+                        "available": False,
+                        "reason": reason,
+                    }
+                elif action_context is not None:
+                    raise _support.CombatEngineError(
+                        "Lock key unavailability is already recorded on this item"
+                    )
+                if key_available is not False:
+                    raise _support.CombatEngineError(
+                        "Lock picking requires no currently available source-provided key"
+                    )
+            else:
+                raise _support.CombatEngineError("unsupported source-defined Lock intent")
         requirements = set(plan.get("requirements") or [])
         if "thieves_tools_proficiency" in requirements:
             proficiencies = dict(
@@ -519,7 +2129,8 @@ class InventoryService:
 
         campaign_state = _support.deepcopy(state)
         stream_context = _support.active_random_stream()
-        if stream_context is None:
+        lock_key_unlock = state_key == "lock" and intent == "unlock"
+        if not lock_key_unlock and stream_context is None:
             with _support.use_random_stream(
                 _support.CampaignRandomStream.from_campaign_state(
                     campaign.id,
@@ -550,34 +2161,56 @@ class InventoryService:
                     request_payload=request_payload,
                     action_context=action_context,
                 )
+        check = None
+        success = True
         stream = _support.active_random_stream()
-        random_state = _support.validate_random_stream_state(
-            dict(campaign.state or {}).get("random_stream")
-            or _support.initial_random_stream(f"sagasmith-dnd:{campaign.id}")
-        )
-        if (
-            stream.campaign_id != campaign.id
-            or stream.seed != random_state["seed"]
-            or stream.start_position != random_state["position"]
-            or (
-                stream.campaign_revision is not None
-                and stream.campaign_revision != campaign.revision
+        if not lock_key_unlock:
+            random_state = _support.validate_random_stream_state(
+                dict(campaign.state or {}).get("random_stream")
+                or _support.initial_random_stream(f"sagasmith-dnd:{campaign.id}")
             )
-        ):
-            raise _support.CombatEngineError(
-                "gear object checks require the current campaign random snapshot"
+            if (
+                stream.campaign_id != campaign.id
+                or stream.seed != random_state["seed"]
+                or stream.start_position != random_state["position"]
+                or (
+                    stream.campaign_revision is not None
+                    and stream.campaign_revision != campaign.revision
+                )
+            ):
+                raise _support.CombatEngineError(
+                    "gear object checks require the current campaign random snapshot"
+                )
+            check_spec = dict(plan.get("check") or {})
+            check = _support.resolve_actor_check(
+                self.combat_actor_snapshot(actor_id),
+                kind="check",
+                ability=str(check_spec.get("ability") or ""),
+                dc=int(check_spec["dc"]),
+                proficient=(state_key == "lock" and intent == "pick"),
+                ruleset=self.campaign_rules_edition(campaign.id),
+                rng=stream,
             )
-        check_spec = dict(plan.get("check") or {})
-        check = _support.resolve_actor_check(
-            self.combat_actor_snapshot(actor_id),
-            kind="check",
-            ability=str(check_spec.get("ability") or ""),
-            dc=int(check_spec["dc"]),
-            ruleset=self.campaign_rules_edition(campaign.id),
-            rng=stream,
-        )
-        success = check.get("success") is True
-        if success:
+            success = check.get("success") is True
+        if state_key == "lock":
+            gear_state = {
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                "source_key": item_key,
+                "item_name": name,
+                "owner_actor_id": actor_id,
+                "item_id": item_id,
+                "state": (
+                    dict(plan.get("effect") or {}).get("success_state")
+                    if success
+                    else dict(plan.get("effect") or {}).get("failure_state")
+                ),
+                "key_source": "provided_with_lock",
+                "key_holder_actor_id": key_holder_actor_id,
+                "key_available": key_available,
+            }
+            if key_review is not None:
+                gear_state["key_review"] = key_review
+        elif success:
             gear_state = {
                 "source_ref": ADVENTURING_GEAR_SOURCE_REF,
                 "source_key": item_key,
@@ -588,15 +2221,6 @@ class InventoryService:
             }
             if state_key in {"chain", "rope"}:
                 gear_state["object_hit_points"] = 0
-        elif state_key == "lock":
-            gear_state = {
-                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
-                "source_key": item_key,
-                "item_name": name,
-                "owner_actor_id": actor_id,
-                "item_id": item_id,
-                "state": dict(plan.get("effect") or {}).get("failure_state"),
-            }
         else:
             gear_state = {
                 "source_ref": ADVENTURING_GEAR_SOURCE_REF,
@@ -629,6 +2253,9 @@ class InventoryService:
             "check": check,
             "resulting_state": gear_state,
         }
+        if state_key == "lock":
+            receipt["key_holder_actor_id"] = key_holder_actor_id
+            receipt["key_available"] = key_available
         spends.append(receipt)
         campaign_state["item_spends"] = spends
         owner_sheet = _support.validate_character_sheet(owner_sheet)
@@ -671,6 +2298,392 @@ class InventoryService:
             character_updates=[actor_update],
             expected_campaign_revision=expected_campaign_revision,
             operation="campaign.adventuring_gear.object_check",
+            actor=principal_id,
+            branch_id=branch_id,
+            idempotency_key=idempotency_key,
+            idempotency_write=_support.IdempotencyWrite(
+                scope=scope,
+                payload=request_payload,
+                response=response,
+            ),
+        )
+        return response
+
+    def settle_scene_object_gear_strength_check(
+        self,
+        *,
+        campaign: Any,
+        state: dict[str, Any],
+        owner: Any,
+        owner_sheet: dict[str, Any],
+        item: dict[str, Any],
+        plan: dict[str, Any],
+        target_object: dict[str, Any],
+        action_id: str,
+        item_id: str,
+        actor_id: str,
+        expected_actor_revision: int,
+        expected_campaign_revision: int | None,
+        branch_id: str,
+        principal_id: str,
+        idempotency_key: str,
+        scope: str,
+        request_payload: dict[str, Any],
+        helper_actor_id: str | None,
+    ) -> dict[str, Any]:
+        """Resolve the Crowbar/Ram Strength check against one signed scene object."""
+        from sagasmith_dnd.objects import validate_object_profile
+
+        from .source_objects import approved_gear_strength_check
+
+        if expected_campaign_revision is None or campaign.revision != expected_campaign_revision:
+            raise ValueError("campaign revision conflict for object Strength check")
+        if owner.id != actor_id or owner.campaign_id != campaign.id:
+            raise _support.CombatEngineError(
+                "gear Strength check requires its owning campaign actor"
+            )
+        if owner.revision != expected_actor_revision:
+            raise ValueError(
+                f"character revision conflict: expected {expected_actor_revision}, "
+                f"found {owner.revision}"
+            )
+        if self.campaign_rules_edition(campaign.id) != "2014":
+            raise _support.CombatEngineError("object gear Strength checks require the 2014 rules")
+        if type(helper_actor_id) not in (str, type(None)):
+            raise ValueError("helper_actor_id must be text when supplied")
+        helper_id = str(helper_actor_id or "").strip() or None
+        intent = str(plan.get("intent") or "")
+        source_key = str(item.get("source_key") or "")
+        item_name = str(item.get("name") or "").strip().casefold()
+        is_crowbar = item_name == "crowbar" and intent == "apply_leverage"
+        is_ram = item_name == "ram, portable" and intent == "break_door"
+        if not (is_crowbar or is_ram):
+            raise _support.CombatEngineError(
+                "only Crowbar and Portable Ram checks target scene objects"
+            )
+        if helper_id is not None and not is_ram:
+            raise _support.CombatEngineError("only Portable Ram checks accept a helper")
+        if item.get("quantity", 0) < 1:
+            raise _support.CombatEngineError("the source-bound gear item is not available")
+        scene_id = str(target_object.get("scene_id") or "").strip()
+        object_id = str(target_object.get("id") or "").strip()
+        if not scene_id or not object_id:
+            raise ValueError("target_object requires its exact reviewed id and scene_id")
+        scene_objects = _support.deepcopy(dict(state.get("scene_objects") or {}))
+        scene_state = _support.deepcopy(dict(scene_objects.get(scene_id) or {}))
+        object_state = _support.deepcopy(dict(scene_state.get(object_id) or {}))
+        if not object_state:
+            raise _support.CombatEngineError("target scene object has no DM-reviewed profile")
+        profile = validate_object_profile(object_state.get("profile"))
+        if (
+            profile["id"] != object_id
+            or profile["scene_id"] != scene_id
+            or not isinstance(object_state.get("profile_approval"), dict)
+        ):
+            raise _support.CombatEngineError("target scene object identity or approval is invalid")
+        check_review = approved_gear_strength_check(
+            self,
+            campaign_id=campaign.id,
+            branch_id=branch_id,
+            profile=profile,
+            profile_approval=object_state["profile_approval"],
+            review=object_state.get("gear_strength_check"),
+            approval=object_state.get("gear_strength_check_approval"),
+        )
+        facts = dict(check_review["facts"])
+        if is_ram and facts["door"] is not True:
+            raise _support.CombatEngineError("Portable Ram requires a DM-reviewed door target")
+        if object_state.get("destroyed") or int(object_state.get("hit_points", 0) or 0) <= 0:
+            raise _support.CombatEngineError("target scene object is already destroyed")
+        current_state = dict(object_state.get("gear_strength_check_state") or {})
+        if current_state.get("state") in {"open", "breached"}:
+            raise _support.CombatEngineError("target scene object is already open or breached")
+        if helper_id == actor_id:
+            raise _support.CombatEngineError("Portable Ram requires a different helper actor")
+
+        helper = None
+        helper_sheet = None
+        if helper_id is not None:
+            helper = self.require_campaign_actor(campaign.id, helper_id)
+            if self.narrative_only_actor(helper):
+                raise _support.CombatEngineError("Portable Ram helper requires an exact actor card")
+            helper_sheet = _support.validate_character_sheet(helper.sheet)
+            incapacitating = set(_support.condition_ids(helper_sheet.get("conditions"))) & set(
+                _support.INCAPACITATING_STATE_IDS
+            )
+            if (
+                int(helper_sheet.get("combat", {}).get("hp", {}).get("value", 0)) <= 0
+                or incapacitating
+            ):
+                raise _support.CombatEngineError(
+                    "an incapacitated actor cannot help use a Portable Ram"
+                )
+
+        encounter = _support.deepcopy(dict(state.get("combat") or {}))
+        active_combat = bool(encounter.get("active"))
+        if active_combat:
+            self.require_no_blocking_pending(encounter)
+            encounter = _support.resolve_common_action(
+                encounter,
+                actor_id_value=actor_id,
+                action="improvise",
+                payload={"gear_check": intent, "object_id": object_id, "scene_id": scene_id},
+            )
+            if helper_id is not None and not any(
+                str(value.get("actor_id") or "") == helper_id
+                for value in encounter.get("combatants", [])
+            ):
+                raise _support.CombatEngineError(
+                    "Portable Ram helper must be in the active encounter"
+                )
+        elif self.authoritative_phase(campaign.id) == _support.PROFILE_COMBAT:
+            raise _support.CombatEngineError("active combat state is unavailable for object check")
+
+        stream = _support.active_random_stream()
+        if stream is None:
+            with _support.use_random_stream(
+                _support.CampaignRandomStream.from_campaign_state(
+                    campaign.id,
+                    campaign.state,
+                    operation="campaign.adventuring_gear.scene_object_strength_check",
+                    idempotency_key=idempotency_key,
+                    campaign_revision=campaign.revision,
+                )
+            ):
+                return self.settle_scene_object_gear_strength_check(
+                    campaign=campaign,
+                    state=state,
+                    owner=owner,
+                    owner_sheet=owner_sheet,
+                    item=item,
+                    plan=plan,
+                    target_object=target_object,
+                    action_id=action_id,
+                    item_id=item_id,
+                    actor_id=actor_id,
+                    expected_actor_revision=expected_actor_revision,
+                    expected_campaign_revision=expected_campaign_revision,
+                    branch_id=branch_id,
+                    principal_id=principal_id,
+                    idempotency_key=idempotency_key,
+                    scope=scope,
+                    request_payload=request_payload,
+                    helper_actor_id=helper_id,
+                )
+        random_state = _support.validate_random_stream_state(
+            dict(campaign.state or {}).get("random_stream")
+            or _support.initial_random_stream(f"sagasmith-dnd:{campaign.id}")
+        )
+        if (
+            stream.campaign_id != campaign.id
+            or stream.seed != random_state["seed"]
+            or stream.start_position != random_state["position"]
+            or (
+                stream.campaign_revision is not None
+                and stream.campaign_revision != campaign.revision
+            )
+        ):
+            raise _support.CombatEngineError(
+                "object Strength check requires the current random snapshot"
+            )
+        check_plan = dict(plan.get("check") or {})
+        bonus = int(check_plan.get("bonus", 0) or 0)
+        advantage = is_crowbar and facts["crowbar_leverage"]
+        if active_combat:
+            rules = self.effective_rule_context(
+                campaign.id,
+                branch_id=branch_id,
+                facts={"action": intent, "actor_id": actor_id, "target_id": object_id},
+            )
+            check = _support.resolve_actor_check(
+                self.combat_actor_snapshot(actor_id),
+                kind="check",
+                ability="strength",
+                action=intent,
+                dc=int(facts["strength_dc"]),
+                bonus=bonus,
+                advantage=advantage,
+                encounter=encounter,
+                rules=rules,
+                ruleset="2014",
+                rng=stream,
+            )
+            helped_by = str(check.get("helped_by") or "")
+            if helper_id is not None and helped_by != helper_id:
+                raise _support.CombatEngineError(
+                    "the named Portable Ram helper has no matching paid task Help action"
+                )
+            if helped_by:
+                encounter = _support.consume_task_help(
+                    encounter, actor_id_value=actor_id, helper_id=helped_by
+                )
+        else:
+            rules = self.effective_rule_context(
+                campaign.id,
+                branch_id=branch_id,
+                facts={"action": intent, "actor_id": actor_id, "target_id": object_id},
+            )
+            check = _support.resolve_actor_check(
+                self.combat_actor_snapshot(actor_id),
+                kind="check",
+                ability="strength",
+                action=intent,
+                dc=int(facts["strength_dc"]),
+                bonus=bonus,
+                advantage=bool(advantage or helper_id),
+                rules=rules,
+                ruleset="2014",
+                rng=stream,
+            )
+            if helper_id:
+                check["helped_by"] = helper_id
+                check["advantage_source"] = "portable_ram_helper"
+                check["advantage_sources"] = ["portable_ram_helper"]
+        check["source_item_modifier"] = {
+            "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+            "source_key": source_key,
+            "bonus": bonus,
+            "crowbar_leverage_applies": facts["crowbar_leverage"] if is_crowbar else None,
+            "reviewed_strength_dc": facts["strength_dc"],
+        }
+        success = check.get("success") is True
+
+        if any(
+            isinstance(entry, dict) and str(entry.get("id") or "") == action_id
+            for entry in list(state.get("item_spends") or [])
+        ):
+            raise ValueError("gear action_id already exists on this branch")
+        campaign_state = _support.deepcopy(state)
+        if active_combat:
+            campaign_state["combat"] = encounter
+        next_object = _support.deepcopy(object_state)
+        if success:
+            next_object["gear_strength_check_state"] = {
+                "state": facts["success_state"],
+                "action_id": action_id,
+                "actor_id": actor_id,
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                "scene_id": scene_id,
+                "object_id": object_id,
+                "review_approval_digest": _support.json_sha256(check_review["approval"]),
+                "campaign_revision": campaign.revision + 1,
+            }
+            scene_state[object_id] = next_object
+            scene_objects[scene_id] = scene_state
+            campaign_state["scene_objects"] = scene_objects
+        resulting_state = _support.deepcopy(
+            next_object.get("gear_strength_check_state")
+            or {"state": "intact", "scene_id": scene_id, "object_id": object_id}
+        )
+        receipt = {
+            "id": action_id,
+            "item_id": item_id,
+            "quantity": 0,
+            "reason": f"adventuring gear scene-object Strength check:{intent}",
+            "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+            "source_key": source_key,
+            "owner_actor_id": actor_id,
+            "owner_revision_before": owner.revision,
+            "owner_revision_after": owner.revision + 1,
+            "target_scene_id": scene_id,
+            "target_object_id": object_id,
+            "target_object_revision_before": campaign.revision,
+            "target_object_revision_after": campaign.revision + 1,
+            "target_source_ref": check_review["source_ref"],
+            "review_approval_digest": _support.json_sha256(check_review["approval"]),
+            "helper_actor_id": check.get("helped_by"),
+            "action_paid": active_combat,
+            "rule_plan": _support.deepcopy(plan),
+            "check": _support.deepcopy(check),
+            "success": success,
+            "resulting_state": resulting_state,
+        }
+        spends = [*list(campaign_state.get("item_spends") or []), receipt]
+        campaign_state["item_spends"] = spends
+        resolution_id = f"resolution-{_support.uuid4().hex}"
+        campaign_state["resolution_log"] = [
+            *list(campaign_state.get("resolution_log") or []),
+            {
+                "id": resolution_id,
+                "type": "adventuring_gear_scene_object_strength_check",
+                "operation": "campaign.adventuring_gear.scene_object_strength_check",
+                "campaign_revision": campaign.revision + 1,
+                "branch_id": branch_id,
+                "actor_id": actor_id,
+                "actor_revision": owner.revision,
+                "scene_id": scene_id,
+                "object_id": object_id,
+                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                "target_source_ref": check_review["source_ref"],
+                "success": success,
+                "result": receipt,
+            },
+        ][-100:]
+        character_updates = [
+            _support.CharacterStateUpdate(
+                character_id=owner.id,
+                sheet=owner_sheet,
+                notes=_support.validate_character_notes(
+                    owner.notes, character_type=owner.character_type
+                ),
+                expected_revision=owner.revision,
+            )
+        ]
+        updated_owner = _support.replace(owner, sheet=owner_sheet, revision=owner.revision + 1)
+        updated_helper = None
+        if helper is not None and helper_sheet is not None:
+            character_updates.append(
+                _support.CharacterStateUpdate(
+                    character_id=helper.id,
+                    sheet=helper_sheet,
+                    notes=_support.validate_character_notes(
+                        helper.notes, character_type=helper.character_type
+                    ),
+                    expected_revision=helper.revision,
+                )
+            )
+            updated_helper = _support.replace(
+                helper, sheet=helper_sheet, revision=helper.revision + 1
+            )
+        normalized_state = _support.validate_party_state(campaign_state)
+        response = {
+            "status": "committed",
+            "action_id": action_id,
+            "item_id": item_id,
+            "intent": intent,
+            "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+            "rule_plan": _support.deepcopy(plan),
+            "check": _support.deepcopy(check),
+            "success": success,
+            "target_object": {
+                "id": object_id,
+                "scene_id": scene_id,
+                "state": resulting_state,
+                "profile_approval": _support.deepcopy(object_state["profile_approval"]),
+                "strength_check_approval": _support.deepcopy(
+                    object_state["gear_strength_check_approval"]
+                ),
+            },
+            "owner": self.character_view(updated_owner),
+            **({"helper": self.character_view(updated_helper)} if updated_helper else {}),
+            "campaign": _support.asdict(
+                _support.replace(
+                    campaign,
+                    state=normalized_state,
+                    revision=campaign.revision + 1,
+                )
+            ),
+            "receipt": receipt,
+        }
+        response["campaign"]["state"] = normalized_state
+        if stream.draw_count > 0:
+            response["random_stream_receipt"] = stream.receipt()
+        _support.StateMutationService(self.storage.database).replace(
+            campaign.id,
+            campaign_state=normalized_state,
+            character_updates=character_updates,
+            expected_campaign_revision=expected_campaign_revision,
+            operation="campaign.adventuring_gear.scene_object_strength_check",
             actor=principal_id,
             branch_id=branch_id,
             idempotency_key=idempotency_key,

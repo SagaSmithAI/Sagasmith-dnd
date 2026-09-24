@@ -106,6 +106,17 @@ def test_poison_needle_trigger_is_source_bound_atomic_and_replayable(tmp_path: P
             )
             expanded = await _call(server, "module_expand", {"chunk_id": hits[0]["id"]})
             source_ref = json.dumps(expanded["source_ref"], sort_keys=True, separators=(",", ":"))
+            scene_progress = await _call(
+                server,
+                "module_set_progress",
+                {
+                    "campaign_id": campaign_id,
+                    "scene_id": expanded["scene"]["id"],
+                    "status": "current",
+                    "expected_state_version": 0,
+                    "idempotency_key": "make-needle-scene-current",
+                },
+            )
             current = await _call(
                 server,
                 "campaign_query",
@@ -130,7 +141,18 @@ def test_poison_needle_trigger_is_source_bound_atomic_and_replayable(tmp_path: P
                 "source_excerpt": excerpt,
                 "profile": profile,
                 "actor_id": actor["id"],
-                "area_confirmed": True,
+                "spatial_facts": {
+                    "decision_id": "needle-range-1",
+                    "reason": "The DM reviewed the active scene and target at the lock.",
+                    "scene_id": expanded["scene"]["id"],
+                    "scene_revision": scene_progress["state_version"],
+                    "trap_id": "needle-lock-1",
+                    "target_actor_id": actor["id"],
+                    "source_ref": source_ref,
+                    "campaign_revision": current["revision"],
+                    "reviewed_by": "system:local",
+                    "distance_inches": 3,
+                },
                 "trigger_fact": {
                     "kind": "lock_opened",
                     "scene_id": expanded["scene"]["id"],
@@ -140,14 +162,87 @@ def test_poison_needle_trigger_is_source_bound_atomic_and_replayable(tmp_path: P
                 "expected_revision": current["revision"],
                 "idempotency_key": "needle-trigger-1",
             }
-            with pytest.raises(ToolError, match="confirmed source-defined area"):
+            no_facts_args = {key: value for key, value in args.items() if key != "spatial_facts"}
+            with pytest.raises(ToolError, match="DM-reviewed spatial_facts"):
+                await _call(
+                    server,
+                    "trap_state_transition",
+                    {
+                        **no_facts_args,
+                        "idempotency_key": "needle-out-of-range",
+                    },
+                )
+            with pytest.raises(ToolError, match="3-inch range"):
                 await _call(
                     server,
                     "trap_state_transition",
                     {
                         **args,
-                        "area_confirmed": False,
-                        "idempotency_key": "needle-out-of-range",
+                        "spatial_facts": {**args["spatial_facts"], "distance_inches": 3.01},
+                        "idempotency_key": "needle-outside-three-inches",
+                    },
+                )
+            with pytest.raises(ToolError, match="stale for the current campaign revision"):
+                await _call(
+                    server,
+                    "trap_state_transition",
+                    {
+                        **args,
+                        "spatial_facts": {
+                            **args["spatial_facts"],
+                            "campaign_revision": current["revision"] - 1,
+                        },
+                        "idempotency_key": "needle-stale-campaign-review",
+                    },
+                )
+            with pytest.raises(ToolError, match="active scene revision"):
+                await _call(
+                    server,
+                    "trap_state_transition",
+                    {
+                        **args,
+                        "spatial_facts": {
+                            **args["spatial_facts"],
+                            "scene_revision": scene_progress["state_version"] - 1,
+                        },
+                        "idempotency_key": "needle-stale-scene-review",
+                    },
+                )
+            with pytest.raises(ToolError, match="not area_confirmed"):
+                await _call(
+                    server,
+                    "trap_state_transition",
+                    {
+                        **args,
+                        "area_confirmed": True,
+                        "idempotency_key": "needle-unreviewed-area-confirmation",
+                    },
+                )
+            with pytest.raises(ToolError):
+                await _call(
+                    server,
+                    "trap_state_transition",
+                    {
+                        **args,
+                        "principal_id": "player:untrusted",
+                        "spatial_facts": {
+                            **args["spatial_facts"],
+                            "reviewed_by": "player:untrusted",
+                        },
+                        "idempotency_key": "needle-player-cannot-review-range",
+                    },
+                )
+            with pytest.raises(ToolError, match="authorized DM"):
+                await _call(
+                    server,
+                    "trap_state_transition",
+                    {
+                        **args,
+                        "spatial_facts": {
+                            **args["spatial_facts"],
+                            "reviewed_by": "system:forged-reviewer",
+                        },
+                        "idempotency_key": "needle-forged-reviewer",
                     },
                 )
             with pytest.raises(ToolError, match="only profile_id"):
@@ -193,6 +288,8 @@ def test_poison_needle_trigger_is_source_bound_atomic_and_replayable(tmp_path: P
             assert result["trap"]["status"] == "spent"
             assert result["trap"]["trigger_fact"] == args["trigger_fact"]
             assert result["trap"]["range_confirmed"] is True
+            assert result["trap"]["spatial_facts"] == args["spatial_facts"]
+            assert result["spatial_facts"]["reviewed_by"] == "system:local"
             assert "attack" not in result
             assert result["piercing"]["damage_type"] == "piercing"
             assert result["piercing"]["hp_damage"] == 1

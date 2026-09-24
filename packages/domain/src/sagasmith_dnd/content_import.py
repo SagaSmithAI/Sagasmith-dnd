@@ -22,6 +22,11 @@ from sagasmith_dnd.content_validation import (
     selection_schema_for_artifact,
     species_materializer_errors,
 )
+from sagasmith_dnd.diseases import (
+    DiseaseError,
+    disease_profile,
+    normalize_disease_variant_definition,
+)
 from sagasmith_dnd.parsing_vocabulary import DND5E_2014_CLASS_NAMES as _CLASS_NAMES
 from sagasmith_dnd.parsing_vocabulary import (
     DND5E_2014_STANDARD_SUBCLASS_TITLES as _STANDARD_FLAT_SUBCLASS_TITLES,
@@ -3379,20 +3384,43 @@ def compiled_artifacts_from_candidates(
         value = deepcopy(dict(candidate.get("artifact") or {}))
         reviewed_catalog = value.pop("catalog_review", None)
         reviewed_selection = value.pop("selection_contract", None)
-        if require_review_contracts and (
-            not isinstance(reviewed_catalog, dict) or reviewed_catalog.get("status") != "approved"
-        ):
-            raise ValueError(
-                f"accepted candidate {candidate.get('id')} needs an approved catalog review"
-            )
-        if require_review_contracts and not isinstance(reviewed_selection, dict):
-            raise ValueError(f"accepted candidate {candidate.get('id')} needs a selection contract")
-        if (reviewed_catalog is None) != (reviewed_selection is None):
-            raise ValueError(
-                f"accepted candidate {candidate.get('id')} must keep catalog and "
-                "selection attestations together"
-            )
         kind = str(value.get("kind") or candidate.get("kind") or "").strip()
+        if kind != "disease_variant":
+            if require_review_contracts and (
+                not isinstance(reviewed_catalog, dict)
+                or reviewed_catalog.get("status") != "approved"
+            ):
+                raise ValueError(
+                    f"accepted candidate {candidate.get('id')} needs an approved catalog review"
+                )
+            if require_review_contracts and not isinstance(reviewed_selection, dict):
+                raise ValueError(
+                    f"accepted candidate {candidate.get('id')} needs a selection contract"
+                )
+            if (reviewed_catalog is None) != (reviewed_selection is None):
+                raise ValueError(
+                    f"accepted candidate {candidate.get('id')} must keep catalog and "
+                    "selection attestations together"
+                )
+        else:
+            # Disease approval is created only after the authorized DM review
+            # and frozen candidate-set receipt are verified by Runtime.
+            value.pop("catalog_review", None)
+            value.pop("selection_contract", None)
+            try:
+                value["disease_variant"] = normalize_disease_variant_definition(
+                    value.get("disease_variant", {}).get("disease_id")
+                    if isinstance(value.get("disease_variant"), Mapping)
+                    else None,
+                    value.get("disease_variant"),
+                )
+            except DiseaseError as error:
+                raise ValueError(
+                    f"accepted candidate {candidate.get('id')} disease variant: {error}"
+                ) from error
+            value["authoring_candidate_id"] = str(candidate.get("id") or "")
+            value["execution_state"] = "disease_variant_ready"
+            value["application_state"] = "catalog_only"
         card = dict(value.get("card") or {})
         if kind == "feature":
             subclass_key = _canonical_source_heading(
@@ -3406,6 +3434,12 @@ def compiled_artifacts_from_candidates(
         name = str(card.get("name") or candidate.get("name") or "").strip()
         if not kind or not name:
             raise ValueError(f"accepted candidate {candidate.get('id')} needs kind and card.name")
+        if kind == "disease_variant" and name != str(
+            disease_profile(value["disease_variant"]["disease_id"])["name"]
+        ):
+            # Identity is subsequently bound to an indexed source heading; this
+            # check keeps the typed ruleset from silently naming another disease.
+            raise ValueError(f"accepted candidate {candidate.get('id')} disease identity mismatch")
         explicit_artifact_id = str(value.get("id") or "").strip()
         base_artifact_id = _artifact_id(pack_id, kind, name)
         artifact_id = explicit_artifact_id or base_artifact_id
@@ -3567,7 +3601,9 @@ def compiled_artifacts_from_candidates(
             "mechanical_scope": mechanical_scope,
             "source_chunk_ids": chunk_ids,
         }
-        if isinstance(reviewed_catalog, dict) and isinstance(reviewed_selection, dict):
+        if kind != "disease_variant" and isinstance(reviewed_catalog, dict) and isinstance(
+            reviewed_selection, dict
+        ):
             selection_status = str(reviewed_selection.get("status") or "")
             artifact["selection_contract"] = build_selection_contract(
                 artifact,
@@ -5897,6 +5933,26 @@ def candidate_draft_issues(candidate: Mapping[str, Any]) -> list[dict[str, Any]]
             f"{candidate_id} included card has no reviewed name",
             path="artifact.card.name",
         )
+    if artifact_kind == "disease_variant":
+        variant = artifact_value.get("disease_variant")
+        try:
+            normalized_variant = normalize_disease_variant_definition(
+                variant.get("disease_id") if isinstance(variant, Mapping) else None,
+                variant,
+            )
+            expected_name = disease_profile(normalized_variant["disease_id"])["name"]
+            if not isinstance(card, Mapping) or str(card.get("name") or "") != expected_name:
+                add(
+                    "disease_identity_mismatch",
+                    f"{candidate_id} disease variant card name does not match its disease id",
+                    path="artifact.card.name",
+                )
+        except DiseaseError as error:
+            add(
+                "invalid_disease_variant",
+                f"{candidate_id} disease variant is invalid: {error}",
+                path="artifact.disease_variant",
+            )
     for error in catalog_review_errors(artifact_value):
         add(
             "catalog_advisory",
@@ -5957,6 +6013,25 @@ def audit_release_semantic_validation(
                     ),
                 }
             )
+            continue
+        if str(artifact.get("kind") or "") == "disease_variant":
+            variant = artifact.get("disease_variant")
+            try:
+                normalized = normalize_disease_variant_definition(
+                    variant.get("disease_id") if isinstance(variant, Mapping) else None,
+                    variant,
+                )
+                if normalized != dict(variant or {}):
+                    raise DiseaseError("disease variant is not in canonical typed form")
+            except (DiseaseError, TypeError, ValueError) as error:
+                unresolved.append(
+                    {
+                        "artifact_id": artifact_id,
+                        "reason": f"invalid disease variant: {error}",
+                    }
+                )
+                continue
+            modes["reviewed_disease_variant"] = modes.get("reviewed_disease_variant", 0) + 1
             continue
         card = dict(artifact.get("card") or {})
         semantic = dict(artifact.get("semantic_resolution") or {})

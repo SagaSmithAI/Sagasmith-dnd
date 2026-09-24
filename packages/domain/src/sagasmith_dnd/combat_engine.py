@@ -593,10 +593,25 @@ def charmed_social_check_advantage(
 def timed_condition_sources(sheet: dict[str, Any]) -> dict[str, list[str]]:
     """Index active condition-owning effects by condition and source actor."""
     result: dict[str, list[str]] = {}
+    from .madness import SOURCE_REF as MADNESS_SOURCE_REF
+    from .madness import fleeing_source_bindings
+
+    fleeing_sources = {
+        str(item["effect_id"]): item.get("actor_id")
+        for item in fleeing_source_bindings(sheet)
+    }
     for normalized in condition_ids(sheet.get("conditions")):
         sources = sorted(
             {
-                str(effect.get("source") or "")
+                str(
+                    (
+                        fleeing_sources.get(str(effect.get("id") or ""))
+                        or MADNESS_SOURCE_REF
+                    )
+                    if normalized == "frightened"
+                    and effect.get("source") == MADNESS_SOURCE_REF
+                    else effect.get("source") or ""
+                )
                 for effect in active_condition_source_effects(sheet, normalized)
                 if str(effect.get("source") or "")
             }
@@ -630,7 +645,9 @@ def source_speed_multiplier(sheet: dict[str, Any]) -> float:
     return multiplier
 
 
-def _active_attack_roll_effect_flags(sheet: dict[str, Any]) -> tuple[bool, bool, list[str]]:
+def _active_attack_roll_effect_flags(
+    sheet: dict[str, Any], *, ability: str | None = None
+) -> tuple[bool, bool, list[str]]:
     """Read generic attack-roll advantage/disadvantage flags from active effects."""
 
     advantage = False
@@ -657,6 +674,13 @@ def _active_attack_roll_effect_flags(sheet: dict[str, Any]) -> tuple[bool, bool,
                 effect_applied = True
         if effect_applied:
             sources.append(str(effect.get("id") or "source_effect"))
+    if ability is not None:
+        from .madness import roll_disadvantage_effect_ids
+
+        for effect_id in roll_disadvantage_effect_ids(sheet, kind="attack", ability=ability):
+            disadvantage = True
+            if effect_id not in sources:
+                sources.append(effect_id)
     return advantage, disadvantage, sources
 
 
@@ -2228,19 +2252,27 @@ def settle_jump_2014(
 
 
 def _refresh_weapon_mastery_speed(encounter: dict[str, Any], combatant: dict[str, Any]) -> None:
-    """Project active Slow effects into the existing movement budget once."""
+    """Project source-owned speed penalties into the existing movement budget."""
 
     budget = dict(combatant.get("turn_budget") or {})
     spent, extra_granted = _movement_accounting(combatant)
+    from sagasmith_dnd.adventuring_gear import ADVENTURING_GEAR_SOURCE_REF
+
     penalty = max(
         (
             int(effect.get("penalty_ft", 0) or 0)
             for effect in encounter.get("ongoing_effects", [])
             if isinstance(effect, dict)
             and effect.get("active", True)
-            and effect.get("mechanic_id") == "dnd5e.core.weapon.mastery"
             and effect.get("kind") == "speed_penalty"
             and str(effect.get("target_id") or "") == str(combatant.get("actor_id") or "")
+            and (
+                effect.get("mechanic_id") == "dnd5e.core.weapon.mastery"
+                or (
+                    effect.get("mechanic_id") == "dnd5e.core.adventuring_gear.caltrops"
+                    and effect.get("source_ref") == ADVENTURING_GEAR_SOURCE_REF
+                )
+            )
         ),
         default=0,
     )
@@ -2281,6 +2313,23 @@ def available_actions(encounter: dict[str, Any], actor_id_value: str) -> list[st
     if "incapacitated" in conditions:
         actions = ["move"] if (has_movement and not conditions & {"grappled", "restrained"}) else []
         if budget.get("object_interaction", 0) > 0:
+            actions.append("interact_object")
+        return actions
+    madness_flee = dict(combatant.get("turn_flags") or {}).get("madness_flee")
+    if (
+        isinstance(madness_flee, dict)
+        and str(madness_flee.get("turn_token") or "") == _combat_turn_token(encounter)
+        and str(madness_flee.get("dash_used_turn_token") or "")
+        != _combat_turn_token(encounter)
+    ):
+        actions = ["move"] if has_movement and not conditions & {"grappled", "restrained"} else []
+        if int(budget.get("main_action", 0) or 0) > 0 or int(
+            budget.get("extra_action", 0) or 0
+        ) > 0:
+            actions.append("dash")
+        if int(budget.get("bonus_action", 0) or 0) > 0:
+            actions.append("bonus_action")
+        if int(budget.get("object_interaction", 0) or 0) > 0:
             actions.append("interact_object")
         return actions
     mounted_turn = dict(combatant.get("mounted_turn") or {})
@@ -3710,12 +3759,9 @@ def preflight_attack(
         elif actor_id(target) in charm_sources:
             raise CombatEngineError(CHARMED_ATTACK_ERROR)
     if "frightened" in attacker_conditions:
-        frightened_effects = active_condition_source_effects(actor_sheet(attacker), "frightened")
-        fear_sources = {
-            str(effect.get("source") or "")
-            for effect in frightened_effects
-            if str(effect.get("source") or "")
-        }
+        fear_sources = set(
+            timed_condition_sources(actor_sheet(attacker)).get("frightened", [])
+        )
         if not fear_sources:
             unresolved_condition_sources.append("frightened")
         elif encounter is not None:
@@ -3737,7 +3783,7 @@ def preflight_attack(
         else:
             unresolved_condition_sources.append("frightened")
     effect_advantage, effect_disadvantage, effect_sources = _active_attack_roll_effect_flags(
-        actor_sheet(attacker)
+        actor_sheet(attacker), ability=attack_ability
     )
     if effect_advantage:
         context["advantage"] = True
@@ -6744,6 +6790,71 @@ def _spend_movement_uninterrupted(
         raise CombatEngineError(
             "a frightened creature cannot willingly move closer to its visible fear source"
         )
+    madness_flee = dict(combatant.get("turn_flags") or {}).get("madness_flee")
+    if (
+        voluntary
+        and isinstance(madness_flee, dict)
+        and madness_flee.get("turn_token") == _combat_turn_token(value)
+    ):
+        source_actor_ids = [
+            str(item).strip() for item in madness_flee.get("source_actor_ids", [])
+        ]
+        if not source_actor_ids or any(not item for item in source_actor_ids):
+            raise NeedsRulingError(
+                "fleeing madness requires its typed fear-source actors",
+                missing=("madness.flee.source_actor_ids",),
+                ruling_kind="source_or_scene_fact",
+            )
+        if positioning_mode == "grid":
+            if origin is None or target_position is None:
+                raise NeedsRulingError(
+                    "Grid fleeing madness requires the move's origin and destination",
+                    missing=("madness.flee.grid_path",),
+                    ruling_kind="agent_dm_adjudication",
+                )
+            members = [
+                *list(value.get("combatants", [])),
+                *list(value.get("reinforcements", [])),
+            ]
+            for source_actor_id in source_actor_ids:
+                source_actor = next(
+                    (
+                        item
+                        for item in members
+                        if str(item.get("actor_id") or "") == source_actor_id
+                    ),
+                    None,
+                )
+                source_position = _position((source_actor or {}).get("position"))
+                if source_position is None:
+                    raise NeedsRulingError(
+                        "fleeing madness requires each fear source's Grid position",
+                        missing=(f"madness.flee.grid_position.{source_actor_id}",),
+                        ruling_kind="agent_dm_adjudication",
+                    )
+                if _grid_distance(target_position, source_position) <= _grid_distance(
+                    origin, source_position
+                ):
+                    raise CombatEngineError(
+                        "fleeing madness requires movement farther from every fear source"
+                    )
+        elif positioning_mode == "agent":
+            if (
+                agent_facts is None
+                or agent_facts.get("moves_farther_from_madness_fear_source") is not True
+            ):
+                raise NeedsRulingError(
+                    "Agent movement requires a reviewed path that increases distance "
+                    "from each fear source",
+                    missing=("movement.spatial_facts.moves_farther_from_madness_fear_source",),
+                    ruling_kind="agent_dm_adjudication",
+                )
+        else:
+            raise NeedsRulingError(
+                "fleeing madness requires a supported encounter positioning mode",
+                missing=("madness.flee.positioning_mode",),
+                ruling_kind="agent_dm_adjudication",
+            )
     if uses_aggressive_grant:
         assert aggressive_grant is not None
         aggressive_grant["remaining"] = available - movement_cost
@@ -7474,6 +7585,16 @@ def resolve_common_action(
         )
     if int(budget.get(payment, 0) or 0) <= 0:
         raise CombatEngineError("actor has no action payment available")
+    flags = dict(acting.get("turn_flags") or {})
+    madness_flee = dict(flags.get("madness_flee") or {})
+    if (
+        madness_flee
+        and madness_flee.get("turn_token") == _combat_turn_token(value)
+        and madness_flee.get("dash_used_turn_token") != _combat_turn_token(value)
+        and payment in {"main_action", "extra_action"}
+        and action != "dash"
+    ):
+        raise CombatEngineError("fleeing madness requires spending the action to Dash")
     budget[payment] = int(budget[payment]) - 1
     acting["turn_budget"] = budget
     _record_action_payment(
@@ -7482,7 +7603,6 @@ def resolve_common_action(
         action=action,
         payment=payment,
     )
-    flags = dict(acting.get("turn_flags") or {})
     if not _stances.is_exit_action(action) and "turned" in _condition_set(acting.get("conditions")):
         if action not in {"dash", "dodge", "escape"}:
             raise CombatEngineError("a turned creature can use its action only to Dash or escape")
@@ -7505,6 +7625,15 @@ def resolve_common_action(
             budget,
             extra_grant_delta=_effective_speed_ft(acting),
         )
+        if (
+            madness_flee
+            and madness_flee.get("turn_token") == _combat_turn_token(value)
+            and payment in {"main_action", "extra_action"}
+        ):
+            flags["madness_flee"] = {
+                **madness_flee,
+                "dash_used_turn_token": _combat_turn_token(value),
+            }
     elif action == "disengage":
         flags["disengaged"] = True
         flags["disengaged_turn_token"] = _combat_turn_token(value)
@@ -9065,7 +9194,16 @@ def _sheet_check_modifiers(
     effect_advantage, effect_disadvantage = active_effect_roll_advantage(
         sheet, kind, key=normalized_ability
     )
-    return effect_bonus, equipment_disadvantage or effect_disadvantage, poisoned
+    from .madness import roll_disadvantage_effect_ids
+
+    madness_disadvantage = bool(
+        roll_disadvantage_effect_ids(sheet, kind=kind, ability=check_ability)
+    )
+    return (
+        effect_bonus,
+        equipment_disadvantage or effect_disadvantage or madness_disadvantage,
+        poisoned,
+    )
 
 
 def resolve_actor_check(
@@ -10835,7 +10973,127 @@ def vision_profile_2014(
     rank = {"dark": 0, "dim": 1, "bright": 2}
     cell_ft = int(dict(battle_map.get("grid") or {}).get("cell_ft", 5) or 5)
     active_light_sources: list[dict[str, Any]] = []
-    for source in battle_map.get("light_sources", []):
+
+    def dynamic_gear_lights() -> list[dict[str, Any]]:
+        records = encounter.get("adventuring_gear_lights", [])
+        combatants = {
+            str(item.get("actor_id") or ""): item
+            for item in encounter.get("combatants", [])
+            if isinstance(item, dict)
+        }
+        result: list[dict[str, Any]] = []
+        if not isinstance(records, list):
+            return result
+        from .adventuring_gear import resolve_adventuring_gear_intent
+
+        source_ref = "bundled:srd2014/04_Equipment/Adventuring_Gear.md"
+        current_scene_id = str(
+            encounter.get("scene_id")
+            or dict(battle_map.get("source") or {}).get("scene_id")
+            or ""
+        )
+        excerpts = {
+            "Lamp": (
+                "A lamp casts bright light in a 15-foot radius and dim light for an additional "
+                "30 feet. Once lit, it burns for 6 hours on a flask (1 pint) of oil."
+            ),
+            "Lantern, bullseye": (
+                "A bullseye lantern casts bright light in a 60-foot cone and dim light for an "
+                "additional 60 feet. Once lit, it burns for 6 hours on a flask (1 pint) of oil."
+            ),
+            "Lantern, hooded": (
+                "A hooded lantern casts bright light in a 30-foot radius and dim light for an "
+                "additional 30 feet. Once lit, it burns for 6 hours on a flask (1 pint) of oil. "
+                "As an action, you can lower the hood, reducing the light to dim light in a "
+                "5-foot radius."
+            ),
+        }
+        expected_names = set(excerpts)
+        for record in records:
+            if not isinstance(record, dict) or record.get("active") is not True:
+                continue
+            item_name = record.get("item_name")
+            if item_name not in expected_names or record.get("source_ref") != source_ref:
+                continue
+            if (
+                isinstance(record.get("remaining_fuel_ticks"), bool)
+                or not isinstance(record.get("remaining_fuel_ticks"), int)
+                or record.get("remaining_fuel_ticks", 0) <= 0
+            ):
+                continue
+            if (
+                isinstance(record.get("fuel_due_elapsed_ticks"), bool)
+                or not isinstance(record.get("fuel_due_elapsed_ticks"), int)
+                or record.get("fuel_due_elapsed_ticks", 0) < 1
+            ):
+                continue
+            actor = combatants.get(str(record.get("actor_id") or ""))
+            position = dict((actor or {}).get("position") or {})
+            if set(position) != {"x", "y"} or any(
+                type(position.get(key)) is not int for key in ("x", "y")
+            ):
+                continue
+            try:
+                light_plan = resolve_adventuring_gear_intent(
+                    {
+                        "id": record.get("item_id"),
+                        "name": item_name,
+                        "source_key": record.get("source_key"),
+                        "source_ref": record.get("source_ref"),
+                    },
+                    "light",
+                )
+            except (CombatEngineError, TypeError, ValueError):
+                continue
+            effect = dict(light_plan.get("effect") or {})
+            bright = dict(effect.get("bright_light") or {})
+            if item_name == "Lantern, hooded" and record.get("hood") == "lowered":
+                hood_plan = resolve_adventuring_gear_intent(
+                    {
+                        "id": record.get("item_id"),
+                        "name": item_name,
+                        "source_key": record.get("source_key"),
+                        "source_ref": record.get("source_ref"),
+                    },
+                    "lower_hood",
+                )
+                dim = dict(dict(hood_plan.get("effect") or {}).get("dim_light") or {})
+                bright_radius = 0
+                dim_radius = int(dim.get("feet", 0) or 0)
+            else:
+                bright_radius = int(bright.get("feet", 0) or 0)
+                dim_radius = bright_radius + int(effect.get("dim_light_additional_feet", 0) or 0)
+            shape = str(bright.get("shape") or "radius")
+            direction = None
+            if shape == "cone":
+                direction = str(record.get("orientation") or "")
+                if (
+                    direction not in {"north", "east", "south", "west"}
+                    or record.get("reviewer_principal_id") is None
+                    or record.get("reviewed_scene_id") != current_scene_id
+                    or record.get("reviewed_map_checksum") != battle_map.get("checksum")
+                    or record.get("reviewed_map_revision") != battle_map.get("map_revision")
+                ):
+                    continue
+            result.append(
+                {
+                    "id": str(record.get("id") or ""),
+                    "position": position,
+                    "bright_radius_ft": bright_radius,
+                    "dim_radius_ft": dim_radius,
+                    "shape": shape,
+                    "direction": direction,
+                    "source_ref": f"{source_ref}#{item_name}",
+                    "source_excerpt": excerpts[item_name],
+                }
+            )
+        return result
+
+    all_light_sources = [
+        *list(battle_map.get("light_sources", [])),
+        *dynamic_gear_lights(),
+    ]
+    for source in all_light_sources:
         if not isinstance(source, dict):
             continue
         position = dict(source.get("position") or {})
@@ -10856,6 +11114,25 @@ def vision_profile_2014(
             )
             * cell_ft
         )
+        if source.get("shape") == "cone":
+            dx = int(subject_position[0]) - source_position[0]
+            dy = int(subject_position[1]) - source_position[1]
+            direction_vectors = {
+                "north": (0, -1),
+                "east": (1, 0),
+                "south": (0, 1),
+                "west": (-1, 0),
+            }
+            direction_vector = direction_vectors.get(str(source.get("direction") or ""))
+            if direction_vector is None:
+                continue
+            inside_cone = (dx == 0 and dy == 0) or (
+                direction_vector[0] * dx + direction_vector[1] * dy > 0
+                and 4 * (direction_vector[0] * dx + direction_vector[1] * dy) ** 2
+                >= 3 * (dx * dx + dy * dy)
+            )
+            if not inside_cone:
+                continue
         source_level = (
             "bright"
             if source_distance <= int(source.get("bright_radius_ft", 0) or 0)
@@ -10905,6 +11182,11 @@ def vision_profile_2014(
                 "dim_radius_ft": item["dim_radius_ft"],
                 "source_ref": item["source_ref"],
                 "source_excerpt": item["source_excerpt"],
+                **(
+                    {"shape": item["shape"], "direction": item["direction"]}
+                    if item.get("shape") == "cone"
+                    else {}
+                ),
             }
             for item in active_light_sources
         ],

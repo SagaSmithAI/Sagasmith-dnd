@@ -4,10 +4,260 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
+from sagasmith_dnd.traps import settle_trap_object_spell, source_trap_profile
+
 from .. import application_support as _support
+
+_SOURCE_DETECT_MAGIC_ID = "dnd5e.content.srd2014.spell.detect-magic"
+_SOURCE_DISPEL_MAGIC_ID = "dnd5e.content.srd2014.spell.dispel-magic"
 
 
 class SpellsService:
+    def source_trap_object_spell_kind(
+        self,
+        spell: dict[str, Any],
+        *,
+        source_item_id: str | None,
+        ruleset: str,
+    ) -> str | None:
+        """Recognize only the exact 2014 actor spell cards used by trap profiles."""
+        spell_id = str(spell.get("id") or "")
+        expected = {
+            _SOURCE_DETECT_MAGIC_ID: ("Detect Magic", 1),
+            _SOURCE_DISPEL_MAGIC_ID: ("Dispel Magic", 3),
+        }.get(spell_id)
+        if expected is None:
+            return None
+        name, level = expected
+        definition = dict(spell.get("definition") or {})
+        if (
+            source_item_id is not None
+            or ruleset != "2014"
+            or str(spell.get("name") or "").strip().casefold() != name.casefold()
+            or type(spell.get("level")) is not int
+            or int(spell["level"]) != level
+            or str(definition.get("casting_time") or "").strip().casefold()
+            not in {"action", "1 action"}
+            or spell.get("resolution") is not None
+            or spell.get("resolution_plan") is not None
+        ):
+            raise _support.CombatEngineError(
+                f"{name} trap-object settlement requires its exact 2014 actor spell card"
+            )
+        return "detect_magic" if spell_id == _SOURCE_DETECT_MAGIC_ID else "dispel_magic"
+
+    def validate_source_trap_object_spell_facts(
+        self,
+        campaign: Any,
+        *,
+        actor_id: str,
+        spell_kind: str,
+        declaration: Any,
+        principal_id: str,
+        cast_level: int | None,
+    ) -> dict[str, Any]:
+        """Bind DM-reviewed trap-object facts to an exact active module scene/revision."""
+        self.access.require_campaign(
+            campaign.id, principal_id, roles=_support.CAMPAIGN_DM_ROLES
+        )
+        if not isinstance(declaration, dict) or set(declaration) != {"trap_object_facts"}:
+            raise _support.CombatEngineError(
+                "source-bound trap spells require declaration.trap_object_facts"
+            )
+        facts = declaration.get("trap_object_facts")
+        required = {
+            "decision_id",
+            "reason",
+            "source_ref",
+            "source_excerpt",
+            "scene_id",
+            "trap_id",
+            "profile_id",
+            "component",
+            "actor_id",
+            "campaign_revision",
+            "scene_revision",
+            "distance_ft",
+            "visible",
+            "targetable",
+        }
+        optional = {"face_enchantment_present"}
+        if (
+            not isinstance(facts, dict)
+            or required - set(facts)
+            or set(facts) - required - optional
+        ):
+            raise _support.CombatEngineError(
+                "trap_object_facts require exact source, scene, trap, caster, revision, "
+                "scene revision, distance, visibility, targetability, decision_id, and "
+                "reason fields"
+            )
+        if facts.get("actor_id") != actor_id:
+            raise _support.CombatEngineError("trap_object_facts actor_id must match the caster")
+        if (
+            not isinstance(facts.get("decision_id"), str)
+            or not facts["decision_id"].strip()
+            or len(facts["decision_id"]) > 200
+            or not isinstance(facts.get("reason"), str)
+            or not facts["reason"].strip()
+            or len(facts["reason"]) > 500
+        ):
+            raise _support.CombatEngineError(
+                "trap_object_facts decision_id and reason must be bounded non-empty text"
+            )
+        if (
+            type(facts.get("campaign_revision")) is not int
+            or facts["campaign_revision"] != campaign.revision
+        ):
+            raise _support.CombatEngineError(
+                "trap_object_facts must match the current campaign/trap revision"
+            )
+        distance = facts.get("distance_ft")
+        if (
+            isinstance(distance, bool)
+            or not isinstance(distance, (int, float))
+            or not _support.math.isfinite(float(distance))
+            or float(distance) < 0
+            or facts.get("visible") is not True
+            or facts.get("targetable") is not True
+        ):
+            raise _support.CombatEngineError(
+                "trap object must be reviewed as visible, targetable, and at a valid distance"
+            )
+        try:
+            exact_source, _, expanded = self.managed_module_source_ref(
+                campaign.id,
+                facts.get("source_ref"),
+                require_exact=True,
+                require_active_module=True,
+            )
+            assert expanded is not None
+            excerpt = self.managed_module_source_excerpt(
+                expanded,
+                facts.get("source_excerpt"),
+                field="trap_object_facts source_excerpt",
+                minimum_length=10,
+            )
+            profile = source_trap_profile(
+                {"profile_id": facts.get("profile_id")}, excerpt
+            )
+        except (AssertionError, LookupError, ValueError) as error:
+            raise _support.CombatEngineError(
+                f"trap_object_facts do not match an active exact source: {error}"
+            ) from error
+        scene_id = str(dict(expanded.get("scene") or {}).get("id") or "")
+        if not scene_id or facts.get("scene_id") != scene_id:
+            raise _support.CombatEngineError(
+                "trap_object_facts scene_id must match the managed source scene"
+            )
+        active_scene = self.modules.current_scene(campaign.id, scope_id="party")
+        active_progress = (
+            dict(active_scene.get("progress") or {}) if isinstance(active_scene, dict) else {}
+        )
+        active_scene_revision = (
+            active_scene.get("state_version", active_progress.get("state_version"))
+            if isinstance(active_scene, dict)
+            else None
+        )
+        if (
+            not isinstance(active_scene, dict)
+            or str(active_scene.get("scene_id") or "") != scene_id
+            or type(active_scene_revision) is not int
+            or type(facts.get("scene_revision")) is not int
+            or facts["scene_revision"] != active_scene_revision
+        ):
+            raise _support.CombatEngineError(
+                "trap_object_facts must match the active party scene and its current revision"
+            )
+        trap_id = facts.get("trap_id")
+        if not isinstance(trap_id, str) or not trap_id.strip() or len(trap_id) > 200:
+            raise _support.CombatEngineError(
+                "trap_object_facts trap_id must be bounded non-empty text"
+            )
+        profile_id = str(profile["profile_id"])
+        component = facts.get("component")
+        if spell_kind == "detect_magic":
+            detection = dict(profile.get("magic_detection") or {})
+            if (
+                profile_id != "srd5.1.fire_breathing_statue"
+                or component != detection.get("target")
+                or facts.get("face_enchantment_present") is not None
+            ):
+                raise _support.CombatEngineError(
+                    "Detect Magic currently reveals only a source-bound Fire Statue aura"
+                )
+            spell_range = 30
+        elif spell_kind == "dispel_magic":
+            if profile_id == "srd5.1.fire_breathing_statue" and component == "statue":
+                spell_range = 120
+                if "face_enchantment_present" in facts:
+                    raise _support.CombatEngineError(
+                        "Fire Statue dispel does not accept Sphere enchantment facts"
+                    )
+            elif (
+                profile_id == "srd5.1.sphere_of_annihilation"
+                and component == "face_enchantment"
+                and facts.get("face_enchantment_present") is True
+            ):
+                spell_range = 120
+            else:
+                raise _support.CombatEngineError(
+                    "Dispel Magic target must be a Fire Statue or the Sphere face enchantment"
+                )
+        else:
+            raise _support.CombatEngineError("unsupported source-bound trap spell")
+        if float(distance) > spell_range:
+            raise _support.CombatEngineError(
+                f"trap object is outside the {spell_range}-foot spell range"
+            )
+        if cast_level is not None and (
+            type(cast_level) is not int or cast_level < (1 if spell_kind == "detect_magic" else 3)
+        ):
+            raise _support.CombatEngineError(
+                "trap spell cast_level is below its source spell level"
+            )
+        existing = dict(
+            dict(dict(campaign.state or {}).get("trap_state") or {}).get("traps") or {}
+        ).get(trap_id)
+        if isinstance(existing, dict):
+            if (
+                existing.get("source_ref") not in (None, exact_source)
+                or existing.get("scene_id") not in (None, scene_id)
+                or existing.get("profile_id") not in (None, profile_id)
+            ):
+                raise _support.CombatEngineError(
+                    "trap object is bound to a different source, scene, or profile"
+                )
+            if spell_kind == "dispel_magic" and profile_id == "srd5.1.fire_breathing_statue":
+                if str(existing.get("status") or "armed") != "armed":
+                    raise _support.CombatEngineError("only an armed Fire Statue can be dispelled")
+            if (
+                spell_kind == "dispel_magic"
+                and profile_id == "srd5.1.sphere_of_annihilation"
+                and existing.get("optional_sympathy_active") is False
+            ):
+                raise _support.CombatEngineError("Sphere face enchantment is already dispelled")
+        normalized = {
+            "decision_id": facts["decision_id"].strip(),
+            "reason": " ".join(facts["reason"].split()),
+            "source_ref": exact_source,
+            "source_excerpt": excerpt,
+            "scene_id": scene_id,
+            "trap_id": trap_id.strip(),
+            "profile_id": profile_id,
+            "component": component,
+            "actor_id": actor_id,
+            "campaign_revision": campaign.revision,
+            "scene_revision": active_scene_revision,
+            "distance_ft": float(distance),
+            "visible": True,
+            "targetable": True,
+            "reviewed_by": principal_id,
+        }
+        if profile_id == "srd5.1.sphere_of_annihilation":
+            normalized["face_enchantment_present"] = True
+        return {"facts": normalized, "profile": profile, "range_ft": spell_range}
+
     def validate_spell_spatial_facts(
         self, facts: Any, *, ruleset: str | None = None
     ) -> dict[str, Any]:
@@ -1077,6 +1327,54 @@ class SpellsService:
         )
         if spell_entry is None:
             raise _support.CombatEngineError("spell is not recorded on the caster card")
+        trap_spell_kind = self.source_trap_object_spell_kind(
+            spell_entry,
+            source_item_id=source_item_id,
+            ruleset=str(encounter.get("ruleset") or ""),
+        )
+        trap_object_context = None
+        if trap_spell_kind is not None:
+            trap_object_context = self.validate_source_trap_object_spell_facts(
+                campaign,
+                actor_id=actor_id,
+                spell_kind=trap_spell_kind,
+                declaration=declaration,
+                principal_id=principal_id,
+                cast_level=cast_level,
+            )
+            if trap_spell_kind == "dispel_magic" and _support.active_random_stream() is None:
+                stream = _support.CampaignRandomStream.from_campaign_state(
+                    campaign_id,
+                    campaign.state,
+                    operation="combat.spell.source_trap_object",
+                    idempotency_key=str(idempotency_key or ""),
+                    campaign_revision=campaign.revision,
+                )
+                with _support.use_random_stream(stream):
+                    return self._settle_combat_spell(
+                        campaign_id=campaign_id,
+                        actor_id=actor_id,
+                        spell_id=spell_id,
+                        cast_level=cast_level,
+                        ritual=ritual,
+                        signature_free_cast=signature_free_cast,
+                        feature_cast_source=feature_cast_source,
+                        component_ruling=component_ruling,
+                        source_item_id=source_item_id,
+                        choice_id=choice_id,
+                        principal_id=principal_id,
+                        expected_revision=expected_revision,
+                        branch_id=branch_id,
+                        idempotency_key=idempotency_key,
+                        target_allocations=target_allocations,
+                        declaration=declaration,
+                        ready_context=ready_context,
+                    )
+        elif isinstance(declaration, dict) and "trap_object_facts" in declaration:
+            raise _support.CombatEngineError(
+                "trap_object_facts are accepted only for the exact source-bound Detect Magic "
+                "or Dispel Magic actor spell"
+            )
         casting_time = str(
             spell_entry.get("casting_time")
             or dict(spell_entry.get("definition") or {}).get("casting_time")
@@ -1219,6 +1517,7 @@ class SpellsService:
             ).strip()
             and not fly
             and not invisibility
+            and trap_object_context is None
             and not self.source_card_has_executable_mechanic(
                 campaign_id,
                 spell_entry,
@@ -1822,6 +2121,129 @@ class SpellsService:
                 source_item_id=source_item_id,
             )
         resolved_cast_level = int(applied.get("cast_level", cast_level or spell_level) or 0)
+        if trap_object_context is not None:
+            facts = trap_object_context["facts"]
+            check = None
+            if trap_spell_kind == "dispel_magic":
+                if resolved_cast_level < 3:
+                    raise _support.CombatEngineError(
+                        "Dispel Magic trap settlement requires a 3rd-level or higher cast"
+                    )
+                actor_sheet = applied["sheet"]
+                derived = self.derive_character_sheet(actor_sheet, character_id=actor_id)
+                ability = str(dict(derived.get("spellcasting") or {}).get("ability") or "")
+                if ability not in dict(actor_sheet.get("abilities") or {}):
+                    raise _support.CombatEngineError(
+                        "Dispel Magic requires a derivable spellcasting ability"
+                    )
+                dc = (
+                    int(
+                        dict(
+                            dict(trap_object_context["profile"].get("trigger") or {}).get(
+                                "optional_sympathy"
+                            )
+                            or {}
+                        )["dispel_magic_dc"]
+                    )
+                    if facts["profile_id"] == "srd5.1.sphere_of_annihilation"
+                    else int(dict(trap_object_context["profile"].get("spell_disable") or {})["dc"])
+                )
+                check_rules = self.effective_rule_context(
+                    campaign_id,
+                    branch_id=resolved_branch_id,
+                    facts={
+                        "kind": "check",
+                        "actor_id": actor_id,
+                        "ability": ability,
+                        "dc": dc,
+                        "spell_id": spell_id,
+                        "trap_id": facts["trap_id"],
+                        "trap_source_ref": facts["source_ref"],
+                        "trap_profile_id": facts["profile_id"],
+                        "trap_spell_action": "dispel_magic",
+                    },
+                )
+                check = _support.resolve_actor_check(
+                    self.combat_actor_snapshot(actor_id),
+                    kind="check",
+                    ability=ability,
+                    dc=dc,
+                    encounter=next_encounter,
+                    ruleset="2014",
+                    rules=check_rules,
+                    rng=_support.active_random_stream(),
+                )
+                check["ability"] = ability
+            settled = settle_trap_object_spell(
+                _support.deepcopy(dict(campaign.state or {}).get("trap_state") or {}),
+                profile=trap_object_context["profile"],
+                source_ref=facts["source_ref"],
+                scene_id=facts["scene_id"],
+                trap_id=facts["trap_id"],
+                actor_id=actor_id,
+                action=trap_spell_kind,
+                component=facts["component"],
+                success=None if check is None else bool(check.get("success")),
+                face_enchantment_present=facts.get("face_enchantment_present"),
+                reviewed_by=principal_id,
+                campaign_revision=campaign.revision,
+            )
+            result = {
+                "kind": "source_trap_object_spell",
+                "spell_id": spell_id,
+                "spell_action": trap_spell_kind,
+                "cast_level": resolved_cast_level,
+                "payment": _support.deepcopy(applied.get("payment") or {}),
+                "component_receipt": _support.deepcopy(applied.get("component_receipt")),
+                "source_review_receipt": facts,
+                "effect": settled["result"],
+                "trap": settled["trap"],
+            }
+            if check is not None:
+                result["check"] = check
+            if trap_spell_kind == "detect_magic":
+                result["aura"] = {"target": "statue", "school": "evocation"}
+            applied["automatic_effect"] = "source_trap_object_spell"
+            applied["ruling_required"] = []
+            applied["ruling_requirements"] = []
+            next_encounter["log"] = [
+                *list(next_encounter.get("log") or []),
+                {
+                    "type": "source_trap_object_spell",
+                    "actor_id": actor_id,
+                    "spell_id": spell_id,
+                    "result": result,
+                },
+            ][-100:]
+            next_state = _support.deepcopy(dict(campaign.state or {}))
+            next_state["combat"] = next_encounter
+            next_state["trap_state"] = settled["state"]
+            response = self.commit_campaign_state(
+                campaign,
+                next_state,
+                operation="combat.spell.source_trap_object",
+                principal_id=principal_id,
+                branch_id=resolved_branch_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+                payload=payload,
+                response_fields={
+                    "status": "committed",
+                    "result": result,
+                    "combat": next_encounter,
+                },
+                character_updates=[
+                    _support.CharacterStateUpdate(
+                        character_id=actor_id,
+                        sheet=_support.validate_character_sheet(applied["sheet"]),
+                        notes=_support.validate_character_notes(current.notes),
+                        expected_revision=current.revision,
+                    )
+                ],
+                rule_receipts=(list(check.get("rule_receipts") or []) if check else []),
+                expected_campaign_revision=campaign.revision,
+            )
+            return self.combat_response(campaign_id, principal_id, response)
         if fly:
             assert fly_target is not None
             concentration_effect = next(
@@ -3656,6 +4078,26 @@ class SpellsService:
         )
         if spell_entry is None:
             raise _support.CombatEngineError("spell is not recorded on the caster card")
+        trap_spell_kind = self.source_trap_object_spell_kind(
+            spell_entry,
+            source_item_id=source_item_id,
+            ruleset=self.campaign_rules_edition(current.campaign_id),
+        )
+        trap_object_context = None
+        if trap_spell_kind is not None:
+            trap_object_context = self.validate_source_trap_object_spell_facts(
+                campaign,
+                actor_id=character_id,
+                spell_kind=trap_spell_kind,
+                declaration=declaration,
+                principal_id=principal_id,
+                cast_level=cast_level,
+            )
+        elif isinstance(declaration, dict) and "trap_object_facts" in declaration:
+            raise _support.CombatEngineError(
+                "trap_object_facts are accepted only for the exact source-bound Detect Magic "
+                "or Dispel Magic actor spell"
+            )
         from .spell_components import preflight
 
         preflight(
@@ -3827,10 +4269,15 @@ class SpellsService:
                 "reason": reason,
                 "committed": True,
             }
+        elif trap_object_context is not None:
+            if target_character_ids is not None or willing_target_ids is not None:
+                raise _support.CombatEngineError(
+                    "trap-object spell facts are the only target declaration for this cast"
+                )
         elif declaration is not None:
             raise _support.CombatEngineError(
-                "noncombat spell declaration is supported only for native Sleep or "
-                "Steel Defender Mending"
+                "noncombat spell declaration is supported only for native Sleep, "
+                "Steel Defender Mending, or a source-bound trap-object spell"
             )
         normalized_fly_targets: list[str] = []
         normalized_willing_targets: list[str] = []
@@ -3931,6 +4378,7 @@ class SpellsService:
             and not fly
             and not invisibility
             and not mending
+            and trap_object_context is None
             and not self.source_card_has_executable_mechanic(
                 current.campaign_id,
                 spell_entry,
@@ -3954,6 +4402,31 @@ class SpellsService:
                 "character": self.character_view(current),
                 "campaign_revision": campaign.revision,
             }
+        if trap_spell_kind == "dispel_magic" and _support.active_random_stream() is None:
+            stream = _support.CampaignRandomStream.from_campaign_state(
+                current.campaign_id,
+                campaign.state,
+                operation="character.spell.source_trap_object",
+                idempotency_key=idempotency_key,
+                campaign_revision=campaign.revision,
+            )
+            with _support.use_random_stream(stream):
+                return self.character_cast_spell(
+                    character_id=character_id,
+                    spell_id=spell_id,
+                    cast_level=cast_level,
+                    ritual=ritual,
+                    signature_free_cast=signature_free_cast,
+                    feature_cast_source=feature_cast_source,
+                    component_ruling=component_ruling,
+                    source_item_id=source_item_id,
+                    target_character_ids=target_character_ids,
+                    willing_target_ids=willing_target_ids,
+                    declaration=declaration,
+                    principal_id=principal_id,
+                    expected_revision=expected_revision,
+                    idempotency_key=idempotency_key,
+                )
         elapsed_ticks = self.completed_spell_cast_ticks(spell_entry, ritual=ritual)
         next_state, time_transition = self.advance_state_game_time(
             next_state,
@@ -4251,6 +4724,93 @@ class SpellsService:
                         rules, [_support.CORE_FEY_ANCESTRY_MECHANIC_ID], "spell.sleep.immunity"
                     )
                     rule_receipts.extend(target_result["rule_receipts"])
+        if trap_object_context is not None:
+            facts = trap_object_context["facts"]
+            check = None
+            if trap_spell_kind == "dispel_magic":
+                resolved_level = int(applied.get("cast_level", cast_level or 3) or 3)
+                if resolved_level < 3:
+                    raise _support.CombatEngineError(
+                        "Dispel Magic trap settlement requires a 3rd-level or higher cast"
+                    )
+                derived = self.derive_character_sheet(applied["sheet"], character_id=character_id)
+                ability = str(dict(derived.get("spellcasting") or {}).get("ability") or "")
+                if ability not in dict(applied["sheet"].get("abilities") or {}):
+                    raise _support.CombatEngineError(
+                        "Dispel Magic requires a derivable spellcasting ability"
+                    )
+                dc = (
+                    int(
+                        dict(
+                            dict(trap_object_context["profile"].get("trigger") or {}).get(
+                                "optional_sympathy"
+                            )
+                            or {}
+                        )["dispel_magic_dc"]
+                    )
+                    if facts["profile_id"] == "srd5.1.sphere_of_annihilation"
+                    else int(dict(trap_object_context["profile"].get("spell_disable") or {})["dc"])
+                )
+                check_rules = self.effective_rule_context(
+                    current.campaign_id,
+                    branch_id=branch_id,
+                    facts={
+                        "kind": "check",
+                        "actor_id": character_id,
+                        "ability": ability,
+                        "dc": dc,
+                        "spell_id": spell_id,
+                        "trap_id": facts["trap_id"],
+                        "trap_source_ref": facts["source_ref"],
+                        "trap_profile_id": facts["profile_id"],
+                        "trap_spell_action": "dispel_magic",
+                    },
+                )
+                check = _support.resolve_actor_check(
+                    self.combat_actor_snapshot(character_id),
+                    kind="check",
+                    ability=ability,
+                    dc=dc,
+                    ruleset="2014",
+                    rules=check_rules,
+                    rng=_support.active_random_stream(),
+                )
+                check["ability"] = ability
+            settled = settle_trap_object_spell(
+                _support.deepcopy(dict(next_state.get("trap_state") or {})),
+                profile=trap_object_context["profile"],
+                source_ref=facts["source_ref"],
+                scene_id=facts["scene_id"],
+                trap_id=facts["trap_id"],
+                actor_id=character_id,
+                action=trap_spell_kind,
+                component=facts["component"],
+                success=None if check is None else bool(check.get("success")),
+                face_enchantment_present=facts.get("face_enchantment_present"),
+                reviewed_by=principal_id,
+                campaign_revision=campaign.revision,
+            )
+            trap_result = {
+                "kind": "source_trap_object_spell",
+                "spell_id": spell_id,
+                "spell_action": trap_spell_kind,
+                "cast_level": int(applied.get("cast_level", cast_level or 1) or 1),
+                "payment": _support.deepcopy(applied.get("payment") or {}),
+                "component_receipt": _support.deepcopy(applied.get("component_receipt")),
+                "source_review_receipt": facts,
+                "effect": settled["result"],
+                "trap": settled["trap"],
+            }
+            if check is not None:
+                trap_result["check"] = check
+                rule_receipts.extend(check.get("rule_receipts") or [])
+            if trap_spell_kind == "detect_magic":
+                trap_result["aura"] = {"target": "statue", "school": "evocation"}
+            next_state["trap_state"] = settled["state"]
+            applied["automatic_effect"] = "source_trap_object_spell"
+            applied["trap_object_spell"] = trap_result
+            applied["ruling_required"] = []
+            applied["ruling_requirements"] = []
         reconciled_dependencies = _support.reconcile_source_effect_dependencies(timed_sheets)
         timed_sheets = reconciled_dependencies["sheets"]
         applied["sheet"] = timed_sheets[current.id]

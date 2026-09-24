@@ -2332,6 +2332,78 @@ def test_2014_grid_vision_resolves_light_and_senses() -> None:
     assert profile["light_level"] == "dark"
     assert profile["visible"] is False
 
+    dynamic_map = {"ambient_illumination": "dark"}
+    encounter, ordinary, subject = actors(
+        viewer_senses={}, map_request=dynamic_map, subject_x=2,
+    )
+    map_checksum = encounter["battle_map"]["checksum"]
+    scene_id = encounter["battle_map"]["source"]["scene_id"]
+    lamp = {
+        "id": "gear-light:viewer:lamp",
+        "actor_id": ordinary["actor_id"],
+        "item_id": "lamp",
+        "item_name": "Lamp",
+        "source_key": "dnd5e.content.srd2014.item.lamp",
+        "source_ref": "bundled:srd2014/04_Equipment/Adventuring_Gear.md",
+        "active": True,
+        "remaining_fuel_ticks": 3600,
+        "fuel_due_elapsed_ticks": 3600,
+        "hood": "raised",
+        "orientation": None,
+        "reviewer_principal_id": None,
+        "reviewed_scene_id": None,
+        "reviewed_map_checksum": None,
+        "reviewed_map_revision": None,
+    }
+    encounter["adventuring_gear_lights"] = [lamp]
+    profile = vision_profile_2014(encounter, ordinary, subject)
+    assert profile["light_level"] == "bright"
+    assert profile["source_lights"][0]["bright_radius_ft"] == 15
+    assert profile["source_lights"][0]["dim_radius_ft"] == 45
+
+    hooded = {
+        **lamp,
+        "id": "gear-light:viewer:hooded",
+        "item_id": "hooded",
+        "item_name": "Lantern, hooded",
+        "source_key": "dnd5e.content.srd2014.item.lantern-hooded",
+        "hood": "lowered",
+    }
+    encounter["adventuring_gear_lights"] = [hooded]
+    subject["position"] = {"x": 1, "y": 0}
+    profile = vision_profile_2014(encounter, ordinary, subject)
+    assert profile["light_level"] == "dim"
+    assert profile["source_lights"][0]["bright_radius_ft"] == 0
+    assert profile["source_lights"][0]["dim_radius_ft"] == 5
+
+    bullseye = {
+        **lamp,
+        "id": "gear-light:viewer:bullseye",
+        "item_id": "bullseye",
+        "item_name": "Lantern, bullseye",
+        "source_key": "dnd5e.content.srd2014.item.lantern-bullseye",
+        "orientation": "east",
+        "reviewer_principal_id": "system:local",
+        "reviewed_scene_id": scene_id,
+        "reviewed_map_checksum": map_checksum,
+        "reviewed_map_revision": encounter["battle_map"]["map_revision"],
+    }
+    encounter["adventuring_gear_lights"] = [bullseye]
+    subject["position"] = {"x": 2, "y": 0}
+    profile = vision_profile_2014(encounter, ordinary, subject)
+    assert profile["light_level"] == "bright"
+    assert profile["source_lights"][0]["shape"] == "cone"
+    assert profile["source_lights"][0]["direction"] == "east"
+    subject["position"] = {"x": 0, "y": 2}
+    profile = vision_profile_2014(encounter, ordinary, subject)
+    assert profile["light_level"] == "dark"
+    assert profile["source_lights"] == []
+    bullseye["reviewed_map_checksum"] = "stale-map"
+    subject["position"] = {"x": 2, "y": 0}
+    profile = vision_profile_2014(encounter, ordinary, subject)
+    assert profile["light_level"] == "dark"
+    assert profile["source_lights"] == []
+
     blocked_torch_map = {
         **torch_map,
         "vision_cells": [{
@@ -8830,3 +8902,51 @@ def test_lucky_charm_madness_attack_penalty_uses_chosen_actor_grid_distance() ->
 
     assert plan["disadvantage"] is True
     assert "lucky-charm" in plan["disadvantage_sources"]
+
+
+def test_2014_paranoia_disadvantages_only_wisdom_and_charisma_checks() -> None:
+    from sagasmith_dnd.madness import resolve_madness
+
+    actor = _actor("paranoid")
+    effect = resolve_madness("long_term", 25, duration_die=3)["runtime_effect"]
+    effect["id"] = "paranoia"
+    actor["sheet"], _ = add_effect(actor["sheet"], effect)
+    actor["derived"] = derive_character_sheet(actor["sheet"])
+
+    wisdom = resolve_actor_check(
+        actor, kind="ability", ability="wisdom", dc=15, rng=_SequenceRng(2, 19)
+    )
+    charisma = resolve_actor_check(
+        actor, kind="ability", ability="charisma", dc=15, rng=_SequenceRng(3, 18)
+    )
+    strength = resolve_actor_check(
+        actor, kind="ability", ability="strength", dc=15, rng=_SequenceRng(7)
+    )
+
+    assert wisdom["rolls"] == [2, 19]
+    assert charisma["rolls"] == [3, 18]
+    assert strength["rolls"] == [7]
+
+
+def test_2014_tremors_disadvantage_applies_to_strength_dexterity_rolls() -> None:
+    from sagasmith_dnd.madness import resolve_madness
+
+    attacker = _actor("trembling")
+    target = _actor("target")
+    effect = resolve_madness("long_term", 70, duration_die=3)["runtime_effect"]
+    effect["id"] = "tremors"
+    attacker["sheet"], _ = add_effect(attacker["sheet"], effect)
+    attacker["derived"] = derive_character_sheet(attacker["sheet"])
+
+    dexterity_save = resolve_actor_check(
+        attacker, kind="save", ability="dexterity", dc=15, rng=_SequenceRng(2, 19)
+    )
+    constitution_save = resolve_actor_check(
+        attacker, kind="save", ability="constitution", dc=15, rng=_SequenceRng(7)
+    )
+    attack = preflight_attack(attacker, target, action={})
+
+    assert dexterity_save["rolls"] == [2, 19]
+    assert constitution_save["rolls"] == [7]
+    assert attack["disadvantage"] is True
+    assert "tremors" in attack["disadvantage_sources"]

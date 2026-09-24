@@ -56,7 +56,8 @@ module_query module_search module_expand continuity_context memory_change campai
 combat_start combat_query combat_resolve_attack combat_cast_spell combat_movement
 combat_choice combat_end_turn combat_end combat_common_action combat_use_activity
 combat_check combat_poison_coat combat_poison_expose combat_poison_neutralize combat_poison_wash
-character_state_change character_disease_exposure character_disease_cure
+character_state_change character_disease_exposure
+character_disease_exposure_batch character_disease_cure
 character_disease_eyebright_craft character_disease_eyebright_apply character_disease_stress
 character_disease_end_turn character_downtime_settle
 rule_search rule_expand skill_query
@@ -80,7 +81,7 @@ PHASE_TOOLS = {
         campaign_event campaign_rules character_ability_apply character_action
         character_content_apply character_create_from character_metadata_update character_query
         character_sheet_replace character_spell_prepare character_state_change
-        character_disease_exposure character_disease_cure
+        character_disease_exposure character_disease_exposure_batch character_disease_cure
         character_disease_eyebright_craft character_disease_eyebright_apply character_disease_stress
         character_disease_end_turn character_downtime_settle
         adventuring_gear_action
@@ -100,7 +101,8 @@ PHASE_TOOLS = {
         addon_actor_instantiate bounded_evaluation
         branch_query campaign_change campaign_event campaign_rules character_action
         character_check character_content_apply character_metadata_update
-        character_query character_state_change character_disease_exposure character_disease_cure
+        character_query character_state_change character_disease_exposure
+        character_disease_exposure_batch character_disease_cure
         character_disease_eyebright_craft character_disease_eyebright_apply
         character_disease_stress character_disease_end_turn
         character_downtime_settle
@@ -121,7 +123,7 @@ PHASE_TOOLS = {
         bounded_evaluation
         branch_change branch_query
         campaign_rules character_query character_state_change
-        character_disease_exposure character_disease_cure
+        character_disease_exposure character_disease_exposure_batch character_disease_cure
         character_disease_eyebright_craft character_disease_eyebright_apply character_disease_stress
         character_disease_end_turn
         combat_cast_spell combat_check combat_choice
@@ -166,7 +168,7 @@ PHASE_DM_TOOLS = {
         combat_start content_pack content_solution memory_change memory_query module_set_progress
         npc_conversation playthrough_manifest snapshot_create snapshot_query snapshot_restore
         combat_poison_coat combat_poison_expose combat_poison_neutralize combat_poison_wash
-        character_disease_exposure character_disease_cure
+        character_disease_exposure character_disease_exposure_batch character_disease_cure
         character_disease_eyebright_craft character_disease_eyebright_apply character_disease_stress
         character_disease_end_turn
         state_revision trap_state_transition adventuring_gear_action

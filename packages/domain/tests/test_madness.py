@@ -110,6 +110,7 @@ def test_lucky_charm_choice_is_source_owned_and_penalty_has_exact_distance_bound
         ("long_term", 41, {"kind": "potion", "potion_name": "healing"}),
         ("indefinite", 26, {"kind": "person_actor", "actor_id": "actor:scribe"}),
         ("indefinite", 36, {"kind": "goal", "goal_id": "find_the_crown"}),
+        ("short_term", 31, {"kind": "fear_source_actor", "actor_id": "actor:terror"}),
     ],
 )
 def test_source_defined_narrative_madness_choices_are_typed_and_persisted(
@@ -414,3 +415,69 @@ def test_suppression_preserves_overlaps_and_does_not_revive_a_cured_effect() -> 
     assert resumed["resumed_effect_ids"] == []
     assert resumed["sheet"]["effects"][0]["changes"] == []
     assert "paralyzed" in resumed["sheet"]["conditions"]
+
+
+@pytest.mark.parametrize(
+    ("table_roll", "kind", "ability", "expected"),
+    [
+        (25, "ability", "wisdom", True),
+        (25, "ability", "charisma", True),
+        (25, "ability", "strength", False),
+        (25, "save", "wisdom", False),
+        (70, "attack", "strength", True),
+        (70, "ability", "dexterity", True),
+        (70, "save", "dexterity", True),
+        (70, "save", "constitution", False),
+    ],
+)
+def test_scoped_madness_disadvantage_matches_source_ability_and_roll_kind(
+    table_roll: int, kind: str, ability: str, expected: bool
+) -> None:
+    effect = madness.resolve_madness(
+        "long_term", table_roll, duration_die=3
+    )["runtime_effect"]
+    effect["id"] = "scoped-madness"
+    sheet = {"effects": [effect]}
+
+    effect_ids = madness.roll_disadvantage_effect_ids(
+        sheet, kind=kind, ability=ability
+    )
+
+    assert bool(effect_ids) is expected
+    assert effect_ids == (["scoped-madness"] if expected else [])
+
+
+def test_suppressed_scoped_madness_does_not_apply_disadvantage() -> None:
+    effect = madness.resolve_madness(
+        "long_term", 70, duration_die=3
+    )["runtime_effect"]
+    effect["id"] = "suppressed-tremors"
+    sheet = madness.suppress_madness_effect(
+        {"effects": [effect]},
+        effect_id="suppressed-tremors",
+        started_elapsed_ticks=0,
+    )
+
+    assert madness.roll_disadvantage_effect_ids(
+        sheet, kind="attack", ability="strength"
+    ) == []
+
+
+def test_flee_madness_requires_a_typed_fear_source_actor_choice() -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2014"
+    effect = madness.resolve_madness("short_term", 31, duration_die=2)["runtime_effect"]
+    effect["id"] = "flee-fear"
+    sheet, _ = add_effect(sheet, effect)
+
+    assert madness.fleeing_source_bindings(sheet) == [
+        {"effect_id": "flee-fear", "actor_id": None}
+    ]
+    chosen = madness.choose_madness_outcome(
+        sheet,
+        effect_id="flee-fear",
+        choice={"kind": "fear_source_actor", "actor_id": "actor:terror"},
+    )
+    assert madness.fleeing_source_bindings(chosen) == [
+        {"effect_id": "flee-fear", "actor_id": "actor:terror"}
+    ]

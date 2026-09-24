@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from sagasmith_dnd.character_schema import derive_character_sheet, effective_ability_modifier
+from sagasmith_dnd.character_schema import derive_character_sheet
 from sagasmith_dnd.diseases import (
     DISEASE_SOURCE_REF,
     advance_disease_clock,
+    cackle_fever_save_dc,
+    disease_save_dc,
+    disease_symptom_exhaustion_levels,
     resolve_sewer_plague_rest_exhaustion,
-    sewer_plague_hit_die_healing,
     sight_rot_attack_penalty,
 )
 from sagasmith_dnd.diseases import (
@@ -31,6 +33,7 @@ from .diseases import (
     EYEBRIGHT_OINTMENT_NAME,
     EYEBRIGHT_OINTMENT_SOURCE_KEY,
     EyebrightCraftingPlan,
+    deactivate_disease_owned_conditions,
 )
 from .grapples import reconcile_grapples
 from .mounted_combat import needs_mounted_rider_save, reconcile_mounted_conditions
@@ -62,9 +65,13 @@ def _advance_disease_effects(
             ):
                 combat = value.setdefault("combat", {})
                 before = int(combat.get("exhaustion", 0) or 0)
-                value = _support.set_exhaustion_level(value, min(6, before + 1))
+                value = _support.set_exhaustion_level(
+                    value, min(6, before + disease_symptom_exhaustion_levels(advanced))
+                )
                 advanced["symptom_exhaustion_owned"] = True
-                advanced["locked_exhaustion_level"] = min(6, before + 1)
+                advanced["locked_exhaustion_level"] = min(
+                    6, before + disease_symptom_exhaustion_levels(advanced)
+                )
                 effect = next(
                     item for item in value.get("effects", []) if item.get("id") == effect.get("id")
                 )
@@ -88,36 +95,27 @@ def _advance_disease_effects(
     return value, changed
 
 
-def _apply_sewer_plague_hit_die_limit(
-    sheet: dict[str, Any], applied: dict[str, Any]
-) -> dict[str, Any]:
-    """Apply Sewer Plague's half Hit Die healing before the HP cap."""
-    original_hp = int(sheet.get("combat", {}).get("hp", {}).get("value", 0) or 0)
-    maximum_hp = int(
-        applied["sheet"].get("combat", {}).get("hp", {}).get("max", original_hp)
-        or original_hp
-    )
-    disease_healing = sewer_plague_hit_die_healing(
-        list(applied.get("hit_die_rolls") or []),
-        constitution_modifier=effective_ability_modifier(sheet, "constitution"),
-    )
-    song_of_rest = dict(applied.get("song_of_rest") or {})
-    song_healing = int(song_of_rest.get("rolled_healing", 0) or 0)
-    hit_die_applied = min(
-        disease_healing["disease_hit_die_healing"], max(0, maximum_hp - original_hp)
-    )
-    song_applied = min(
-        song_healing, max(0, maximum_hp - original_hp - hit_die_applied)
-    )
-    applied["sheet"].setdefault("combat", {}).setdefault("hp", {})["value"] = (
-        original_hp + hit_die_applied + song_applied
-    )
-    applied["hit_die_applied_healing"] = hit_die_applied
-    if song_of_rest:
-        song_of_rest["applied_healing"] = song_applied
-        applied["song_of_rest"] = song_of_rest
-    applied["sewer_plague_hit_die_healing"] = disease_healing
-    return applied
+def _sewer_plague_symptomatic(
+    sheet: dict[str, Any], *, elapsed_ticks: int = 0
+) -> bool:
+    """Check source-owned 2014 Sewer Plague symptoms at a rest boundary."""
+    if str(sheet.get("edition") or "") != "2014":
+        return False
+    for effect in sheet.get("effects", []):
+        if effect.get("kind") != "disease_state" or effect.get("source") != DISEASE_SOURCE_REF:
+            continue
+        state = dict(dict(effect.get("metadata") or {}).get("disease_state") or {})
+        if (
+            not state.get("active")
+            or state.get("edition") != "2014"
+            or state.get("disease_id") != "sewer_plague"
+        ):
+            continue
+        if elapsed_ticks:
+            state = advance_disease_clock(state, elapsed_ticks=elapsed_ticks)
+        if state.get("symptomatic"):
+            return True
+    return False
 
 
 class CampaignsService:
@@ -2628,6 +2626,13 @@ class CampaignsService:
                     if song_source_id is not None
                     else None
                 )
+                hit_die_healing_divisor = (
+                    2
+                    if _sewer_plague_symptomatic(
+                        sheet, elapsed_ticks=int(time_transition["after"]["elapsed_ticks"])
+                    )
+                    else 1
+                )
                 applied_rest = _support.apply_rest(
                     sheet,
                     rest_type="short_rest",
@@ -2639,6 +2644,7 @@ class CampaignsService:
                     natural_recovery=resting_member["natural_recovery"],
                     sorcerous_restoration_points=resting_member["sorcerous_restoration_points"],
                     song_of_rest_source_sheet=song_source_sheet,
+                    hit_die_healing_divisor=hit_die_healing_divisor,
                     rng=_support.active_random_stream(),
                 )
                 if applied_rest.get("status") != "committed":
@@ -2658,6 +2664,10 @@ class CampaignsService:
                     started_elapsed_ticks=started_elapsed_ticks,
                     completed_elapsed_ticks=int(time_transition["after"]["elapsed_ticks"]),
                     hit_dice_spent_count=len(applied_rest.get("hit_dice_rolls") or []),
+                    hit_die_healing_divisor=hit_die_healing_divisor,
+                    hit_die_healing_before_modifier=int(
+                        applied_rest.get("hit_die_healing_before_modifier", 0)
+                    ),
                     expected_character_revision=current.revision + 1,
                     song_of_rest_die_sides=(
                         _support.validate_song_of_rest_source(song_source_sheet)
@@ -3320,12 +3330,14 @@ class CampaignsService:
             "attune_item_id",
             "attunement_prerequisite_confirmed",
             "survival_intake",
+            "cackle_fever_recovery",
         }
         long_rest_fields = {
             "prepared_spell_ids",
             "hit_dice_recovery",
             "food_and_drink",
             "survival_intake",
+            "cackle_fever_recovery",
         }
         short_rest_fields = {
             "hit_dice_spends",
@@ -3352,6 +3364,14 @@ class CampaignsService:
                 raise ValueError(
                     f"members[{index}] fields are invalid for {normalized_rest_type}: "
                     f"{wrong_rest_fields}"
+                )
+            cackle_fever_recovery = raw_member.get("cackle_fever_recovery", "attempt")
+            if not isinstance(cackle_fever_recovery, str) or cackle_fever_recovery not in {
+                "attempt",
+                "skip",
+            }:
+                raise ValueError(
+                    f"members[{index}].cackle_fever_recovery must be attempt or skip"
                 )
             character_id = str(raw_member.get("character_id") or "").strip()
             if not character_id:
@@ -3514,6 +3534,7 @@ class CampaignsService:
                         "hit_dice_recovery": recovery,
                         "food_and_drink": food_and_drink,
                         "survival_intake": survival_intake,
+                        "cackle_fever_recovery": cackle_fever_recovery,
                     }
                 )
             else:
@@ -3744,6 +3765,17 @@ class CampaignsService:
                             "song_of_rest_source_sheet": song_source_sheet,
                         }
                     )
+                if normalized_rest_type == "short_rest" and _sewer_plague_symptomatic(
+                    sheet, elapsed_ticks=completed_elapsed_ticks
+                ):
+                    rest_arguments["hit_die_healing_divisor"] = 2
+                elif normalized_rest_type == "long_rest" and _sewer_plague_symptomatic(
+                    sheet, elapsed_ticks=completed_elapsed_ticks
+                ):
+                    # The disease may become symptomatic at the end of this rest.
+                    # Decide before applying ordinary long-rest healing so the
+                    # authoritative lifecycle calculation owns the HP result.
+                    rest_arguments["restore_hp_on_long_rest"] = False
                 applied = _support.apply_rest(
                     sheet,
                     **rest_arguments,
@@ -3753,31 +3785,6 @@ class CampaignsService:
                     raise _support.CombatEngineError(
                         f"party rest for {current.id} requires an unresolved rule choice"
                     )
-                if (
-                    normalized_rest_type == "short_rest"
-                    and str(sheet.get("edition") or "") == "2014"
-                ):
-                    sewer_active = any(
-                        effect.get("kind") == "disease_state"
-                        and effect.get("source") == DISEASE_SOURCE_REF
-                        and bool(
-                            dict(dict(effect.get("metadata") or {}).get("disease_state") or {}).get(
-                                "active"
-                            )
-                        )
-                        and bool(
-                            dict(dict(effect.get("metadata") or {}).get("disease_state") or {}).get(
-                                "symptomatic"
-                            )
-                        )
-                        and dict(dict(effect.get("metadata") or {}).get("disease_state") or {}).get(
-                            "disease_id"
-                        )
-                        == "sewer_plague"
-                        for effect in sheet.get("effects", [])
-                    )
-                    if sewer_active:
-                        applied = _apply_sewer_plague_hit_die_limit(sheet, applied)
                 if normalized_rest_type == "short_rest":
                     applied["sheet"], _ = _advance_disease_effects(
                         applied["sheet"], completed_elapsed_ticks
@@ -3821,7 +3828,11 @@ class CampaignsService:
                             )
                             disease_effect_id = disease_effect.get("id")
                             applied["sheet"] = _support.set_exhaustion_level(
-                                applied["sheet"], min(6, before_level + 1)
+                                applied["sheet"],
+                                min(
+                                    6,
+                                    before_level + disease_symptom_exhaustion_levels(disease_state),
+                                ),
                             )
                             disease_effect = next(
                                 item
@@ -3829,7 +3840,9 @@ class CampaignsService:
                                 if item.get("id") == disease_effect_id
                             )
                             disease_state["symptom_exhaustion_owned"] = True
-                            disease_state["locked_exhaustion_level"] = min(6, before_level + 1)
+                            disease_state["locked_exhaustion_level"] = min(
+                                6, before_level + disease_symptom_exhaustion_levels(disease_state)
+                            )
                         if not disease_state.get("symptomatic"):
                             disease_effect.setdefault("metadata", {})["disease_state"] = (
                                 disease_state
@@ -3854,7 +3867,13 @@ class CampaignsService:
                         check_result = None
                         recovery_die = madness_d100 = None
                         disease_id = disease_state["disease_id"]
-                        if disease_id in {"cackle_fever", "sewer_plague"}:
+                        cackle_recovery_skipped = (
+                            disease_id == "cackle_fever"
+                            and member.get("cackle_fever_recovery", "attempt") == "skip"
+                        )
+                        if disease_id == "sewer_plague" or (
+                            disease_id == "cackle_fever" and not cackle_recovery_skipped
+                        ):
                             if stream is None:
                                 raise _support.CombatEngineError(
                                     "disease rest saves require the campaign random stream"
@@ -3866,7 +3885,11 @@ class CampaignsService:
                                 actor_snapshot,
                                 kind="save",
                                 ability="constitution",
-                                dc=13 if disease_id == "cackle_fever" else 11,
+                                dc=(
+                                    cackle_fever_save_dc(disease_state, save_kind="recovery")
+                                    if disease_id == "cackle_fever"
+                                    else disease_save_dc(disease_state, save_kind="recovery")
+                                ),
                                 save_condition_id=str(disease_effect.get("id") or ""),
                                 encounter=next_state.get("combat"),
                                 rules=disease_rules,
@@ -3928,6 +3951,18 @@ class CampaignsService:
                         if not disease_state.get("active"):
                             disease_effect["active"] = False
                             disease_effect["ended_reason"] = "cured_by_long_rest"
+                            if disease_id == "cackle_fever":
+                                applied["sheet"], _ = deactivate_disease_owned_conditions(
+                                    applied["sheet"],
+                                    disease_effect_id=str(disease_effect.get("id") or ""),
+                                    disease_id=disease_id,
+                                    ended_reason="cured_by_long_rest",
+                                )
+                                disease_effect = next(
+                                    item
+                                    for item in applied["sheet"].get("effects", [])
+                                    if item.get("id") == disease_effect.get("id")
+                                )
                         if disease_id == "sewer_plague":
                             after_ordinary = int(
                                 applied["sheet"].get("combat", {}).get("exhaustion", 0) or 0
@@ -3950,12 +3985,6 @@ class CampaignsService:
                                 disease_state["active"] = False
                                 disease_effect["active"] = False
                                 disease_effect["ended_reason"] = "cured_by_sewer_plague_rest"
-                            hp_before = int(
-                                sheet.get("combat", {}).get("hp", {}).get("value", 0) or 0
-                            )
-                            applied["sheet"].setdefault("combat", {}).setdefault("hp", {})[
-                                "value"
-                            ] = hp_before
                             transition["events"].extend(sewer["events"])
                             transition["events"].append({"kind": "long_rest_hp_recovery_blocked"})
                             transition["events"].append({"kind": "hit_dice_recovery_halved"})
@@ -4075,6 +4104,10 @@ class CampaignsService:
                         _support.validate_song_of_rest_source(song_source_sheet)
                         if normalized_rest_type == "short_rest" and song_source_sheet is not None
                         else None
+                    ),
+                    hit_die_healing_divisor=int(rest_arguments.get("hit_die_healing_divisor", 1)),
+                    hit_die_healing_before_modifier=int(
+                        applied.get("hit_die_healing_before_modifier", 0)
                     ),
                     song_of_rest_used=applied.get("song_of_rest") is not None,
                 )
@@ -4767,13 +4800,13 @@ class CampaignsService:
         self,
         campaign_id: str,
         payload: dict[str, Any],
-        action: Literal["water"] = "water",
+        action: Literal["water", "object_strength_review"] = "water",
         principal_id: str = _support.LOCAL_SYSTEM_PRINCIPAL_ID,
         expected_revision: int | None = None,
         branch_id: str | None = None,
         idempotency_key: str | None = None,
     ) -> dict[str, Any]:
-        """Record a DM-reviewed 2014 water transition without moving an actor.
+        """Record a DM-reviewed scene fact without moving an actor.
 
         payload={source_ref,source_excerpt,reason,actors?:[{actor_id,underwater,
         fully_immersed}],objects?:[{scene_id,object_id,fully_immersed}]}.
@@ -4786,6 +4819,19 @@ class CampaignsService:
         Pending combat choices must finish before changing their environment.
         """
         from .environment import change_water_environment
+
+        if action == "object_strength_review":
+            from .environment import review_scene_object_strength_check
+
+            return review_scene_object_strength_check(
+                self,
+                campaign_id,
+                payload,
+                principal_id=principal_id,
+                expected_revision=expected_revision,
+                branch_id=branch_id,
+                idempotency_key=idempotency_key,
+            )
 
         return change_water_environment(
             self,

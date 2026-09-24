@@ -1,23 +1,71 @@
 import pytest
 
 from sagasmith_dnd.character_schema import active_effect_roll_bonus, default_character_sheet
+from sagasmith_dnd.content_validation import build_catalog_review
 from sagasmith_dnd.diseases import (
     DISEASE_SOURCE_REF,
     DiseaseError,
     advance_disease_clock,
     apply_sight_rot_ointment,
     cackle_carrier_immunity,
+    cackle_fever_save_dc,
     cure_disease,
+    disease_save_dc,
     infection_state,
     resolve_cackle_end_turn,
     resolve_cackle_spread,
     resolve_cackle_stress,
     resolve_long_rest,
+    resolve_reviewed_disease_variant,
     resolve_sewer_plague_rest_exhaustion,
     sewer_plague_hit_die_healing,
     sight_rot_ability_check_penalty,
     sight_rot_attack_penalty,
 )
+
+
+def _reviewed_disease_variant(disease_id: str, values: dict, *, status: str = "approved") -> dict:
+    artifact = {
+        "id": f"campaign.diseases.{disease_id}",
+        "kind": "disease_variant",
+        "card": {"name": f"Campaign {disease_id}"},
+        "source_citations": [
+            {
+                "source": "campaign-source:disease-appendix",
+                "source_ref": {"section": disease_id},
+                "source_excerpt": "Reviewed campaign disease rule.",
+            }
+        ],
+        "disease_variant": {
+            "schema_version": 1,
+            "edition": "2014",
+            "disease_id": disease_id,
+            **values,
+        },
+    }
+    artifact["catalog_review"] = build_catalog_review(
+        artifact,
+        decisions=[
+            {
+                "role": "dm",
+                "reviewer": "campaign-dm",
+                "method": "human",
+                "checks": {
+                    "identity": True,
+                    "classification": True,
+                    "entry_boundary": True,
+                    "references": True,
+                },
+                "notes": "Reviewed against the campaign source.",
+            }
+        ],
+        status=status,
+    )
+    return artifact
+
+
+def _disease_variant_binding() -> dict:
+    return {"pack_id": "campaign.diseases", "version": "1.0.0", "checksum": "a" * 64}
 
 
 @pytest.mark.parametrize(
@@ -63,7 +111,7 @@ def test_successful_or_rejected_exposure_consumes_no_incubation_die():
         )
 
 
-def test_cackle_recovery_save_is_required_and_third_failure_rolls_bundled_madness_once():
+def test_cackle_recovery_can_be_skipped_without_a_failure_or_die():
     state = infection_state(
         "cackle_fever",
         actor_id="actor-1",
@@ -72,8 +120,22 @@ def test_cackle_recovery_save_is_required_and_third_failure_rolls_bundled_madnes
         incubation_roll=1,
     )
     state = advance_disease_clock(state, elapsed_ticks=600)
-    with pytest.raises(DiseaseError, match="requires a long-rest save"):
-        resolve_long_rest(state, save_succeeded=None, elapsed_ticks=600)
+    skipped = resolve_long_rest(state, save_succeeded=None, elapsed_ticks=600)
+    assert skipped["state"] == state
+    assert skipped["events"] == [{"kind": "recovery_skipped"}]
+    with pytest.raises(DiseaseError, match="consumes no disease dice"):
+        resolve_long_rest(state, save_succeeded=None, elapsed_ticks=600, recovery_die=1)
+
+
+def test_cackle_recovery_third_failure_rolls_bundled_madness_once():
+    state = infection_state(
+        "cackle_fever",
+        actor_id="actor-1",
+        elapsed_ticks=0,
+        save_succeeded=False,
+        incubation_roll=1,
+    )
+    state = advance_disease_clock(state, elapsed_ticks=600)
     skipped = {"state": state}
     for count in range(2):
         result = resolve_long_rest(skipped["state"], save_succeeded=False, elapsed_ticks=600)
@@ -123,6 +185,25 @@ def test_cackle_dc_reduction_clamps_to_zero_and_cures():
     assert result["state"]["active"] is False
     assert result["state"]["recovery_dc"] == result["state"]["laughter_dc"] == 0
     assert result["state"]["exhaustion_lock"] is False
+
+
+@pytest.mark.parametrize(
+    ("save_kind", "field"),
+    [("laughter", "laughter_dc"), ("recovery", "recovery_dc")],
+)
+def test_cackle_runtime_save_dc_is_the_persisted_reduced_value(save_kind, field):
+    state = infection_state(
+        "cackle_fever",
+        actor_id="actor-1",
+        elapsed_ticks=0,
+        save_succeeded=False,
+        incubation_roll=1,
+    )
+    state[field] = 4
+    assert cackle_fever_save_dc(state, save_kind=save_kind) == 4
+    state[field] = True
+    with pytest.raises(DiseaseError, match="integer from 0 through 30"):
+        cackle_fever_save_dc(state, save_kind=save_kind)
 
 
 @pytest.mark.parametrize("trigger", ["entering_combat", "taking_damage", "fear", "nightmare"])
@@ -425,3 +506,171 @@ def test_disease_cure_only_releases_its_owned_riders():
     assert any(event["kind"] == "exhaustion_removal_released" for event in cured["events"])
     with pytest.raises(DiseaseError, match="exact disease instance"):
         cure_disease(state, disease_id="sight_rot")
+
+
+def test_cackle_cure_ends_only_its_active_laughter_episode():
+    state = infection_state(
+        "cackle_fever",
+        actor_id="actor-1",
+        elapsed_ticks=0,
+        save_succeeded=False,
+        incubation_roll=1,
+    )
+    state = advance_disease_clock(state, elapsed_ticks=600)
+    state = resolve_cackle_stress(
+        state,
+        trigger="fear",
+        save_succeeded=False,
+        elapsed_ticks=600,
+        psychic_damage_roll=4,
+    )["state"]
+    cured = cure_disease(state, disease_id="cackle_fever")
+    assert cured["state"]["active"] is False
+    assert cured["state"]["laughing"] is False
+    assert cured["state"]["incapacitation_owned"] is False
+    assert "laughing_until_elapsed_ticks" not in cured["state"]
+    assert any(event["kind"] == "mad_laughter_ended" for event in cured["events"])
+
+
+def test_reviewed_cackle_variant_pins_dc_incubation_taxonomy_symptoms_and_receipt():
+    artifact = _reviewed_disease_variant(
+        "cackle_fever",
+        {
+            "save_dcs": {"infection": 12, "laughter": 12, "recovery": 12, "spread": 9},
+            "incubation": {"die": "1d6", "unit": "hour"},
+            "eligible_creature_types": ["humanoid", "beast"],
+            "symptoms": {
+                "exhaustion_levels": 2,
+                "laughter_duration_ticks": 7,
+                "psychic_damage_die": "1d4",
+            },
+        },
+    )
+    profile = resolve_reviewed_disease_variant(
+        "cackle_fever", artifact=artifact, pack_binding=_disease_variant_binding()
+    )
+    state = infection_state(
+        "cackle_fever",
+        actor_id="actor-1",
+        elapsed_ticks=0,
+        save_succeeded=False,
+        incubation_roll=5,
+        profile_override=profile,
+    )
+    assert profile["save_dcs"] == {"infection": 12, "laughter": 12, "recovery": 12, "spread": 9}
+    assert profile["eligible_creature_types"] == ["humanoid", "beast"]
+    assert state["symptoms_due_elapsed_ticks"] == 5 * 600
+    assert state["variant_receipt"]["artifact_id"] == artifact["id"]
+    assert state["variant_receipt"]["reviewed_content_hash"] == artifact["catalog_review"][
+        "reviewed_content_hash"
+    ]
+    symptomatic = advance_disease_clock(state, elapsed_ticks=5 * 600)
+    assert symptomatic["symptom_exhaustion_levels"] == 2
+    assert disease_save_dc(symptomatic, save_kind="spread") == 9
+    laughter = resolve_cackle_stress(
+        symptomatic,
+        trigger="fear",
+        save_succeeded=False,
+        elapsed_ticks=5 * 600,
+        psychic_damage_roll=4,
+    )
+    assert laughter["state"]["laughing_until_elapsed_ticks"] == 5 * 600 + 7
+    assert laughter["events"][0]["rolled"] == 4
+
+
+def test_reviewed_sewer_and_sight_rot_variants_apply_typed_symptom_rules():
+    sewer_profile = resolve_reviewed_disease_variant(
+        "sewer_plague",
+        artifact=_reviewed_disease_variant(
+            "sewer_plague",
+            {
+                "save_dcs": {"infection": 10, "recovery": 9},
+                "symptoms": {"exhaustion_levels": 2},
+            },
+        ),
+        pack_binding=_disease_variant_binding(),
+    )
+    sewer = infection_state(
+        "sewer_plague",
+        actor_id="actor-2",
+        elapsed_ticks=0,
+        save_succeeded=False,
+        incubation_roll=1,
+        profile_override=sewer_profile,
+    )
+    sewer = advance_disease_clock(sewer, elapsed_ticks=24 * 600)
+    assert sewer["symptom_exhaustion_levels"] == 2
+    assert disease_save_dc(sewer, save_kind="recovery") == 9
+
+    sight_profile = resolve_reviewed_disease_variant(
+        "sight_rot",
+        artifact=_reviewed_disease_variant(
+            "sight_rot",
+            {
+                "eligible_creature_types": ["undead"],
+                "incubation": {"fixed": 1, "unit": "day"},
+                "symptoms": {"penalty_per_long_rest": 2, "blindness_threshold": 3},
+            },
+        ),
+        pack_binding=_disease_variant_binding(),
+    )
+    sight = infection_state(
+        "sight_rot",
+        actor_id="actor-3",
+        elapsed_ticks=0,
+        save_succeeded=False,
+        profile_override=sight_profile,
+    )
+    sight = advance_disease_clock(sight, elapsed_ticks=24 * 600)
+    sight = resolve_long_rest(sight, save_succeeded=None, elapsed_ticks=24 * 600)["state"]
+    assert sight_rot_attack_penalty(sight) == -2
+    sight = resolve_long_rest(sight, save_succeeded=None, elapsed_ticks=48 * 600)
+    assert sight["state"]["sight_penalty"] == 3
+    assert any(event["kind"] == "blindness_applied" for event in sight["events"])
+
+
+@pytest.mark.parametrize("status", ["needs_review", "rejected"])
+def test_unreviewed_campaign_disease_variant_is_not_executable(status):
+    artifact = _reviewed_disease_variant(
+        "sewer_plague", {"save_dcs": {"infection": 10}}, status=status
+    )
+    with pytest.raises(DiseaseError, match="approved content review"):
+        resolve_reviewed_disease_variant(
+            "sewer_plague", artifact=artifact, pack_binding=_disease_variant_binding()
+        )
+
+
+def test_stale_review_and_caller_outcome_or_classification_fields_are_rejected():
+    tampered = _reviewed_disease_variant(
+        "sight_rot", {"save_dcs": {"infection": 12}}
+    )
+    tampered["disease_variant"]["save_dcs"]["infection"] = 10
+    with pytest.raises(DiseaseError, match="review is stale"):
+        resolve_reviewed_disease_variant(
+            "sight_rot", artifact=tampered, pack_binding=_disease_variant_binding()
+        )
+
+    forbidden_values = (
+        {"save_succeeded": True},
+        {"creature_type": "humanoid"},
+        {"outcome": "saved"},
+    )
+    for forbidden in forbidden_values:
+        artifact = _reviewed_disease_variant(
+            "sight_rot", {"save_dcs": {"infection": 12}, **forbidden}
+        )
+        with pytest.raises(DiseaseError, match="fields are unsupported"):
+            resolve_reviewed_disease_variant(
+                "sight_rot", artifact=artifact, pack_binding=_disease_variant_binding()
+            )
+
+    with pytest.raises(DiseaseError, match="exact activated rule-pack"):
+        resolve_reviewed_disease_variant(
+            "sight_rot",
+            artifact=_reviewed_disease_variant("sight_rot", {"save_dcs": {"infection": 12}}),
+            pack_binding={
+                "pack_id": "campaign.diseases",
+                "version": "1.0.0",
+                "checksum": "tampered",
+            },
+        )

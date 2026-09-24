@@ -2293,6 +2293,7 @@ class AuthoringService:
         artifacts: list[dict[str, Any]] | None = None,
         mechanics: list[dict[str, Any]] | None = None,
         provenance: dict[str, Any] | None = None,
+        disease_variant_approvals: dict[str, dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         """Draft a pack whose citations are resolved from imported rule chunks."""
         definition_id = str(manifest.get("id") or "")
@@ -2335,8 +2336,10 @@ class AuthoringService:
         bound_artifacts: list[dict[str, Any]] = []
         for artifact in artifacts or []:
             raw_value = _support.deepcopy(artifact)
-            reviewed_catalog = raw_value.pop("catalog_review", None)
-            reviewed_selection = raw_value.pop("selection_contract", None)
+            raw_value.pop("catalog_review", None)
+            raw_value.pop("selection_contract", None)
+            candidate_id = str(raw_value.pop("authoring_candidate_id", "") or "")
+            is_disease_variant = str(raw_value.get("kind") or "") == "disease_variant"
             chunk_ids = list(raw_value.get("source_chunk_ids", []) or [])
             if not chunk_ids:
                 raise ValueError("source-bound artifacts require source_chunk_ids")
@@ -2353,24 +2356,80 @@ class AuthoringService:
                 if source_excerpt:
                     citation["source_excerpt"] = source_excerpt
                 citations.append(citation)
-            value = _support.artifact_with_direct_resolution(
-                {
+            if is_disease_variant:
+                approval = dict((disease_variant_approvals or {}).get(candidate_id) or {})
+                if (
+                    not candidate_id
+                    or not approval.get("reviewer")
+                    or not approval.get("note")
+                    or not approval.get("candidate_set_fingerprint")
+                    or approval.get("source_id") != source_id
+                    or approval.get("source_checksum") != str(source.get("checksum") or "")
+                ):
+                    raise ValueError(
+                        "disease variant source compilation requires a finalized DM review receipt"
+                    )
+                value = {
+                    **raw_value,
                     "id": str(raw_value.get("id") or ""),
-                    "kind": str(raw_value.get("kind") or "content"),
-                    "name": str(dict(raw_value.get("card") or {}).get("name") or ""),
-                    "mechanical_scope": raw_value.get("mechanical_scope"),
+                    "kind": "disease_variant",
                     "source_chunk_ids": chunk_ids,
-                    "artifact": raw_value,
-                },
-                citation_source=str(citations[0]["source"]),
-                source_chunks_by_id=source_chunks_by_id,
-            )
+                }
+            else:
+                value = _support.artifact_with_direct_resolution(
+                    {
+                        "id": str(raw_value.get("id") or ""),
+                        "kind": str(raw_value.get("kind") or "content"),
+                        "name": str(dict(raw_value.get("card") or {}).get("name") or ""),
+                        "mechanical_scope": raw_value.get("mechanical_scope"),
+                        "source_chunk_ids": chunk_ids,
+                        "artifact": raw_value,
+                    },
+                    citation_source=str(citations[0]["source"]),
+                    source_chunks_by_id=source_chunks_by_id,
+                )
             value.pop("source_chunk_ids", None)
             value["rule_refs"] = [
                 f"{citation['source']}#chunk:{citation['chunk_id']}" for citation in citations
             ]
             value["source_citations"] = citations
-            if isinstance(reviewed_catalog, dict) and isinstance(reviewed_selection, dict):
+            if is_disease_variant:
+                value["selection_contract"] = _support.build_selection_contract(
+                    value,
+                    status="not_applicable",
+                    references=[
+                        f"{citation['source']}#chunk:{citation['chunk_id']}"
+                        for citation in citations
+                    ],
+                    blockers=[],
+                )
+                value["catalog_review"] = _support.build_catalog_review(
+                    value,
+                    decisions=[
+                        {
+                            "role": "dm",
+                            "reviewer": str(approval["reviewer"]),
+                            "method": "agent",
+                            "checks": {
+                                "identity": True,
+                                "classification": True,
+                                "entry_boundary": True,
+                                "references": True,
+                            },
+                            "notes": (
+                                "DM accepted candidate and finalized the source-bound set: "
+                                + str(approval["note"])
+                            )[:2000],
+                        }
+                    ],
+                    status="approved",
+                )
+            else:
+                reviewed_catalog = artifact.get("catalog_review")
+                reviewed_selection = artifact.get("selection_contract")
+            if not is_disease_variant and isinstance(reviewed_catalog, dict) and isinstance(
+                reviewed_selection, dict
+            ):
                 value["selection_contract"] = _support.build_selection_contract(
                     value,
                     status=str(reviewed_selection.get("status") or ""),

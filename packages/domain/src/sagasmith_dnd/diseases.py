@@ -6,9 +6,11 @@ the save rolls, authoritative creature records, clocks, persistence and commit.
 
 from __future__ import annotations
 
+import re
 from copy import deepcopy
-from typing import Any
+from typing import Any, Mapping
 
+from .content_validation import catalog_review_errors, content_fingerprint
 from .madness import resolve_madness
 
 DISEASE_SOURCE_REF = "bundled:srd2014/08_Gamemastering/Diseases.md"
@@ -27,25 +29,35 @@ DISEASES_2014: dict[str, dict[str, Any]] = {
         "id": "cackle_fever",
         "name": "Cackle Fever",
         "save_dc": 13,
+        "save_dcs": {"infection": 13, "laughter": 13, "recovery": 13, "spread": 10},
         "eligible_creature_types": ["humanoid"],
         "immune_species": ["gnome"],
         "incubation": {"die": "1d4", "unit": "hour"},
+        "symptoms": {
+            "exhaustion_levels": 1,
+            "laughter_duration_ticks": TICKS_PER_MINUTE,
+            "psychic_damage_die": "1d10",
+        },
         "source_ref": DISEASE_SOURCE_REF,
     },
     "sewer_plague": {
         "id": "sewer_plague",
         "name": "Sewer Plague",
         "save_dc": 11,
+        "save_dcs": {"infection": 11, "recovery": 11},
         "eligible_creature_types": ["humanoid"],
         "incubation": {"die": "1d4", "unit": "day"},
+        "symptoms": {"exhaustion_levels": 1},
         "source_ref": DISEASE_SOURCE_REF,
     },
     "sight_rot": {
         "id": "sight_rot",
         "name": "Sight Rot",
         "save_dc": 15,
+        "save_dcs": {"infection": 15},
         "eligible_creature_types": ["beast", "humanoid"],
         "incubation": {"fixed": 1, "unit": "day"},
+        "symptoms": {"penalty_per_long_rest": 1, "blindness_threshold": 5},
         "source_ref": DISEASE_SOURCE_REF,
     },
 }
@@ -59,6 +71,265 @@ def disease_profile(value: Any) -> dict[str, Any]:
     return deepcopy(DISEASES_2014[key])
 
 
+def _infection_profile(value: Any, override: Mapping[str, Any] | None) -> dict[str, Any]:
+    profile = disease_profile(value)
+    if override is None:
+        return profile
+    candidate = deepcopy(dict(override))
+    if candidate.get("id") != profile["id"] or candidate.get("source_ref") != profile["source_ref"]:
+        raise DiseaseError("compiled disease profile does not match the bundled disease")
+    receipt = candidate.get("variant_receipt")
+    if not isinstance(receipt, Mapping):
+        raise DiseaseError("campaign disease variants require reviewed rule-pack provenance")
+    if set(candidate.get("save_dcs") or {}) != set(profile["save_dcs"]):
+        raise DiseaseError("compiled disease save DCs are incomplete")
+    for dc in candidate["save_dcs"].values():
+        if isinstance(dc, bool) or not isinstance(dc, int) or not 1 <= dc <= 30:
+            raise DiseaseError("compiled disease save DC is invalid")
+    candidate["save_dc"] = int(candidate["save_dcs"]["infection"])
+    candidate["incubation"] = _normalize_variant_incubation(candidate.get("incubation"))
+    candidate["symptoms"] = _normalize_variant_symptoms(
+        profile["id"], profile["symptoms"], candidate.get("symptoms")
+    )
+    kinds = candidate.get("eligible_creature_types")
+    if (
+        not isinstance(kinds, list)
+        or not kinds
+        or any(kind not in _CREATURE_KINDS for kind in kinds)
+        or len(set(kinds)) != len(kinds)
+    ):
+        raise DiseaseError("compiled disease creature kinds are invalid")
+    candidate["immune_species"] = list(profile.get("immune_species", []))
+    return candidate
+
+
+_CREATURE_KINDS = frozenset(
+    {
+        "aberration",
+        "beast",
+        "celestial",
+        "construct",
+        "dragon",
+        "elemental",
+        "fey",
+        "fiend",
+        "giant",
+        "humanoid",
+        "monstrosity",
+        "ooze",
+        "plant",
+        "undead",
+    }
+)
+
+
+def normalize_disease_variant_definition(value: Any, raw_variant: Any) -> dict[str, Any]:
+    """Validate and normalize the bounded, typed 2014 disease variant payload."""
+
+    profile = disease_profile(value)
+    if not isinstance(raw_variant, Mapping):
+        raise DiseaseError("disease variant artifact needs a typed disease_variant object")
+    variant = deepcopy(dict(raw_variant))
+    allowed_fields = {
+        "schema_version",
+        "edition",
+        "disease_id",
+        "save_dcs",
+        "incubation",
+        "eligible_creature_types",
+        "symptoms",
+    }
+    if set(variant) - allowed_fields or not {"schema_version", "edition", "disease_id"} <= set(
+        variant
+    ):
+        raise DiseaseError("disease variant fields are unsupported or incomplete")
+    if type(variant.get("schema_version")) is not int or variant["schema_version"] != 1:
+        raise DiseaseError("disease variants require schema version 1 and edition 2014")
+    if variant.get("edition") != "2014":
+        raise DiseaseError("disease variants require schema version 1 and edition 2014")
+    if variant.get("disease_id") != profile["id"]:
+        raise DiseaseError("disease variant id does not match the selected disease")
+    if len(set(variant) - {"schema_version", "edition", "disease_id"}) == 0:
+        raise DiseaseError("disease variant must change at least one permitted rule field")
+
+    if "save_dcs" in variant:
+        save_dcs = variant["save_dcs"]
+        allowed_saves = set(profile["save_dcs"])
+        if not isinstance(save_dcs, Mapping) or not save_dcs or set(save_dcs) - allowed_saves:
+            raise DiseaseError("disease variant save_dcs contains unsupported save kinds")
+        normalized_saves: dict[str, int] = {}
+        for save_kind, dc in dict(save_dcs).items():
+            if isinstance(dc, bool) or not isinstance(dc, int) or not 1 <= dc <= 30:
+                raise DiseaseError("disease variant save DCs must be from 1 through 30")
+            normalized_saves[str(save_kind)] = dc
+        variant["save_dcs"] = normalized_saves
+    if "incubation" in variant:
+        variant["incubation"] = _normalize_variant_incubation(variant["incubation"])
+    if "eligible_creature_types" in variant:
+        kinds = variant["eligible_creature_types"]
+        if (
+            not isinstance(kinds, list)
+            or not kinds
+            or any(not isinstance(item, str) or item not in _CREATURE_KINDS for item in kinds)
+            or len(set(kinds)) != len(kinds)
+        ):
+            raise DiseaseError("disease variant creature kinds are invalid or duplicated")
+        variant["eligible_creature_types"] = list(kinds)
+    if "symptoms" in variant:
+        normalized = _normalize_variant_symptoms(
+            profile["id"], profile["symptoms"], variant["symptoms"]
+        )
+        variant["symptoms"] = {
+            key: normalized[key] for key in dict(variant["symptoms"])
+        }
+    return variant
+
+
+def resolve_reviewed_disease_variant(
+    value: Any,
+    *,
+    artifact: Mapping[str, Any],
+    pack_binding: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Apply one narrow, approved disease variant from an activated rule pack.
+
+    The caller must obtain ``artifact`` from the exact immutable installed
+    version in the campaign's effective branch lock. This helper verifies the
+    artifact's own review/content binding and accepts only modeled 2014 fields.
+    """
+
+    profile = disease_profile(value)
+    artifact_value = deepcopy(dict(artifact))
+    artifact_id = str(artifact_value.get("id") or "").strip()
+    raw_variant = artifact_value.get("disease_variant")
+    binding = dict(pack_binding)
+    pack_id = str(binding.get("pack_id") or "").strip()
+    version = str(binding.get("version") or "").strip()
+    checksum = str(binding.get("checksum") or "")
+    if (
+        artifact_value.get("kind") != "disease_variant"
+        or not artifact_id
+        or not pack_id
+        or not version
+        or not re.fullmatch(r"[0-9a-f]{64}", checksum)
+        or not artifact_id.startswith(f"{pack_id}.")
+    ):
+        raise DiseaseError("disease variant must come from an exact activated rule-pack version")
+    variant = normalize_disease_variant_definition(value, raw_variant)
+
+    review = artifact_value.get("catalog_review")
+    if not isinstance(review, Mapping) or review.get("status") != "approved":
+        raise DiseaseError("disease variant requires an approved content review")
+    review_errors = catalog_review_errors(artifact_value)
+    if review_errors:
+        raise DiseaseError(
+            "disease variant review is stale or malformed: " + "; ".join(review_errors)
+        )
+    decisions = list(dict(review).get("decisions") or [])
+    checks = {"identity", "classification", "entry_boundary", "references"}
+    if not any(
+        isinstance(item, Mapping)
+        and item.get("role") == "dm"
+        and isinstance(item.get("checks"), Mapping)
+        and all(dict(item["checks"]).get(key) is True for key in checks)
+        for item in decisions
+    ):
+        raise DiseaseError("disease variant requires a passing DM review decision")
+    citations = artifact_value.get("source_citations")
+    if not isinstance(citations, list) or not any(
+        isinstance(item, Mapping) and str(item.get("source") or "").strip()
+        for item in citations
+    ):
+        raise DiseaseError("disease variant requires a source citation")
+
+    if "save_dcs" in variant:
+        for save_kind, dc in variant["save_dcs"].items():
+            profile["save_dcs"][save_kind] = dc
+        profile["save_dc"] = int(profile["save_dcs"]["infection"])
+    if "incubation" in variant:
+        profile["incubation"] = variant["incubation"]
+    if "eligible_creature_types" in variant:
+        profile["eligible_creature_types"] = list(variant["eligible_creature_types"])
+    if "symptoms" in variant:
+        profile["symptoms"] = _normalize_variant_symptoms(
+            profile["id"], profile["symptoms"], variant["symptoms"]
+        )
+    profile["variant_receipt"] = {
+        "pack_id": pack_id,
+        "version": version,
+        "pack_checksum": checksum,
+        "artifact_id": artifact_id,
+        "artifact_content_hash": content_fingerprint(artifact_value),
+        "reviewed_content_hash": str(review.get("reviewed_content_hash") or ""),
+        "source_citations": deepcopy(citations),
+    }
+    return profile
+
+
+def _normalize_variant_incubation(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise DiseaseError("disease variant incubation must be an object")
+    incubation = dict(value)
+    unit = incubation.get("unit")
+    if unit not in {"hour", "day"}:
+        raise DiseaseError("disease variant incubation unit must be hour or day")
+    if set(incubation) == {"die", "unit"}:
+        die = incubation.get("die")
+        match = re.fullmatch(r"1d(2|[3-9]|1[0-9]|20)", str(die or ""))
+        if match is None:
+            raise DiseaseError("disease variant incubation die must be a bounded 1dN")
+        return {"die": f"1d{int(match.group(1))}", "unit": unit}
+    if set(incubation) == {"fixed", "unit"}:
+        amount = incubation.get("fixed")
+        if isinstance(amount, bool) or not isinstance(amount, int) or not 1 <= amount <= 365:
+            raise DiseaseError("disease variant fixed incubation must be from 1 through 365")
+        return {"fixed": amount, "unit": unit}
+    raise DiseaseError("disease variant incubation fields are unsupported")
+
+
+def _normalize_variant_symptoms(
+    disease_id: str, defaults: Mapping[str, Any], value: Any
+) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or not value:
+        raise DiseaseError("disease variant symptoms must be a non-empty object")
+    result = deepcopy(dict(defaults))
+    supplied = dict(value)
+    if disease_id in {"cackle_fever", "sewer_plague"}:
+        allowed = {"exhaustion_levels"}
+        if disease_id == "cackle_fever":
+            allowed |= {"laughter_duration_ticks", "psychic_damage_die"}
+        if set(supplied) - allowed:
+            raise DiseaseError("disease variant symptoms contain unsupported fields")
+        if "exhaustion_levels" in supplied:
+            levels = supplied["exhaustion_levels"]
+            if isinstance(levels, bool) or not isinstance(levels, int) or not 1 <= levels <= 6:
+                raise DiseaseError("symptom exhaustion_levels must be from 1 through 6")
+            result["exhaustion_levels"] = levels
+        if "laughter_duration_ticks" in supplied:
+            ticks = supplied["laughter_duration_ticks"]
+            if isinstance(ticks, bool) or not isinstance(ticks, int) or not 1 <= ticks <= 10:
+                raise DiseaseError("laughter_duration_ticks must be from 1 through 10")
+            result["laughter_duration_ticks"] = ticks
+        if "psychic_damage_die" in supplied:
+            die = supplied["psychic_damage_die"]
+            if die not in {"1d4", "1d6", "1d8", "1d10", "1d12"}:
+                raise DiseaseError("psychic_damage_die is unsupported")
+            result["psychic_damage_die"] = die
+    elif disease_id == "sight_rot":
+        if set(supplied) - {"penalty_per_long_rest", "blindness_threshold"}:
+            raise DiseaseError("disease variant symptoms contain unsupported fields")
+        for field in ("penalty_per_long_rest", "blindness_threshold"):
+            if field not in supplied:
+                continue
+            amount = supplied[field]
+            if isinstance(amount, bool) or not isinstance(amount, int) or not 1 <= amount <= 10:
+                raise DiseaseError(f"{field} must be an integer from 1 through 10")
+            result[field] = amount
+    else:  # pragma: no cover - profiles are closed above
+        raise DiseaseError("disease variant symptoms are unsupported")
+    return result
+
+
 def infection_state(
     disease: Any,
     *,
@@ -66,13 +337,14 @@ def infection_state(
     elapsed_ticks: Any,
     incubation_roll: Any = None,
     save_succeeded: Any,
+    profile_override: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Create infection state after an already-resolved authoritative save.
 
     The caller must validate source, eligibility, exposure, edition and save
     provenance before calling. Incubation is requested only after failure.
     """
-    profile = disease_profile(disease)
+    profile = _infection_profile(disease, profile_override)
     if type(save_succeeded) is not bool:
         raise DiseaseError("infection requires an engine-resolved saving throw")
     if save_succeeded:
@@ -85,12 +357,15 @@ def infection_state(
         raise DiseaseError("infection requires authoritative non-negative campaign time")
     incubation = profile["incubation"]
     if "die" in incubation:
+        sides = _die_sides(incubation["die"])
         if (
             isinstance(incubation_roll, bool)
             or not isinstance(incubation_roll, int)
-            or not 1 <= incubation_roll <= 4
+            or not 1 <= incubation_roll <= sides
         ):
-            raise DiseaseError("failed infection requires one engine-owned d4 incubation result")
+            raise DiseaseError(
+                f"failed infection requires one engine-owned {incubation['die']} incubation result"
+            )
         amount = incubation_roll
     else:
         if incubation_roll is not None:
@@ -107,12 +382,20 @@ def infection_state(
         "symptoms_due_elapsed_ticks": elapsed_ticks + amount * unit_ticks,
         "symptomatic": False,
         "active": True,
+        "disease_rules": {
+            "save_dcs": deepcopy(profile["save_dcs"]),
+            "incubation": deepcopy(incubation),
+            "eligible_creature_types": list(profile["eligible_creature_types"]),
+            "symptoms": deepcopy(profile["symptoms"]),
+        },
     }
+    if profile.get("variant_receipt"):
+        state["variant_receipt"] = deepcopy(profile["variant_receipt"])
     if profile["id"] == "cackle_fever":
         state.update(
             {
-                "laughter_dc": 13,
-                "recovery_dc": 13,
+                "laughter_dc": int(profile["save_dcs"]["laughter"]),
+                "recovery_dc": int(profile["save_dcs"]["recovery"]),
                 "failed_recovery_saves": 0,
                 "indefinite_madness_applied": False,
                 "exhaustion_lock": True,
@@ -139,8 +422,14 @@ def advance_disease_clock(state: dict[str, Any], *, elapsed_ticks: Any) -> dict[
         result["symptomatic"] = True
         if result["disease_id"] == "cackle_fever":
             result["symptom_exhaustion_owned"] = True
+            result["symptom_exhaustion_levels"] = int(
+                _state_rules(result)["symptoms"]["exhaustion_levels"]
+            )
         elif result["disease_id"] == "sewer_plague":
             result["symptom_exhaustion_owned"] = True
+            result["symptom_exhaustion_levels"] = int(
+                _state_rules(result)["symptoms"]["exhaustion_levels"]
+            )
     laughter_deadline = result.get("laughing_until_elapsed_ticks")
     if (
         result.get("active")
@@ -186,12 +475,16 @@ def resolve_cackle_stress(
             "state": result,
             "events": [{"kind": "stress_save_succeeded", "trigger": trigger_id}],
         }
+    symptoms = _state_rules(result)["symptoms"]
+    damage_die = str(symptoms["psychic_damage_die"])
     _die(
         psychic_damage_roll,
-        10,
-        "failed Cackle Fever stress save requires a d10 psychic damage roll",
+        _die_sides(damage_die),
+        f"failed Cackle Fever stress save requires a {damage_die} psychic damage roll",
     )
-    result["laughing_until_elapsed_ticks"] = elapsed_ticks + TICKS_PER_MINUTE
+    result["laughing_until_elapsed_ticks"] = elapsed_ticks + int(
+        symptoms["laughter_duration_ticks"]
+    )
     result["laughing"] = True
     result["incapacitation_owned"] = True
     return {
@@ -205,6 +498,23 @@ def resolve_cackle_stress(
             },
         ],
     }
+
+
+def cackle_fever_save_dc(state: dict[str, Any], *, save_kind: Any) -> int:
+    """Return the current source-owned DC for one Cackle Fever saving throw."""
+    _validate_state(state)
+    if state["disease_id"] != "cackle_fever" or not state["active"]:
+        raise DiseaseError("Cackle Fever save DC requires an active disease instance")
+    field = {
+        "laughter": "laughter_dc",
+        "recovery": "recovery_dc",
+    }.get(str(save_kind or "").strip().casefold())
+    if field is None:
+        raise DiseaseError("Cackle Fever save kind must be laughter or recovery")
+    value = state.get(field)
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 30:
+        raise DiseaseError(f"Cackle Fever {field} must be an integer from 0 through 30")
+    return value
 
 
 def resolve_cackle_end_turn(state: dict[str, Any], *, save_succeeded: Any) -> dict[str, Any]:
@@ -257,6 +567,7 @@ def resolve_cackle_spread(
     save_succeeded: Any = None,
     incubation_roll: Any = None,
     immunity: dict[str, Any] | None = None,
+    profile_override: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Resolve spread from a currently laughing carrier at turn start.
 
@@ -265,6 +576,8 @@ def resolve_cackle_spread(
     """
     carrier = deepcopy(carrier_state)
     _validate_state(carrier)
+    profile = _infection_profile("cackle_fever", profile_override)
+    spread_dc = int(profile["save_dcs"]["spread"])
     if (
         carrier["disease_id"] != "cackle_fever"
         or not carrier["active"]
@@ -277,7 +590,7 @@ def resolve_cackle_spread(
         raise DiseaseError("spread requires authoritative non-negative campaign time")
     creature_type = str(target_creature_type or "").strip().casefold()
     species_id = str(target_species_id or "").strip().casefold()
-    if creature_type != "humanoid":
+    if creature_type not in profile["eligible_creature_types"]:
         if save_succeeded is not None or incubation_roll is not None:
             raise DiseaseError("ineligible target makes no spread save and consumes no RNG")
         return {"status": "ineligible", "infection": None, "immunity": None}
@@ -319,12 +632,12 @@ def resolve_cackle_spread(
                 raise DiseaseError("active pair immunity makes no save and consumes no RNG")
             return {
                 "status": "immune_to_carrier",
-                "dc": 10,
+                "dc": spread_dc,
                 "infection": None,
                 "immunity": immunity,
             }
     if type(save_succeeded) is not bool:
-        raise DiseaseError("eligible exposure requires an engine-resolved DC 10 save")
+        raise DiseaseError(f"eligible exposure requires an engine-resolved DC {spread_dc} save")
     if save_succeeded:
         if incubation_roll is not None:
             raise DiseaseError("successful spread save consumes no incubation die")
@@ -333,15 +646,16 @@ def resolve_cackle_spread(
             carrier_id=carrier["actor_id"],
             elapsed_ticks=elapsed_ticks,
         )
-        return {"status": "saved", "dc": 10, "infection": None, "immunity": granted}
+        return {"status": "saved", "dc": spread_dc, "infection": None, "immunity": granted}
     infection = infection_state(
         "cackle_fever",
         actor_id=target_actor_id,
         elapsed_ticks=elapsed_ticks,
         save_succeeded=False,
         incubation_roll=incubation_roll,
+        profile_override=(profile if profile.get("variant_receipt") else None),
     )
-    return {"status": "infected", "dc": 10, "infection": infection, "immunity": None}
+    return {"status": "infected", "dc": spread_dc, "infection": infection, "immunity": None}
 
 
 def resolve_long_rest(
@@ -364,7 +678,9 @@ def resolve_long_rest(
     disease_id = result["disease_id"]
     if disease_id == "cackle_fever":
         if save_succeeded is None:
-            raise DiseaseError("symptomatic Cackle Fever requires a long-rest save")
+            if recovery_die is not None or madness_d100 is not None:
+                raise DiseaseError("skipping Cackle Fever recovery consumes no disease dice")
+            return {"state": result, "events": [{"kind": "recovery_skipped"}]}
         _bool(save_succeeded)
         if save_succeeded:
             _die(recovery_die, 6, "Cackle Fever DC reduction requires one d6")
@@ -375,9 +691,17 @@ def resolve_long_rest(
                 result["active"] = False
                 result["exhaustion_lock"] = False
                 result["symptom_exhaustion_owned"] = False
+            events = [
+                {"kind": "dc_reduced", "amount": amount, "cured": not result["active"]}
+            ]
+            if not result["active"] and result.get("laughing"):
+                result["laughing"] = False
+                result["incapacitation_owned"] = False
+                result.pop("laughing_until_elapsed_ticks", None)
+                events.append({"kind": "mad_laughter_ended", "condition": "incapacitated"})
             return {
                 "state": result,
-                "events": [{"kind": "dc_reduced", "amount": amount, "cured": not result["active"]}],
+                "events": events,
             }
         if recovery_die is not None:
             raise DiseaseError("failed Cackle Fever recovery consumes no DC reduction die")
@@ -432,8 +756,13 @@ def resolve_long_rest(
     if result.pop("ointment_prevent_next_rest", False):
         events.append({"kind": "worsening_prevented_by_ointment"})
     else:
-        result["sight_penalty"] = min(5, int(result["sight_penalty"]) + 1)
-        if result["sight_penalty"] == 5 and not result["blindness_owned"]:
+        symptoms = _state_rules(result)["symptoms"]
+        threshold = int(symptoms["blindness_threshold"])
+        result["sight_penalty"] = min(
+            threshold,
+            int(result["sight_penalty"]) + int(symptoms["penalty_per_long_rest"]),
+        )
+        if result["sight_penalty"] >= threshold and not result["blindness_owned"]:
             result["blindness_owned"] = True
             events.append({"kind": "blindness_applied", "condition": "blinded"})
         events.append({"kind": "sight_penalty_worsened", "penalty": -result["sight_penalty"]})
@@ -566,8 +895,9 @@ def sight_rot_attack_penalty(state: dict[str, Any]) -> int:
     if state["disease_id"] != "sight_rot" or not state["active"] or not state["symptomatic"]:
         return 0
     penalty = state.get("sight_penalty")
-    if isinstance(penalty, bool) or not isinstance(penalty, int) or not 0 <= penalty <= 5:
-        raise DiseaseError("Sight Rot penalty must be an integer from 0 through 5")
+    threshold = int(_state_rules(state)["symptoms"]["blindness_threshold"])
+    if isinstance(penalty, bool) or not isinstance(penalty, int) or not 0 <= penalty <= threshold:
+        raise DiseaseError(f"Sight Rot penalty must be an integer from 0 through {threshold}")
     return -penalty
 
 
@@ -605,9 +935,41 @@ def cure_disease(state: dict[str, Any], *, disease_id: Any) -> dict[str, Any]:
             result[field] = False
             released.append(event)
     events = [{"kind": "disease_cured"}, *({"kind": e} for e in released)]
+    if key == "cackle_fever" and result.get("laughing"):
+        result["laughing"] = False
+        result["incapacitation_owned"] = False
+        result.pop("laughing_until_elapsed_ticks", None)
+        events.append({"kind": "mad_laughter_ended", "condition": "incapacitated"})
     if result.get("blindness_owned"):
         events.append({"kind": "blindness_restoration_required"})
     return {"state": result, "events": events}
+
+
+def disease_save_dc(state: dict[str, Any], *, save_kind: Any) -> int:
+    """Return an infection or recurring-save DC from this disease instance."""
+    _validate_state(state)
+    kind = str(save_kind or "").strip().casefold()
+    save_dcs = _state_rules(state)["save_dcs"]
+    value = save_dcs.get(kind)
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 30:
+        raise DiseaseError("disease save kind is not defined by this instance")
+    return value
+
+
+def disease_symptom_exhaustion_levels(state: dict[str, Any]) -> int:
+    """Return the onset exhaustion delta pinned to one disease instance."""
+    _validate_state(state)
+    if state["disease_id"] not in {"cackle_fever", "sewer_plague"}:
+        return 0
+    return int(_state_rules(state)["symptoms"]["exhaustion_levels"])
+
+
+def cackle_psychic_damage_die(state: dict[str, Any]) -> str:
+    """Return the damage die bound to one active Cackle Fever instance."""
+    _validate_state(state)
+    if state["disease_id"] != "cackle_fever" or not state["active"]:
+        raise DiseaseError("Cackle Fever damage die requires an active disease instance")
+    return str(_state_rules(state)["symptoms"]["psychic_damage_die"])
 
 
 def _validate_state(state: dict[str, Any]) -> None:
@@ -620,8 +982,80 @@ def _validate_state(state: dict[str, Any]) -> None:
     profile = disease_profile(state.get("disease_id"))
     if state.get("source_ref") != profile["source_ref"] or not state.get("actor_id"):
         raise DiseaseError("disease state source or actor identity is invalid")
+    _state_rules(state)
     for field in ("active", "symptomatic"):
         _bool(state.get(field))
+
+
+def _state_rules(state: Mapping[str, Any]) -> dict[str, Any]:
+    profile = disease_profile(state.get("disease_id"))
+    raw = state.get("disease_rules")
+    if raw is None:
+        return {
+            "save_dcs": deepcopy(profile["save_dcs"]),
+            "incubation": deepcopy(profile["incubation"]),
+            "eligible_creature_types": list(profile["eligible_creature_types"]),
+            "symptoms": deepcopy(profile["symptoms"]),
+        }
+    if not isinstance(raw, Mapping) or set(raw) != {
+        "save_dcs",
+        "incubation",
+        "eligible_creature_types",
+        "symptoms",
+    }:
+        raise DiseaseError("disease instance rules are malformed")
+    value = dict(raw)
+    save_dcs = value["save_dcs"]
+    if not isinstance(save_dcs, Mapping) or set(save_dcs) != set(profile["save_dcs"]):
+        raise DiseaseError("disease instance save DCs are malformed")
+    for dc in save_dcs.values():
+        if isinstance(dc, bool) or not isinstance(dc, int) or not 1 <= dc <= 30:
+            raise DiseaseError("disease instance save DC is invalid")
+    kinds = value["eligible_creature_types"]
+    if (
+        not isinstance(kinds, list)
+        or not kinds
+        or any(kind not in _CREATURE_KINDS for kind in kinds)
+        or len(set(kinds)) != len(kinds)
+    ):
+        raise DiseaseError("disease instance creature kinds are malformed")
+    normalized = {
+        "save_dcs": dict(save_dcs),
+        "incubation": _normalize_variant_incubation(value["incubation"]),
+        "eligible_creature_types": list(kinds),
+        "symptoms": _normalize_variant_symptoms(
+            profile["id"], profile["symptoms"], value["symptoms"]
+        ),
+    }
+    if not state.get("variant_receipt") and normalized != {
+        "save_dcs": profile["save_dcs"],
+        "incubation": profile["incubation"],
+        "eligible_creature_types": profile["eligible_creature_types"],
+        "symptoms": profile["symptoms"],
+    }:
+        raise DiseaseError("unreviewed disease instance rule override is not permitted")
+    if state.get("variant_receipt"):
+        receipt = state["variant_receipt"]
+        if (
+            not isinstance(receipt, Mapping)
+            or not str(receipt.get("pack_id") or "").strip()
+            or not str(receipt.get("version") or "").strip()
+            or not re.fullmatch(r"[0-9a-f]{64}", str(receipt.get("pack_checksum") or ""))
+            or not re.fullmatch(r"[0-9a-f]{64}", str(receipt.get("artifact_content_hash") or ""))
+            or not re.fullmatch(r"[0-9a-f]{64}", str(receipt.get("reviewed_content_hash") or ""))
+        ):
+            raise DiseaseError("disease variant provenance receipt is malformed")
+    return normalized
+
+
+def _die_sides(die: Any) -> int:
+    match = re.fullmatch(r"1d([1-9][0-9]?)", str(die or ""))
+    if match is None:
+        raise DiseaseError("disease die must be a single bounded dN")
+    sides = int(match.group(1))
+    if not 2 <= sides <= 100:
+        raise DiseaseError("disease die must have 2 through 100 sides")
+    return sides
 
 
 def _bool(value: Any) -> None:

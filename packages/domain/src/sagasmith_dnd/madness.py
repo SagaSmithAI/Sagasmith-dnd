@@ -32,6 +32,7 @@ _TABLES: dict[str, tuple[tuple[int, int, str, dict[str, Any]], ...]] = {
             {
                 "conditions": ["frightened"],
                 "turn_constraint": "spend_action_and_movement_fleeing_source",
+                "requires_fear_source_choice": True,
             },
         ),
         (41, 50, "babbling", {"speech": "not_normal", "spellcasting": False}),
@@ -385,6 +386,37 @@ def nearest_attack_constraint(
     }
 
 
+def fleeing_source_bindings(sheet: dict[str, Any]) -> list[dict[str, str | None]]:
+    """List active short-term flee effects and their typed fear-source actor choices."""
+    result: list[dict[str, str | None]] = []
+    for effect in sheet.get("effects", []):
+        if (
+            not isinstance(effect, dict)
+            or effect.get("active") is not True
+            or effect.get("source") != SOURCE_REF
+        ):
+            continue
+        madness = dict(dict(effect.get("metadata") or {}).get("madness") or {})
+        mechanics = dict(madness.get("mechanics") or {})
+        if (
+            madness.get("category") != "short_term"
+            or madness.get("effect_key") != "flee_source"
+            or mechanics.get("turn_constraint") != "spend_action_and_movement_fleeing_source"
+            or madness.get("suppression")
+        ):
+            continue
+        effect_id = str(effect.get("id") or "").strip()
+        choice = dict(madness.get("choice") or {})
+        actor_id = (
+            str(choice.get("actor_id") or "").strip()
+            if choice.get("kind") == "fear_source_actor"
+            else ""
+        )
+        if effect_id:
+            result.append({"effect_id": effect_id, "actor_id": actor_id or None})
+    return sorted(result, key=lambda item: str(item["effect_id"]))
+
+
 def choose_confusion_random_target(candidate_actor_ids: list[str], d_n: int) -> str:
     """Select the engine-rolled index from an authoritative in-reach candidate list."""
     candidates = [str(actor_id).strip() for actor_id in candidate_actor_ids]
@@ -518,6 +550,69 @@ def cure_tier(category: str, spell_id: str, *, source_authorizes: bool = False) 
     return "insufficient"
 
 
+def roll_disadvantage_effect_ids(
+    sheet: dict[str, Any], *, kind: str, ability: str
+) -> list[str]:
+    """Return source-owned madness effects that disadvantage this ability roll.
+
+    Most table results project their disadvantage through ordinary effect
+    changes. This helper handles the two source entries whose penalties are
+    scoped to specific abilities: paranoia (Wisdom/Charisma checks) and
+    tremors (Strength/Dexterity attacks, checks, and saves).
+    """
+    normalized_kind = str(kind).strip().casefold().replace("-", "_").replace(" ", "_")
+    roll_kind = {
+        "attack": "attack_rolls",
+        "attack_roll": "attack_rolls",
+        "ability": "ability_checks",
+        "check": "ability_checks",
+        "ability_check": "ability_checks",
+        "skill": "ability_checks",
+        "save": "saving_throws",
+        "saving_throw": "saving_throws",
+    }.get(normalized_kind)
+    if roll_kind is None:
+        raise MadnessError("unsupported madness roll kind")
+    normalized_ability = str(ability).strip().casefold().replace(" ", "_")
+    if normalized_ability not in {
+        "strength",
+        "dexterity",
+        "constitution",
+        "intelligence",
+        "wisdom",
+        "charisma",
+    }:
+        raise MadnessError("madness roll requires an authoritative ability")
+
+    result: list[str] = []
+    for effect in sheet.get("effects", []):
+        if (
+            not isinstance(effect, dict)
+            or effect.get("active") is not True
+            or effect.get("source") != SOURCE_REF
+        ):
+            continue
+        madness = dict(dict(effect.get("metadata") or {}).get("madness") or {})
+        if not madness or madness.get("suppression"):
+            continue
+        mechanics = dict(madness.get("mechanics") or {})
+        applies_to = set(mechanics.get("applies_to") or [])
+        scoped_abilities = set(mechanics.get("disadvantage_for_abilities") or [])
+        applies = roll_kind in applies_to and normalized_ability in scoped_abilities
+        if roll_kind == "ability_checks":
+            scoped_check_abilities = {
+                "wisdom" if value == "wisdom_checks" else "charisma"
+                for value in mechanics.get("disadvantage") or []
+                if value in {"wisdom_checks", "charisma_checks"}
+            }
+            applies = applies or normalized_ability in scoped_check_abilities
+        if applies:
+            effect_id = str(effect.get("id") or "").strip()
+            if effect_id:
+                result.append(effect_id)
+    return sorted(set(result))
+
+
 def choose_lucky_charm(
     sheet: dict[str, Any], *, effect_id: str, charm_actor_id: str
 ) -> dict[str, Any]:
@@ -580,6 +675,7 @@ def choose_madness_outcome(
         "lucky_charm": ("requires_charm_choice", "lucky_charm_actor", "actor_id"),
         "imitate_another_person": ("requires_person_choice", "person_actor", "actor_id"),
         "pursue_goal_at_all_costs": ("requires_goal_choice", "goal", "goal_id"),
+        "flee_source": ("requires_fear_source_choice", "fear_source_actor", "actor_id"),
     }
     effect_key = str(madness.get("effect_key") or "")
     specification = required.get(effect_key)

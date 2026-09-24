@@ -2,6 +2,13 @@
 
 ## Invariants
 
+### Cackle Fever long-rest recovery
+
+For a 2014 long rest, a member may set `cackle_fever_recovery` to `"skip"` in
+the `party_rest` payload. Omit it or set `"attempt"` to make the optional
+recovery save. Skipping leaves the failure count and disease DCs unchanged and
+does not draw disease dice.
+
 ### 2014 short-rest Hit Dice
 
 Spend at most one initial Hit Die per member in `party_rest`. Inspect the actual

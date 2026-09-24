@@ -1263,6 +1263,7 @@ class CombatService:
             "moves_farther_from_turn_source",
             "enters_turn_source_30_ft",
             "moves_closer_to_visible_fear_source",
+            "moves_farther_from_madness_fear_source",
             "moves_toward_aggressive_target",
             "opportunity_attack_actor_ids",
             "opportunity_attack_boundaries",
@@ -1313,6 +1314,7 @@ class CombatService:
             "moves_farther_from_turn_source",
             "enters_turn_source_30_ft",
             "moves_closer_to_visible_fear_source",
+            "moves_farther_from_madness_fear_source",
             "moves_toward_aggressive_target",
         }:
             if not isinstance(spatial_facts.get(field, False), bool):
@@ -1393,6 +1395,9 @@ class CombatService:
             "moves_closer_to_visible_fear_source": bool(
                 spatial_facts.get("moves_closer_to_visible_fear_source", False)
             ),
+            "moves_farther_from_madness_fear_source": bool(
+                spatial_facts.get("moves_farther_from_madness_fear_source", False)
+            ),
             "moves_toward_aggressive_target": bool(
                 spatial_facts.get("moves_toward_aggressive_target", False)
             ),
@@ -1458,6 +1463,23 @@ class CombatService:
             *encounter.get("reinforcements", []),
         ]:
             if combatant.get("actor_id") == actor_id:
+                prior_hit_points = int(combatant.get("hit_points", 0) or 0)
+                next_hit_points = int(sheet["combat"]["hp"]["value"])
+                recovered_hit_points = next_hit_points >= 1 and next_hit_points > prior_hit_points
+                if recovered_hit_points:
+                    for effect in encounter.get("ongoing_effects", []):
+                        if (
+                            isinstance(effect, dict)
+                            and effect.get("active", True)
+                            and effect.get("kind") == "speed_penalty"
+                            and effect.get("mechanic_id")
+                            == "dnd5e.core.adventuring_gear.caltrops"
+                            and effect.get("source_ref") == ADVENTURING_GEAR_SOURCE_REF
+                            and str(effect.get("target_id") or "") == str(actor_id)
+                            and effect.get("ends_when_hp_at_least") == 1
+                        ):
+                            effect["active"] = False
+                            effect["ended_reason"] = "regained_hit_points"
                 # Upgrade old encounter snapshots before replacing their stale
                 # projection. Otherwise removing a zero-speed or grappling
                 # effect could make a persisted dodging=True flag active again.
@@ -1466,7 +1488,7 @@ class CombatService:
                 combatant["senses"] = _support.deepcopy(
                     dict(sheet.get("traits") or {}).get("senses") or {}
                 )
-                combatant["hit_points"] = int(sheet["combat"]["hp"]["value"])
+                combatant["hit_points"] = next_hit_points
                 self.sync_combatant_spaces(encounter, actor_id, sheet)
                 if (
                     combatant["hit_points"] > 0
@@ -1495,6 +1517,10 @@ class CombatService:
                     else:
                         combatant.pop("turn_flags", None)
                 _support.reconcile_tortle_shell_defense_projection(combatant, sheet)
+                if recovered_hit_points:
+                    from sagasmith_dnd.combat_engine import _refresh_weapon_mastery_speed
+
+                    _refresh_weapon_mastery_speed(encounter, combatant)
                 current_dodge_transition = _support.reconcile_dodge_lifecycle(combatant)
                 dodge_transition = (
                     prior_dodge_transition
@@ -3536,6 +3562,37 @@ class CombatService:
             raise _support.CombatEngineError(
                 "Confusion random movement must be completed before ending this turn"
             )
+        current_madness_flee = dict(
+            dict(current_combatant.get("turn_flags") or {}).get("madness_flee") or {}
+        )
+        current_turn_token = self.encounter_turn_token(encounter)
+        if current_madness_flee.get("turn_token") == current_turn_token:
+            current_turn_conditions = set(
+                _support.condition_ids(current_combatant.get("conditions"))
+            ) | set(_support.condition_ids(self.characters.get(actor_id).sheet.get("conditions")))
+            cannot_act_or_move = {
+                "dead",
+                "incapacitated",
+                "paralyzed",
+                "petrified",
+                "stunned",
+                "unconscious",
+            }
+            turn_budget = dict(current_combatant.get("turn_budget") or {})
+            movement_available = max(0, int(turn_budget.get("movement", 0) or 0))
+            movement_spent = max(0, int(turn_budget.get("movement_spent", 0) or 0))
+            if (
+                not current_turn_conditions.intersection(cannot_act_or_move)
+                and (movement_available or movement_spent)
+            ):
+                if current_madness_flee.get("dash_used_turn_token") != current_turn_token:
+                    raise _support.CombatEngineError(
+                        "fleeing madness requires a Dash before ending this turn"
+                    )
+                if movement_spent <= 0:
+                    raise _support.CombatEngineError(
+                        "fleeing madness requires movement before ending this turn"
+                    )
         before_readied = list(encounter.get("readied", []))
         current = self.characters.get(actor_id)
         current_sheet = _support.deepcopy(current.sheet)
@@ -3731,8 +3788,79 @@ class CombatService:
         activity_recharge_receipts: list[dict[str, Any]] = []
         madness_turn_events: list[dict[str, Any]] = []
         madness_turn_receipts: list[dict[str, Any]] = []
+        madness_flee_bindings: list[dict[str, str | None]] = []
         if next_combatant is not None:
             next_actor_id = str(next_combatant.get("actor_id") or "")
+            from sagasmith_dnd import madness as madness_domain
+
+            madness_flee_bindings = madness_domain.fleeing_source_bindings(
+                source_sheets[next_actor_id]
+            )
+            if madness_flee_bindings:
+                missing_choice_ids = [
+                    str(item["effect_id"])
+                    for item in madness_flee_bindings
+                    if not item.get("actor_id")
+                ]
+                if missing_choice_ids:
+                    raise _support.NeedsRulingError(
+                        "fleeing madness requires a persisted fear-source actor choice",
+                        missing=tuple(
+                            f"madness.{effect_id}.fear_source_actor_id"
+                            for effect_id in missing_choice_ids
+                        ),
+                        ruling_kind="source_or_scene_fact",
+                    )
+                source_actor_ids = sorted(
+                    {str(item["actor_id"]) for item in madness_flee_bindings}
+                )
+                if next_actor_id in source_actor_ids:
+                    raise _support.CombatEngineError(
+                        "fleeing madness cannot use the affected actor as its fear source"
+                    )
+                encounter_members = {
+                    str(item.get("actor_id") or ""): item
+                    for item in [
+                        *next_state["combat"].get("combatants", []),
+                        *next_state["combat"].get("reinforcements", []),
+                    ]
+                    if str(item.get("actor_id") or "")
+                }
+                missing_encounter_sources = sorted(
+                    set(source_actor_ids) - encounter_members.keys()
+                )
+                if missing_encounter_sources:
+                    raise _support.NeedsRulingError(
+                        "fleeing madness source must be present in the active encounter",
+                        missing=tuple(
+                            f"madness.fear_source.{source_id}.encounter_position"
+                            for source_id in missing_encounter_sources
+                        ),
+                        ruling_kind="agent_dm_adjudication",
+                    )
+                if next_state["combat"].get("positioning_mode") == "grid":
+                    positioned_ids = {
+                        actor_id
+                        for actor_id, item in encounter_members.items()
+                        if isinstance(item.get("position"), dict)
+                        and isinstance(item["position"].get("x"), (int, float))
+                        and not isinstance(item["position"].get("x"), bool)
+                        and isinstance(item["position"].get("y"), (int, float))
+                        and not isinstance(item["position"].get("y"), bool)
+                    }
+                    missing_grid_positions = sorted(
+                        ({next_actor_id, *source_actor_ids}) - positioned_ids
+                    )
+                    if missing_grid_positions:
+                        raise _support.NeedsRulingError(
+                            "Grid fleeing madness requires the affected actor and "
+                            "fear sources to be positioned",
+                            missing=tuple(
+                                f"madness.flee.grid_position.{actor_id}"
+                                for actor_id in missing_grid_positions
+                            ),
+                            ruling_kind="agent_dm_adjudication",
+                        )
             next_sheet, next_events, next_receipts = self.settle_poison_turn_events(
                 campaign,
                 campaign_id,
@@ -3925,30 +4053,35 @@ class CombatService:
                     )
                 )
             nearest_contract = nearest_attack_constraint(source_sheets[next_actor_id], {})
-            flee_effects = []
-            for effect in source_sheets[next_actor_id].get("effects", []):
-                if (
-                    not isinstance(effect, dict)
-                    or effect.get("active") is not True
-                    or effect.get("source") != MADNESS_SOURCE_REF
-                ):
-                    continue
-                madness_metadata = dict(dict(effect.get("metadata") or {}).get("madness") or {})
-                mechanics = dict(madness_metadata.get("mechanics") or {})
-                if (
-                    mechanics.get("turn_constraint")
-                    == "spend_action_and_movement_fleeing_source"
-                    and not madness_metadata.get("suppression")
-                ):
-                    flee_effects.append(str(effect.get("id") or ""))
-            if flee_effects:
-                raise _support.NeedsRulingError(
-                    "fleeing madness requires an exact fear-source position and verified flee path",
-                    missing=tuple(
-                        f"madness.{effect_id}.fear_source_grid_position"
-                        for effect_id in flee_effects
+            if madness_flee_bindings:
+                next_combatant = next(
+                    item
+                    for item in next_state["combat"].get("combatants", [])
+                    if str(item.get("actor_id") or "") == next_actor_id
+                )
+                flags = dict(next_combatant.get("turn_flags") or {})
+                flee_event = {
+                    "effect_ids": [
+                        str(item["effect_id"]) for item in madness_flee_bindings
+                    ],
+                    "source_actor_ids": sorted(
+                        {str(item["actor_id"]) for item in madness_flee_bindings}
                     ),
-                    ruling_kind="agent_dm_adjudication",
+                    "turn_token": self.encounter_turn_token(next_state["combat"]),
+                    "action": "dash",
+                    "movement_required": True,
+                }
+                flags["madness_flee"] = flee_event
+                next_combatant["turn_flags"] = flags
+                madness_turn_events.append(
+                    {"actor_id": next_actor_id, **flee_event}
+                )
+                madness_turn_receipts.extend(
+                    _support.core_receipts(
+                        rule_context,
+                        ["dnd5e.core.madness.2014"],
+                        "madness.flee.turn_start",
+                    )
                 )
             if nearest_contract is not None:
                 if next_state["combat"].get("positioning_mode") != "grid":
@@ -4273,6 +4406,18 @@ class CombatService:
             ),
             None,
         )
+        if (
+            moving_combatant is not None
+            and str(movement_mode).strip().casefold().replace("-", "_")
+            in {"voluntary", "aggressive"}
+            and dict(moving_combatant.get("turn_flags") or {}).get(
+                "caltrops_movement_stopped_turn_token"
+            )
+            == self.encounter_turn_token(encounter)
+        ):
+            raise _support.CombatEngineError(
+                "Caltrops have stopped this actor's movement for the turn"
+            )
         confusion_event = dict(
             dict((moving_combatant or {}).get("turn_flags") or {}).get("madness_confusion")
             or {}
@@ -4775,6 +4920,465 @@ class CombatService:
             grapple_drag_ids=drag_ids,
             jump_kind=movement_jump_kind,
         )
+        gear_area_resolutions: list[dict[str, Any]] = []
+        active_gear_hazards = [
+            item
+            for item in encounter.get("adventuring_gear_hazards", [])
+            if isinstance(item, dict)
+            and item.get("active") is True
+            and item.get("kind") == "adventuring_gear_ground_hazard"
+        ]
+        if active_gear_hazards:
+            battle_map = dict(encounter.get("battle_map") or {})
+            if (
+                encounter.get("positioning_mode") != "grid"
+                or encounter.get("ruleset") != "2014"
+                or str(movement_mode).strip().casefold().replace("-", "_")
+                not in {"voluntary", "aggressive"}
+                or str(travel_mode).strip().casefold().replace("-", "_") != "walk"
+                or jump is not None
+            ):
+                raise _support.NeedsRulingError(
+                    "deployed gear hazards require a traversed five-foot Grid path",
+                    missing=("adventuring_gear.movement_path",),
+                    ruling_kind="agent_dm_adjudication",
+                )
+            if (
+                dict(dict(battle_map.get("grid") or {})).get("kind") != "square"
+                or dict(dict(battle_map.get("grid") or {})).get("cell_ft") != 5
+            ):
+                raise _support.NeedsRulingError(
+                    "deployed gear hazards require a five-foot square map",
+                    missing=("adventuring_gear.grid_geometry",),
+                    ruling_kind="agent_dm_adjudication",
+                )
+            from sagasmith_dnd.combat_engine import (
+                _effective_speed_ft,
+                _position,
+            )
+
+            mover_before = next(
+                item
+                for item in encounter.get("combatants", [])
+                if str(item.get("actor_id") or "") == str(actor_id)
+            )
+            mover_after = next(
+                item
+                for item in next_encounter.get("combatants", [])
+                if str(item.get("actor_id") or "") == str(actor_id)
+            )
+            origin = _position(mover_before.get("position"))
+            final_position = _position(mover_after.get("position"))
+            if origin is None or final_position is None:
+                raise _support.NeedsRulingError(
+                    "deployed gear hazards require recorded Grid origins and destinations",
+                    missing=("adventuring_gear.grid_positions",),
+                    ruling_kind="agent_dm_adjudication",
+                )
+            if movement_path is None:
+                raise _support.NeedsRulingError(
+                    "deployed gear hazards require the caller's exact traversed Grid path",
+                    missing=("adventuring_gear.movement_path",),
+                    ruling_kind="agent_dm_adjudication",
+                )
+            route = [_position(point) for point in movement_path]
+            if not route or any(point is None for point in route):
+                raise _support.NeedsRulingError(
+                    "deployed gear hazards require an exact cell-by-cell route",
+                    missing=("adventuring_gear.movement_path",),
+                    ruling_kind="agent_dm_adjudication",
+                )
+            route_points = [point for point in route if point is not None]
+            if route_points[0] != origin:
+                raise _support.CombatEngineError(
+                    "gear hazard path must begin at the actor's recorded position"
+                )
+            if route_points[-1] != final_position:
+                raise _support.CombatEngineError(
+                    "gear hazard movement path must end at the settled destination"
+                )
+            if any(
+                any(not coordinate.is_integer() for coordinate in point)
+                for point in route_points
+            ):
+                raise _support.NeedsRulingError(
+                    "deployed gear hazards require integer Grid cell positions",
+                    missing=("adventuring_gear.integer_grid_positions",),
+                    ruling_kind="agent_dm_adjudication",
+                )
+            if any(
+                max(abs(right[0] - left[0]), abs(right[1] - left[1])) != 1
+                for left, right in zip(route_points, route_points[1:])
+            ):
+                raise _support.NeedsRulingError(
+                    "deployed gear hazards require every traversed five-foot cell",
+                    missing=("adventuring_gear.cell_by_cell_path",),
+                    ruling_kind="agent_dm_adjudication",
+                )
+            hazard_cells_by_id: dict[str, set[str]] = {}
+            hazard_plans: dict[str, dict[str, Any]] = {}
+            current_map_digest = _support.json_sha256(battle_map)
+            for hazard in active_gear_hazards:
+                if (
+                    str(hazard.get("encounter_id") or "") != str(encounter.get("id") or "")
+                    or str(hazard.get("scene_id") or "")
+                    != str(encounter.get("scene_id") or "")
+                    or str(hazard.get("battle_map_sha256") or "") != current_map_digest
+                    or hazard.get("source_ref") != ADVENTURING_GEAR_SOURCE_REF
+                    or hazard.get("hazard_kind")
+                    not in {
+                        "ball bearings (bag of 1,000)",
+                        "ball bearings",
+                        "caltrops (bag of 20)",
+                        "caltrops",
+                    }
+                ):
+                    raise _support.NeedsRulingError(
+                        "deployed gear hazard no longer matches its source, scene, encounter, "
+                        "or map snapshot",
+                        missing=("adventuring_gear.hazard_authority",),
+                        ruling_kind="missing_or_conflicting_source_review",
+                    )
+                hazard_id = str(hazard.get("id") or "")
+                cells = hazard.get("cells")
+                if (
+                    not hazard_id
+                    or not isinstance(cells, list)
+                    or not cells
+                    or any(not isinstance(cell, str) for cell in cells)
+                ):
+                    raise _support.CombatEngineError(
+                        "deployed gear hazard state is malformed"
+                    )
+                plan = resolve_adventuring_gear_intent(
+                    {
+                        "name": hazard.get("hazard_kind"),
+                        "source_key": hazard.get("source_key"),
+                        "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                    },
+                    "spread",
+                )
+                hazard_effect = dict(plan.get("effect") or {})
+                hazard_trigger = str(hazard_effect.get("trigger") or "")
+                if plan.get("target") != "ground_area" or hazard_trigger not in {
+                    "creature_crosses_area",
+                    "creature_enters_area",
+                }:
+                    raise _support.CombatEngineError(
+                        "deployed gear hazard has no supported source movement contract"
+                    )
+                area = dict(plan.get("area") or {})
+                origin_cell = dict(hazard.get("area_origin") or {})
+                width = area.get("width_feet")
+                height = area.get("depth_feet")
+                expected_width = width // 5 if type(width) is int and width > 0 else 0
+                expected_height = height // 5 if type(height) is int and height > 0 else 0
+                expected_cells = {
+                    f"{int(origin_cell['x']) + dx},{int(origin_cell['y']) + dy}"
+                    for dx in range(expected_width)
+                    for dy in range(expected_height)
+                } if (
+                    type(origin_cell.get("x")) is int
+                    and type(origin_cell.get("y")) is int
+                    and area.get("shape") == "square"
+                    and width == height
+                    and width % 5 == 0
+                ) else set()
+                if (
+                    expected_width < 1
+                    or expected_height < 1
+                    or hazard.get("width_cells") != expected_width
+                    or hazard.get("height_cells") != expected_height
+                    or len(cells) != len(set(cells))
+                    or set(cells) != expected_cells
+                ):
+                    raise _support.CombatEngineError(
+                        "deployed gear hazard cells do not match the exact bundled area"
+                    )
+                if hazard_trigger == "creature_enters_area" and (
+                    hazard.get("hazard_kind") not in {"caltrops (bag of 20)", "caltrops"}
+                    or hazard_effect.get("half_speed_avoids_save") is not True
+                ):
+                    raise _support.CombatEngineError(
+                        "deployed gear hazard has an unsupported enter-area contract"
+                    )
+                hazard_cells_by_id[hazard_id] = set(cells)
+                hazard_plans[hazard_id] = plan
+            route_cells = [f"{int(point[0])},{int(point[1])}" for point in route_points]
+            crossings = []
+            for hazard in active_gear_hazards:
+                hazard_cells = hazard_cells_by_id[str(hazard["id"])]
+                crossing_index = next(
+                    (
+                        index
+                        for index, cell in enumerate(route_cells[1:], start=1)
+                        if cell in hazard_cells
+                    ),
+                    None,
+                )
+                if crossing_index is not None:
+                    crossings.append((hazard, crossing_index))
+            crossings.sort(key=lambda entry: entry[1])
+            has_caltrops_crossing = any(
+                dict(hazard_plans[str(hazard["id"])].get("effect") or {}).get("trigger")
+                == "creature_enters_area"
+                for hazard, _ in crossings
+            )
+            if has_caltrops_crossing and (
+                movement_distance != (len(route_points) - 1) * 5
+                or any(
+                    abs(right[0] - left[0]) + abs(right[1] - left[1]) != 1
+                    for left, right in zip(route_points, route_points[1:])
+                )
+            ):
+                raise _support.NeedsRulingError(
+                    "Caltrops movement settlement requires an axial five-foot Grid route",
+                    missing=("adventuring_gear.caltrops_movement_cost",),
+                    ruling_kind="agent_dm_adjudication",
+                )
+            half_speed = False
+            if crossings:
+                before_budget = dict(mover_before.get("turn_budget") or {})
+                after_budget = dict(mover_after.get("turn_budget") or {})
+                effective_walk = _effective_speed_ft(mover_before, "walk")
+                spent_after = int(
+                    after_budget.get("movement_spent", 0)
+                    or max(
+                        0,
+                        int(before_budget.get("speed", effective_walk) or effective_walk)
+                        - int(after_budget.get("movement", 0) or 0),
+                    )
+                )
+                half_speed = effective_walk > 0 and spent_after <= effective_walk // 2
+            if crossings and not half_speed and _support.active_random_stream() is None:
+                with self.campaign_random_context(
+                    campaign_id,
+                    "combat_movement_adventuring_gear_hazard",
+                    {"idempotency_key": idempotency_key},
+                ):
+                    return self.combat_move(
+                        campaign_id,
+                        actor_id,
+                        distance,
+                        destination,
+                        path,
+                        movement_mode,
+                        travel_mode,
+                        crawl,
+                        spatial_facts,
+                        drag_grapple_ids,
+                        principal_id,
+                        expected_revision,
+                        branch_id,
+                        idempotency_key,
+                        jump=jump,
+                    )
+            stream = _support.active_random_stream()
+            if crossings and not half_speed:
+                random_state = _support.validate_random_stream_state(
+                    dict(campaign.state or {}).get("random_stream")
+                    or _support.initial_random_stream(f"sagasmith-dnd:{campaign_id}")
+                )
+                if (
+                    stream is None
+                    or stream.campaign_id != campaign_id
+                    or stream.seed != random_state["seed"]
+                    or stream.start_position != random_state["position"]
+                    or (
+                        stream.campaign_revision is not None
+                        and stream.campaign_revision != campaign.revision
+                    )
+                ):
+                    raise _support.CombatEngineError(
+                        "gear hazard saves require the current campaign random snapshot"
+                    )
+            actor_snapshot = self.combat_actor_snapshot(actor_id) if crossings else None
+            for hazard, route_index in crossings:
+                hazard_id = str(hazard["id"])
+                plan = hazard_plans[hazard_id]
+                effect = dict(plan.get("effect") or {})
+                trigger = str(effect.get("trigger") or "")
+                is_caltrops = trigger == "creature_enters_area"
+                if half_speed:
+                    resolution = {
+                        "hazard_id": hazard_id,
+                        "actor_id": actor_id,
+                        "source_key": hazard.get("source_key"),
+                        "trigger": trigger,
+                        "avoided_by": "half_speed",
+                        "save_required": False,
+                        "route_index": route_index,
+                        "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                    }
+                else:
+                    save_dc = dict(effect.get("save") or {}).get("dc")
+                    if type(save_dc) is not int or save_dc < 1:
+                        raise _support.CombatEngineError(
+                            "deployed gear hazard has an invalid bundled save DC"
+                        )
+                    rules = self.effective_rule_context(
+                        campaign_id,
+                        branch_id=resolved_branch_id,
+                        facts={
+                            "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                            "source_key": hazard.get("source_key"),
+                            "hazard_id": hazard_id,
+                            "actor_id": actor_id,
+                            "save_ability": "dexterity",
+                            "save_dc": save_dc,
+                        },
+                    )
+                    save = _support.resolve_actor_check(
+                        actor_snapshot,
+                        kind="save",
+                        ability="dexterity",
+                        dc=save_dc,
+                        encounter=next_encounter,
+                        rules=rules,
+                        ruleset="2014",
+                        rng=stream,
+                    )
+                    resolution = {
+                        "hazard_id": hazard_id,
+                        "actor_id": actor_id,
+                        "source_key": hazard.get("source_key"),
+                        "trigger": trigger,
+                        "save": _support.deepcopy(save),
+                        "outcome": (
+                            "avoided"
+                            if save.get("success") is True
+                            else "damaged_and_stopped"
+                            if is_caltrops
+                            else "prone"
+                        ),
+                        "route_index": route_index,
+                        "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                    }
+                    if save.get("success") is not True:
+                        actor_record = self.require_campaign_actor(campaign_id, actor_id)
+                        existing_update = next(
+                            (item for item in space_guards if item.character_id == actor_id),
+                            None,
+                        )
+                        actor_sheet = _support.deepcopy(
+                            existing_update.sheet
+                            if existing_update is not None
+                            else actor_record.sheet
+                        )
+                        if is_caltrops:
+                            damage = _support.apply_damage_parts_to_sheet(
+                                actor_sheet,
+                                [{"amount": 1, "damage_type": "piercing"}],
+                                source=ADVENTURING_GEAR_SOURCE_REF,
+                                ruleset="2014",
+                                death_saves=self.combatant_zero_hp_buffered(mover_after),
+                            )
+                            actor_sheet = damage["sheet"]
+                            resolution["damage"] = {
+                                key: value for key, value in damage.items() if key != "sheet"
+                            }
+                            self.add_concentration_window(
+                                next_encounter,
+                                actor_id,
+                                damage.get("concentration"),
+                                next_revision=campaign.revision + 1,
+                            )
+                        else:
+                            _support.apply_condition_change(
+                                actor_sheet, condition_id="prone", add=True
+                            )
+                        self.sync_combatant_conditions(next_encounter, actor_id, actor_sheet)
+                        if is_caltrops:
+                            effect_id = f"adventuring-gear-caltrops:{hazard_id}:{actor_id}"
+                            speed_effect = {
+                                "id": effect_id,
+                                "kind": "speed_penalty",
+                                "mechanic_id": "dnd5e.core.adventuring_gear.caltrops",
+                                "target_id": actor_id,
+                                "penalty_ft": int(
+                                    dict(effect.get("failure") or {}).get(
+                                        "walking_speed_reduction_feet", 10
+                                    )
+                                ),
+                                "ends_when_hp_at_least": int(
+                                    dict(effect.get("failure") or {}).get(
+                                        "speed_reduction_ends_when_hp_at_least", 1
+                                    )
+                                ),
+                                "source_ref": ADVENTURING_GEAR_SOURCE_REF,
+                                "source_key": hazard.get("source_key"),
+                                "hazard_id": hazard_id,
+                                "active": True,
+                            }
+                            effects = list(next_encounter.get("ongoing_effects") or [])
+                            prior_effect = next(
+                                (
+                                    item
+                                    for item in effects
+                                    if isinstance(item, dict) and item.get("id") == effect_id
+                                ),
+                                None,
+                            )
+                            if prior_effect is None:
+                                effects.append(speed_effect)
+                            else:
+                                prior_effect.update(speed_effect)
+                            next_encounter["ongoing_effects"] = effects
+                            turn_flags = dict(mover_after.get("turn_flags") or {})
+                            turn_flags["caltrops_movement_stopped_turn_token"] = (
+                                self.encounter_turn_token(next_encounter)
+                            )
+                            mover_after["turn_flags"] = turn_flags
+                            stopped_position = route_points[route_index]
+                            mover_after["position"] = {
+                                "x": int(stopped_position[0]),
+                                "y": int(stopped_position[1]),
+                            }
+                            stopped_distance = route_index * 5
+                            stopped_budget = dict(mover_after.get("turn_budget") or {})
+                            previous_spent = int(before_budget.get("movement_spent", 0) or 0)
+                            stopped_budget["movement_spent"] = previous_spent + stopped_distance
+                            mover_after["turn_budget"] = stopped_budget
+                            history = list(stopped_budget.get("movement_history") or [])
+                            if history:
+                                history[-1] = {
+                                    **dict(history[-1]),
+                                    "distance_ft": stopped_distance,
+                                    "destination": _support.deepcopy(mover_after["position"]),
+                                    "path": [
+                                        {"x": int(point[0]), "y": int(point[1])}
+                                        for point in route_points[: route_index + 1]
+                                    ],
+                                }
+                                stopped_budget["movement_history"] = history
+                            from sagasmith_dnd.combat_engine import _refresh_weapon_mastery_speed
+
+                            _refresh_weapon_mastery_speed(next_encounter, mover_after)
+                            resolution["stopped_position"] = _support.deepcopy(
+                                mover_after["position"]
+                            )
+                            resolution["movement_stopped_this_turn"] = True
+                            resolution["speed_penalty"] = _support.deepcopy(speed_effect)
+                        replacement = _support.CharacterStateUpdate(
+                            character_id=actor_id,
+                            sheet=_support.validate_character_sheet(actor_sheet),
+                            notes=_support.validate_character_notes(actor_record.notes),
+                            expected_revision=actor_record.revision,
+                        )
+                        if existing_update is not None:
+                            space_guards[space_guards.index(existing_update)] = replacement
+                        else:
+                            space_guards.append(replacement)
+                gear_area_resolutions.append(resolution)
+                next_encounter["log"] = [
+                    *list(next_encounter.get("log") or []),
+                    {
+                        "type": "adventuring_gear_hazard_trigger",
+                        **_support.deepcopy(resolution),
+                    },
+                ][-100:]
+                if is_caltrops and resolution.get("outcome") == "damaged_and_stopped":
+                    break
         if confusion_move_pending:
             _set_confusion_movement_status(
                 next_encounter,
@@ -4954,6 +5558,8 @@ class CombatService:
             movement_boundary_ids.append("dnd5e.core.movement.forced_and_teleport")
         if "prone" in moving_conditions:
             movement_boundary_ids.append("dnd5e.core.movement.prone_crawl_stand")
+        if any(item.get("outcome") == "prone" for item in gear_area_resolutions):
+            movement_boundary_ids.append("dnd5e.core.movement.prone_crawl_stand")
         if "grappled" in moving_conditions:
             movement_boundary_ids.append("dnd5e.core.movement.grapple_source")
         if drag_ids:
@@ -5005,6 +5611,11 @@ class CombatService:
                 ),
                 "combat": next_encounter,
                 **({"jump_resolution": jump_result} if jump_result is not None else {}),
+                **(
+                    {"adventuring_gear_area_resolutions": gear_area_resolutions}
+                    if gear_area_resolutions
+                    else {}
+                ),
                 "rule_receipts": movement_receipts,
                 "ended_witch_bolt_tether_ids": [
                     str(item.get("id") or "") for item in ended_tethers

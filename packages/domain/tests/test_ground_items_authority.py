@@ -25,3 +25,8 @@ def test_narrative_campaign_patch_preserves_ground_items_without_aliasing():
 def test_generic_campaign_patch_cannot_write_dependent_actor_relations():
     with pytest.raises(ValueError, match="system-owned.*dependent_actor_relations"):
         merge_reviewed_campaign_state({}, {"dependent_actor_relations": []})
+
+
+def test_generic_campaign_patch_cannot_write_adventuring_gear_bindings():
+    with pytest.raises(ValueError, match="system-owned.*adventuring_gear_bindings"):
+        merge_reviewed_campaign_state({}, {"adventuring_gear_bindings": {}})

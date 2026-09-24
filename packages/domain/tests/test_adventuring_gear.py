@@ -320,11 +320,20 @@ def test_bound_target_size_and_tool_eligibility_are_encoded_as_requirements() ->
     )
     escape = resolve_adventuring_gear_intent(_item(manacles), "escape")
     pick = resolve_adventuring_gear_intent(_item(manacles), "pick")
+    bind = resolve_adventuring_gear_intent(_item(manacles), "bind")
+    unlock = resolve_adventuring_gear_intent(_item(manacles), "unlock")
 
     assert escape["target"] == "bound_small_or_medium_creature"
     assert escape["check"] == {"ability": "dexterity", "dc": 20}
     assert pick["check"] == {"ability": "dexterity", "dc": 15}
     assert pick["requirements"] == ["thieves_tools_proficiency"]
+    assert bind["target"] == "small_or_medium_creature"
+    assert bind["effect"] == {"binding_state": "bound"}
+    assert unlock["target"] == "bound_small_or_medium_creature"
+    assert unlock["effect"] == {
+        "requires_provided_key": True,
+        "binding_state": "released",
+    }
     manacles = next(
         action for action in ADVENTURING_GEAR_ACTIONS.values() if action.name == "Manacles"
     )
@@ -332,8 +341,6 @@ def test_bound_target_size_and_tool_eligibility_are_encoded_as_requirements() ->
     assert breaking["object_hit_points"] == 15
     assert breaking["check"] == {"ability": "strength", "dc": 20}
     assert manacles.target == "small_or_medium_creature"
-    with pytest.raises(CombatEngineError, match="not a source-defined action"):
-        resolve_adventuring_gear_intent(_item(manacles), "bind")
 
 
 @pytest.mark.parametrize(
@@ -354,10 +361,10 @@ def test_bound_target_size_and_tool_eligibility_are_encoded_as_requirements() ->
             "pick",
             {
                 "key_provided_by_source": True,
+                "requires_key_unavailable": True,
                 "requires_state": "locked",
                 "success_state": "open",
                 "failure_state": "locked",
-                "broken_state": "broken",
             },
         ),
         (
@@ -399,3 +406,17 @@ def test_source_bound_check_families_reject_forged_item_identity() -> None:
         forged = {**_item(action), "source_key": "custom.crowbar"}
         with pytest.raises(CombatEngineError, match="source-bound|identity"):
             resolve_adventuring_gear_intent(forged, intent)
+
+
+def test_lock_key_unlock_is_source_bound_and_has_no_check() -> None:
+    action = next(action for action in ADVENTURING_GEAR_ACTIONS.values() if action.name == "Lock")
+    plan = resolve_adventuring_gear_intent(_item(action), "unlock")
+
+    assert plan["action_economy"] is None
+    assert plan["check"] is None
+    assert plan["target"] == "lock"
+    assert plan["effect"] == {
+        "requires_state": "locked",
+        "requires_provided_key": True,
+        "success_state": "open",
+    }

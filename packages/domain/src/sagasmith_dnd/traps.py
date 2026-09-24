@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from copy import deepcopy
 from typing import Any
 
@@ -63,19 +64,43 @@ _SRD_TRAPS: dict[str, dict[str, Any]] = {
         },
         "bypass_methods": [],
         "trigger": {
-            "kind": "area_save_condition",
+            "kind": "area_condition_and_save",
             "area": "10_foot_square",
-            "save_ability": "dexterity",
+            "condition_on_trigger": "restrained",
+            "save_ability": "strength",
             "save_dc": 10,
-            "condition_on_failure": "restrained",
+            "condition_on_failure": "prone",
             "escape_check": {"ability": "strength", "dc": 10},
-            "object": {"kind": "net", "ac": 10, "hp": 20, "slashing_damage_to_destroy_section": 5},
+            "object": {
+                "kind": "net",
+                "ac": 10,
+                "hp": 20,
+                "slashing_damage_to_destroy_section": 5,
+            },
         },
-        "settlement": "supported_single_target_area_confirmed_object_hp_unsupported",
+        "settlement": "supported_multiple_targets_object_hp_unsupported",
     },
     "srd5.1.fire_breathing_statue": {
         "name": "Fire-Breathing Statue",
-        "detect": {"active": [{"ability": "perception", "dc": 15}], "passive_dc": 15},
+        "detect": {
+            "active": [{"ability": "perception", "dc": 15}],
+            "passive_dc": 15,
+            "reveals_on_success": [
+                "hidden_pressure_plate",
+                "faint_scorch_marks_on_floor_and_walls",
+            ],
+        },
+        "magic_detection": {
+            "effect": "detect_magic_or_equivalent",
+            "target": "statue",
+            "reveals_school": "evocation",
+        },
+        "spell_disable": {
+            "spell": "dispel_magic",
+            "dc": 13,
+            "target": "statue",
+            "effect": "destroy_trap",
+        },
         "disable": None,
         "bypass_methods": ["wedge_pressure_plate"],
         "trigger": {
@@ -313,30 +338,71 @@ _SRD_TRAPS: dict[str, dict[str, Any]] = {
         "name": "Rolling Sphere",
         "detect": {"active": [{"ability": "perception", "dc": 15}], "passive_dc": 15},
         "disable": None,
-        "bypass_methods": ["move_to_side_alcove"],
+        "bypass_methods": ["wedge_pressure_plate"],
         "trigger": {
             "kind": "complex_trap",
+            "pressure_plate_minimum_weight_lb": 20,
+            "sphere_diameter_ft": 10,
+            "initiative_bonus": 8,
+            "movement_speed_ft": 60,
+            "movement_path": "straight_line",
+            "moves_through_creature_spaces": True,
+            "creature_can_move_through_sphere_space": True,
+            "traversal_terrain": "difficult",
+            "stops_at": "wall_or_similar_barrier",
+            "can_turn_corners": False,
             "dexterity_save_dc": 15,
             "damage_expression": "10d10",
             "damage_type": "bludgeoning",
             "on_failure": ["prone"],
-            "speed_ft": 60,
             "slow_check": {"ability": "strength", "dc": 20, "speed_reduction_ft": 15},
         },
         "settlement": "unsupported_complex_movement",
     },
     "srd5.1.sphere_of_annihilation": {
         "name": "Sphere of Annihilation",
-        "detect": {"active": [{"ability": "arcana", "dc": 20}], "passive_dc": None},
+        "detect": {
+            "active": [{"ability": "arcana", "dc": 20}],
+            "passive_dc": None,
+            "reveals_on_success": [
+                "sphere_of_annihilation_in_stone_mouth",
+                "sphere_cannot_be_controlled_or_moved",
+            ],
+        },
         "disable": None,
         "bypass_methods": [],
         "trigger": {
             "kind": "complex_magic",
             "contact_effect": "obliterate",
-            "optional_sympathy": {"dispel_magic_dc": 18},
+            "optional_sympathy": {
+                "dispel_magic_dc": 18,
+                "target": "face_enchantment",
+                "effect": "remove_enchantment_only",
+            },
         },
         "settlement": "unsupported_complex_magic_and_instant_death",
     },
+}
+
+_LOCKING_PIT_PROFILES = {
+    "srd5.1.locking_pit",
+    "srd5.1.spiked_locking_pit",
+    "srd5.1.poisoned_spiked_locking_pit",
+}
+_SOURCE_AREA_TARGET_PROFILES = {
+    "srd5.1.collapsing_roof",
+    "srd5.1.falling_net",
+    "srd5.1.fire_breathing_statue",
+    "srd5.1.poison_darts",
+    "srd5.1.simple_pit",
+    "srd5.1.hidden_pit",
+    "srd5.1.spiked_simple_pit",
+    "srd5.1.spiked_hidden_pit",
+    "srd5.1.locking_pit",
+    "srd5.1.spiked_locking_pit",
+    "srd5.1.poisoned_spiked_simple_pit",
+    "srd5.1.poisoned_spiked_hidden_pit",
+    "srd5.1.poisoned_spiked_locking_pit",
 }
 
 
@@ -428,6 +494,184 @@ def source_trap_profile(profile: Any, source_excerpt: Any) -> dict[str, Any]:
     return {"profile_id": profile_id, **deepcopy(_SRD_TRAPS[profile_id])}
 
 
+def source_trap_object_facts(profile: Any, requested: Any = None) -> dict[str, Any]:
+    """Return fixed source facts for the Falling Net's destructible object.
+
+    The bundled trap entry fixes AC 10 and 20 hit points, and specifies
+    slashing damage for destroying net sections. Runtime may accept other
+    reviewed physical properties, but these source-authored facts cannot be
+    chosen or changed by a caller.
+    """
+    if not isinstance(profile, dict) or profile.get("profile_id") != "srd5.1.falling_net":
+        raise ValueError("source object facts are supported only for Falling Net")
+    object_rules = dict(dict(profile.get("trigger") or {}).get("object") or {})
+    armor_class = object_rules.get("ac")
+    hit_points = object_rules.get("hp")
+    section_damage = object_rules.get("slashing_damage_to_destroy_section")
+    if (
+        type(armor_class) is not int
+        or armor_class != 10
+        or type(hit_points) is not int
+        or hit_points != 20
+        or type(section_damage) is not int
+        or section_damage != 5
+    ):
+        raise ValueError(
+            "Falling Net source profile must define AC 10, 20 HP, and 5 slashing section damage"
+        )
+    damage_filter = {"allowed_damage_types": ["slashing"]}
+    normalized_damage_filter = {
+        **damage_filter,
+        "required_any_weapon_traits": [],
+        "allowed_weapon_ids": [],
+    }
+    if requested is not None:
+        if not isinstance(requested, dict):
+            raise ValueError("Falling Net object request must be an object")
+        if "armor_class" in requested and requested["armor_class"] != armor_class:
+            raise ValueError("Falling Net armor class is fixed by its source at 10")
+        if "hit_points" in requested and requested["hit_points"] != hit_points:
+            raise ValueError("Falling Net hit points are fixed by its source at 20")
+        if "damage_filter" in requested:
+            requested_filter = requested["damage_filter"]
+            if requested_filter != damage_filter and requested_filter != normalized_damage_filter:
+                raise ValueError("Falling Net object damage is fixed by its source to slashing")
+    return {
+        "armor_class": armor_class,
+        "hit_points": hit_points,
+        "damage_filter": damage_filter,
+        "slashing_damage_to_destroy_section": section_damage,
+    }
+
+
+def validate_falling_net_section_spatial_facts(
+    profile: Any,
+    facts: Any,
+    *,
+    scene_id: str,
+    scene_revision: int,
+    trap_id: str,
+    object_id: str,
+    source_ref: str,
+    campaign_revision: int,
+    reviewed_by: str,
+    restrained_actor_ids: list[str],
+) -> dict[str, Any]:
+    """Validate a complete DM-reviewed mapping of trapped actors to net sections."""
+    if not isinstance(profile, dict) or profile.get("profile_id") != "srd5.1.falling_net":
+        raise ValueError("net section spatial facts require the Falling Net profile")
+    expected_fields = {
+        "decision_id",
+        "reason",
+        "scene_id",
+        "scene_revision",
+        "trap_id",
+        "object_id",
+        "source_ref",
+        "campaign_revision",
+        "reviewed_by",
+        "target_section_id",
+        "actor_sections",
+    }
+    if not isinstance(facts, dict) or set(facts) != expected_fields:
+        raise ValueError(
+            "Falling Net section_spatial_facts require decision, scene, trap, object, "
+            "source, revisions, reviewer, target section, and complete actor_sections"
+        )
+    decision_id = facts.get("decision_id")
+    reason = " ".join(str(facts.get("reason") or "").split())
+    if (
+        not isinstance(decision_id, str)
+        or not decision_id.strip()
+        or len(decision_id) > 200
+        or not reason
+        or len(reason) > 1000
+    ):
+        raise ValueError("Falling Net section_spatial_facts require a bounded decision and reason")
+    if facts.get("scene_id") != scene_id:
+        raise ValueError("Falling Net section facts do not match the source scene")
+    if type(facts.get("scene_revision")) is not int or facts["scene_revision"] != scene_revision:
+        raise ValueError("Falling Net section facts are stale for the active scene revision")
+    if facts.get("trap_id") != trap_id or facts.get("object_id") != object_id:
+        raise ValueError("Falling Net section facts do not match this source trap object")
+    if facts.get("source_ref") != source_ref:
+        raise ValueError("Falling Net section facts do not match the exact trap source")
+    if not reviewed_by or facts.get("reviewed_by") != reviewed_by:
+        raise ValueError("Falling Net section facts reviewer does not match the authorized DM")
+    revision = facts.get("campaign_revision")
+    if type(revision) is not int or revision != campaign_revision:
+        raise ValueError("Falling Net section facts are stale for the current campaign revision")
+    if (
+        not isinstance(restrained_actor_ids, list)
+        or any(not isinstance(actor_id, str) or not actor_id for actor_id in restrained_actor_ids)
+        or len(restrained_actor_ids) != len(set(restrained_actor_ids))
+    ):
+        raise ValueError("Falling Net section facts require current unique restrained actors")
+    target_section_id = facts.get("target_section_id")
+    valid_sections = {"northwest", "northeast", "southwest", "southeast"}
+    if not isinstance(target_section_id, str) or target_section_id not in valid_sections:
+        raise ValueError("Falling Net target section must identify one of four 5-foot squares")
+    actor_sections = facts.get("actor_sections")
+    if not isinstance(actor_sections, list):
+        raise ValueError("Falling Net section facts require complete actor_sections")
+    normalized_by_id: dict[str, str] = {}
+    for item in actor_sections:
+        if not isinstance(item, dict) or set(item) != {"actor_id", "section_id"}:
+            raise ValueError("each net actor section fact must contain actor_id and section_id")
+        actor_id = item.get("actor_id")
+        section_id = item.get("section_id")
+        if not isinstance(actor_id, str) or not actor_id or actor_id in normalized_by_id:
+            raise ValueError("net actor section facts require unique non-empty actor IDs")
+        if not isinstance(section_id, str) or section_id not in valid_sections:
+            raise ValueError("net actor section facts must identify one of four 5-foot squares")
+        normalized_by_id[actor_id] = section_id
+    if set(normalized_by_id) != set(restrained_actor_ids):
+        raise ValueError(
+            "Falling Net section facts must cover every currently restrained actor exactly once"
+        )
+    ordered_sections = [
+        {"actor_id": actor_id, "section_id": normalized_by_id[actor_id]}
+        for actor_id in restrained_actor_ids
+    ]
+    affected_actor_ids = [
+        actor_id
+        for actor_id in restrained_actor_ids
+        if normalized_by_id[actor_id] == target_section_id
+    ]
+    return {
+        "decision_id": decision_id.strip(),
+        "reason": reason,
+        "scene_id": scene_id,
+        "scene_revision": scene_revision,
+        "trap_id": trap_id,
+        "object_id": object_id,
+        "source_ref": source_ref,
+        "campaign_revision": revision,
+        "reviewed_by": reviewed_by,
+        "target_section_id": target_section_id,
+        "actor_sections": ordered_sections,
+        "affected_actor_ids": affected_actor_ids,
+    }
+
+
+def falling_net_section_cut_qualifies(profile: Any, attack: Any, damage: Any) -> bool:
+    """Return whether an engine-resolved hit dealt the source's section-cut damage."""
+    threshold = source_trap_object_facts(profile)["slashing_damage_to_destroy_section"]
+    if not isinstance(attack, dict) or attack.get("hit") is not True:
+        return False
+    if not isinstance(damage, dict):
+        return False
+    parts = damage.get("parts")
+    if not isinstance(parts, list):
+        return False
+    slashing_amount = sum(
+        max(0, int(part.get("adjusted_amount", 0)))
+        for part in parts
+        if isinstance(part, dict) and part.get("damage_type") == "slashing"
+    )
+    return slashing_amount >= threshold
+
+
 def validate_source_pit_depth(profile: Any, depth_ft: Any) -> int:
     """Validate a scene-confirmed pit dimension against its selected SRD profile."""
     if not isinstance(profile, dict):
@@ -452,6 +696,339 @@ def validate_source_pit_depth(profile: Any, depth_ft: Any) -> int:
     return depth_ft
 
 
+def validate_rolling_sphere_trigger_fact(
+    profile: Any,
+    fact: Any,
+    *,
+    scene_id: str,
+    trap_id: str,
+) -> dict[str, Any]:
+    """Validate the source-defined pressure trigger without inventing a sphere path."""
+    if not isinstance(profile, dict) or profile.get("profile_id") != "srd5.1.rolling_sphere":
+        raise ValueError("pressure trigger fact requires the source-defined Rolling Sphere")
+    trigger = profile.get("trigger")
+    minimum_weight = (
+        trigger.get("pressure_plate_minimum_weight_lb") if isinstance(trigger, dict) else None
+    )
+    if type(minimum_weight) is not int or minimum_weight != 20:
+        raise ValueError("Rolling Sphere source profile must define a 20 lb minimum trigger weight")
+    expected_fields = {"kind", "scene_id", "plate_id", "weight_lb"}
+    if not isinstance(fact, dict) or set(fact) != expected_fields:
+        raise ValueError("Rolling Sphere trigger requires exact pressure-plate weight facts")
+    if fact.get("kind") != "pressure_plate_weight":
+        raise ValueError("Rolling Sphere trigger fact must be pressure_plate_weight")
+    if fact.get("scene_id") != scene_id:
+        raise ValueError("Rolling Sphere trigger fact does not match the source-defined scene")
+    if fact.get("plate_id") != trap_id:
+        raise ValueError("Rolling Sphere trigger fact must identify this pressure plate")
+    weight = fact.get("weight_lb")
+    if (
+        isinstance(weight, bool)
+        or not isinstance(weight, (int, float))
+        or (isinstance(weight, float) and not math.isfinite(weight))
+        or weight < minimum_weight
+    ):
+        raise ValueError("Rolling Sphere triggers at 20 lb or greater")
+    return deepcopy(fact)
+
+
+def validate_source_trap_area_spatial_facts(
+    profile: Any,
+    facts: Any,
+    *,
+    scene_id: str,
+    trap_id: str,
+    encounter_id: str,
+    source_ref: str,
+    campaign_revision: int,
+    reviewed_by: str,
+    actor_ids: list[str],
+    eligible_actor_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    """Validate a complete Agent-reviewed area decision bound to one encounter revision."""
+    if (
+        not isinstance(profile, dict)
+        or profile.get("profile_id") not in _SOURCE_AREA_TARGET_PROFILES
+    ):
+        raise ValueError("reviewed area spatial facts require a supported source trap area")
+    expected_fields = {
+        "decision_id",
+        "reason",
+        "scene_id",
+        "trap_id",
+        "encounter_id",
+        "source_ref",
+        "campaign_revision",
+        "reviewed_by",
+        "actor_facts",
+    }
+    if not isinstance(facts, dict) or set(facts) != expected_fields:
+        raise ValueError(
+            "area spatial_facts require decision_id, reason, scene_id, trap_id, encounter_id, "
+            "source_ref, campaign_revision, reviewed_by, and complete actor_facts"
+        )
+    decision_id = str(facts.get("decision_id") or "").strip()
+    reason = " ".join(str(facts.get("reason") or "").split())
+    if not decision_id or len(decision_id) > 200 or not reason or len(reason) > 1000:
+        raise ValueError("area spatial_facts require a bounded reviewed decision_id and reason")
+    if facts.get("scene_id") != scene_id:
+        raise ValueError("area spatial_facts do not match the source-defined scene")
+    if facts.get("trap_id") != trap_id:
+        raise ValueError("area spatial_facts do not match this trap")
+    if facts.get("encounter_id") != encounter_id:
+        raise ValueError("area spatial_facts do not match the active encounter")
+    if facts.get("source_ref") != source_ref:
+        raise ValueError("area spatial_facts do not match the exact trap source")
+    if not reviewed_by or facts.get("reviewed_by") != reviewed_by:
+        raise ValueError("area spatial_facts reviewer does not match the authorized DM principal")
+    revision = facts.get("campaign_revision")
+    if type(revision) is not int or revision != campaign_revision:
+        raise ValueError("area spatial_facts are stale for the current campaign revision")
+    if (
+        not isinstance(actor_ids, list)
+        or any(not isinstance(item, str) or not item for item in actor_ids)
+        or len(actor_ids) != len(set(actor_ids))
+        or not actor_ids
+    ):
+        raise ValueError("area spatial facts require current unique encounter combatants")
+    eligible_ids = actor_ids if eligible_actor_ids is None else eligible_actor_ids
+    if (
+        not isinstance(eligible_ids, list)
+        or any(not isinstance(item, str) or not item for item in eligible_ids)
+        or len(eligible_ids) != len(set(eligible_ids))
+        or not set(eligible_ids).issubset(actor_ids)
+    ):
+        raise ValueError("area spatial facts require eligible actors from the active encounter")
+    actor_facts = facts.get("actor_facts")
+    if not isinstance(actor_facts, list) or not actor_facts:
+        raise ValueError("area spatial_facts require one fact for every active encounter combatant")
+    normalized_by_id: dict[str, dict[str, Any]] = {}
+    for actor_fact in actor_facts:
+        if not isinstance(actor_fact, dict) or set(actor_fact) != {"actor_id", "in_area"}:
+            raise ValueError("each area actor fact must contain exactly actor_id and in_area")
+        actor_id = actor_fact.get("actor_id")
+        if not isinstance(actor_id, str) or not actor_id or actor_id in normalized_by_id:
+            raise ValueError("area spatial_facts actor IDs must be unique non-empty strings")
+        if type(actor_fact.get("in_area")) is not bool:
+            raise ValueError("area spatial_facts in_area values must be booleans")
+        normalized_by_id[actor_id] = {
+            "actor_id": actor_id,
+            "in_area": actor_fact["in_area"],
+        }
+    if set(normalized_by_id) != set(actor_ids):
+        raise ValueError(
+            "area spatial_facts must cover every active encounter combatant exactly once"
+        )
+    ordered_facts = [normalized_by_id[actor_id] for actor_id in actor_ids]
+    eligible_set = set(eligible_ids)
+    affected_actor_ids = [
+        item["actor_id"]
+        for item in ordered_facts
+        if item["in_area"] and item["actor_id"] in eligible_set
+    ]
+    if not affected_actor_ids:
+        raise ValueError("source trap area has no eligible targets")
+    if profile["profile_id"] == "srd5.1.poison_darts":
+        affected_actor_ids.sort()
+    return {
+        "decision_id": decision_id,
+        "reason": reason,
+        "scene_id": scene_id,
+        "trap_id": trap_id,
+        "encounter_id": encounter_id,
+        "source_ref": source_ref,
+        "campaign_revision": revision,
+        "reviewed_by": reviewed_by,
+        "actor_facts": ordered_facts,
+        "affected_actor_ids": affected_actor_ids,
+    }
+
+
+def validate_poison_needle_spatial_facts(
+    profile: Any,
+    facts: Any,
+    *,
+    scene_id: str,
+    scene_revision: int,
+    trap_id: str,
+    target_actor_id: str,
+    source_ref: str,
+    campaign_revision: int,
+    reviewed_by: str,
+) -> dict[str, Any]:
+    """Validate DM-reviewed distance for the Poison Needle's fixed 3-inch reach."""
+    if not isinstance(profile, dict) or profile.get("profile_id") != "srd5.1.poison_needle":
+        raise ValueError("Poison Needle spatial facts require the Poison Needle profile")
+    expected_fields = {
+        "decision_id",
+        "reason",
+        "scene_id",
+        "scene_revision",
+        "trap_id",
+        "target_actor_id",
+        "source_ref",
+        "campaign_revision",
+        "reviewed_by",
+        "distance_inches",
+    }
+    if not isinstance(facts, dict) or set(facts) != expected_fields:
+        raise ValueError(
+            "Poison Needle spatial_facts require decision, scene, trap, actor, source, "
+            "revision, reviewer, and distance fields"
+        )
+    decision_id = facts.get("decision_id")
+    reason = " ".join(str(facts.get("reason") or "").split())
+    if (
+        not isinstance(decision_id, str)
+        or not decision_id.strip()
+        or len(decision_id) > 200
+        or not reason
+        or len(reason) > 1000
+    ):
+        raise ValueError("Poison Needle spatial_facts require bounded decision_id and reason")
+    if facts.get("scene_id") != scene_id:
+        raise ValueError("Poison Needle spatial_facts do not match the source scene")
+    revision = facts.get("scene_revision")
+    if type(revision) is not int or revision != scene_revision:
+        raise ValueError("Poison Needle spatial_facts are stale for the active scene revision")
+    if facts.get("trap_id") != trap_id:
+        raise ValueError("Poison Needle spatial_facts do not match this trap")
+    if facts.get("target_actor_id") != target_actor_id:
+        raise ValueError("Poison Needle spatial_facts do not match the target actor")
+    if facts.get("source_ref") != source_ref:
+        raise ValueError("Poison Needle spatial_facts do not match the exact source")
+    if not reviewed_by or facts.get("reviewed_by") != reviewed_by:
+        raise ValueError("Poison Needle spatial_facts reviewer does not match the authorized DM")
+    campaign_fact_revision = facts.get("campaign_revision")
+    if type(campaign_fact_revision) is not int or campaign_fact_revision != campaign_revision:
+        raise ValueError("Poison Needle spatial_facts are stale for the current campaign revision")
+    distance = facts.get("distance_inches")
+    if (
+        isinstance(distance, bool)
+        or not isinstance(distance, (int, float))
+        or not math.isfinite(float(distance))
+        or float(distance) < 0
+        or float(distance) > 3
+    ):
+        raise ValueError("Poison Needle target must be within its source-defined 3-inch range")
+    return {
+        "decision_id": decision_id.strip(),
+        "reason": reason,
+        "scene_id": scene_id,
+        "scene_revision": scene_revision,
+        "trap_id": trap_id,
+        "target_actor_id": target_actor_id,
+        "source_ref": source_ref,
+        "campaign_revision": campaign_revision,
+        "reviewed_by": reviewed_by,
+        "distance_inches": float(distance),
+    }
+
+
+def validate_locking_pit_disable_scene_facts(
+    profile: Any,
+    facts: Any,
+    *,
+    scene_id: str,
+    trap_id: str,
+    actor_id: str,
+) -> dict[str, Any]:
+    """Validate DM-confirmed scene facts for disabling a locking pit from inside.
+
+    The identity fields bind the adjudication to the expanded source scene, the
+    active trap instance, and the creature making the check. The three required
+    scene facts come directly from the selected fixed profile.
+    """
+    if not isinstance(profile, dict) or profile.get("profile_id") not in _LOCKING_PIT_PROFILES:
+        raise ValueError("inside-pit disable facts require a source-defined locking pit")
+    disable = profile.get("disable")
+    required_scene = disable.get("required_scene") if isinstance(disable, dict) else None
+    if (
+        not isinstance(disable, dict)
+        or disable.get("ability") != "dexterity"
+        or disable.get("dc") != 15
+        or disable.get("tool") != "thieves_tools"
+        or not isinstance(required_scene, list)
+        or not required_scene
+        or any(not isinstance(key, str) or not key for key in required_scene)
+        or len(set(required_scene)) != len(required_scene)
+    ):
+        raise ValueError("locking pit source profile is missing exact required scene facts")
+    identity_fields = {"scene_id", "trap_id", "actor_id", "decision_id", "reason"}
+    if not isinstance(facts, dict) or set(facts) != set(required_scene) | identity_fields:
+        raise ValueError("locking pit disable requires exact reviewed scene facts")
+    if any(type(facts[key]) is not bool or facts[key] is not True for key in required_scene):
+        raise ValueError("locking pit disable requires every source-defined scene fact to be true")
+    if facts.get("scene_id") != scene_id:
+        raise ValueError("locking pit scene facts do not match the source-defined scene")
+    if facts.get("trap_id") != trap_id or facts.get("actor_id") != actor_id:
+        raise ValueError("locking pit scene facts must identify this trap and actor")
+    if any(
+        not isinstance(facts[key], str) or not facts[key].strip()
+        for key in ("decision_id", "reason")
+    ):
+        raise ValueError("locking pit scene facts require a reviewed decision id and reason")
+    return deepcopy(facts)
+
+
+def validate_locking_pit_disable_state(
+    state: Any,
+    *,
+    profile_id: str,
+    source_ref: str,
+    scene_id: str,
+    trap_id: str,
+    actor_id: str,
+) -> dict[str, Any]:
+    """Require the actor to be contained in this exact, still-open pit instance."""
+    if not isinstance(state, dict):
+        raise ValueError("trap state must be an object")
+    traps = state.get("traps")
+    current = traps.get(trap_id) if isinstance(traps, dict) else None
+    if not isinstance(current, dict):
+        raise ValueError("actor is not contained by this source-bound locking pit")
+    if current.get("profile_id") != profile_id or profile_id not in _LOCKING_PIT_PROFILES:
+        raise ValueError("locking pit instance does not match its source-defined profile")
+    if current.get("source_ref") != source_ref:
+        raise ValueError("trap instance is bound to a different source")
+    if current.get("scene_id") != scene_id:
+        raise ValueError("locking pit instance is bound to a different source-defined scene")
+    if current.get("status") != "triggered":
+        raise ValueError("only a triggered locking pit can have its spring disabled")
+    if actor_id not in list(current.get("contained_actor_ids") or []):
+        raise ValueError("actor is not contained by this source-bound locking pit")
+    if current.get("spring_disabled") is True:
+        raise ValueError("locking pit spring is already disabled")
+    return deepcopy(current)
+
+
+def apply_locking_pit_spring_disable(
+    state: Any,
+    *,
+    profile_id: str,
+    source_ref: str,
+    scene_id: str,
+    trap_id: str,
+    actor_id: str,
+    success: bool,
+) -> dict[str, Any]:
+    """Record the spring check while keeping the triggered pit and captives intact."""
+    if type(success) is not bool:
+        raise ValueError("locking pit disable requires an engine-resolved success value")
+    current = validate_locking_pit_disable_state(
+        state,
+        profile_id=profile_id,
+        source_ref=source_ref,
+        scene_id=scene_id,
+        trap_id=trap_id,
+        actor_id=actor_id,
+    )
+    current["spring_disabled"] = success
+    result = deepcopy(state)
+    result.setdefault("traps", {})[trap_id] = current
+    return result
+
+
 def transition_trap_state(
     state: dict[str, Any],
     *,
@@ -463,6 +1040,8 @@ def transition_trap_state(
     contained_actor_ids: list[str] | None = None,
     destroyed_object_id: str | None = None,
     destroyed_hit_points: int | None = None,
+    section_id: str | None = None,
+    released_actor_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Apply an explicit, source-bound trap lifecycle transition."""
     if not isinstance(state, dict):
@@ -478,6 +1057,7 @@ def transition_trap_state(
         "trigger",
         "settle",
         "escape",
+        "cut_object_section",
         "destroy_object",
     }:
         raise ValueError("unsupported trap action")
@@ -496,6 +1076,19 @@ def transition_trap_state(
             raise ValueError("destroy_object requires zero authoritative remaining hit points")
     elif destroyed_object_id is not None or destroyed_hit_points is not None:
         raise ValueError("destroyed object facts are accepted only for destroy_object")
+    if action == "cut_object_section":
+        if not isinstance(section_id, str) or section_id not in {
+            "northwest", "northeast", "southwest", "southeast"
+        }:
+            raise ValueError("cut_object_section requires one of the four net section ids")
+        if (
+            not isinstance(released_actor_ids, list)
+            or any(not isinstance(item, str) or not item.strip() for item in released_actor_ids)
+            or len(set(released_actor_ids)) != len(released_actor_ids)
+        ):
+            raise ValueError("cut_object_section requires distinct released actor ids")
+    elif section_id is not None or released_actor_ids is not None:
+        raise ValueError("section release facts are accepted only for cut_object_section")
     if contained_actor_ids is not None:
         if action != "trigger":
             raise ValueError("contained_actor_ids are accepted only when a trap triggers")
@@ -533,6 +1126,11 @@ def transition_trap_state(
         else:
             current["status"] = "triggered"
     elif action == "trigger":
+        if (
+            current.get("bypassed") is True
+            and current.get("bypass_method") == "wedge_pressure_plate"
+        ):
+            raise ValueError("a pressure-plate wedge prevents this trap from triggering")
         if status != "armed":
             raise ValueError("only an armed trap can trigger")
         current["status"] = "triggered"
@@ -554,6 +1152,27 @@ def transition_trap_state(
         else:
             raise ValueError("actor is not restrained by this trap")
         current["last_escaped_actor_id"] = actor_id
+    elif action == "cut_object_section":
+        if status != "triggered" or current.get("profile_id") != "srd5.1.falling_net":
+            raise ValueError("only a triggered Falling Net can lose a section")
+        severed = list(current.get("severed_section_ids") or [])
+        if section_id in severed:
+            raise ValueError("Falling Net section was already destroyed")
+        restrained = list(current.get("restrained_actor_ids") or [])
+        released = list(released_actor_ids or [])
+        if not set(released).issubset(restrained):
+            raise ValueError("section release actors must still be restrained by this net")
+        owned = list(current.get("trap_added_restrained_actor_ids") or [])
+        current["severed_section_ids"] = [*severed, section_id]
+        current["restrained_actor_ids"] = [item for item in restrained if item not in released]
+        current["trap_added_restrained_actor_ids"] = [
+            item for item in owned if item not in released
+        ]
+        current["released_actor_ids"] = list(
+            dict.fromkeys([*list(current.get("released_actor_ids") or []), *released])
+        )
+        current["last_released_section_id"] = section_id
+        current["last_section_released_actor_ids"] = released
     elif action == "destroy_object":
         if status != "triggered":
             raise ValueError("only a triggered trap can be released by object destruction")
@@ -565,7 +1184,9 @@ def transition_trap_state(
         current["status"] = "spent"
         current["restrained_actor_ids"] = []
         current["trap_added_restrained_actor_ids"] = []
-        current["released_actor_ids"] = restrained
+        current["released_actor_ids"] = list(
+            dict.fromkeys([*list(current.get("released_actor_ids") or []), *restrained])
+        )
         current["object_destroyed"] = True
         current["object_hit_points"] = 0
     elif action == "settle":
@@ -575,3 +1196,144 @@ def transition_trap_state(
     instances[trap_id] = current
     result["traps"] = instances
     return result
+
+
+def settle_trap_object_spell(
+    state: dict[str, Any],
+    *,
+    profile: dict[str, Any],
+    source_ref: str,
+    scene_id: str,
+    trap_id: str,
+    actor_id: str,
+    action: str,
+    component: str,
+    success: bool | None,
+    face_enchantment_present: bool | None,
+    reviewed_by: str,
+    campaign_revision: int,
+) -> dict[str, Any]:
+    """Settle only fixed Fire Statue aura/dispelling and Sphere face dispelling.
+
+    Runtime supplies ``reviewed_by`` from the authenticated campaign principal
+    after checking DM membership and validates all source and scene identities.
+    The domain function accepts an engine-resolved check result, never caller
+    mechanics or a claimed role.
+    """
+    if not isinstance(state, dict) or not isinstance(profile, dict):
+        raise ValueError("source-bound trap spell state and profile must be objects")
+    source = str(source_ref or "").strip()
+    scene = str(scene_id or "").strip()
+    instance_id = str(trap_id or "").strip()
+    actor = str(actor_id or "").strip()
+    reviewer = str(reviewed_by or "").strip()
+    if not source or not scene or not instance_id or not actor or not reviewer:
+        raise ValueError("trap spell settlement requires source, scene, trap, actor, and reviewer")
+    if type(campaign_revision) is not int or campaign_revision < 0:
+        raise ValueError("trap spell review requires the current campaign revision")
+
+    profile_id = profile.get("profile_id")
+    if action == "detect_magic":
+        detection = dict(profile.get("magic_detection") or {})
+        if (
+            profile_id != "srd5.1.fire_breathing_statue"
+            or component != detection.get("target")
+            or detection.get("effect") != "detect_magic_or_equivalent"
+            or not detection.get("reveals_school")
+            or success is not None
+            or face_enchantment_present is not None
+        ):
+            raise ValueError("Detect Magic is source-defined only for the Fire-Breathing Statue")
+        result = {
+            "kind": "magic_aura",
+            "target": component,
+            "school": str(detection["reveals_school"]),
+        }
+    elif action == "dispel_magic":
+        if type(success) is not bool:
+            raise ValueError("Dispel Magic requires the engine-resolved check result")
+        if face_enchantment_present is not None:
+            if (
+                profile_id != "srd5.1.sphere_of_annihilation"
+                or component != "face_enchantment"
+                or face_enchantment_present is not True
+            ):
+                raise ValueError("face enchantment facts apply only to the Sphere face")
+            dispel = dict(dict(profile.get("trigger") or {}).get("optional_sympathy") or {})
+            if (
+                dispel.get("target") != component
+                or dispel.get("effect") != "remove_enchantment_only"
+            ):
+                raise ValueError("Sphere face dispel does not match its source-defined effect")
+            result = {
+                "kind": "dispel_magic",
+                "target": component,
+                "success": success,
+                "effect": "remove_enchantment_only" if success else "no_effect",
+                "sphere_removed": False,
+            }
+        else:
+            dispel = dict(profile.get("spell_disable") or {})
+            if (
+                profile_id != "srd5.1.fire_breathing_statue"
+                or component != dispel.get("target")
+                or dispel.get("spell") != "dispel_magic"
+                or dispel.get("effect") != "destroy_trap"
+            ):
+                raise ValueError(
+                    "Dispel Magic is source-defined only for the Fire Statue or Sphere face"
+                )
+            result = {
+                "kind": "dispel_magic",
+                "target": component,
+                "success": success,
+                "effect": "destroy_trap" if success else "no_effect",
+            }
+    else:
+        raise ValueError("unsupported trap-object spell action")
+
+    instances = dict(state.get("traps") or {})
+    current = dict(instances.get(instance_id) or {})
+    if current.get("source_ref") not in (None, source):
+        raise ValueError("trap instance is bound to a different source")
+    if current.get("scene_id") not in (None, scene):
+        raise ValueError("trap instance is bound to a different scene")
+    if current.get("profile_id") not in (None, profile_id):
+        raise ValueError("trap instance is bound to a different source profile")
+
+    status = str(current.get("status") or "armed")
+    if profile_id == "srd5.1.fire_breathing_statue":
+        if status != "armed":
+            raise ValueError("only an armed Fire-Breathing Statue can be detected or dispelled")
+        if action == "dispel_magic" and success is True:
+            current["status"] = "disabled"
+    elif action == "dispel_magic" and success is True:
+        current["optional_sympathy_active"] = False
+        current["sphere_object_removed"] = False
+
+    current.update(
+        source_ref=source,
+        scene_id=scene,
+        profile_id=profile_id,
+    )
+    if action == "detect_magic":
+        current["magic_aura_revealed"] = result["school"]
+    instances[instance_id] = current
+    updated = {**state, "traps": instances}
+    attempts = list(updated.get("attempts") or [])
+    attempts.append(
+        {
+            "trap_id": instance_id,
+            "source_ref": source,
+            "scene_id": scene,
+            "profile_id": profile_id,
+            "actor_id": actor,
+            "action": action,
+            "component": component,
+            "reviewed_by": reviewer,
+            "campaign_revision": campaign_revision,
+            "result": result,
+        }
+    )
+    updated["attempts"] = attempts[-100:]
+    return {"state": updated, "trap": current, "result": result}

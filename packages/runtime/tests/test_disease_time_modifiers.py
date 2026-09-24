@@ -2,8 +2,9 @@ from sagasmith_dnd.character_schema import active_effect_roll_bonus, default_cha
 from sagasmith_dnd.diseases import DISEASE_SOURCE_REF, infection_state
 from sagasmith_dnd_runtime.services.campaigns import (
     _advance_disease_effects,
-    _apply_sewer_plague_hit_die_limit,
+    _sewer_plague_symptomatic,
 )
+from sagasmith_dnd_runtime.services.diseases import deactivate_disease_owned_conditions
 
 
 def test_sight_rot_clock_refreshes_attack_penalty_without_global_check_penalty():
@@ -63,23 +64,80 @@ def test_sight_rot_clock_reconciles_existing_penalty_to_attack_rider_only():
     assert active_effect_roll_bonus(advanced, "ability") == 0
 
 
-def test_sewer_plague_halves_hit_die_healing_before_hp_cap():
+def test_sewer_plague_rest_policy_requires_an_active_source_owned_2014_instance():
     sheet = default_character_sheet()
-    sheet["abilities"]["constitution"]["score"] = 12
-    sheet["combat"]["hp"]["max"] = 20
-    sheet["combat"]["hp"]["value"] = 18
-    applied = {
-        "sheet": default_character_sheet(),
-        "hit_die_rolls": [{"key": "d8", "total": 4}, {"key": "d8", "total": 4}],
-        "hit_die_applied_healing": 2,
+    sheet["edition"] = "2014"
+    state = infection_state(
+        "sewer_plague",
+        actor_id="actor-1",
+        elapsed_ticks=0,
+        incubation_roll=1,
+        save_succeeded=False,
+    )
+    effect = {
+        "id": "sewer-plague-1",
+        "kind": "disease_state",
+        "source": DISEASE_SOURCE_REF,
+        "metadata": {"disease_state": state},
     }
-    applied["sheet"]["combat"]["hp"]["max"] = 20
+    sheet["effects"].append(effect)
 
-    resolved = _apply_sewer_plague_hit_die_limit(sheet, applied)
+    assert _sewer_plague_symptomatic(sheet) is False
+    assert _sewer_plague_symptomatic(sheet, elapsed_ticks=24 * 600) is True
 
-    assert resolved["sewer_plague_hit_die_healing"] == {
-        "normal_hit_die_healing": 10,
-        "disease_hit_die_healing": 5,
-    }
-    assert resolved["hit_die_applied_healing"] == 2
-    assert resolved["sheet"]["combat"]["hp"]["value"] == 20
+    effect["source"] = "untrusted:copied-disease"
+    assert _sewer_plague_symptomatic(sheet) is False
+
+    effect["source"] = DISEASE_SOURCE_REF
+    sheet["edition"] = "2024"
+    assert _sewer_plague_symptomatic(sheet) is False
+
+
+def test_disease_cure_reconciles_only_the_selected_instances_condition_rider():
+    sheet = default_character_sheet()
+    sheet["conditions"].append("incapacitated")
+    sheet["effects"].extend(
+        [
+            {
+                "id": "selected-laughter",
+                "kind": "timed_conditions",
+                "active": True,
+                "changes": [{"path": "conditions", "mode": "add", "value": "incapacitated"}],
+                "metadata": {
+                    "disease_condition_owner": "selected-cackle",
+                    "disease_id": "cackle_fever",
+                },
+            },
+            {
+                "id": "other-disease-laughter",
+                "kind": "timed_conditions",
+                "active": True,
+                "changes": [{"path": "conditions", "mode": "add", "value": "incapacitated"}],
+                "metadata": {
+                    "disease_condition_owner": "other-cackle",
+                    "disease_id": "cackle_fever",
+                },
+            },
+            {
+                "id": "unrelated-incapacitation",
+                "kind": "timed_conditions",
+                "active": True,
+                "changes": [{"path": "conditions", "mode": "add", "value": "incapacitated"}],
+                "metadata": {},
+            },
+        ]
+    )
+
+    cured, ended = deactivate_disease_owned_conditions(
+        sheet,
+        disease_effect_id="selected-cackle",
+        disease_id="cackle_fever",
+        ended_reason="cured_by:test",
+    )
+
+    effects = {effect["id"]: effect for effect in cured["effects"]}
+    assert [effect["id"] for effect in ended] == ["selected-laughter"]
+    assert effects["selected-laughter"]["active"] is False
+    assert effects["other-disease-laughter"]["active"] is True
+    assert effects["unrelated-incapacitation"]["active"] is True
+    assert "incapacitated" in cured["conditions"]

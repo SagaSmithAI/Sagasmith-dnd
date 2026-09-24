@@ -2,8 +2,9 @@ from copy import deepcopy
 
 import pytest
 
-from sagasmith_dnd.character_schema import default_character_sheet
+from sagasmith_dnd.character_schema import default_character_sheet, set_exhaustion_level
 from sagasmith_dnd.combat_engine import CombatEngineError
+from sagasmith_dnd.diseases import resolve_sewer_plague_rest_exhaustion
 from sagasmith_dnd.lifecycle import (
     advance_effect_durations,
     advance_elapsed_effect_durations,
@@ -970,6 +971,134 @@ def test_2014_short_rest_healing_uses_the_effective_exhaustion_hp_maximum() -> N
     assert rested["hit_die_applied_healing"] == 5
     assert rested["sheet"]["combat"]["hp"] == {"value": 10, "max": 20, "temp": 0}
     assert rested["sheet"]["combat"]["hit_dice"]["d8"]["value"] == 0
+
+
+@pytest.mark.parametrize(
+    ("roll", "constitution_modifier", "normal_healing", "disease_healing"),
+    [
+        (1, 0, 1, 0),  # odd total rounds down
+        (2, 0, 2, 1),  # even total halves exactly
+    ],
+)
+def test_2014_sewer_plague_halves_aggregate_hit_die_healing_before_hp_cap(
+    roll: int,
+    constitution_modifier: int,
+    normal_healing: int,
+    disease_healing: int,
+) -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2014"
+    sheet["abilities"]["constitution"]["score"] = 10 + constitution_modifier * 2
+    sheet["combat"]["hp"] = {"value": 1, "max": 20, "temp": 0}
+    sheet["combat"]["hit_dice"] = {
+        "d8": {
+            "label": "d8",
+            "value": 1,
+            "max": 2,
+            "recovers_on": "long_rest",
+            "source_key": "fighter",
+        }
+    }
+
+    rested = apply_rest(
+        sheet,
+        rest_type="short_rest",
+        hit_dice_spends=[{"key": "d8", "count": 1}],
+        hit_die_healing_divisor=2,
+        rng=_SequenceRng(roll),
+    )
+
+    assert rested["hit_die_healing"] == disease_healing
+    assert rested["hit_die_healing_before_modifier"] == normal_healing
+    assert rested["hit_die_applied_healing"] == disease_healing
+    assert rested["sheet"]["combat"]["hp"]["value"] == 1 + disease_healing
+    assert normal_healing // 2 == disease_healing
+
+
+def test_2014_sewer_plague_keeps_aggregate_rounding_across_sequential_hit_dice() -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2014"
+    sheet["combat"]["hp"] = {"value": 1, "max": 20, "temp": 0}
+    sheet["combat"]["hit_dice"] = {
+        "d8": {
+            "label": "d8",
+            "value": 2,
+            "max": 2,
+            "recovers_on": "long_rest",
+            "source_key": "fighter",
+        }
+    }
+    first = apply_rest(
+        sheet,
+        rest_type="short_rest",
+        hit_dice_spends=[{"key": "d8", "count": 1}],
+        hit_die_healing_divisor=2,
+        rng=_SequenceRng(3),
+    )
+    recorded = record_rest_completion(
+        first["sheet"],
+        rest_type="short_rest",
+        started_elapsed_ticks=0,
+        completed_elapsed_ticks=600,
+        hit_dice_spent_count=1,
+        hit_die_healing_divisor=2,
+        hit_die_healing_before_modifier=first["hit_die_healing_before_modifier"],
+    )
+
+    second = apply_short_rest_hit_die_choice(
+        recorded,
+        decision="spend",
+        hit_die_key="d8",
+        rest_completed_elapsed_ticks=600,
+        rng=_SequenceRng(3),
+    )
+
+    assert first["hit_die_healing_before_modifier"] == 3
+    assert first["hit_die_healing"] == 1
+    assert second["rolled_healing"] == 3
+    assert second["applied_healing"] == 2
+    assert second["sheet"]["combat"]["hp"]["value"] == 4
+
+
+@pytest.mark.parametrize(
+    ("exhaustion", "food_and_drink", "save_succeeded", "expected_exhaustion", "dead"),
+    [
+        (2, True, True, 0, False),
+        (5, True, False, 5, False),
+        (5, False, False, 6, True),
+    ],
+)
+def test_sewer_plague_long_rest_applies_normal_exhaustion_recovery_before_disease_delta(
+    exhaustion: int,
+    food_and_drink: bool,
+    save_succeeded: bool,
+    expected_exhaustion: int,
+    dead: bool,
+) -> None:
+    sheet = default_character_sheet()
+    sheet["edition"] = "2014"
+    sheet["combat"]["exhaustion"] = exhaustion
+    sheet["combat"]["hp"] = {"value": 3, "max": 20, "temp": 0}
+
+    rested = apply_rest(
+        sheet,
+        rest_type="long_rest",
+        food_and_drink=food_and_drink,
+        restore_hp_on_long_rest=False,
+    )
+    before_disease_delta = int(rested["sheet"]["combat"]["exhaustion"])
+    disease = resolve_sewer_plague_rest_exhaustion(
+        current_exhaustion=before_disease_delta,
+        disease_save_succeeded=save_succeeded,
+        ordinary_2014_recovery_applies=False,
+    )
+    final = set_exhaustion_level(rested["sheet"], disease["exhaustion"])
+
+    assert rested["sheet"]["combat"]["hp"]["value"] == 3
+    assert disease["exhaustion"] == expected_exhaustion
+    assert ("dead" in final["conditions"]) is dead
+    if food_and_drink and exhaustion:
+        assert before_disease_delta == exhaustion - 1
 
 
 def test_song_of_rest_applies_once_per_eligible_creature() -> None:

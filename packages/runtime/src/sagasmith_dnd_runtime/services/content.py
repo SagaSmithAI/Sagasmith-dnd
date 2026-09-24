@@ -2360,6 +2360,7 @@ class ContentService:
             "activity",
             "background",
             "class",
+            "disease_variant",
             "feat",
             "feature",
             "item",
@@ -2402,6 +2403,7 @@ class ContentService:
                 "source_chunk_ids",
                 "source_spans",
                 "card",
+                "disease_variant",
                 "note",
                 "replace_existing",
             }
@@ -2532,6 +2534,39 @@ class ContentService:
                 raise ValueError(f"additions[{index}].card exceeds 64000 serialized chars")
             card = _support.deepcopy(raw_card)
             reject_executable_fields(card)
+            disease_variant = None
+            if kind == "disease_variant":
+                source = self.rules.source(job.source_id)
+                if str(source.get("edition") or "") != "2014":
+                    raise ValueError("disease variants can only be authored from 2014 rule sources")
+                if card:
+                    raise ValueError(
+                        f"additions[{index}].card must be empty for a typed disease variant"
+                    )
+                raw_variant = raw_addition.get("disease_variant")
+                if not isinstance(raw_variant, dict):
+                    raise ValueError(
+                        f"additions[{index}].disease_variant must be a typed object"
+                    )
+                try:
+                    disease_variant = _support.normalize_disease_variant_definition(
+                        raw_variant.get("disease_id"), raw_variant
+                    )
+                    canonical_name = _support.disease_profile(
+                        disease_variant["disease_id"]
+                    )["name"]
+                except _support.DiseaseError as error:
+                    raise ValueError(
+                        f"additions[{index}].disease_variant is invalid: {error}"
+                    ) from error
+                if name != canonical_name:
+                    raise ValueError(
+                        f"additions[{index}].name must match {canonical_name!r}"
+                    )
+            elif "disease_variant" in raw_addition:
+                raise ValueError(
+                    f"additions[{index}].disease_variant is only valid for disease_variant kind"
+                )
             source_chunks = [available_chunks[item] for item in chunk_ids]
             source_text = "\n\n".join(
                 text.strip() for text in span_texts if text.strip()
@@ -2640,6 +2675,12 @@ class ContentService:
                     "application_state": "catalog_only",
                     "mechanical_scope": "review_required",
                     "card": card,
+                    **({"disease_variant": disease_variant} if disease_variant else {}),
+                    **(
+                        {"execution_state": "disease_variant_ready"}
+                        if disease_variant
+                        else {}
+                    ),
                 },
                 "source_citations": [
                     self.rules.citation(chunk_id, source_id=job.source_id) for chunk_id in chunk_ids
@@ -4411,6 +4452,40 @@ class ContentService:
             raise ValueError("rule import job must be indexed before pack compilation")
         if job.state not in {"reviewed", "compiled", "validated", "failed"}:
             raise ValueError("content candidates must be explicitly finalized before compilation")
+        disease_candidates = [
+            candidate
+            for candidate in job.candidates
+            if candidate.get("review_status") == "accepted"
+            and str((candidate.get("artifact") or {}).get("kind") or candidate.get("kind") or "")
+            == "disease_variant"
+        ]
+        disease_variant_approvals: dict[str, dict[str, str]] = {}
+        if disease_candidates:
+            finalization = dict(dict(job.result or {}).get("review_finalization") or {})
+            source = self.rules.source(job.source_id)
+            reviewer = str(finalization.get("confirmed_by") or "").strip()
+            source_checksum = str(source.get("checksum") or "")
+            if (
+                not reviewer
+                or str(finalization.get("source_id") or "") != job.source_id
+                or str(finalization.get("source_checksum") or "") != source_checksum
+                or not str(finalization.get("candidate_set_fingerprint") or "")
+                or not str(finalization.get("note") or "").strip()
+            ):
+                raise ValueError(
+                    "disease variants require a source-bound, finalized DM candidate review"
+                )
+            for candidate in disease_candidates:
+                candidate_id = str(candidate.get("id") or "").strip()
+                if not candidate_id:
+                    raise ValueError("reviewed disease variant is missing its candidate identity")
+                disease_variant_approvals[candidate_id] = {
+                    "reviewer": reviewer,
+                    "note": str(finalization["note"]),
+                    "candidate_set_fingerprint": str(finalization["candidate_set_fingerprint"]),
+                    "source_id": job.source_id,
+                    "source_checksum": source_checksum,
+                }
         artifacts = _support.compiled_artifacts_from_candidates(
             job.candidates,
             pack_id=pack_id,
@@ -4422,6 +4497,7 @@ class ContentService:
             artifacts=artifacts,
             mechanics=mechanics,
             provenance={**dict(provenance or {}), "import_job_id": job_id},
+            disease_variant_approvals=disease_variant_approvals,
         )
         state = "compiled" if draft["status"] == "validated" else "failed"
         updated = self.import_jobs.record_validation(

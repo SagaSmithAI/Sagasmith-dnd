@@ -8,10 +8,16 @@ from sagasmith_dnd.combat_engine import resolve_fall_to_sheet
 from sagasmith_dnd.conditions import effect_is_immune, effect_is_suspended_by_petrification
 from sagasmith_dnd.engine import resolve_attack, roll
 from sagasmith_dnd.traps import (
+    apply_locking_pit_spring_disable,
     build_poison_needle_condition_effect,
     source_trap_profile,
     transition_trap_state,
+    validate_locking_pit_disable_scene_facts,
+    validate_locking_pit_disable_state,
+    validate_poison_needle_spatial_facts,
+    validate_rolling_sphere_trigger_fact,
     validate_source_pit_depth,
+    validate_source_trap_area_spatial_facts,
 )
 
 from .. import application_support as _support
@@ -32,9 +38,17 @@ _SOURCE_LOCKING_PIT_PROFILES = {
     "srd5.1.spiked_locking_pit",
     "srd5.1.poisoned_spiked_locking_pit",
 }
+_SOURCE_AREA_TARGET_PROFILES = {
+    "srd5.1.collapsing_roof",
+    "srd5.1.falling_net",
+    "srd5.1.fire_breathing_statue",
+    "srd5.1.poison_darts",
+    *_SOURCE_PIT_PROFILES,
+}
 _SOURCE_TRIGGER_FACT_KINDS = {
     "srd5.1.fire_breathing_statue": ("pressure_plate_weight", "plate_id"),
     "srd5.1.poison_darts": ("pressure_plate_weight", "plate_id"),
+    "srd5.1.rolling_sphere": ("pressure_plate_weight", "plate_id"),
     "srd5.1.poison_needle": ("lock_opened", "lock_id"),
     "srd5.1.simple_pit": ("step_on_cover", "cover_id"),
     "srd5.1.hidden_pit": ("step_on_cover", "cover_id"),
@@ -47,6 +61,148 @@ _SOURCE_TRIGGER_FACT_KINDS = {
     "srd5.1.poisoned_spiked_locking_pit": ("step_on_cover", "cover_id"),
     "srd5.1.collapsing_roof": ("knock_wedged_beam", "beam_id"),
 }
+
+
+def _apply_falling_net_effects(
+    sheet: dict[str, Any], *, strength_save_succeeded: bool
+) -> tuple[dict[str, Any], bool]:
+    """Apply the net's automatic restraint and failed-save prone condition.
+
+    Return whether this net added the restrained condition, so later escape or
+    net destruction removes only the condition owned by this trap instance.
+    """
+    updated = _support.deepcopy(sheet)
+    had_restrained = "restrained" in set(updated.get("conditions") or [])
+    _support.apply_condition_change(updated, condition_id="restrained", add=True)
+    restrained_added = not had_restrained and "restrained" in set(updated.get("conditions") or [])
+    if not strength_save_succeeded:
+        _support.apply_condition_change(updated, condition_id="prone", add=True)
+    return updated, restrained_added
+
+
+def _has_thieves_tools_proficiency(sheet: dict[str, Any]) -> bool:
+    tool_proficiencies = {
+        str(item).casefold().replace("'", "").replace("_", " ").strip()
+        for item in dict(dict(sheet.get("traits") or {}).get("proficiencies") or {}).get(
+            "tools", []
+        )
+    }
+    return bool({"thieves tools", "thieves tool"} & tool_proficiencies)
+
+
+def _require_rolling_sphere_trigger_settlement(
+    profile: dict[str, Any],
+    trigger_fact: dict[str, Any] | None,
+    *,
+    scene_id: str,
+    trap_id: str,
+) -> None:
+    try:
+        validate_rolling_sphere_trigger_fact(
+            profile,
+            trigger_fact,
+            scene_id=scene_id,
+            trap_id=trap_id,
+        )
+    except ValueError as exc:
+        raise _support.CombatEngineError(str(exc)) from exc
+    raise _support.CombatEngineError(
+        "Rolling Sphere pressure trigger is source-bound, but activation is unresolved: "
+        "the encounter has no trap initiative participant or authoritative sphere path and "
+        "creature-collision settlement; no state was written"
+    )
+
+
+def _resolve_source_trap_area_targets(
+    profile: dict[str, Any],
+    spatial_facts: dict[str, Any] | None,
+    *,
+    encounter: dict[str, Any],
+    scene_id: str,
+    trap_id: str,
+    reviewed_by: str,
+    source_ref: str,
+    campaign_revision: int,
+) -> tuple[list[str], dict[str, Any]]:
+    if encounter.get("active") is not True:
+        raise _support.CombatEngineError(
+            "source-bound area targets require a current active encounter"
+        )
+    positioning_mode = str(encounter.get("positioning_mode") or "agent")
+    if positioning_mode == "grid":
+        raise _support.CombatEngineError(
+            "Grid trap area settlement is unsupported until the encounter records an "
+            "authoritative position and facing for this trap component"
+        )
+    if positioning_mode != "agent":
+        raise _support.CombatEngineError("trap area targeting requires Grid or Agent positioning")
+    combatants = list(encounter.get("combatants") or [])
+    actor_ids = [
+        str(item.get("actor_id") or "")
+        for item in combatants
+    ]
+    eligible_actor_ids = [
+        str(item.get("actor_id") or "")
+        for item in combatants
+        if "dead" not in {str(condition).casefold() for condition in item.get("conditions", [])}
+    ]
+    try:
+        normalized = validate_source_trap_area_spatial_facts(
+            profile,
+            spatial_facts,
+            scene_id=scene_id,
+            trap_id=trap_id,
+            encounter_id=str(encounter.get("id") or ""),
+            source_ref=source_ref,
+            campaign_revision=campaign_revision,
+            reviewed_by=reviewed_by,
+            actor_ids=actor_ids,
+            eligible_actor_ids=eligible_actor_ids,
+        )
+    except ValueError as exc:
+        raise _support.CombatEngineError(str(exc)) from exc
+    return list(normalized["affected_actor_ids"]), normalized
+
+
+def _resolve_poison_needle_spatial_facts(
+    profile: dict[str, Any],
+    spatial_facts: dict[str, Any] | None,
+    *,
+    scene_id: str,
+    scene_revision: int,
+    trap_id: str,
+    target_actor_id: str,
+    source_ref: str,
+    campaign_revision: int,
+    reviewed_by: str,
+) -> dict[str, Any]:
+    try:
+        return validate_poison_needle_spatial_facts(
+            profile,
+            spatial_facts,
+            scene_id=scene_id,
+            scene_revision=scene_revision,
+            trap_id=trap_id,
+            target_actor_id=target_actor_id,
+            source_ref=source_ref,
+            campaign_revision=campaign_revision,
+            reviewed_by=reviewed_by,
+        )
+    except ValueError as exc:
+        raise _support.CombatEngineError(str(exc)) from exc
+
+
+def _revealed_detection_facts(
+    profile: dict[str, Any], checks: list[dict[str, Any]]
+) -> list[str]:
+    """Return only fixed source clues unlocked by successful engine checks."""
+    if not checks or any(item.get("success") is not True for item in checks):
+        return []
+    detect = profile.get("detect")
+    clues = detect.get("reveals_on_success") if isinstance(detect, dict) else None
+    if not isinstance(clues, list) or any(not isinstance(item, str) for item in clues):
+        return []
+    return list(clues)
 
 
 class TrapService:
@@ -69,6 +225,8 @@ class TrapService:
         area_confirmed: bool | None = None,
         trap_depth_ft: int | None = None,
         trigger_fact: dict[str, Any] | None = None,
+        scene_facts: dict[str, Any] | None = None,
+        spatial_facts: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Resolve source-bound trap detection and explicit no-roll bypass actions.
 
@@ -92,6 +250,21 @@ class TrapService:
             normalized_profile = source_trap_profile(profile, source_excerpt)
         except ValueError as exc:
             raise _support.CombatEngineError(str(exc)) from exc
+        profile_id = str(normalized_profile["profile_id"])
+        area_target_action = profile_id in _SOURCE_AREA_TARGET_PROFILES and (
+            action == "trigger"
+            or (
+                action == "disable"
+                and dict(normalized_profile.get("disable") or {}).get("failed_check") == "trigger"
+            )
+        )
+        poison_needle_range_action = profile_id == "srd5.1.poison_needle" and (
+            action == "trigger"
+            or (
+                action == "disable"
+                and dict(normalized_profile.get("disable") or {}).get("failed_check") == "trigger"
+            )
+        )
         if action == "bypass":
             if method not in normalized_profile["bypass_methods"]:
                 raise _support.CombatEngineError(
@@ -109,19 +282,68 @@ class TrapService:
                 raise _support.CombatEngineError(
                     "disable method must match this source-bound trap profile"
                 )
-            if disable_spec.get("failed_check") == "trigger" and area_confirmed is not True:
+            if (
+                disable_spec.get("failed_check") == "trigger"
+                and not area_target_action
+                and not poison_needle_range_action
+                and area_confirmed is not True
+            ):
                 raise _support.CombatEngineError(
                     "failed disable requires an explicit confirmed source-defined area fact"
                 )
             failed_area_trigger = disable_spec.get("failed_check") == "trigger"
-            if target_ids is not None and not failed_area_trigger:
+            if target_ids is not None and (not failed_area_trigger or area_target_action):
                 raise _support.CombatEngineError("disable does not accept target_ids")
         elif method is not None:
             raise _support.CombatEngineError("method is accepted only for trap bypass")
+        if area_target_action:
+            if area_confirmed is not None:
+                raise _support.CombatEngineError(
+                    "source-bound area effects require reviewed spatial_facts, not area_confirmed"
+                )
+            if target_ids is not None:
+                raise _support.CombatEngineError(
+                    "source-bound area effects derive all affected actors from spatial_facts"
+                )
+        elif spatial_facts is not None and not poison_needle_range_action:
+            raise _support.CombatEngineError(
+                "spatial_facts are accepted only for source-defined area or Poison Needle "
+                "range settlement"
+            )
+        if poison_needle_range_action:
+            if area_confirmed is not None:
+                raise _support.CombatEngineError(
+                    "Poison Needle range requires reviewed spatial_facts, not area_confirmed"
+                )
+            if not isinstance(spatial_facts, dict):
+                raise _support.CombatEngineError(
+                    "Poison Needle requires DM-reviewed spatial_facts for its 3-inch range"
+                )
         if action in {"trigger", "escape"}:
-            if action == "trigger" and area_confirmed is not True:
+            is_rolling_sphere_trigger = (
+                action == "trigger"
+                and profile_id == "srd5.1.rolling_sphere"
+            )
+            if (
+                action == "trigger"
+                and not is_rolling_sphere_trigger
+                and not area_target_action
+                and not poison_needle_range_action
+                and area_confirmed is not True
+            ):
                 raise _support.CombatEngineError(
                     "trap trigger requires an explicit confirmed source-defined area fact"
+                )
+            if (
+                is_rolling_sphere_trigger
+                and area_confirmed is not None
+            ):
+                raise _support.CombatEngineError(
+                    "Rolling Sphere trigger does not accept caller-confirmed area facts"
+                )
+            if is_rolling_sphere_trigger and target_ids is not None:
+                raise _support.CombatEngineError(
+                    "Rolling Sphere target selection requires its unresolved authoritative path"
                 )
             if action == "escape" and (target_ids is not None or area_confirmed is not None):
                 raise _support.CombatEngineError("escape does not accept target or area facts")
@@ -171,11 +393,20 @@ class TrapService:
                     )
                 if fact_kind == "pressure_plate_weight":
                     weight = trigger_fact.get("weight_lb")
+                    numeric_weight = not isinstance(weight, bool) and isinstance(
+                        weight, (int, float)
+                    )
+                    is_rolling_sphere = (
+                        normalized_profile["profile_id"] == "srd5.1.rolling_sphere"
+                    )
                     if (
-                        isinstance(weight, bool)
-                        or not isinstance(weight, (int, float))
-                        or weight <= 20
+                        not numeric_weight
+                        or (numeric_weight and (weight < 20 if is_rolling_sphere else weight <= 20))
                     ):
+                        if is_rolling_sphere:
+                            raise _support.CombatEngineError(
+                                "Rolling Sphere triggers at 20 lb or greater"
+                            )
                         raise _support.CombatEngineError(
                             "pressure plate trigger requires a confirmed weight greater than 20 lb"
                         )
@@ -212,6 +443,7 @@ class TrapService:
                 "srd5.1.collapsing_roof",
                 "srd5.1.fire_breathing_statue",
                 *_SOURCE_PIT_PROFILES,
+                "srd5.1.rolling_sphere",
             }:
                 raise _support.CombatEngineError(
                     "this source-bound trap trigger has no complete runtime settlement"
@@ -232,9 +464,23 @@ class TrapService:
             or area_confirmed is not None
             or trap_depth_ft is not None
             or trigger_fact is not None
+            or scene_facts is not None
         ):
             raise _support.CombatEngineError(
                 "target_ids and area_confirmed are accepted only for trap trigger"
+            )
+        if action == "disable" and normalized_profile["profile_id"] in _SOURCE_LOCKING_PIT_PROFILES:
+            if method != "thieves_tools":
+                raise _support.CombatEngineError(
+                    "locking pit disable requires the source-defined thieves_tools method"
+                )
+            if area_confirmed is not None or trap_depth_ft is not None:
+                raise _support.CombatEngineError(
+                    "locking pit disable does not accept trigger area or depth facts"
+                )
+        elif scene_facts is not None:
+            raise _support.CombatEngineError(
+                "scene_facts are accepted only for source-defined locking pit disable"
             )
         self.access.require_campaign(campaign_id, principal_id, roles=_support.CAMPAIGN_DM_ROLES)
         self.require_campaign_actor(campaign_id, actor_id)
@@ -243,6 +489,7 @@ class TrapService:
             "srd5.1.falling_net",
             "srd5.1.poison_needle",
             "srd5.1.collapsing_roof",
+            *_SOURCE_LOCKING_PIT_PROFILES,
         }:
             raise _support.CombatEngineError(
                 "this source-bound trap disable settlement is unsupported"
@@ -260,6 +507,8 @@ class TrapService:
             "area_confirmed": area_confirmed,
             "trap_depth_ft": trap_depth_ft,
             "trigger_fact": trigger_fact,
+            "scene_facts": scene_facts,
+            "spatial_facts": spatial_facts,
         }
         scope = f"trap-state:{campaign_id}:{resolved_branch}:{principal_id}"
         replay_payload = {"payload": payload, "branch_id": resolved_branch}
@@ -299,6 +548,8 @@ class TrapService:
                     area_confirmed=area_confirmed,
                     trap_depth_ft=trap_depth_ft,
                     trigger_fact=trigger_fact,
+                    scene_facts=scene_facts,
+                    spatial_facts=spatial_facts,
                 )
         stream = _support.active_random_stream()
         random_state = _support.validate_random_stream_state(
@@ -331,6 +582,19 @@ class TrapService:
             field="trap source_excerpt",
             minimum_length=10,
         )
+        if action == "trigger":
+            current_traps = dict(dict(campaign.state or {}).get("trap_state") or {}).get(
+                "traps", {}
+            )
+            current_trap = dict(dict(current_traps).get(trap_id) or {})
+            if (
+                current_trap.get("source_ref") == exact_source
+                and current_trap.get("bypassed") is True
+                and current_trap.get("bypass_method") == "wedge_pressure_plate"
+            ):
+                raise _support.CombatEngineError(
+                    "a pressure-plate wedge prevents this trap from triggering"
+                )
         actor = self.combat_actor_snapshot(actor_id)
         encounter = dict(dict(campaign.state or {}).get("combat") or {})
         ruleset = (
@@ -349,6 +613,59 @@ class TrapService:
                 raise _support.CombatEngineError(
                     "trap trigger fact scene_id does not match the source-defined scene"
                 )
+            normalized_needle_spatial_facts = None
+            if poison_needle_range_action:
+                scene_id = str(expanded["scene"]["id"])
+                active_scene = self.modules.current_scene(campaign_id, scope_id="party")
+                active_progress = (
+                    dict(active_scene.get("progress") or {})
+                    if isinstance(active_scene, dict)
+                    else {}
+                )
+                scene_revision = (
+                    active_scene.get("state_version", active_progress.get("state_version"))
+                    if isinstance(active_scene, dict)
+                    else None
+                )
+                if (
+                    not isinstance(active_scene, dict)
+                    or str(active_scene.get("scene_id") or "") != scene_id
+                    or type(scene_revision) is not int
+                ):
+                    raise _support.CombatEngineError(
+                        "Poison Needle spatial_facts require the active source scene and revision"
+                    )
+                normalized_needle_spatial_facts = _resolve_poison_needle_spatial_facts(
+                    normalized_profile,
+                    spatial_facts,
+                    scene_id=scene_id,
+                    scene_revision=scene_revision,
+                    trap_id=trap_id,
+                    target_actor_id=actor_id,
+                    source_ref=exact_source,
+                    campaign_revision=campaign.revision,
+                    reviewed_by=principal_id,
+                )
+            if action == "trigger" and normalized_profile["profile_id"] == "srd5.1.rolling_sphere":
+                _require_rolling_sphere_trigger_settlement(
+                    normalized_profile,
+                    trigger_fact,
+                    scene_id=str(expanded["scene"]["id"]),
+                    trap_id=trap_id,
+                )
+            normalized_area_spatial_facts = None
+            if area_target_action:
+                target_ids, normalized_area_spatial_facts = _resolve_source_trap_area_targets(
+                    normalized_profile,
+                    spatial_facts,
+                    encounter=encounter,
+                    scene_id=str(expanded["scene"]["id"]),
+                    trap_id=trap_id,
+                    reviewed_by=principal_id,
+                    source_ref=exact_source,
+                    campaign_revision=campaign.revision,
+                )
+                area_confirmed = True
             return self._source_bound_trap_effect_transition(
                 campaign=campaign,
                 campaign_id=campaign_id,
@@ -363,6 +680,12 @@ class TrapService:
                 area_confirmed=area_confirmed,
                 trap_depth_ft=trap_depth_ft,
                 trigger_fact=trigger_fact,
+                scene_facts=scene_facts,
+                spatial_facts=(
+                    normalized_area_spatial_facts
+                    if area_target_action
+                    else normalized_needle_spatial_facts
+                ),
                 encounter=encounter,
                 ruleset=ruleset,
                 stream=stream,
@@ -454,7 +777,14 @@ class TrapService:
             )
             trap_state["traps"][trap_id]["bypass_method"] = method
 
+        revealed_facts = (
+            _revealed_detection_facts(normalized_profile, checks)
+            if action in {"detect", "passive_detect"}
+            else []
+        )
         result: dict[str, Any] = {"check": check, "checks": checks, "action": action}
+        if revealed_facts:
+            result["revealed_facts"] = revealed_facts
         character_updates: list[Any] = []
         rule_receipts = [receipt for item in checks for receipt in item.get("rule_receipts", [])]
         trap_state.setdefault("attempts", [])
@@ -467,6 +797,7 @@ class TrapService:
                 "action": action,
                 "check": check,
                 "checks": checks,
+                **({"revealed_facts": revealed_facts} if revealed_facts else {}),
                 "method": method,
                 "campaign_revision": campaign.revision + 1,
             },
@@ -479,6 +810,7 @@ class TrapService:
             "trap": trap_state.get("traps", {}).get(trap_id),
             "check": check,
             "checks": checks,
+            **({"revealed_facts": revealed_facts} if revealed_facts else {}),
             **(
                 {"failure_settlement": result["failure_settlement"]}
                 if "failure_settlement" in result
@@ -519,6 +851,8 @@ class TrapService:
         area_confirmed: bool | None,
         trap_depth_ft: int | None,
         trigger_fact: dict[str, Any] | None,
+        scene_facts: dict[str, Any] | None,
+        spatial_facts: dict[str, Any] | None,
         encounter: dict[str, Any],
         ruleset: str,
         stream: Any,
@@ -561,7 +895,11 @@ class TrapService:
                 trap_id=trap_id,
                 action="settle",
             )
-            trap_state["traps"][trap_id]["trigger_fact"] = dict(trigger_fact or {})
+            darts_trap = dict(trap_state["traps"][trap_id])
+            darts_trap["trigger_fact"] = dict(trigger_fact or {})
+            darts_trap["spatial_facts"] = _support.deepcopy(spatial_facts)
+            darts_trap["affected_actor_ids"] = list(target_ids)
+            trap_state["traps"][trap_id] = darts_trap
             current_sheets = {
                 target_id: _support.deepcopy(snapshot["sheet"])
                 for target_id, snapshot in snapshots.items()
@@ -677,6 +1015,7 @@ class TrapService:
                     "action": action,
                     "area_confirmed": True,
                     "eligible_target_ids": target_ids,
+                    "spatial_facts": _support.deepcopy(spatial_facts),
                     "darts": dart_results,
                     "campaign_revision": campaign.revision + 1,
                 },
@@ -690,6 +1029,8 @@ class TrapService:
                 "trap": trap_state["traps"][trap_id],
                 "darts": dart_results,
                 "eligible_target_ids": target_ids,
+                "affected_actor_ids": list(target_ids),
+                "spatial_facts": _support.deepcopy(spatial_facts),
             }
             if receipt is not None:
                 response["random_stream_receipt"] = receipt
@@ -770,6 +1111,9 @@ class TrapService:
                         success=True,
                     )
                     current_trap = dict(trap_state["traps"][trap_id])
+                    current_trap["range_confirmed"] = True
+                    current_trap["spatial_facts"] = _support.deepcopy(spatial_facts)
+                    trap_state["traps"][trap_id] = current_trap
                     trap_state.setdefault("attempts", [])
                     trap_state["attempts"] = [
                         *list(trap_state["attempts"]),
@@ -780,6 +1124,7 @@ class TrapService:
                             "action": action,
                             "method": method,
                             "check": disable_check,
+                            "spatial_facts": _support.deepcopy(spatial_facts),
                             "campaign_revision": campaign.revision + 1,
                         },
                     ][-100:]
@@ -792,6 +1137,7 @@ class TrapService:
                         "trap": current_trap,
                         "disable_check": disable_check,
                         "check": disable_check,
+                        "spatial_facts": _support.deepcopy(spatial_facts),
                     }
                     if receipt is not None:
                         response["random_stream_receipt"] = receipt
@@ -856,6 +1202,8 @@ class TrapService:
                     "trap_id": trap_id,
                     "trap_source_ref": exact_source,
                     "target_within_source_defined_range": True,
+                    "trap_spatial_decision_id": dict(spatial_facts or {}).get("decision_id"),
+                    "target_distance_inches": dict(spatial_facts or {}).get("distance_inches"),
                 },
             )
             settled = _support.resolve_save_damage_to_sheets(
@@ -897,6 +1245,7 @@ class TrapService:
             current_trap = dict(trap_state["traps"][trap_id])
             current_trap["triggered_actor_id"] = actor_id
             current_trap["range_confirmed"] = True
+            current_trap["spatial_facts"] = _support.deepcopy(spatial_facts)
             if action == "trigger":
                 current_trap["trigger_fact"] = dict(trigger_fact or {})
             if effect is not None:
@@ -912,6 +1261,7 @@ class TrapService:
                     "action": action,
                     **({"disable_check": disable_check} if disable_check is not None else {}),
                     "range_confirmed": True,
+                    "spatial_facts": _support.deepcopy(spatial_facts),
                     "piercing": {key: value for key, value in piercing.items() if key != "sheet"},
                     "poison": poison,
                     "condition_effect_id": effect["id"] if effect is not None else None,
@@ -950,6 +1300,7 @@ class TrapService:
                 **({"disable_check": disable_check} if disable_check is not None else {}),
                 "trap": current_trap,
                 "target_id": actor_id,
+                "spatial_facts": _support.deepcopy(spatial_facts),
                 "piercing": {key: value for key, value in piercing.items() if key != "sheet"},
                 "poison": poison,
                 "condition_effect": effect,
@@ -1148,6 +1499,7 @@ class TrapService:
             }
             current_trap["area_confirmed"] = True
             current_trap["affected_actor_ids"] = list(target_ids)
+            current_trap["spatial_facts"] = _support.deepcopy(spatial_facts)
             if action == "trigger":
                 current_trap["trigger_fact"] = dict(trigger_fact or {})
             current_trap["terrain_effects"] = [terrain_effect]
@@ -1195,6 +1547,7 @@ class TrapService:
                     **({"disable_check": disable_check} if disable_check is not None else {}),
                     "area_confirmed": True,
                     "target_ids": list(target_ids),
+                    "spatial_facts": _support.deepcopy(spatial_facts),
                     "save_damage": settled["result"],
                     "campaign_revision": campaign.revision + 1,
                 },
@@ -1209,6 +1562,7 @@ class TrapService:
                 **({"disable_check": disable_check} if disable_check is not None else {}),
                 **({"check": disable_check} if disable_check is not None else {}),
                 "affected_actor_ids": list(target_ids),
+                "spatial_facts": _support.deepcopy(spatial_facts),
                 "damage_roll": settled["result"]["damage_roll"],
                 "targets": target_results,
                 "terrain_effect": terrain_effect,
@@ -1293,6 +1647,7 @@ class TrapService:
             current_trap = dict(trap_state["traps"][trap_id])
             current_trap["area_confirmed"] = True
             current_trap["affected_actor_ids"] = list(target_ids)
+            current_trap["spatial_facts"] = _support.deepcopy(spatial_facts)
             current_trap["trigger_fact"] = dict(trigger_fact or {})
             current_trap["area_effect"] = {
                 "kind": "fire_cone",
@@ -1344,6 +1699,7 @@ class TrapService:
                     "action": action,
                     "area_confirmed": True,
                     "target_ids": list(target_ids),
+                    "spatial_facts": _support.deepcopy(spatial_facts),
                     "save_damage": settled["result"],
                     "campaign_revision": campaign.revision + 1,
                 },
@@ -1356,6 +1712,7 @@ class TrapService:
                 "action": action,
                 "trap": current_trap,
                 "affected_actor_ids": list(target_ids),
+                "spatial_facts": _support.deepcopy(spatial_facts),
                 "damage_roll": settled["result"]["damage_roll"],
                 "targets": target_results,
                 "area_effect": current_trap["area_effect"],
@@ -1490,8 +1847,11 @@ class TrapService:
             current_trap["area_confirmed"] = True
             current_trap["trap_depth_ft"] = depth_ft
             current_trap["affected_actor_ids"] = list(target_ids)
+            current_trap["spatial_facts"] = _support.deepcopy(spatial_facts)
             if is_locking_pit:
                 current_trap["contained_actor_ids"] = list(target_ids)
+                current_trap["profile_id"] = profile_id
+                current_trap["scene_id"] = scene_id
             trap_state["traps"][trap_id] = current_trap
             trap_state.setdefault("attempts", [])
             trap_state["attempts"] = [
@@ -1504,6 +1864,7 @@ class TrapService:
                     "area_confirmed": True,
                     "trap_depth_ft": depth_ft,
                     "target_ids": list(target_ids),
+                    "spatial_facts": _support.deepcopy(spatial_facts),
                     "targets": target_results,
                     "campaign_revision": campaign.revision + 1,
                 },
@@ -1550,6 +1911,7 @@ class TrapService:
                 "affected_actor_ids": list(target_ids),
                 "trap_depth_ft": depth_ft,
                 "targets": target_results,
+                "spatial_facts": _support.deepcopy(spatial_facts),
             }
             if receipt is not None:
                 response["random_stream_receipt"] = receipt
@@ -1579,11 +1941,140 @@ class TrapService:
         next_state = _support.deepcopy(campaign.state)
         trap_state = dict(next_state.get("trap_state") or {})
         current_trap = dict(dict(trap_state.get("traps") or {}).get(trap_id) or {})
-        if action in {"trigger", "disable"}:
-            if target_ids is not None:
-                raise _support.CombatEngineError(
-                    "falling net currently settles one explicitly confirmed target"
+        updated_sheets: dict[str, dict[str, Any]] = {}
+        if action == "disable" and profile_id in _SOURCE_LOCKING_PIT_PROFILES:
+            try:
+                validated_scene_facts = validate_locking_pit_disable_scene_facts(
+                    normalized_profile,
+                    scene_facts,
+                    scene_id=scene_id,
+                    trap_id=trap_id,
+                    actor_id=actor_id,
                 )
+                validate_locking_pit_disable_state(
+                    trap_state,
+                    profile_id=profile_id,
+                    source_ref=exact_source,
+                    scene_id=scene_id,
+                    trap_id=trap_id,
+                    actor_id=actor_id,
+                )
+            except ValueError as exc:
+                raise _support.CombatEngineError(str(exc)) from exc
+            disable_spec = normalized_profile["disable"]
+            tool_proficient = _has_thieves_tools_proficiency(actor["sheet"])
+            check_context = self.effective_rule_context(
+                campaign_id,
+                branch_id=branch_id,
+                facts={
+                    "kind": "check",
+                    "actor_id": actor_id,
+                    "ability": disable_spec["ability"],
+                    "dc": disable_spec["dc"],
+                    "tool": disable_spec["tool"],
+                    "trap_id": trap_id,
+                    "trap_source_ref": exact_source,
+                    "trap_action": "disable",
+                    "scene_id": scene_id,
+                    "scene_facts": validated_scene_facts,
+                },
+            )
+            disable_check = _support.resolve_actor_check(
+                actor,
+                kind="check",
+                ability=disable_spec["ability"],
+                dc=disable_spec["dc"],
+                proficient=tool_proficient,
+                encounter=encounter or None,
+                ruleset=ruleset,
+                rules=check_context,
+                rng=stream,
+            )
+            disable_check = {
+                **disable_check,
+                "ability": disable_spec["ability"],
+                "dc": disable_spec["dc"],
+                "tool": disable_spec["tool"],
+                "method": method,
+                "tool_proficient": tool_proficient,
+            }
+            try:
+                trap_state = apply_locking_pit_spring_disable(
+                    trap_state,
+                    profile_id=profile_id,
+                    source_ref=exact_source,
+                    scene_id=scene_id,
+                    trap_id=trap_id,
+                    actor_id=actor_id,
+                    success=disable_check.get("success") is True,
+                )
+            except ValueError as exc:
+                raise _support.CombatEngineError(str(exc)) from exc
+            current_trap = dict(trap_state["traps"][trap_id])
+            trap_state.setdefault("attempts", [])
+            trap_state["attempts"] = [
+                *list(trap_state["attempts"]),
+                {
+                    "trap_id": trap_id,
+                    "source_ref": exact_source,
+                    "actor_id": actor_id,
+                    "action": action,
+                    "method": method,
+                    "scene_facts": validated_scene_facts,
+                    "check": disable_check,
+                    "campaign_revision": campaign.revision + 1,
+                },
+            ][-100:]
+            next_state["trap_state"] = trap_state
+            receipt = stream.receipt() if stream.draw_count else None
+            response = {
+                "status": "committed",
+                "trap_id": trap_id,
+                "action": action,
+                "trap": current_trap,
+                "disable_check": disable_check,
+                "check": disable_check,
+                "scene_facts": validated_scene_facts,
+            }
+            if receipt is not None:
+                response["random_stream_receipt"] = receipt
+            return self.commit_campaign_state(
+                campaign,
+                next_state,
+                operation="trap.state.transition",
+                principal_id=principal_id,
+                branch_id=branch_id,
+                idempotency_key=idempotency_key,
+                scope=scope,
+                payload=replay_payload,
+                response_fields=response,
+                rule_receipts=list(disable_check.get("rule_receipts") or []),
+                expected_campaign_revision=campaign.revision,
+            )
+        if action in {"trigger", "disable"}:
+            net_target_actor_ids = [actor_id]
+            net_target_snapshots = {actor_id: actor}
+            if profile_id == "srd5.1.falling_net":
+                if target_ids is not None:
+                    if (
+                        not isinstance(target_ids, list)
+                        or not target_ids
+                        or len(target_ids) > 20
+                        or any(not isinstance(item, str) or not item.strip() for item in target_ids)
+                        or len(set(target_ids)) != len(target_ids)
+                    ):
+                        raise _support.CombatEngineError(
+                            "Falling Net requires 1 to 20 distinct confirmed area targets"
+                        )
+                    net_target_actor_ids = list(target_ids)
+                    net_target_snapshots = {}
+                    for target_id in net_target_actor_ids:
+                        self.require_campaign_actor(campaign_id, target_id)
+                        if encounter.get("active"):
+                            self.require_encounter_combatant(
+                                encounter, target_id, role="Falling Net target"
+                            )
+                        net_target_snapshots[target_id] = self.combat_actor_snapshot(target_id)
             disable_check = None
             if action == "disable":
                 disable_spec = normalized_profile.get("disable")
@@ -1692,7 +2183,7 @@ class TrapService:
                         expected_campaign_revision=campaign.revision,
                     )
                 # A failed source-defined disable transitions to trigger, then
-                # the same atomic command rolls the net's Dexterity save.
+                # the same atomic command resolves every confirmed area target.
                 trap_state = transition_trap_state(
                     trap_state,
                     source_ref=exact_source,
@@ -1708,55 +2199,82 @@ class TrapService:
                     action="trigger",
                 )
             check_spec = normalized_profile["trigger"]
-            check_context = self.effective_rule_context(
-                campaign_id,
-                branch_id=branch_id,
-                facts={
-                    "kind": "save",
-                    "actor_id": actor_id,
-                    "ability": check_spec["save_ability"],
-                    "dc": check_spec["save_dc"],
-                    "trap_id": trap_id,
-                    "trap_source_ref": exact_source,
-                    "target_in_source_defined_area": True,
-                },
-            )
-            check = _support.resolve_actor_check(
-                actor,
-                kind="save",
-                ability=check_spec["save_ability"],
-                dc=check_spec["save_dc"],
-                encounter=encounter or None,
-                ruleset=ruleset,
-                rules=check_context,
-                rng=stream,
-            )
-            check = {**check, "ability": check_spec["save_ability"]}
+            target_results: list[dict[str, Any]] = []
+            checks: list[dict[str, Any]] = []
             current_trap = dict(trap_state["traps"][trap_id])
             restrained_ids = list(current_trap.get("restrained_actor_ids") or [])
             trap_added_ids = list(current_trap.get("trap_added_restrained_actor_ids") or [])
-            updated_sheet = _support.deepcopy(actor["sheet"])
-            if check.get("success") is False:
-                had_condition = "restrained" in set(updated_sheet.get("conditions") or [])
-                _support.apply_condition_change(updated_sheet, condition_id="restrained", add=True)
-                if "restrained" in set(updated_sheet.get("conditions") or []):
-                    restrained_ids.append(actor_id)
-                    if not had_condition:
-                        trap_added_ids.append(actor_id)
+            for target_id in net_target_actor_ids:
+                target_snapshot = net_target_snapshots[target_id]
+                check_context = self.effective_rule_context(
+                    campaign_id,
+                    branch_id=branch_id,
+                    facts={
+                        "kind": "save",
+                        "actor_id": target_id,
+                        "ability": check_spec["save_ability"],
+                        "dc": check_spec["save_dc"],
+                        "trap_id": trap_id,
+                        "trap_source_ref": exact_source,
+                        "target_in_source_defined_area": True,
+                    },
+                )
+                check = _support.resolve_actor_check(
+                    target_snapshot,
+                    kind="save",
+                    ability=check_spec["save_ability"],
+                    dc=check_spec["save_dc"],
+                    encounter=encounter or None,
+                    ruleset=ruleset,
+                    rules=check_context,
+                    rng=stream,
+                )
+                check = {**check, "ability": check_spec["save_ability"]}
+                checks.append(check)
+                updated_sheet, restrained_added = _apply_falling_net_effects(
+                    target_snapshot["sheet"],
+                    strength_save_succeeded=check.get("success") is True,
+                )
+                updated_sheets[target_id] = updated_sheet
+                restrained_ids.append(target_id)
+                if restrained_added:
+                    trap_added_ids.append(target_id)
+                target_results.append(
+                    {
+                        "target_id": target_id,
+                        "check": check,
+                        "restrained": "restrained" in set(updated_sheet.get("conditions") or []),
+                        "prone": "prone" in set(updated_sheet.get("conditions") or []),
+                    }
+                )
+            check = checks[0]
             current_trap["restrained_actor_ids"] = list(dict.fromkeys(restrained_ids))
             current_trap["trap_added_restrained_actor_ids"] = list(dict.fromkeys(trap_added_ids))
             current_trap["area_confirmed"] = True
             current_trap["profile_id"] = profile_id
+            if spatial_facts is not None:
+                current_trap["spatial_facts"] = _support.deepcopy(spatial_facts)
             if profile_id == "srd5.1.falling_net":
                 current_trap["object_id"] = trap_id
                 current_trap["scene_id"] = scene_id
             trap_state["traps"][trap_id] = current_trap
             result: dict[str, Any] = {
                 "check": check,
+                "checks": checks,
+                "targets": target_results,
+                "affected_actor_ids": list(net_target_actor_ids),
                 "action": action,
+                **(
+                    {"spatial_facts": _support.deepcopy(spatial_facts)}
+                    if spatial_facts is not None else {}
+                ),
                 **({"disable_check": disable_check} if disable_check is not None else {}),
             }
-            receipts = list(check.get("rule_receipts") or [])
+            receipts = [
+                receipt
+                for target_check in checks
+                for receipt in target_check.get("rule_receipts") or []
+            ]
             if disable_check is not None:
                 receipts.extend(disable_check.get("rule_receipts") or [])
         elif action == "escape":
@@ -1824,6 +2342,7 @@ class TrapService:
                     if item != actor_id
                 ]
                 trap_state["traps"][trap_id] = current_trap
+            updated_sheets[actor_id] = updated_sheet
             result = {
                 "check": check,
                 "action": action,
@@ -1832,19 +2351,22 @@ class TrapService:
             }
             receipts = list(check.get("rule_receipts") or [])
 
-        updated_sheet = _support.validate_character_sheet(updated_sheet)
-        current_actor = self.characters.get(actor_id)
-        character_updates = [
-            _support.CharacterStateUpdate(
-                character_id=actor_id,
-                sheet=updated_sheet,
-                notes=_support.validate_character_notes(current_actor.notes),
-                expected_revision=current_actor.revision,
+        character_updates = []
+        for updated_actor_id, updated_sheet in updated_sheets.items():
+            updated_sheet = _support.validate_character_sheet(updated_sheet)
+            current_actor = self.characters.get(updated_actor_id)
+            character_updates.append(
+                _support.CharacterStateUpdate(
+                    character_id=updated_actor_id,
+                    sheet=updated_sheet,
+                    notes=_support.validate_character_notes(current_actor.notes),
+                    expected_revision=current_actor.revision,
+                )
             )
-        ]
+            if encounter.get("active"):
+                self.sync_combatant_conditions(encounter, updated_actor_id, updated_sheet)
+                _support.reconcile_readied_spells(encounter, updated_actor_id, updated_sheet)
         if encounter.get("active"):
-            self.sync_combatant_conditions(encounter, actor_id, updated_sheet)
-            _support.reconcile_readied_spells(encounter, actor_id, updated_sheet)
             next_state["combat"] = encounter
         trap_state.setdefault("attempts", [])
         trap_state["attempts"] = [
@@ -1855,8 +2377,15 @@ class TrapService:
                 "actor_id": actor_id,
                 "action": action,
                 "check": check,
+                **(
+                    {"target_ids": list(updated_sheets)} if action in {"trigger", "disable"} else {}
+                ),
                 "area_confirmed": True if action in {"trigger", "disable"} else None,
                 "method": method,
+                **(
+                    {"spatial_facts": _support.deepcopy(spatial_facts)}
+                    if spatial_facts is not None else {}
+                ),
                 "campaign_revision": campaign.revision + 1,
             },
         ][-100:]

@@ -15,13 +15,17 @@ from sagasmith_dnd.diseases import (
     advance_disease_clock,
     apply_sight_rot_ointment,
     cackle_carrier_immunity,
+    cackle_fever_save_dc,
+    cackle_psychic_damage_die,
     cure_disease,
     disease_profile,
+    disease_symptom_exhaustion_levels,
     infection_state,
     resolve_cackle_end_turn,
     resolve_cackle_spread,
     resolve_cackle_stress,
     resolve_long_rest,
+    resolve_reviewed_disease_variant,
 )
 from sagasmith_dnd.engine import roll
 
@@ -99,6 +103,31 @@ def _actor_disease_state(
     return matches[0] if matches else None
 
 
+def deactivate_disease_owned_conditions(
+    sheet: dict[str, Any],
+    *,
+    disease_effect_id: str,
+    disease_id: str,
+    ended_reason: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """End only condition projections owned by one exact disease instance."""
+    value = support.deepcopy(sheet)
+    ended: list[dict[str, Any]] = []
+    for effect in value.get("effects", []):
+        metadata = dict(effect.get("metadata") or {})
+        if (
+            metadata.get("disease_condition_owner") == str(disease_effect_id)
+            and metadata.get("disease_id") == str(disease_id)
+            and effect.get("active") is True
+        ):
+            effect["active"] = False
+            effect["ended_reason"] = ended_reason
+            ended.append(effect)
+    if ended:
+        support.reconcile_ended_effect_conditions(value, ended_effects=ended)
+    return value, ended
+
+
 def _authoritative_disease_taxonomy(record: Any) -> tuple[str, str]:
     """Read normalized species/statblock type from the persisted actor card."""
     sheet = dict(record.sheet or {})
@@ -116,7 +145,22 @@ def _authoritative_disease_taxonomy(record: Any) -> tuple[str, str]:
     # The statblock importer stores its parsed creature type in this canonical
     # field. Only exact normalized 2014 creature types are accepted here.
     creature_type = species_id.split("(", 1)[0].strip()
-    if actor_kind in {"npc", "monster"} and creature_type in {"humanoid", "beast"}:
+    if actor_kind in {"npc", "monster"} and creature_type in {
+        "aberration",
+        "beast",
+        "celestial",
+        "construct",
+        "dragon",
+        "elemental",
+        "fey",
+        "fiend",
+        "giant",
+        "humanoid",
+        "monstrosity",
+        "ooze",
+        "plant",
+        "undead",
+    }:
         return creature_type, ""
     raise support.NeedsRulingError(
         "disease eligibility needs a normalized statblock creature type",
@@ -127,6 +171,58 @@ def _authoritative_disease_taxonomy(record: Any) -> tuple[str, str]:
 
 class DiseasesService:
     """Narrow adapter for transaction owners integrating disease transitions."""
+
+    def campaign_disease_profile(
+        self, campaign_id: str, disease_id: str, *, branch_id: str | None = None
+    ) -> dict[str, Any]:
+        """Resolve one disease from the exact active immutable branch lock."""
+
+        base = disease_profile(disease_id)
+        effective = self.rule_packs.effective_ruleset(campaign_id, branch_id=branch_id)
+        matches: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        if str(effective.edition) != "2014":
+            raise support.CombatEngineError("source-bound disease variants require a 2014 campaign")
+        for lock in effective.lock:
+            pack_id = str(lock.get("pack_id") or "")
+            version_id = str(lock.get("version") or "")
+            checksum = str(lock.get("checksum") or "")
+            version = self.rule_packs.get_version(pack_id, version_id)
+            if version.status != "installed" or version.checksum != checksum:
+                raise support.RulesetUnavailableError(
+                    "disease variant source is not the exact installed lock: "
+                    f"{pack_id}@{version_id}"
+                )
+            for artifact in version.artifacts:
+                if artifact.get("kind") != "disease_variant":
+                    continue
+                typed_variant = artifact.get("disease_variant")
+                if not isinstance(typed_variant, dict):
+                    raise support.CombatEngineError(
+                        "active disease variant artifact has no typed disease_variant object"
+                    )
+                variant_id = str(typed_variant.get("disease_id") or "")
+                try:
+                    disease_profile(variant_id)
+                    resolved = resolve_reviewed_disease_variant(
+                        variant_id,
+                        artifact=dict(artifact),
+                        pack_binding={
+                            "pack_id": pack_id,
+                            "version": version_id,
+                            "checksum": checksum,
+                        },
+                    )
+                except ValueError as error:
+                    raise support.CombatEngineError(str(error)) from error
+                if variant_id == base["id"]:
+                    matches.append((resolved, {"pack_id": pack_id, "version": version_id}))
+        if len(matches) > 1:
+            raise support.CombatEngineError(
+                f"multiple active campaign variants define {base['id']}"
+            )
+        if not matches:
+            return base
+        return matches[0][0]
 
     @staticmethod
     def disease_infection_transition(
@@ -284,8 +380,7 @@ class DiseasesService:
             "branch_id": resolved_branch_id,
         }
         scope = (
-            f"character-disease-eyebright-apply:{campaign_id}:"
-            f"{resolved_branch_id}:{principal_id}"
+            f"character-disease-eyebright-apply:{campaign_id}:{resolved_branch_id}:{principal_id}"
         )
         replay = self.replay_idempotent(scope, idempotency_key, payload)
         if replay is not None:
@@ -587,7 +682,7 @@ class DiseasesService:
             snapshot,
             kind="save",
             ability="constitution",
-            dc=13,
+            dc=cackle_fever_save_dc(disease_state, save_kind="laughter"),
             save_condition_id=str(disease_effect.get("id") or ""),
             encounter=combat if combat.get("active") else None,
             rules=rules,
@@ -598,7 +693,9 @@ class DiseasesService:
         damage_result = None
         psychic_damage = None
         if save.get("success") is not True:
-            damage_roll = roll("1d10", rng=support.active_random_stream())
+            damage_roll = roll(
+                cackle_psychic_damage_die(disease_state), rng=support.active_random_stream()
+            )
             psychic_damage = int(damage_roll.total)
         transition = resolve_cackle_stress(
             disease_state,
@@ -611,7 +708,9 @@ class DiseasesService:
         updated_state = transition["state"]
         if not was_symptomatic and updated_state.get("symptomatic"):
             before_exhaustion = int(dict(next_sheet.get("combat") or {}).get("exhaustion", 0) or 0)
-            locked_exhaustion = min(6, before_exhaustion + 1)
+            locked_exhaustion = min(
+                6, before_exhaustion + disease_symptom_exhaustion_levels(updated_state)
+            )
             next_sheet = support.set_exhaustion_level(next_sheet, locked_exhaustion)
             updated_state["symptom_exhaustion_owned"] = True
             updated_state["locked_exhaustion_level"] = locked_exhaustion
@@ -807,7 +906,7 @@ class DiseasesService:
             snapshot,
             kind="save",
             ability="constitution",
-            dc=13,
+            dc=cackle_fever_save_dc(disease_state, save_kind="laughter"),
             save_condition_id=str(disease_effect.get("id") or ""),
             encounter=combat,
             rules=rules,
@@ -979,6 +1078,9 @@ class DiseasesService:
             )
         if self.campaign_rules_edition(campaign_id) != "2014":
             raise support.CombatEngineError("source-bound disease samples require a 2014 campaign")
+        profile = self.campaign_disease_profile(
+            campaign_id, profile["id"], branch_id=resolved_branch_id
+        )
         state = support.validate_party_state(support.deepcopy(campaign.state or {}))
         encounter = dict(state.get("combat") or {})
         if encounter.get("active"):
@@ -1001,6 +1103,8 @@ class DiseasesService:
             "creature_type": taxonomy,
             "species_id": species_id,
         }
+        if profile.get("variant_receipt"):
+            disease_facts["disease_variant"] = support.deepcopy(profile["variant_receipt"])
         target_active = _actor_disease_state(target.sheet, profile["id"])
         elapsed_ticks = int(dict(state.get("game_time") or {}).get("elapsed_ticks", 0))
         save_result: dict[str, Any] | None = None
@@ -1023,6 +1127,8 @@ class DiseasesService:
                 )
             _carrier_effect, carrier_state = active
             carrier_state = advance_disease_clock(carrier_state, elapsed_ticks=elapsed_ticks)
+            # The persisted actor card, not a stale import-time placeholder, owns carrier identity.
+            carrier_state["actor_id"] = str(source_actor_id)
 
         if not target_active and normalized_exposure in {"carrier_laughter", "carrier_bite"}:
             if normalized_exposure == "carrier_laughter":
@@ -1168,14 +1274,22 @@ class DiseasesService:
                     "actor_id": actor_id,
                     "kind": "save",
                     "ability": "constitution",
-                    "save_dc": int(profile["save_dc"]),
+                    "save_dc": int(
+                        profile["save_dcs"][
+                            "spread" if normalized_exposure == "carrier_laughter" else "infection"
+                        ]
+                    ),
                 },
             )
             save_result = support.resolve_actor_check(
                 actor_snapshot,
                 kind="save",
                 ability="constitution",
-                dc=int(profile["save_dc"]),
+                dc=int(
+                    profile["save_dcs"][
+                        "spread" if normalized_exposure == "carrier_laughter" else "infection"
+                    ]
+                ),
                 rules=rules,
                 encounter=encounter if encounter.get("active") else None,
                 rng=support.active_random_stream(),
@@ -1185,7 +1299,9 @@ class DiseasesService:
                 save_succeeded = bool(save_result.get("success"))
                 incubation_roll = None
                 if not save_succeeded:
-                    incubation_roll = int(roll("1d4", rng=support.active_random_stream()).total)
+                    incubation_roll = int(
+                        roll(profile["incubation"]["die"], rng=support.active_random_stream()).total
+                    )
                 transition = resolve_cackle_spread(
                     carrier_state,
                     target_actor_id=actor_id,
@@ -1205,6 +1321,7 @@ class DiseasesService:
                     save_succeeded=save_succeeded,
                     incubation_roll=incubation_roll,
                     immunity=immunity_pair,
+                    profile_override=(profile if profile.get("variant_receipt") else None),
                 )
                 infection = transition.get("infection")
                 if infection is not None and incubation_roll is not None:
@@ -1215,13 +1332,16 @@ class DiseasesService:
                 save_succeeded = bool(save_result.get("success"))
                 incubation_roll = None
                 if not save_succeeded and "die" in profile["incubation"]:
-                    incubation_roll = int(roll("1d4", rng=support.active_random_stream()).total)
+                    incubation_roll = int(
+                        roll(profile["incubation"]["die"], rng=support.active_random_stream()).total
+                    )
                 infection = infection_state(
                     profile["id"],
                     actor_id=actor_id,
                     elapsed_ticks=elapsed_ticks,
                     save_succeeded=save_succeeded,
                     incubation_roll=incubation_roll,
+                    profile_override=(profile if profile.get("variant_receipt") else None),
                 )
                 status = "saved" if save_succeeded else "infected"
                 if infection is not None and incubation_roll is not None:
@@ -1238,6 +1358,8 @@ class DiseasesService:
             "ruleset_fingerprint": rule_context.fingerprint,
             "facts": disease_facts,
         }
+        if profile.get("variant_receipt"):
+            disease_receipt["disease_variant"] = support.deepcopy(profile["variant_receipt"])
         receipts = [disease_receipt]
         if save_result is not None:
             receipts.extend(support.deepcopy(list(save_result.get("rule_receipts") or [])))
@@ -1371,6 +1493,490 @@ class DiseasesService:
             else None
         )
 
+    def character_disease_exposure_batch(
+        self,
+        campaign_id: str,
+        carrier_actor_id: str,
+        target_actor_ids: list[str],
+        exposure_source_ref: str,
+        target_turn_start_confirmed: bool,
+        *,
+        within_10_feet_by_target: dict[str, bool] | None = None,
+        expected_actor_revisions: dict[str, int] | None = None,
+        principal_id: str = support.LOCAL_SYSTEM_PRINCIPAL_ID,
+        expected_revision: int | None = None,
+        branch_id: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Settle a deterministic, all-or-nothing Cackle carrier spread batch.
+
+        Multi-target scene facts are accepted outside initiative. During combat,
+        Runtime can validate only the single actor at the authoritative turn index.
+        """
+        self.access.require_campaign(campaign_id, principal_id, roles=support.CAMPAIGN_DM_ROLES)
+        self.require_write_contract(expected_revision, idempotency_key)
+        if exposure_source_ref != DISEASE_SOURCE_REF:
+            raise support.CombatEngineError("disease source must match the bundled 2014 definition")
+        if type(target_turn_start_confirmed) is not bool or not target_turn_start_confirmed:
+            raise support.CombatEngineError(
+                "Cackle Fever spread requires DM confirmation of each target turn start"
+            )
+        if not isinstance(carrier_actor_id, str) or not carrier_actor_id.strip():
+            raise support.CombatEngineError("Cackle spread requires a carrier actor")
+        carrier_actor_id = carrier_actor_id.strip()
+        if not isinstance(target_actor_ids, list) or not 1 <= len(target_actor_ids) <= 100:
+            raise support.CombatEngineError("Cackle spread requires 1 to 100 target actors")
+        if any(not isinstance(item, str) or not item.strip() for item in target_actor_ids):
+            raise support.CombatEngineError(
+                "Cackle spread target identities must be non-empty strings"
+            )
+        normalized_targets = [item.strip() for item in target_actor_ids]
+        if len(set(normalized_targets)) != len(normalized_targets):
+            raise support.CombatEngineError("Cackle spread target identities must be unique")
+        normalized_targets.sort()
+        if carrier_actor_id in normalized_targets:
+            raise support.CombatEngineError("a Cackle carrier cannot be its own spread target")
+        if not isinstance(expected_actor_revisions, dict):
+            raise ValueError("expected_actor_revisions is required for Cackle spread")
+        expected_ids = {carrier_actor_id, *normalized_targets}
+        if set(expected_actor_revisions) != expected_ids:
+            raise ValueError(
+                "expected_actor_revisions must contain exactly the carrier and every target"
+            )
+        normalized_revisions: dict[str, int] = {}
+        for actor_id in sorted(expected_ids):
+            revision = expected_actor_revisions[actor_id]
+            if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
+                raise ValueError("disease actor revisions must be nonnegative integers")
+            normalized_revisions[actor_id] = revision
+        if within_10_feet_by_target is not None:
+            if not isinstance(within_10_feet_by_target, dict) or set(
+                within_10_feet_by_target
+            ) != set(normalized_targets):
+                raise support.CombatEngineError(
+                    "range confirmations must name exactly every Cackle spread target"
+                )
+            if any(type(value) is not bool for value in within_10_feet_by_target.values()):
+                raise support.CombatEngineError("range confirmations must be boolean")
+
+        resolved_branch_id = self.require_current_branch(campaign_id, branch_id)
+        payload = {
+            "carrier_actor_id": carrier_actor_id,
+            "target_actor_ids": normalized_targets,
+            "expected_revision": expected_revision,
+            "exposure_source_ref": exposure_source_ref,
+            "target_turn_start_confirmed": target_turn_start_confirmed,
+            "within_10_feet_by_target": (
+                {
+                    actor_id: within_10_feet_by_target[actor_id]
+                    for actor_id in sorted(within_10_feet_by_target)
+                }
+                if within_10_feet_by_target is not None
+                else None
+            ),
+            "expected_actor_revisions": normalized_revisions,
+            "branch_id": resolved_branch_id,
+        }
+        scope = (
+            f"character-disease-exposure-batch:{campaign_id}:{resolved_branch_id}:{principal_id}"
+        )
+        replay = self.replay_idempotent(scope, idempotency_key, payload)
+        if replay is not None:
+            return replay
+
+        campaign = self.campaigns.get(campaign_id)
+        if campaign.revision != expected_revision:
+            raise ValueError(
+                f"campaign revision conflict: expected {expected_revision}, "
+                f"found {campaign.revision}"
+            )
+        if self.campaign_rules_edition(campaign_id) != "2014":
+            raise support.CombatEngineError("Cackle Fever spread requires a 2014 campaign")
+        profile = self.campaign_disease_profile(
+            campaign_id, "cackle_fever", branch_id=resolved_branch_id
+        )
+        state = support.validate_party_state(support.deepcopy(campaign.state or {}))
+        encounter = dict(state.get("combat") or {})
+        if encounter.get("active"):
+            self.require_no_blocking_pending(encounter)
+            if len(normalized_targets) != 1:
+                raise support.CombatEngineError(
+                    "combat spread batches may contain only the authoritative active target"
+                )
+        elif within_10_feet_by_target is None:
+            raise support.NeedsRulingError(
+                "non-combat spread needs DM range confirmation for every target",
+                missing=("within_10_feet_by_target",),
+                ruling_kind="source_or_scene_fact",
+            )
+
+        elapsed_ticks = int(dict(state.get("game_time") or {}).get("elapsed_ticks", 0))
+        carrier = self.require_campaign_actor(campaign_id, carrier_actor_id)
+        if carrier.revision != normalized_revisions[carrier_actor_id]:
+            raise ValueError(
+                "carrier actor revision conflict: "
+                f"expected {normalized_revisions[carrier_actor_id]}, found {carrier.revision}"
+            )
+        if str(carrier.sheet.get("edition") or "") != "2014":
+            raise support.CombatEngineError("Cackle Fever carrier must use the 2014 ruleset")
+        carrier_match = _actor_disease_state(carrier.sheet, "cackle_fever")
+        if carrier_match is None:
+            raise support.CombatEngineError("named source actor is not an active Cackle carrier")
+        carrier_effect, carrier_state = carrier_match
+        carrier_state = advance_disease_clock(carrier_state, elapsed_ticks=elapsed_ticks)
+        # The persisted actor card, not a stale import-time placeholder, owns carrier identity.
+        carrier_state["actor_id"] = carrier_actor_id
+        if not carrier_state.get("symptomatic") or not carrier_state.get("laughing"):
+            raise support.CombatEngineError(
+                "Cackle Fever carrier must be symptomatic and currently laughing"
+            )
+
+        combatants = list(encounter.get("combatants") or [])
+        range_by_target: dict[str, bool] = {}
+        if encounter.get("active"):
+            current_index = int(encounter.get("turn_index", 0) or 0)
+            current_actor_id = (
+                str(combatants[current_index % len(combatants)].get("actor_id") or "")
+                if combatants
+                else ""
+            )
+            target_id = normalized_targets[0]
+            if current_actor_id != target_id:
+                raise support.CombatEngineError(
+                    "Cackle Fever spread can resolve only at the target's active turn start"
+                )
+            if encounter.get("positioning_mode") == "grid":
+                if within_10_feet_by_target is not None:
+                    raise support.CombatEngineError(
+                        "grid spread distance is derived from encounter positions"
+                    )
+                carrier_combatant = next(
+                    (
+                        item
+                        for item in combatants
+                        if str(item.get("actor_id") or "") == carrier_actor_id
+                    ),
+                    None,
+                )
+                target_combatant = next(
+                    (item for item in combatants if str(item.get("actor_id") or "") == target_id),
+                    None,
+                )
+                distance = self.combat_distance(
+                    dict(carrier_combatant or {}).get("position"),
+                    dict(target_combatant or {}).get("position"),
+                )
+                if distance is None:
+                    raise support.NeedsRulingError(
+                        "Cackle Fever spread needs both grid positions",
+                        missing=("combatant_positions",),
+                        ruling_kind="source_or_scene_fact",
+                    )
+                range_by_target[target_id] = distance <= 10
+            else:
+                if within_10_feet_by_target is None:
+                    raise support.NeedsRulingError(
+                        "agent-mode spread needs DM confirmation of the 10-foot range",
+                        missing=("within_10_feet_by_target",),
+                        ruling_kind="source_or_scene_fact",
+                    )
+                range_by_target[target_id] = within_10_feet_by_target[target_id]
+        else:
+            range_by_target = dict(within_10_feet_by_target or {})
+
+        prepared: list[dict[str, Any]] = []
+        receipts: list[dict[str, Any]] = []
+        # Validate every target and every source fact before the first random draw.
+        for target_id in normalized_targets:
+            target = self.require_campaign_actor(campaign_id, target_id)
+            if target.revision != normalized_revisions[target_id]:
+                raise ValueError(
+                    f"actor revision conflict for {target_id}: "
+                    f"expected {normalized_revisions[target_id]}, found {target.revision}"
+                )
+            if str(target.sheet.get("edition") or "") != "2014":
+                raise support.CombatEngineError("Cackle Fever target must use the 2014 ruleset")
+            taxonomy, species_id = _authoritative_disease_taxonomy(target)
+            target_active = _actor_disease_state(target.sheet, "cackle_fever")
+            immunity = self._find_cackle_immunity(
+                state, target_id=target_id, carrier_id=carrier_actor_id
+            )
+            if target_active is not None:
+                status = "already_infected"
+            elif taxonomy not in profile["eligible_creature_types"]:
+                status = "ineligible"
+            elif species_id in _GNOME_SPECIES_IDS:
+                status = "immune"
+            elif not range_by_target[target_id]:
+                status = "out_of_range"
+            elif immunity is not None and elapsed_ticks < int(
+                immunity.get("expires_elapsed_ticks", 0)
+            ):
+                status = "immune_to_carrier"
+            else:
+                status = "eligible"
+            disease_facts = {
+                "disease_id": "cackle_fever",
+                "source_ref": DISEASE_SOURCE_REF,
+                "exposure_kind": "carrier_laughter",
+                "exposure_source_id": carrier_actor_id,
+                "carrier_actor_id": carrier_actor_id,
+                "target_actor_id": target_id,
+                "creature_type": taxonomy,
+                "species_id": species_id,
+                "within_10_feet": range_by_target[target_id],
+            }
+            if profile.get("variant_receipt"):
+                disease_facts["disease_variant"] = support.deepcopy(profile["variant_receipt"])
+            receipt_rules = self.effective_rule_context(
+                campaign_id,
+                branch_id=resolved_branch_id,
+                facts=disease_facts,
+            )
+            save_rules = None
+            if status == "eligible":
+                save_rules = self.effective_rule_context(
+                    campaign_id,
+                    branch_id=resolved_branch_id,
+                    facts={
+                        **disease_facts,
+                        "actor_id": target_id,
+                        "kind": "save",
+                        "ability": "constitution",
+                        "save_dc": int(profile["save_dcs"]["spread"]),
+                    },
+                )
+            receipts.append(
+                {
+                    "mechanic_id": "dnd5e.core.gamemastering.disease.cackle_fever.2014",
+                    "event": "character.disease.exposure.batch",
+                    "operations": [{"op": "builtin.core_provider"}],
+                    "citations": [{"source": DISEASE_SOURCE_REF, "edition": "2014"}],
+                    "ruleset_fingerprint": receipt_rules.fingerprint,
+                    "facts": disease_facts,
+                }
+            )
+            if profile.get("variant_receipt"):
+                receipts[-1]["disease_variant"] = support.deepcopy(profile["variant_receipt"])
+            prepared.append(
+                {
+                    "actor": target,
+                    "actor_id": target_id,
+                    "taxonomy": taxonomy,
+                    "species_id": species_id,
+                    "active": target_active,
+                    "immunity": immunity,
+                    "status": status,
+                    "disease_facts": disease_facts,
+                    "save_rules": save_rules,
+                }
+            )
+
+        if (
+            any(item["status"] == "eligible" for item in prepared)
+            and support.active_random_stream() is None
+        ):
+            with self.campaign_random_context(
+                campaign_id,
+                "character.disease.exposure.batch",
+                {"idempotency_key": idempotency_key},
+            ):
+                return self.character_disease_exposure_batch(
+                    campaign_id,
+                    carrier_actor_id,
+                    target_actor_ids,
+                    exposure_source_ref,
+                    target_turn_start_confirmed,
+                    within_10_feet_by_target=within_10_feet_by_target,
+                    expected_actor_revisions=expected_actor_revisions,
+                    principal_id=principal_id,
+                    expected_revision=expected_revision,
+                    branch_id=resolved_branch_id,
+                    idempotency_key=idempotency_key,
+                )
+
+        carrier_update = None
+        if carrier_state != dict(
+            dict(carrier_effect.get("metadata") or {}).get("disease_state") or {}
+        ):
+            carrier_sheet = support.deepcopy(carrier.sheet)
+            updated_carrier_effect = next(
+                item
+                for item in carrier_sheet.get("effects", [])
+                if item.get("id") == carrier_effect.get("id")
+            )
+            updated_carrier_effect.setdefault("metadata", {})["disease_state"] = carrier_state
+            carrier_update = support.CharacterStateUpdate(
+                character_id=carrier.id,
+                sheet=support.validate_character_sheet(carrier_sheet),
+                notes=support.validate_character_notes(carrier.notes),
+                expected_revision=carrier.revision,
+            )
+
+        target_updates: list[Any] = []
+        target_results: list[dict[str, Any]] = []
+        for item in prepared:
+            target = item["actor"]
+            target_id = item["actor_id"]
+            status = item["status"]
+            save_result = None
+            infection = None
+            disease_effect = None
+            immunity_result = item["immunity"] if status == "immune_to_carrier" else None
+            if status == "eligible":
+                rules = item["save_rules"]
+                target_snapshot = self.combat_actor_snapshot(target_id)
+                target_snapshot["sheet"] = support.deepcopy(target.sheet)
+                target_snapshot["derived"] = derive_character_sheet(target.sheet)
+                save_result = support.resolve_actor_check(
+                    target_snapshot,
+                    kind="save",
+                    ability="constitution",
+                    dc=int(profile["save_dcs"]["spread"]),
+                    rules=rules,
+                    encounter=encounter if encounter.get("active") else None,
+                    rng=support.active_random_stream(),
+                    ruleset="2014",
+                )
+                incubation_roll = None
+                if save_result.get("success") is not True:
+                    incubation_roll = int(
+                        roll(profile["incubation"]["die"], rng=support.active_random_stream()).total
+                    )
+                spread = resolve_cackle_spread(
+                    carrier_state,
+                    target_actor_id=target_id,
+                    target_creature_type=item["taxonomy"],
+                    target_species_id=item["species_id"],
+                    within_10_feet=range_by_target[target_id],
+                    elapsed_ticks=elapsed_ticks,
+                    save_succeeded=bool(save_result.get("success")),
+                    incubation_roll=incubation_roll,
+                    immunity=item["immunity"],
+                    profile_override=(profile if profile.get("variant_receipt") else None),
+                )
+                status = str(spread["status"])
+                infection = spread.get("infection")
+                immunity_result = spread.get("immunity")
+                if infection is not None and incubation_roll is not None:
+                    infection["incubation_roll"] = incubation_roll
+                if infection is not None:
+                    disease_effect = {
+                        "id": support.uuid4().hex,
+                        "name": "Cackle Fever",
+                        "kind": "disease_state",
+                        "source": DISEASE_SOURCE_REF,
+                        "active": True,
+                        "duration": {"period": "manual", "remaining": 0},
+                        "changes": [],
+                        "metadata": {"disease_state": infection},
+                    }
+                    infected_sheet, _ = support.add_effect(target.sheet, disease_effect)
+                    target_updates.append(
+                        support.CharacterStateUpdate(
+                            character_id=target.id,
+                            sheet=infected_sheet,
+                            notes=support.validate_character_notes(target.notes),
+                            expected_revision=target.revision,
+                        )
+                    )
+                receipts.extend(support.deepcopy(list(save_result.get("rule_receipts") or [])))
+            target_results.append(
+                {
+                    "status": status,
+                    "disease_id": "cackle_fever",
+                    "target_actor_id": target_id,
+                    "exposure_kind": "carrier_laughter",
+                    "exposure_source_id": carrier_actor_id,
+                    "exposure_source_ref": DISEASE_SOURCE_REF,
+                    "save": save_result,
+                    "disease_state": infection,
+                    "disease_effect": disease_effect,
+                    "carrier_immunity": immunity_result,
+                }
+            )
+
+        if carrier_update is not None and any(
+            item.character_id == carrier_update.character_id for item in target_updates
+        ):
+            raise support.CombatEngineError("Cackle spread source and target updates overlap")
+        resolution_id = f"resolution-{support.uuid4().hex}"
+        prior_events = list(state.get("resolution_log") or [])
+        per_target_events = [
+            {
+                "id": f"{resolution_id}:{item['target_actor_id']}",
+                "thread_id": resolution_id,
+                "event_sequence": sequence,
+                "type": "disease_exposure",
+                "operation": "character.disease.exposure",
+                "actor_id": item["target_actor_id"],
+                "audience": {
+                    "scope": "actors",
+                    "actor_refs": [item["target_actor_id"]],
+                    "disclosure": "private",
+                },
+                "branch_id": resolved_branch_id,
+                "campaign_revision": campaign.revision + 1,
+                "result": item,
+            }
+            for sequence, item in enumerate(target_results, start=1)
+        ]
+        immunity_events: dict[tuple[str, str], dict[str, Any]] = {}
+        for event in [*prior_events, *per_target_events]:
+            event_immunity = dict(dict(event.get("result") or {}).get("carrier_immunity") or {})
+            if (
+                not event_immunity
+                or int(event_immunity.get("expires_elapsed_ticks", 0)) <= elapsed_ticks
+            ):
+                continue
+            pair = (
+                str(event_immunity.get("target_actor_id") or ""),
+                str(event_immunity.get("carrier_actor_id") or ""),
+            )
+            prior = immunity_events.get(pair)
+            if prior is None or int(
+                dict(dict(prior.get("result") or {}).get("carrier_immunity") or {}).get(
+                    "expires_elapsed_ticks", 0
+                )
+            ) <= int(event_immunity.get("expires_elapsed_ticks", 0)):
+                immunity_events[pair] = event
+        live_immunity_events = list(immunity_events.values())
+        other_events = [
+            event
+            for event in [*prior_events, *per_target_events]
+            if event not in live_immunity_events
+        ][-100:]
+        state["resolution_log"] = [*other_events, *live_immunity_events]
+        result = {
+            "disease_id": "cackle_fever",
+            "carrier_actor_id": carrier_actor_id,
+            "exposure_kind": "carrier_laughter",
+            "exposure_source_ref": DISEASE_SOURCE_REF,
+            "targets": target_results,
+        }
+        return self.commit_campaign_state(
+            campaign,
+            state,
+            operation="character.disease.exposure.batch",
+            principal_id=principal_id,
+            branch_id=resolved_branch_id,
+            idempotency_key=idempotency_key,
+            scope=scope,
+            payload=payload,
+            response_fields={
+                "status": "committed",
+                "resolution_id": resolution_id,
+                "result": result,
+                "rule_receipts": receipts,
+            },
+            character_updates=[
+                *target_updates,
+                *([carrier_update] if carrier_update is not None else []),
+            ],
+            rule_receipts=receipts,
+            expected_campaign_revision=expected_revision,
+        )
+
     def character_disease_cure(
         self,
         campaign_id: str,
@@ -1463,6 +2069,36 @@ class DiseasesService:
                     sheet,
                     ended_effects=blindness_effects,
                 )
+        elif disease_id == "cackle_fever":
+            sheet, laughter_effects = deactivate_disease_owned_conditions(
+                sheet,
+                disease_effect_id=str(disease_effect_id),
+                disease_id=disease_id,
+                ended_reason=f"cured_by:{cure_id}",
+            )
+            if laughter_effects:
+                laughter_event = next(
+                    (
+                        item
+                        for item in transition["events"]
+                        if item.get("kind") == "mad_laughter_ended"
+                    ),
+                    None,
+                )
+                if laughter_event is None:
+                    laughter_event = {
+                        "kind": "mad_laughter_ended",
+                        "condition": "incapacitated",
+                    }
+                    transition["events"].append(laughter_event)
+                laughter_event["effect_ids"] = [
+                    str(item.get("id") or "") for item in laughter_effects
+                ]
+            effect = next(
+                item
+                for item in sheet.get("effects", [])
+                if str(item.get("id") or "") == str(disease_effect_id)
+            )
         effect["metadata"]["disease_state"] = cured_state
         effect["active"] = False
         effect["ended_reason"] = f"cured_by:{cure_id}"

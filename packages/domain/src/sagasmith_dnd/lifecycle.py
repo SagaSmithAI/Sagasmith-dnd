@@ -344,6 +344,8 @@ def record_rest_completion(
     started_elapsed_ticks: int | None = None,
     completed_elapsed_ticks: int | None = None,
     hit_dice_spent_count: int = 0,
+    hit_die_healing_divisor: int = 1,
+    hit_die_healing_before_modifier: int = 0,
     expected_character_revision: int = 0,
     song_of_rest_die_sides: int | None = None,
     song_of_rest_used: bool = False,
@@ -360,6 +362,20 @@ def record_rest_completion(
         or hit_dice_spent_count < 0
     ):
         raise CombatEngineError("hit_dice_spent_count must be a non-negative integer")
+    if (
+        isinstance(hit_die_healing_divisor, bool)
+        or not isinstance(hit_die_healing_divisor, int)
+        or hit_die_healing_divisor < 1
+    ):
+        raise CombatEngineError("hit_die_healing_divisor must be a positive integer")
+    if (
+        isinstance(hit_die_healing_before_modifier, bool)
+        or not isinstance(hit_die_healing_before_modifier, int)
+        or hit_die_healing_before_modifier < 0
+    ):
+        raise CombatEngineError("hit_die_healing_before_modifier must be a non-negative integer")
+    if normalized != "short_rest" and hit_die_healing_divisor != 1:
+        raise CombatEngineError("hit_die_healing_divisor applies only to short rests")
     if (
         isinstance(expected_character_revision, bool)
         or not isinstance(expected_character_revision, int)
@@ -439,7 +455,7 @@ def record_rest_completion(
             if isinstance(resource, dict) and int(resource.get("value", 0) or 0) > 0
         }
         if remaining:
-            combat["short_rest_hit_dice"] = {
+            choice_window = {
                 "rest_completed_elapsed_ticks": completed,
                 "expected_character_revision": expected_character_revision,
                 "remaining": remaining,
@@ -447,6 +463,12 @@ def record_rest_completion(
                 "song_of_rest_die_sides": song_of_rest_die_sides,
                 "song_of_rest_used": song_of_rest_used,
             }
+            if hit_die_healing_divisor > 1:
+                choice_window["hit_die_healing_divisor"] = hit_die_healing_divisor
+                choice_window["hit_die_healing_before_modifier"] = (
+                    hit_die_healing_before_modifier
+                )
+            combat["short_rest_hit_dice"] = choice_window
     return value
 
 
@@ -554,9 +576,22 @@ def apply_short_rest_hit_die_choice(
         0,
         int(rolled["total"]) + constitution_modifier,
     )
+    hit_die_healing_divisor = int(window.get("hit_die_healing_divisor", 1) or 1)
+    hit_die_healing_before_modifier = int(
+        window.get("hit_die_healing_before_modifier", 0) or 0
+    )
+    if hit_die_healing_divisor > 1:
+        previous_disease_healing = (
+            hit_die_healing_before_modifier // hit_die_healing_divisor
+        )
+        hit_die_healing_before_modifier += rolled_healing
+        total_disease_healing = hit_die_healing_before_modifier // hit_die_healing_divisor
+        applied_healing_request = max(0, total_disease_healing - previous_disease_healing)
+    else:
+        applied_healing_request = rolled_healing
     applied_healing = 0
-    if rolled_healing:
-        healed = apply_basic_healing_to_sheet(value, amount=rolled_healing)
+    if applied_healing_request:
+        healed = apply_basic_healing_to_sheet(value, amount=applied_healing_request)
         value = healed["sheet"]
         combat = value["combat"]
         applied_healing = int(healed["amount"])
@@ -587,13 +622,19 @@ def apply_short_rest_hit_die_choice(
         combat.pop("short_rest_hit_dice", None)
         status = "closed"
     else:
-        combat["short_rest_hit_dice"] = {
+        continued_window = {
             "rest_completed_elapsed_ticks": window_ticks,
             "remaining": remaining,
             "spent_count": spent_count,
             "song_of_rest_die_sides": song_die_sides,
             "song_of_rest_used": song_used,
         }
+        if hit_die_healing_divisor > 1:
+            continued_window["hit_die_healing_divisor"] = hit_die_healing_divisor
+            continued_window["hit_die_healing_before_modifier"] = (
+                hit_die_healing_before_modifier
+            )
+        combat["short_rest_hit_dice"] = continued_window
         status = "open"
     mechanic_ids = ["dnd5e.core.rest.hit_dice"]
     if song_result is not None:
@@ -1111,6 +1152,8 @@ def apply_rest(
     sorcerous_restoration_points: int | None = None,
     rest_activity_minutes: dict[str, int] | None = None,
     food_and_drink: bool = False,
+    hit_die_healing_divisor: int = 1,
+    restore_hp_on_long_rest: bool = True,
     song_of_rest_source_sheet: dict[str, Any] | None = None,
     rules: ResolutionContext | None = None,
     rng: Any = None,
@@ -1126,6 +1169,18 @@ def apply_rest(
         raise CombatEngineError("hit dice recover only during a long rest")
     if rest_type == "short_rest" and food_and_drink:
         raise CombatEngineError("food_and_drink affects exhaustion recovery only on a long rest")
+    if (
+        isinstance(hit_die_healing_divisor, bool)
+        or not isinstance(hit_die_healing_divisor, int)
+        or hit_die_healing_divisor < 1
+    ):
+        raise CombatEngineError("hit_die_healing_divisor must be a positive integer")
+    if type(restore_hp_on_long_rest) is not bool:
+        raise CombatEngineError("restore_hp_on_long_rest must be a boolean")
+    if rest_type != "short_rest" and hit_die_healing_divisor != 1:
+        raise CombatEngineError("hit_die_healing_divisor applies only to short rests")
+    if rest_type != "long_rest" and not restore_hp_on_long_rest:
+        raise CombatEngineError("restore_hp_on_long_rest applies only to long rests")
     if rest_type != "short_rest" and arcane_recovery:
         raise CombatEngineError("Arcane Recovery can be used only when finishing a short rest")
     if rest_type != "short_rest" and natural_recovery:
@@ -1179,6 +1234,7 @@ def apply_rest(
     recovered: dict[str, int] = {}
     unmet_recovery_requirements: dict[str, dict[str, Any]] = {}
     hit_die_healing = 0
+    hit_die_healing_before_modifier = 0
     hit_die_applied_healing = 0
     hit_dice_rolls: list[dict[str, Any]] = []
     arcane_recovery_result: dict[str, Any] | None = None
@@ -1194,7 +1250,8 @@ def apply_rest(
         value = set_exhaustion_level(value, exhaustion)
         combat = value["combat"]
         hp = dict(combat["hp"])
-        hp["value"] = effective_hit_point_maximum(value)
+        if restore_hp_on_long_rest:
+            hp["value"] = effective_hit_point_maximum(value)
         hp["temp"] = 0
         combat["hp"] = hp
         combat["death_saves"] = {"successes": 0, "failures": 0}
@@ -1210,7 +1267,13 @@ def apply_rest(
             roll_value = int(spend["roll"])
             mutate_bounded_resource(resource, amount=1, direction="spend")
             healing = roll_value + effective_ability_modifier(value, "constitution")
-            hit_die_healing += edition_policy(edition).rest.hit_die_healing(healing)
+            hit_die_healing_before_modifier += edition_policy(edition).rest.hit_die_healing(
+                healing
+            )
+        hit_die_healing = hit_die_healing_before_modifier
+        # Rules such as Sewer Plague modify the summed ordinary healing from
+        # the spent dice. Keep the 2014 integer floor at the rest boundary.
+        hit_die_healing //= hit_die_healing_divisor
         if hit_die_healing:
             healed = apply_basic_healing_to_sheet(value, amount=hit_die_healing)
             value = healed["sheet"]
@@ -1383,6 +1446,7 @@ def apply_rest(
             key: item for key, item in chase_recovery.items() if key != "sheet"
         },
         "hit_die_healing": hit_die_healing,
+        "hit_die_healing_before_modifier": hit_die_healing_before_modifier,
         "hit_die_applied_healing": hit_die_applied_healing,
         "hit_dice_rolls": hit_dice_rolls,
         "arcane_recovery": arcane_recovery_result,

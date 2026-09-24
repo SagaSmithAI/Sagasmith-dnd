@@ -2009,6 +2009,9 @@ def _create_application(config: McpConfig | None = None, *, resources) -> DndRun
     _services.character_disease_exposure = _services.public_tool()(
         _services.bind("character_disease_exposure", "character_disease_exposure")
     )
+    _services.character_disease_exposure_batch = _services.public_tool()(
+        _services.bind("character_disease_exposure_batch", "character_disease_exposure_batch")
+    )
     _services.character_disease_cure = _services.public_tool()(
         _services.bind("character_disease_cure", "character_disease_cure")
     )

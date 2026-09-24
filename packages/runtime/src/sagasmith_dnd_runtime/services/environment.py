@@ -122,3 +122,159 @@ def change_water_environment(
         ),
     )
     return response(list(revisions or []))
+
+
+def review_scene_object_strength_check(
+    services: Any,
+    campaign_id: str,
+    payload: dict[str, Any],
+    *,
+    principal_id: str,
+    expected_revision: int | None,
+    branch_id: str | None,
+    idempotency_key: str | None,
+) -> dict[str, Any]:
+    """Register a DM-reviewed Strength-check fact for one exact scene object."""
+    from sagasmith_dnd.objects import validate_gear_strength_check
+
+    from .source_objects import approved_profile, review_gear_strength_check
+
+    services.access.require_campaign(campaign_id, principal_id, roles=support.CAMPAIGN_DM_ROLES)
+    services.require_write_contract(expected_revision, idempotency_key)
+    branch = services.require_current_branch(campaign_id, branch_id)
+    data = _fields(
+        payload,
+        {"object", "object_source_ref", "object_ruling", "strength_check"},
+        set(),
+        "object strength review",
+    )
+    requested = data["object"]
+    if not isinstance(requested, dict):
+        raise ValueError("object strength review requires a source object profile or reference")
+    if services.campaign_rules_edition(campaign_id) != "2014":
+        raise ValueError("object gear strength checks require the reviewed 2014 rules")
+    facts = validate_gear_strength_check(data["strength_check"])
+    scope = f"scene-object-strength-review:{campaign_id}:{branch}:{principal_id}"
+    replay_payload = {"payload": data, "branch_id": branch}
+    replay = services.replay_idempotent(scope, idempotency_key, replay_payload)
+    if replay is not None:
+        return replay
+    campaign = services.campaigns.get(campaign_id)
+    if campaign.revision != expected_revision:
+        raise ValueError(
+            f"campaign revision conflict: expected {expected_revision}, found {campaign.revision}"
+        )
+    combat = dict(campaign.state.get("combat") or {})
+    if combat.get("active"):
+        services.require_no_blocking_pending(combat)
+    object_id = str(requested.get("id") or "").strip()
+    scene_id = str(requested.get("scene_id") or "").strip()
+    if not object_id or not scene_id:
+        raise ValueError("object strength review requires object id and scene_id")
+    if facts["door"] is False and str(requested.get("name") or "").strip() == "":
+        raise ValueError("object strength review requires the exact named scene object")
+    _, source_ref, expanded = services.managed_module_source_ref(
+        campaign_id,
+        data["object_source_ref"],
+        require_exact=True,
+        expected_scene_id=scene_id,
+        require_active_module=True,
+    )
+    assert source_ref is not None and expanded is not None
+    scene_objects = deepcopy(dict(campaign.state.get("scene_objects") or {}))
+    scene_state = deepcopy(dict(scene_objects.get(scene_id) or {}))
+    existing = deepcopy(dict(scene_state.get(object_id) or {}))
+    profile, profile_approval, hit_points = approved_profile(
+        services,
+        campaign_id=campaign_id,
+        branch_id=branch,
+        principal_id=principal_id,
+        requested=requested,
+        existing=existing,
+        source_ref=source_ref,
+        expanded=expanded,
+        ruling=data["object_ruling"],
+    )
+    if hit_points <= 0 or existing.get("destroyed"):
+        raise ValueError("a destroyed scene object cannot receive a new Strength-check review")
+    review_record, review_approval = review_gear_strength_check(
+        services,
+        campaign_id=campaign_id,
+        branch_id=branch,
+        principal_id=principal_id,
+        profile=profile,
+        profile_approval=profile_approval,
+        source_ref=source_ref,
+        expanded=expanded,
+        facts=facts,
+        ruling=data["object_ruling"],
+    )
+    next_object = {
+        **existing,
+        **profile,
+        "hit_point_maximum": profile["hit_points"],
+        "profile": profile,
+        "profile_approval": profile_approval,
+        "source_ref": source_ref,
+        "hit_points": hit_points,
+        "destroyed": False,
+        "gear_strength_check": review_record,
+        "gear_strength_check_approval": review_approval,
+    }
+    scene_state[object_id] = next_object
+    scene_objects[scene_id] = scene_state
+    next_state = deepcopy(campaign.state)
+    next_state["scene_objects"] = scene_objects
+    resolution_id = f"resolution-{support.uuid4().hex}"
+    audience = {"scope": "dm", "actor_refs": [], "disclosure": "hidden"}
+    result = {
+        "object_id": object_id,
+        "scene_id": scene_id,
+        "strength_check": review_record,
+        "strength_check_approval": review_approval,
+        "profile_approval": profile_approval,
+    }
+    next_state["resolution_log"] = [
+        *list(next_state.get("resolution_log") or []),
+        {
+            "id": resolution_id,
+            "thread_id": resolution_id,
+            "event_sequence": 1,
+            "type": "scene_object_strength_review",
+            "operation": "environment.object_strength_review",
+            "audience": audience,
+            "branch_id": branch,
+            "campaign_revision": campaign.revision + 1,
+            "result": result,
+            "source_ref": source_ref,
+            "source_excerpt": review_record["source_excerpt"],
+            "reason": review_record["reason"],
+        },
+    ][-100:]
+
+    def response(revisions: list[Any]) -> dict[str, Any]:
+        return {
+            "status": "committed",
+            "resolution_id": resolution_id,
+            "event_sequence": 1,
+            "audience": audience,
+            "campaign_revision": campaign.revision + 1,
+            "object": deepcopy(next_object),
+            "rule_receipts": [],
+            "revisions": [support.asdict(item) for item in revisions],
+        }
+
+    revisions = support.StateMutationService(services.storage.database).replace(
+        campaign_id,
+        campaign_state=support.validate_party_state(next_state),
+        expected_campaign_revision=campaign.revision,
+        character_updates=[],
+        operation="environment.object_strength_review",
+        actor=principal_id,
+        branch_id=branch,
+        idempotency_key=idempotency_key,
+        idempotency_write=support.IdempotencyWrite(
+            scope=scope, payload=replay_payload, response=response,
+        ),
+    )
+    return response(list(revisions or []))

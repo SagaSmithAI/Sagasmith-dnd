@@ -1211,6 +1211,20 @@
           "title": "Actor Id",
           "type": "string"
         },
+        "attack_ruling": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Bounded attack ruling value accepted by adventuring_gear_action.",
+          "title": "Attack Ruling"
+        },
         "branch_id": {
           "anyOf": [
             {
@@ -1250,9 +1264,31 @@
           "title": "Expected Revision"
         },
         "expected_target_revision": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
           "description": "Bounded expected target revision value accepted by adventuring_gear_action.",
-          "title": "Expected Target Revision",
-          "type": "integer"
+          "title": "Expected Target Revision"
+        },
+        "helper_actor_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Bounded helper actor id value accepted by adventuring_gear_action.",
+          "maxLength": 256,
+          "title": "Helper Actor Id"
         },
         "idempotency_key": {
           "anyOf": [
@@ -1279,6 +1315,47 @@
           "title": "Item Id",
           "type": "string"
         },
+        "object_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Bounded object reason value accepted by adventuring_gear_action.",
+          "title": "Object Reason"
+        },
+        "object_ruling": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Bounded object ruling value accepted by adventuring_gear_action.",
+          "title": "Object Ruling"
+        },
+        "object_source_ref": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Bounded object source ref value accepted by adventuring_gear_action.",
+          "title": "Object Source Ref"
+        },
         "principal_id": {
           "default": "system:local",
           "description": "Caller hint overwritten by process binding or signed Host delegation.",
@@ -1292,10 +1369,32 @@
           "type": "string"
         },
         "target_actor_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
           "description": "Bounded target actor id value accepted by adventuring_gear_action.",
           "maxLength": 256,
-          "title": "Target Actor Id",
-          "type": "string"
+          "title": "Target Actor Id"
+        },
+        "target_object": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Bounded target object value accepted by adventuring_gear_action.",
+          "title": "Target Object"
         }
       },
       "required": [
@@ -1305,9 +1404,7 @@
         "intent",
         "source_ref",
         "actor_id",
-        "target_actor_id",
-        "expected_actor_revision",
-        "expected_target_revision"
+        "expected_actor_revision"
       ],
       "title": "adventuring_gear_actionInput",
       "type": "object"
@@ -5830,6 +5927,276 @@
     "revision_fields": [
       "expected_revision",
       "expected_actor_revision"
+    ],
+    "roles": {
+      "combat": [],
+      "lobby": [],
+      "play": [
+        "dm",
+        "owner"
+      ]
+    }
+  },
+  {
+    "description": "Settle a deterministic, all-or-nothing Cackle carrier spread batch.\n\nMulti-target scene facts are accepted outside initiative. During combat,\nRuntime can validate only the single actor at the authoritative turn index.",
+    "error_envelope": {
+      "fields": [
+        "code",
+        "message",
+        "retryable",
+        "recovery"
+      ],
+      "pending_choice": "Return the pending decision to its authorized owner.",
+      "unknown_dispatch": "Recover using the original request and idempotency key."
+    },
+    "id": "character_disease_exposure_batch",
+    "idempotent": true,
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "branch_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Authoritative timeline branch identifier.",
+          "maxLength": 256,
+          "title": "Branch Id"
+        },
+        "campaign_id": {
+          "description": "Authoritative campaign identifier.",
+          "maxLength": 256,
+          "title": "Campaign Id",
+          "type": "string"
+        },
+        "carrier_actor_id": {
+          "description": "Bounded carrier actor id value accepted by character_disease_exposure_batch.",
+          "maxLength": 256,
+          "title": "Carrier Actor Id",
+          "type": "string"
+        },
+        "expected_actor_revisions": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "integer"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Bounded expected actor revisions value accepted by character_disease_exposure_batch.",
+          "title": "Expected Actor Revisions"
+        },
+        "expected_revision": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Authority revision guard used to reject stale mutations.",
+          "title": "Expected Revision"
+        },
+        "exposure_source_ref": {
+          "description": "Bounded exposure source ref value accepted by character_disease_exposure_batch.",
+          "title": "Exposure Source Ref",
+          "type": "string"
+        },
+        "idempotency_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Stable business-operation key reused unchanged across retries.",
+          "maxLength": 256,
+          "title": "Idempotency Key"
+        },
+        "principal_id": {
+          "default": "system:local",
+          "description": "Caller hint overwritten by process binding or signed Host delegation.",
+          "maxLength": 256,
+          "title": "Principal Id",
+          "type": "string"
+        },
+        "target_actor_ids": {
+          "description": "Bounded target actor ids value accepted by character_disease_exposure_batch.",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 1000,
+          "title": "Target Actor Ids",
+          "type": "array"
+        },
+        "target_turn_start_confirmed": {
+          "description": "Bounded target turn start confirmed value accepted by character_disease_exposure_batch.",
+          "title": "Target Turn Start Confirmed",
+          "type": "boolean"
+        },
+        "within_10_feet_by_target": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "type": "boolean"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Bounded within 10 feet by target value accepted by character_disease_exposure_batch.",
+          "title": "Within 10 Feet By Target"
+        }
+      },
+      "required": [
+        "campaign_id",
+        "carrier_actor_id",
+        "target_actor_ids",
+        "exposure_source_ref",
+        "target_turn_start_confirmed"
+      ],
+      "title": "character_disease_exposure_batchInput",
+      "type": "object"
+    },
+    "output_schema": {
+      "additionalProperties": true,
+      "description": "Structured authoritative result for character_disease_exposure_batch.",
+      "properties": {
+        "action": {
+          "description": "Authoritative action returned by character_disease_exposure_batch.",
+          "type": "string"
+        },
+        "branch_id": {
+          "description": "Authoritative branch id returned by character_disease_exposure_batch.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "campaign_id": {
+          "description": "Authoritative campaign id returned by character_disease_exposure_batch.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "campaign_revision": {
+          "description": "Authoritative campaign revision returned by character_disease_exposure_batch.",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "character_revision": {
+          "description": "Authoritative character revision returned by character_disease_exposure_batch.",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "error": {
+          "additionalProperties": false,
+          "description": "Authoritative error returned by character_disease_exposure_batch.",
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            },
+            "recovery": {
+              "type": [
+                "string",
+                "object"
+              ]
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "retryable",
+            "recovery"
+          ],
+          "type": "object"
+        },
+        "event_sequence": {
+          "description": "Authoritative event sequence returned by character_disease_exposure_batch.",
+          "type": "integer"
+        },
+        "has_more": {
+          "description": "Authoritative has more returned by character_disease_exposure_batch.",
+          "type": "boolean"
+        },
+        "host_context_binding": {
+          "description": "Authoritative host context binding returned by character_disease_exposure_batch.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "idempotent_replay": {
+          "description": "Authoritative idempotent replay returned by character_disease_exposure_batch.",
+          "type": "boolean"
+        },
+        "next_cursor": {
+          "description": "Authoritative next cursor returned by character_disease_exposure_batch.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "random_stream_receipt": {
+          "description": "Authoritative random stream receipt returned by character_disease_exposure_batch.",
+          "type": "object"
+        },
+        "resolution_id": {
+          "description": "Authoritative resolution id returned by character_disease_exposure_batch.",
+          "type": "string"
+        },
+        "status": {
+          "description": "Authoritative status returned by character_disease_exposure_batch.",
+          "type": "string"
+        },
+        "thread_id": {
+          "description": "Authoritative thread id returned by character_disease_exposure_batch.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "phases": [
+      "combat",
+      "lobby",
+      "play"
+    ],
+    "read_only": false,
+    "requires_campaign": true,
+    "revision_fields": [
+      "expected_actor_revisions",
+      "expected_revision"
     ],
     "roles": {
       "combat": [],
@@ -17237,7 +17604,7 @@
     }
   },
   {
-    "description": "Record a DM-reviewed 2014 water transition without moving an actor.\n\npayload={source_ref,source_excerpt,reason,actors?:[{actor_id,underwater,\nfully_immersed}],objects?:[{scene_id,object_id,fully_immersed}]}.\nCopy the exact active module source. All booleans are explicit; fully\nimmersed actors must be underwater. Objects require a reviewed profile;\nan initial source-object profile may also declare fully_immersed.\nThis records environmental facts only. Set breathing separately from\nthe actor's real ability to breathe; immersion alone does not decide it.\nUse this operation on entering/leaving water, including during combat.\nPending combat choices must finish before changing their environment.",
+    "description": "Record a DM-reviewed scene fact without moving an actor.\n\npayload={source_ref,source_excerpt,reason,actors?:[{actor_id,underwater,\nfully_immersed}],objects?:[{scene_id,object_id,fully_immersed}]}.\nCopy the exact active module source. All booleans are explicit; fully\nimmersed actors must be underwater. Objects require a reviewed profile;\nan initial source-object profile may also declare fully_immersed.\nThis records environmental facts only. Set breathing separately from\nthe actor's real ability to breathe; immersion alone does not decide it.\nUse this operation on entering/leaving water, including during combat.\nPending combat choices must finish before changing their environment.",
     "error_envelope": {
       "fields": [
         "code",
@@ -17314,13 +17681,68 @@
               "payload"
             ]
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "action": {
+                "const": "object_strength_review"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "additionalProperties": false,
+                "properties": {
+                  "object": {
+                    "additionalProperties": true,
+                    "title": "Object",
+                    "type": "object"
+                  },
+                  "object_ruling": {
+                    "additionalProperties": true,
+                    "title": "Object Ruling",
+                    "type": "object"
+                  },
+                  "object_source_ref": {
+                    "additionalProperties": true,
+                    "title": "Object Source Ref",
+                    "type": "object"
+                  },
+                  "strength_check": {
+                    "additionalProperties": true,
+                    "title": "Strength Check",
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "object",
+                  "object_source_ref",
+                  "object_ruling",
+                  "strength_check"
+                ],
+                "title": "SceneObjectStrengthReview",
+                "type": "object"
+              }
+            },
+            "required": [
+              "payload"
+            ]
+          }
         }
       ],
       "properties": {
         "action": {
-          "const": "water",
           "default": "water",
           "description": "Exact operation supported by this facade.",
+          "enum": [
+            "water",
+            "object_strength_review"
+          ],
           "maxLength": 256,
           "title": "Action",
           "type": "string"
@@ -25270,6 +25692,20 @@
           "title": "Profile",
           "type": "object"
         },
+        "scene_facts": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Bounded scene facts value accepted by trap_state_transition.",
+          "title": "Scene Facts"
+        },
         "source_excerpt": {
           "description": "Bounded source excerpt value accepted by trap_state_transition.",
           "title": "Source Excerpt",
@@ -25279,6 +25715,20 @@
           "description": "Bounded source ref value accepted by trap_state_transition.",
           "title": "Source Ref",
           "type": "string"
+        },
+        "spatial_facts": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Bounded spatial facts value accepted by trap_state_transition.",
+          "title": "Spatial Facts"
         },
         "target_ids": {
           "anyOf": [

@@ -3069,6 +3069,8 @@ def validate_character_sheet(
                 "expected_character_revision",
                 "remaining",
                 "spent_count",
+                "hit_die_healing_divisor",
+                "hit_die_healing_before_modifier",
                 "song_of_rest_die_sides",
                 "song_of_rest_used",
             },
@@ -3129,6 +3131,20 @@ def validate_character_sheet(
                 "sheet.combat.short_rest_hit_dice.song_of_rest_used",
             ),
         }
+        if (
+            "hit_die_healing_divisor" in short_rest_hit_dice
+            or "hit_die_healing_before_modifier" in short_rest_hit_dice
+        ):
+            normalized_short_rest_hit_dice["hit_die_healing_divisor"] = _integer(
+                short_rest_hit_dice.get("hit_die_healing_divisor", 1),
+                "sheet.combat.short_rest_hit_dice.hit_die_healing_divisor",
+                minimum=1,
+            )
+            normalized_short_rest_hit_dice["hit_die_healing_before_modifier"] = _integer(
+                short_rest_hit_dice.get("hit_die_healing_before_modifier", 0),
+                "sheet.combat.short_rest_hit_dice.hit_die_healing_before_modifier",
+                minimum=0,
+            )
         if normalized_short_rest_hit_dice["song_of_rest_used"] and song_die is None:
             raise ValueError(
                 "sheet.combat.short_rest_hit_dice cannot mark absent Song of Rest as used"

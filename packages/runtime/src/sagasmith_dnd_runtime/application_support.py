@@ -321,6 +321,11 @@ from sagasmith_dnd.dependent_actor_refresh import (
     refresh_dependent_actor_sheet,
 )
 from sagasmith_dnd.dependent_actor_relations import validate_dependent_actor_relations
+from sagasmith_dnd.diseases import (
+    DiseaseError,
+    disease_profile,
+    normalize_disease_variant_definition,
+)
 from sagasmith_dnd.document_layout import DND5E_DOCUMENT_LAYOUT_PROFILE
 from sagasmith_dnd.editions import DEFAULT_CAMPAIGN_EDITION, normalize_dnd_edition
 from sagasmith_dnd.engine import resolve_check, roll
@@ -5572,6 +5577,8 @@ __all__ = [
     "compile_mechanics",
     "compile_resolution_plan",
     "compiled_artifacts_from_candidates",
+    "disease_profile",
+    "DiseaseError",
     "complete_item_attunement_ownership",
     "complete_steel_defender_revival",
     "condition_ids",
@@ -5672,6 +5679,7 @@ __all__ = [
     "nested_ruling_kind",
     "newly_ended_witch_bolt_tethers",
     "normalize_2014_statblock_candidate",
+    "normalize_disease_variant_definition",
     "normalize_audience_facts",
     "normalize_bounded_proposal",
     "normalize_combat_grid_source_refs",

@@ -18,6 +18,7 @@ from .fighting_styles import roll_weapon_damage
 from .rule_engine import ResolutionContext, apply_rule_event, context_with_facts, core_receipts
 
 OBJECT_RULE = "dnd5e.core.objects.damage"
+GEAR_STRENGTH_CHECK_STATES = frozenset({"breached", "open"})
 PROFILE_FIELDS = frozenset(
     {
         "id",
@@ -113,6 +114,32 @@ def validate_object_profile(value: Any) -> dict[str, Any]:
             raise ValueError("object section_of must identify a separate Huge or Gargantuan object")
         result["section_of"] = {"id": parent_id, "size": section["size"]}
     return result
+
+
+def validate_gear_strength_check(value: Any) -> dict[str, Any]:
+    """Validate the narrow DM-reviewed door/object facts used by Crowbar and Ram."""
+    required = {"door", "strength_dc", "crowbar_leverage", "success_state"}
+    if not isinstance(value, dict) or set(value) != required:
+        raise ValueError(
+            "object gear strength review requires door, strength_dc, "
+            "crowbar_leverage, and success_state"
+        )
+    if type(value["door"]) is not bool:
+        raise ValueError("object gear strength review door must be a boolean")
+    if type(value["crowbar_leverage"]) is not bool:
+        raise ValueError("object gear strength review crowbar_leverage must be a boolean")
+    dc = _integer(value["strength_dc"], "strength_dc", 1, 30)
+    success_state = value["success_state"]
+    if success_state not in GEAR_STRENGTH_CHECK_STATES:
+        raise ValueError("object gear strength review success_state must be open or breached")
+    if not value["door"] and success_state == "open":
+        raise ValueError("a non-door object can only be marked breached")
+    return {
+        "door": value["door"],
+        "strength_dc": dc,
+        "crowbar_leverage": value["crowbar_leverage"],
+        "success_state": success_state,
+    }
 
 
 def object_attack_plan(
